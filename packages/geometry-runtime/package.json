@@ -1,0 +1,16 @@
+{
+  "name": "@cadfixer/geometry-runtime",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Transport-agnostic worker protocol, coordinator, and worker-side host runtime for off-main-thread geometry work.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@cadfixer/shared": "*"
+  }
+}

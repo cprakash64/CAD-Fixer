@@ -1,0 +1,8 @@
+{
+  "//": "Worker-thread code only. Uses the WebWorker lib instead of DOM. Kept as a sibling tsconfig.json so editors and typescript-eslint's project service resolve worker files to this project automatically.",
+  "extends": "../../../../tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2023", "WebWorker"]
+  },
+  "include": ["**/*.ts"]
+}
