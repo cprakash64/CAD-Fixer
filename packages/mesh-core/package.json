@@ -1,0 +1,16 @@
+{
+  "name": "@cadfixer/mesh-core",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Canonical in-memory mesh contract and structural validation for CAD Fixer.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@cadfixer/shared": "*"
+  }
+}

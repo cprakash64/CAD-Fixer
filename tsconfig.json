@@ -1,0 +1,11 @@
+{
+  "//": "Covers repository-root tooling files and Playwright end-to-end specs only. Application and library code live in their own projects.",
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    // DOM is included because Playwright's `page.evaluate` callbacks are authored
+    // here but execute inside the browser.
+    "lib": ["ES2023", "DOM"],
+    "types": ["node"]
+  },
+  "include": ["vitest.config.ts", "playwright.config.ts", "e2e/**/*.ts"]
+}

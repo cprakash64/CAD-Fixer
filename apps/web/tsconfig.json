@@ -1,0 +1,11 @@
+{
+  "//": "Main-thread application code. Worker code is excluded here and typechecked by src/workers/tsconfig.json, because the DOM and WebWorker lib definitions declare conflicting globals.",
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "jsx": "react-jsx",
+    "types": ["vite/client"]
+  },
+  "include": ["src/**/*.ts", "src/**/*.tsx", "vite.config.ts", "vitest.setup.ts"],
+  "exclude": ["src/workers/**"]
+}

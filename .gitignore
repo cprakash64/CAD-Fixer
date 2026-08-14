@@ -1,0 +1,20 @@
+node_modules/
+dist/
+coverage/
+playwright-report/
+test-results/
+.vite/
+*.tsbuildinfo
+
+.DS_Store
+.env
+.env.*
+!.env.example
+
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# Machine-local Claude Code permissions. The shared project rules in CLAUDE.md
+# and the review agents in .claude/agents/ are committed; this file is not.
+.claude/settings.local.json

@@ -1,0 +1,13 @@
+{
+  "name": "@cadfixer/shared",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Framework-free primitives shared across CAD Fixer layers: typed errors, units, identifiers, cancellation.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  }
+}

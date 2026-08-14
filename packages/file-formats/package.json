@@ -1,0 +1,17 @@
+{
+  "name": "@cadfixer/file-formats",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Format descriptors, UI-level filename screening, and reader/writer seams. Contains no parsers in Stage 0.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@cadfixer/mesh-core": "*",
+    "@cadfixer/shared": "*"
+  }
+}
