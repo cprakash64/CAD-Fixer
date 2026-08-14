@@ -1,3 +1,5 @@
+import { operationCancelled } from './errors';
+
 /**
  * Minimal cooperative cancellation primitive.
  *
@@ -61,6 +63,17 @@ export class CancellationSource {
       this.listeners.delete(listener);
     };
   }
+}
+
+/**
+ * Throws `OPERATION_CANCELLED` if cancellation has been requested.
+ *
+ * The polling half of cooperative cancellation. Long-running loops call this
+ * periodically — per batch rather than per element, so the check does not
+ * dominate the work it guards.
+ */
+export function throwIfCancelled(token: CancellationToken): void {
+  if (token.isCancelled) throw operationCancelled();
 }
 
 /** A token that is never cancelled, for callers that do not support cancellation. */

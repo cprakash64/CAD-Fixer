@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useRef, type ReactNode } from 'react';
+import { useCallback, useRef, type ReactNode } from 'react';
 import { toAppError } from '@cadfixer/shared';
 import type { OperationHandle } from '@cadfixer/geometry-runtime';
-import { GeometryClient } from '../runtime/geometry-client';
+import { useGeometryClient } from '../runtime/client-context';
 import { SelfTestState, StatusSeverity } from '../state/workspace-store';
 import { useWorkspaceState, useWorkspaceStore } from '../state/store-context';
 
@@ -37,24 +37,12 @@ function buildSelfTestBuffer(): { buffer: ArrayBuffer; expectedChecksum: number 
 export function RuntimePanel(): ReactNode {
   const store = useWorkspaceStore();
   const { runtime } = useWorkspaceState();
-  const clientRef = useRef<GeometryClient | undefined>(undefined);
   const handleRef = useRef<OperationHandle<unknown> | undefined>(undefined);
-
-  useEffect(() => {
-    const client = new GeometryClient({
-      onDiagnostic: (message, details): void => {
-        store.pushStatus(StatusSeverity.Warning, `${message} (${JSON.stringify(details)})`);
-      },
-    });
-    clientRef.current = client;
-    return (): void => {
-      client.dispose();
-      clientRef.current = undefined;
-    };
-  }, [store]);
+  // The shared worker, not a second one: spinning up another worker here would
+  // mean a second copy of the parser resident for a diagnostic button.
+  const client = useGeometryClient();
 
   const runSelfTest = useCallback((): void => {
-    const client = clientRef.current;
     if (client === undefined) return;
 
     const { buffer, expectedChecksum } = buildSelfTestBuffer();
@@ -97,7 +85,7 @@ export function RuntimePanel(): ReactNode {
         store.pushStatus(StatusSeverity.Error, `Worker self-test failed: ${error.message}`);
       },
     );
-  }, [store]);
+  }, [client, store]);
 
   const cancelSelfTest = useCallback((): void => {
     handleRef.current?.cancel();

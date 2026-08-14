@@ -15,6 +15,15 @@ import { triangleCount, vertexCount, type CanonicalMesh } from './mesh';
  * not implemented here. They arrive with the repair workflow and will live in
  * their own module so that the cheap structural gate stays cheap.
  *
+ * KNOWN GAP — `DEGENERATE_TRIANGLE` detects only INDEX-level degeneracy: a
+ * triangle that references the same vertex index twice. It does not detect
+ * POSITIONAL degeneracy, where three distinct indices point at coincident or
+ * collinear coordinates and the triangle has zero area. That distinction
+ * matters more than it sounds: STL triangle soup numbers every corner uniquely,
+ * so a zero-area triangle in an STL file is currently invisible to this check.
+ * Finding it needs a per-triangle cross product, which is a geometric test
+ * rather than a structural one, and belongs with the topological diagnostics.
+ *
  * COST — validation is O(vertices + triangles) and scans every coordinate. On a
  * large mesh this is real work and must run inside a worker, never on the UI
  * thread.
@@ -207,6 +216,7 @@ export function validateMeshStructure(
     );
   }
 
+  let groupIndex = 0;
   for (const group of mesh.groups ?? []) {
     const invalid =
       group.indexOffset < 0 ||
@@ -215,18 +225,24 @@ export function validateMeshStructure(
       group.indexCount % 3 !== 0 ||
       group.indexOffset + group.indexCount > mesh.indices.length;
     if (invalid) {
+      // Reported by INDEX, never by name. A group name comes verbatim from the
+      // file — an ASCII STL `solid` line routinely holds a filesystem path or a
+      // project name — and `details` is the field that would be transmitted if
+      // telemetry were ever introduced. The index locates the group just as
+      // well without quoting the user's data.
       report(
         MeshValidationCode.GroupRangeInvalid,
         MeshValidationSeverity.Error,
-        `Group "${group.name}" describes a range outside the index buffer.`,
+        `Group ${String(groupIndex)} describes a range outside the index buffer.`,
         {
-          name: group.name,
+          groupIndex,
           indexOffset: group.indexOffset,
           indexCount: group.indexCount,
           indexBufferLength: mesh.indices.length,
         },
       );
     }
+    groupIndex += 1;
   }
 
   return {

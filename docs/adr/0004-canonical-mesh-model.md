@@ -86,6 +86,30 @@ measuring memory, and measuring how often the precision loss actually produces
 bad welds. Guessing now risks either wasting memory on every model or corrupting
 a minority of them.
 
+### Stage 1 update (2026-08-14) — still open, but now with evidence
+
+Measurements are in [PERFORMANCE_BASELINE.md](../PERFORMANCE_BASELINE.md).
+Summary of what changed:
+
+- **The memory cost is now measured, not estimated.** Float64 positions add 75%
+  to canonical mesh size (96 MiB → 168 MiB for a 100 MiB STL), plus a conversion
+  pass and a transient extra copy on every GPU upload, since GPUs take Float32.
+- **The benefit for STL import specifically is zero.** Binary STL stores Float32,
+  so widening the canonical type stores identical values in twice the space. The
+  only implemented workflow cannot motivate the change.
+- **The argument for Float64 is entirely about unimplemented operations** —
+  welding tolerances, booleans, offsetting — so the evidence that would justify
+  the cost cannot be gathered yet.
+
+**Decision: Float32 stays, and this question stays OPEN.** It is the reversible
+choice, and `PositionArray` still isolates it to one line.
+
+The benchmark that would close it: implement coincident-vertex welding with an
+absolute tolerance, run it on models translated 10 mm / 1 m / 100 m from the
+origin at feature sizes from 10 µm to 1 mm, and measure how often Float32 and
+Float64 disagree about vertex identity. Divergence at realistic magnitudes
+justifies the memory; no divergence closes this in favour of Float32.
+
 **Mitigation:** the code declares `type PositionArray = Float32Array` as a
 single alias with `Float32Array` as the provisional value. Call sites use the
 alias, never the concrete type, so the decision changes in one place. A likely

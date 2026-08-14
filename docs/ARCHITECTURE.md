@@ -1,8 +1,9 @@
 # CAD Fixer Architecture
 
-Status: Stage 0 (engineering foundation). This document describes the intended
-architecture. Where a layer does not exist yet, its responsibilities are defined
-so that later work has somewhere to go.
+Status: Stage 1 (STL import, viewing, and export). This document describes the
+architecture as built, plus the intended shape of layers that do not exist yet.
+Where a layer is not implemented, its responsibilities are defined so that later
+work has somewhere to go, and it is labelled as such.
 
 ## 1. Governing constraints
 
@@ -42,7 +43,7 @@ Four constraints shape every decision below.
       ┌──────────────────────────────────▼──────────────────────────────────┐
       │                        Geometry worker thread                        │
       │  ┌────────────────────────┐      ┌──────────────────────────────┐    │
-      │  │ Format interfaces      │      │ Geometry operations          │    │
+      │  │ STL codec + seams      │      │ Geometry operations          │    │
       │  │ packages/file-formats  │      │ (not implemented)            │    │
       │  └───────────┬────────────┘      └──────────────┬───────────────┘    │
       │              │                                  │                    │
@@ -52,7 +53,7 @@ Four constraints shape every decision below.
       │  └───────────────────────────┬──────────────────────────────────┘    │
       │                              │                                       │
       │  ┌───────────────────────────▼──────────────────────────────────┐    │
-      │  │ WASM/native geometry kernels (not selected — Stage 0 adds none)│   │
+      │  │ WASM/native geometry kernels (none selected yet)              │    │
       │  └──────────────────────────────────────────────────────────────┘    │
       └──────────────────────────────────────────────────────────────────────┘
 ```
@@ -75,40 +76,82 @@ browser dependency creeping in breaks the test run.
 | --------------------------- | ------------------------------------------------------------ | ------------------------------------------- |
 | `apps/web/src/components`   | Presentation, layout, accessibility, user intent             | Geometry, parsing, validation rules         |
 | `apps/web/src/viewport`     | Three.js scene, renderer lifecycle, GPU resource disposal    | Mesh semantics; it renders what it is given |
-| `apps/web/src/state`        | Workspace snapshot, status log, selection, future undo stack | React-specific APIs (it is framework-free)  |
+| `apps/web/src/state`        | Workspace snapshot, status log, selection, future undo stack | React APIs, except in `use-*.ts` bindings   |
 | `apps/web/src/runtime`      | The only `Worker` construction site; transport adapter       | Protocol logic, geometry                    |
 | `apps/web/src/workers`      | Worker entry point; wires handlers to the host               | Business logic beyond registration          |
 | `packages/geometry-runtime` | Protocol, coordinator, worker host, cancellation, transfers  | DOM, React, Three.js, geometry algorithms   |
 | `packages/mesh-core`        | Canonical mesh contract, structural validation               | File formats, rendering, algorithms         |
-| `packages/file-formats`     | Format descriptors, filename screening, reader/writer seams  | Parsers (none exist yet), UI                |
+| `packages/file-formats`     | Format descriptors, screening, budgets, the STL codec        | UI, rendering, worker protocol              |
 | `packages/shared`           | Typed errors, units, ids, cancellation primitive             | Everything domain-specific                  |
 
 Dependency direction is strictly one way:
 
 ```
 shared ← mesh-core ← file-formats
-shared ← geometry-runtime
+shared ← mesh-core ← geometry-runtime
 all of the above ← apps/web
 ```
 
 Nothing in `packages/` may import from `apps/`.
 
+One nuance on `apps/web/src/state`: the store itself is framework-free and
+tested without React, but the `use-*.ts` files in that directory are React
+bindings and do import hooks. `use-model-import.ts` currently also holds real
+sequencing rules — supersede-an-in-flight-import, and "a failed import must not
+disturb the loaded model" — which means those rules can only be exercised
+through React today. That is a known wrinkle, recorded rather than hidden; the
+rules themselves are covered end to end.
+
+`geometry-runtime` gained its `mesh-core` dependency in Stage 1: the operation
+map is a compile-time contract, and geometry operations genuinely speak
+`CanonicalMesh`. It deliberately does **not** depend on `file-formats` — codecs
+stay behind the worker's operation handlers, so the protocol never knows which
+formats exist.
+
 ## 4. File ingestion
 
-The path a file will take, and where it currently stops:
+The production import path, as implemented for STL:
 
-1. **Drop or picker** (`ImportDropZone`) — reads `name` and `size` only.
+1. **Drop or picker** (`ImportDropZone`) — reads `name` and `size` only. The
+   component never touches file contents.
 2. **Screening** (`file-formats/screening`) — filename extension and declared
    size. A usability filter, **not** a security boundary. Passing screening
    confers no trust.
-3. **Read into a buffer** — _not implemented._ Will happen off the UI thread.
-4. **Parse** (`file-formats` reader) — _not implemented._ Runs in a worker.
-   Must treat bytes as hostile: validate declared counts against real buffer
-   length, bound every allocation, dereference no unchecked offset.
-5. **Validate** (`mesh-core/validation`) — structural invariants.
-6. **Canonical mesh** — handed to the workspace.
+3. **Read into a buffer** (`runtime/import-service`) — the ONLY place in the
+   application that calls `File.arrayBuffer()`. Centralised so the number of
+   live copies of a 500 MB model is answerable by reading one file.
+4. **Transfer to the worker** — the buffer is moved, not copied. The main
+   thread's view is detached the moment `dispatch` returns.
+5. **Detect** (`file-formats/stl/detect`) — structural, never from the
+   extension, the MIME type, or a leading `solid`. See
+   [ADR 0007](adr/0007-stl-preservation-policy.md).
+6. **Parse** (`file-formats/stl`) — in the worker. Treats bytes as hostile:
+   declared counts checked against real buffer length, every allocation
+   preflighted against `ImportBudget`, no unchecked offset dereferenced,
+   non-finite coordinates rejected.
+7. **Validate** (`mesh-core/validation`) — structural invariants. **This is the
+   gate**: the import succeeds only if `assertMeshStructure` passes.
+8. **Derive display data** — bounds and render normals, computed in the worker
+   so the main thread never walks the mesh.
+9. **Transfer back** — canonical buffers and render normals are moved, not
+   cloned, and installed in the workspace.
 
-Stage 0 stops after step 2 and says so in the interface.
+Only STL is implemented. OBJ and 3MF have descriptors but no codec; the
+interface says so rather than starting an import that cannot finish. Capability
+is declared in `file-formats/capabilities` rather than read from the registry,
+because the registry is populated inside the worker and is legitimately empty on
+the main thread — a test asserts the declaration matches what actually registers.
+
+### Cancellation requires yielding
+
+A worker handler that runs one long synchronous loop can never be cancelled. The
+cancel arrives as a message, and that message cannot be read until the handler
+returns to the event loop, so a cancellation flag polled inside the loop can
+never change. Codecs therefore `await context.yieldToEventLoop()` between
+batches. The worker supplies a `MessageChannel`-based yield, which is not
+subject to the ~4 ms clamp browsers apply to nested `setTimeout`.
+
+This was a real defect found by an end-to-end test, not a theoretical concern.
 
 ## 5. Normalized mesh representation
 
@@ -180,9 +223,12 @@ know which kernel is in use. Requirements already established for it:
   what the kernel reports about itself.
 - If it uses pthreads, it needs `SharedArrayBuffer`, which needs cross-origin
   isolation — see [DEPLOYMENT_REQUIREMENTS.md](DEPLOYMENT_REQUIREMENTS.md).
-- Its licence must be compatible with a proprietary commercial product. Several
-  well-known geometry kernels are GPL or AGPL and are therefore not adoptable
-  without an explicit decision.
+- Its licence must be compatible with a proprietary commercial product, and the
+  analysis is per-kernel rather than a blanket rule. Licences in this space range
+  from permissive through LGPL-with-exception to GPL, and CGAL's varies **per
+  package** within one library. See
+  [Geometry kernel licensing](DEPENDENCIES.md#geometry-kernel-licensing) for what
+  upstream actually says about CGAL and OCCT.
 
 ## 9. Serialization and export
 
@@ -204,9 +250,21 @@ contents. See [PRIVACY_ARCHITECTURE.md](PRIVACY_ARCHITECTURE.md). ESLint bans
 the browser's network APIs outright, so adding telemetry is a deliberate,
 reviewable act rather than an accident.
 
-## 12. What Stage 0 deliberately does not contain
+## 12. What is deliberately not implemented
 
-No STL/OBJ/3MF parser, no repair, no booleans, no conversion, no connectors, no
-splitting, no displacement, no hollowing, no drainage holes, no auth, no
-billing, no database, no backend, no analytics, and no stub that pretends to be
-any of them.
+STL is implemented, read and written. Nothing else is:
+
+No OBJ or 3MF codec, no format conversion, no repair, no welding, no booleans,
+no connectors, no splitting, no displacement, no hollowing, no drainage holes,
+no topological diagnostics (manifoldness, self-intersection, orientation
+consistency), no auth, no billing, no database, no backend, no analytics, no
+persistence — and no stub that pretends to be any of them.
+
+Two distinctions the interface is careful about, because both are easy to
+overstate:
+
+- **STL in, STL out is re-export, not conversion.** The Convert workflow stays
+  disabled until a second codec exists.
+- **Structurally valid is not printable.** Validation checks buffer and index
+  integrity. It says nothing about whether a model is watertight, manifold, or
+  manufacturable.

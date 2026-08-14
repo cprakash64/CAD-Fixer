@@ -11,6 +11,9 @@ export type {
   UvArray,
 } from './mesh';
 
+export { computeBounds, computeVertexNormals, triangleNormal } from './analysis';
+export type { MeshBounds, Vector3Tuple } from './analysis';
+
 export {
   assertMeshStructure,
   MeshValidationCode,

@@ -3,6 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
+  "sideEffects": false,
   "description": "Framework-free primitives shared across CAD Fixer layers: typed errors, units, identifiers, cancellation.",
   "exports": {
     ".": "./src/index.ts"

@@ -13,9 +13,20 @@ matter more than moving fast.
 Five workflows are planned: **Repair, Convert, Split, Texture, Hollow**. Target
 formats: **STL, OBJ, 3MF**.
 
-**Current stage: Stage 0 — foundation only.** No parser, no geometry algorithm,
-and no workflow is implemented. Do not implement one unless the task explicitly
-asks for it.
+**Current stage: Stage 1 complete — STL import/export vertical slice.**
+Implemented: structural STL encoding detection, hand-written binary and ASCII
+STL parsers with resource budgets, worker-based parsing with progress and
+working cancellation, a real Three.js viewport with camera controls, model
+statistics, and binary/ASCII STL export that round-trips through our own parser.
+
+NOT implemented, and not to be implemented unless a task explicitly asks: mesh
+repair, welding, hole filling, booleans, remeshing, OBJ or 3MF codecs, format
+conversion, splitting, connectors, texturing, hollowing, drainage holes, and
+topological diagnostics (manifoldness, self-intersection, orientation).
+
+**Parsing is not repair.** Import preserves exactly what the file contains — no
+welding, no dropping degenerate or duplicate triangles, no reorientation, no
+rescaling, no invented units. See `docs/adr/0007-stl-preservation-policy.md`.
 
 ## Non-negotiable rules
 
@@ -59,8 +70,11 @@ asks for it.
 16. **Check licences before adding a significant dependency**, and record it in
     `docs/DEPENDENCIES.md`.
 17. **No GPL/AGPL runtime code without explicit approval.** This product is
-    intended to be proprietary. Several well-known geometry kernels are GPL or
-    AGPL — check before assuming.
+    intended to be proprietary. Copyleft that is not GPL/AGPL (LGPL, LGPL with a
+    linking exception) is not automatically disqualifying but carries obligations
+    that must be evaluated first. Geometry kernel licensing is per-kernel and,
+    for CGAL, **per package** — read
+    `docs/DEPENDENCIES.md#geometry-kernel-licensing` rather than assuming.
 18. **Preserve the UI/geometry separation.** React components do not own
     geometry algorithms. `packages/**` must not import React or Three.js, and
     must never import from `apps/**`.
@@ -79,7 +93,7 @@ apps/web/                   React application shell
   src/workers/              worker entry point (own tsconfig: WebWorker lib)
 packages/shared/            typed errors, units, ids, cancellation
 packages/mesh-core/         canonical mesh + structural validation
-packages/file-formats/      format descriptors, screening, codec seams
+packages/file-formats/      format descriptors, screening, budgets, STL codec
 packages/geometry-runtime/  worker protocol, coordinator, worker host
 docs/                       architecture, dependencies, privacy, deployment
 docs/adr/                   architecture decision records
@@ -87,7 +101,10 @@ e2e/                        Playwright specs
 ```
 
 Dependency direction is one-way:
-`shared ← mesh-core ← file-formats`, `shared ← geometry-runtime`, all ← `apps/web`.
+`shared ← mesh-core ← file-formats`, `shared ← mesh-core ← geometry-runtime`,
+all ← `apps/web`. `geometry-runtime` gained a `mesh-core` dependency in Stage 1
+because geometry operations speak `CanonicalMesh`; it must NOT depend on
+`file-formats`, so codecs stay behind the worker's operation handlers.
 
 ## Commands
 
@@ -102,6 +119,7 @@ npm run typecheck    # TypeScript, all projects
 npm test             # Vitest unit and component tests
 npm run test:e2e     # Playwright end-to-end (needs `npx playwright install chromium`)
 npm run verify       # format:check + lint + typecheck + test + build
+npm run bench:stl    # STL performance benchmark (NOT in CI; see docs/PERFORMANCE_BASELINE.md)
 ```
 
 Before declaring work complete, run `npm run verify`. Run `npm run test:e2e` as
@@ -131,6 +149,17 @@ well when you have touched the shell, the worker, or the build.
   them.
 - **Transferred buffers are detached.** After transferring a buffer to a worker,
   the sender's view is unusable. Use the buffer from the result.
+- **A synchronous worker handler cannot be cancelled.** The cancel arrives as a
+  message and cannot be read until the handler returns to the event loop, so a
+  polled flag never changes. Long loops must `await context.yieldToEventLoop()`
+  between batches. Use the `MessageChannel` yield, not `setTimeout` (clamped to
+  ~4 ms when nested).
+- **Format capability on the main thread comes from
+  `file-formats/capabilities`, not the registry.** Codecs register inside the
+  worker, so the main-thread registry is empty by design. A test keeps the
+  declaration and the registry in agreement.
+- **`ByteScanner.isAtEnd()` is a method, not a getter, because it mutates.**
+  Getters that skip whitespace confuse both readers and TypeScript's narrowing.
 
 ## Honesty rules for the interface
 
@@ -138,8 +167,11 @@ well when you have touched the shell, the worker, or the build.
   says so plainly.
 - **Never report success for work that did not happen.** Screening a filename is
   not importing a model.
-- **Never register a stub codec.** A test asserts the format registry is empty;
-  it exists so a placeholder cannot silently make the app look functional.
+- **Never register a stub codec.** STL is real; OBJ and 3MF must keep failing
+  loudly. Two tests hold this line: `registry.test.ts` asserts unimplemented
+  formats throw rather than returning a placeholder, and `capabilities.test.ts`
+  asserts the capability list the UI reads matches exactly what actually
+  registers — so the interface cannot advertise a format that does not work.
 
 ## Out of scope right now
 

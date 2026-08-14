@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import { AppHeader } from './components/AppHeader';
 import { ImportDropZone } from './components/ImportDropZone';
+import { ModelPanel } from './components/ModelPanel';
 import { RuntimePanel } from './components/RuntimePanel';
 import { StatusPanel } from './components/StatusPanel';
 import { ViewportPanel } from './components/ViewportPanel';
@@ -20,6 +21,7 @@ export function App(): ReactNode {
       <div className="app__body">
         <aside className="app__sidebar">
           <WorkflowNav />
+          <ModelPanel />
           <RuntimePanel />
         </aside>
         <main className="app__main">

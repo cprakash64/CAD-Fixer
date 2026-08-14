@@ -12,8 +12,13 @@ export type {
   ProtocolMessage,
   RequestMessage,
   ResultMessage,
+  MeshValidationSummary,
   SelfTestPayload,
   SelfTestResult,
+  StlExportPayload,
+  StlExportResult,
+  StlImportPayload,
+  StlImportResult,
   TransferHandle,
 } from './protocol';
 
