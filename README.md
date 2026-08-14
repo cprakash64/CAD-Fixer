@@ -8,8 +8,10 @@ exported entirely in the browser using Web Workers, WebAssembly, and your own
 CPU and GPU. There is no server-side geometry processing, no upload endpoint,
 and no analytics.
 
-> **Current status: Stage 0 — engineering foundation.**
-> The application shell runs, but **no mesh processing is implemented yet.** See
+> **Current status: Stage 1 — STL import, viewing, and export.**
+> You can open a binary or ASCII STL file, inspect it in a real 3D viewport, and
+> export it again as binary or ASCII STL, entirely on your own machine. **None
+> of the five workflows is implemented yet** — see
 > [What is and is not implemented](#what-is-and-is-not-implemented). Nothing in
 > this repository fakes a working feature.
 
@@ -68,11 +70,24 @@ running first.
 
 ### Implemented
 
-- Application shell: header, workflow navigation, workspace, drag-and-drop
-  intake area, status log.
-- An empty 3D viewport (Three.js) with correct renderer lifecycle, resize
-  handling, context-loss handling, and disposal. There is no model to display
-  and no camera interaction yet.
+- **STL import**, binary and ASCII, parsed in a Web Worker. The encoding is
+  detected structurally, never from the file extension or a leading `solid` —
+  binary STL files routinely contain `solid` in their header, and getting that
+  wrong is the classic STL bug.
+- **A hand-written STL parser** that treats every file as hostile: declared
+  facet counts are checked against the real buffer length, every allocation is
+  preflighted against a typed budget, and non-finite coordinates are rejected
+  rather than silently replaced. Three.js's `STLLoader` is deliberately not used
+  as the parsing boundary.
+- **Import progress and working cancellation**, including on multi-million-
+  triangle files.
+- **A real 3D viewport**: your model, with orbit/pan/zoom, fit-view, lighting,
+  high-DPI handling, and correct GPU resource disposal when a model is replaced.
+- **Model statistics** — triangle and vertex counts, file size, encoding,
+  bounding box and radius, and unit status.
+- **STL export**, binary and ASCII, written locally with no network involvement
+  and no gating. Both writers round-trip exactly through our own parser, which
+  is asserted in tests.
 - Filename screening at the UI boundary — extension and declared size. **This is
   a usability filter, not a security control, and it reads no file contents.**
 - The canonical mesh contract (`packages/mesh-core`) and structural mesh
@@ -89,16 +104,28 @@ running first.
 
 ### Not implemented
 
-- **No STL, OBJ, or 3MF parser or writer.** The format registry is empty, and a
-  test enforces that so a stub cannot quietly make the app look functional.
-- **No model import.** Dropping a `.stl` file screens the name and then tells
-  you import is not implemented. It does not read the file.
-- **No mesh repair, boolean operations, conversion, splitting, connectors,
-  displacement, hollowing, or drainage holes.**
+- **No OBJ or 3MF parser or writer.** Only STL is implemented. Dropping an
+  `.obj` or `.3mf` file says so plainly instead of starting an import that
+  cannot finish, and a test asserts the declared capabilities match the codecs
+  that actually register.
+- **No format conversion.** STL in, STL out is re-export, not conversion, and
+  the Convert workflow stays disabled until a second format exists.
+- **No mesh repair, boolean operations, splitting, connectors, displacement,
+  hollowing, or drainage holes.** Import deliberately does not weld vertices,
+  drop degenerate triangles, deduplicate facets, reorient winding, or rescale
+  anything — see
+  [ADR 0007](docs/adr/0007-stl-preservation-policy.md). Parsing is not repair.
 - **No geometry kernel.** No Manifold, Geogram, lib3mf, OpenVDB, CGAL, or
-  OpenCascade — these need licence and WASM-portability evaluation first.
+  OpenCascade — these need licence and WASM-portability evaluation first. The
+  licence question is per-kernel (and for CGAL, per package); see
+  [Geometry kernel licensing](docs/DEPENDENCIES.md#geometry-kernel-licensing).
 - **No topological validation.** Structural validation checks buffer and index
-  integrity, not manifoldness or self-intersection.
+  integrity. A model reported as _structurally valid_ is **not** thereby
+  watertight, manifold, or printable, and the interface says so. Manifoldness,
+  boundary edges, self-intersection, and orientation consistency are not
+  implemented.
+- **No units for STL.** STL files carry no unit, so CAD Fixer reports
+  "Unspecified by STL" rather than assuming millimetres.
 - **No accounts, authentication, payments, pricing, or download gating.** Usage
   is completely open.
 - **No analytics or telemetry of any kind.**

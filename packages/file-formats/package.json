@@ -3,7 +3,8 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Format descriptors, UI-level filename screening, and reader/writer seams. Contains no parsers in Stage 0.",
+  "sideEffects": false,
+  "description": "Format descriptors, UI-level filename screening, resource budgets, and the STL codec. OBJ and 3MF are not implemented.",
   "exports": {
     ".": "./src/index.ts"
   },

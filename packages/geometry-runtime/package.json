@@ -3,6 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
+  "sideEffects": false,
   "description": "Transport-agnostic worker protocol, coordinator, and worker-side host runtime for off-main-thread geometry work.",
   "exports": {
     ".": "./src/index.ts"
@@ -11,6 +12,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
+    "@cadfixer/mesh-core": "*",
     "@cadfixer/shared": "*"
   }
 }

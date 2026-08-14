@@ -6,7 +6,10 @@ import {
   type OperationHandle,
   type ProgressUpdate,
   type SelfTestResult,
+  type StlExportResult,
+  type StlImportResult,
 } from '@cadfixer/geometry-runtime';
+import type { CanonicalMesh } from '@cadfixer/mesh-core';
 import { internalError } from '@cadfixer/shared';
 
 /**
@@ -91,6 +94,44 @@ export class GeometryClient {
       { bytes, chunks },
       { onProgress, transfer: [bytes] },
     );
+  }
+
+  /**
+   * Parses an STL file in the worker.
+   *
+   * `bytes` is TRANSFERRED: the caller's buffer is detached as soon as this
+   * returns and must not be read again. The parsed mesh and its render normals
+   * come back by transfer too, so nothing large is ever cloned on this path.
+   */
+  public importStl(
+    bytes: ArrayBuffer,
+    onProgress: (update: ProgressUpdate) => void,
+    budget?: Readonly<Record<string, number>>,
+  ): OperationHandle<StlImportResult> {
+    return this.coordinator.dispatch(
+      'stl/import',
+      budget === undefined ? { bytes } : { bytes, budget },
+      { onProgress, transfer: [bytes] },
+    );
+  }
+
+  /**
+   * Encodes a mesh as STL in the worker.
+   *
+   * The mesh is CLONED rather than transferred, because the main thread is
+   * still displaying it — transferring would detach the buffers the viewport is
+   * rendering from. That clone is the one unavoidable copy in the export path,
+   * and it is not free: structured-cloning a 2-million-triangle mesh copies
+   * about 96 MiB. Eliminating it means keeping canonical geometry worker-side
+   * and never handing it to the main thread at all. Recorded under "Not yet
+   * measured" in docs/PERFORMANCE_BASELINE.md.
+   */
+  public exportStl(
+    mesh: CanonicalMesh,
+    encoding: string,
+    onProgress: (update: ProgressUpdate) => void,
+  ): OperationHandle<StlExportResult> {
+    return this.coordinator.dispatch('stl/export', { mesh, encoding }, { onProgress });
   }
 
   public dispose(): void {

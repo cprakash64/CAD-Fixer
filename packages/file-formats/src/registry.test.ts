@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { AppErrorCode, isAppError } from '@cadfixer/shared';
-import { MeshFormatId, SUPPORTED_FORMATS } from './formats';
+import { MeshFormatId } from './formats';
+import { registerBuiltInFormats } from './register';
 import {
   canRead,
   canWrite,
@@ -14,45 +15,66 @@ afterEach(() => {
 });
 
 /**
- * This suite is a guard against the most likely way Stage 0 could be
- * misrepresented: a stub codec landing in the registry and making the
- * application appear to import models when it cannot.
+ * The registry is the single place that answers "which formats does this build
+ * actually support?". These tests guard the honesty of that answer in both
+ * directions: STL must really be there, and the formats that are not
+ * implemented must fail loudly rather than return a stub that makes the
+ * application look more capable than it is.
  */
-describe('format registry in Stage 0', () => {
-  it.each(SUPPORTED_FORMATS.map((format) => format.id))(
-    'has no reader registered for %s',
-    (formatId) => {
+describe('before registration', () => {
+  it('reports no formats at all', () => {
+    for (const formatId of Object.values(MeshFormatId)) {
       expect(canRead(formatId)).toBe(false);
-    },
-  );
+      expect(canWrite(formatId)).toBe(false);
+    }
+  });
+});
 
-  it.each(SUPPORTED_FORMATS.map((format) => format.id))(
-    'has no writer registered for %s',
+describe('after registering the built-in formats', () => {
+  it('reports STL as readable and writable', () => {
+    registerBuiltInFormats();
+
+    expect(canRead(MeshFormatId.Stl)).toBe(true);
+    expect(canWrite(MeshFormatId.Stl)).toBe(true);
+  });
+
+  it('offers both STL encodings, binary first', () => {
+    registerBuiltInFormats();
+
+    expect(requireWriter(MeshFormatId.Stl).encodings).toEqual(['binary', 'ascii']);
+  });
+
+  it.each([MeshFormatId.Obj, MeshFormatId.ThreeMf])(
+    'still reports %s as unsupported, because no codec exists',
     (formatId) => {
+      registerBuiltInFormats();
+
+      expect(canRead(formatId)).toBe(false);
       expect(canWrite(formatId)).toBe(false);
     },
   );
 
-  it('fails loudly rather than returning a stub reader', () => {
-    try {
-      requireReader(MeshFormatId.Stl);
-      expect.unreachable('requireReader should have thrown');
-    } catch (caught) {
-      expect(isAppError(caught)).toBe(true);
-      if (!isAppError(caught)) return;
-      expect(caught.code).toBe(AppErrorCode.UnsupportedFile);
-      expect(caught.message).toContain('not implemented');
-    }
-  });
+  it.each([MeshFormatId.Obj, MeshFormatId.ThreeMf])(
+    'fails loudly rather than returning a stub reader for %s',
+    (formatId) => {
+      registerBuiltInFormats();
 
-  it('fails loudly rather than returning a stub writer', () => {
-    try {
-      requireWriter(MeshFormatId.ThreeMf);
-      expect.unreachable('requireWriter should have thrown');
-    } catch (caught) {
-      expect(isAppError(caught)).toBe(true);
-      if (!isAppError(caught)) return;
-      expect(caught.code).toBe(AppErrorCode.UnsupportedFile);
-    }
+      try {
+        requireReader(formatId);
+        expect.unreachable('requireReader should have thrown');
+      } catch (caught) {
+        expect(isAppError(caught)).toBe(true);
+        if (!isAppError(caught)) return;
+        expect(caught.code).toBe(AppErrorCode.UnsupportedFile);
+        expect(caught.message).toContain('not implemented');
+      }
+    },
+  );
+
+  it('is idempotent', () => {
+    registerBuiltInFormats();
+    registerBuiltInFormats();
+
+    expect(canRead(MeshFormatId.Stl)).toBe(true);
   });
 });

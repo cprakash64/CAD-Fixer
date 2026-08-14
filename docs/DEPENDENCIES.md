@@ -4,11 +4,14 @@ Every dependency must justify its presence. This file records what we use, why,
 and the licence risk.
 
 **Licence policy.** CAD Fixer is intended to become a proprietary commercial
-application. Runtime dependencies must therefore carry permissive licences
-(MIT, Apache-2.0, BSD, ISC). **No GPL or AGPL code may be copied into the
-project, and no GPL/AGPL runtime dependency may be added without explicit
-written approval from the product owner.** This matters most for geometry: several
-well-known mesh kernels are GPL or AGPL.
+application. Runtime dependencies must therefore carry licences compatible with
+that intent — permissive ones (MIT, Apache-2.0, BSD, ISC) need no further
+analysis. **No GPL or AGPL code may be copied into the project, and no GPL/AGPL
+runtime dependency may be added without explicit written approval from the
+product owner.** Copyleft licences that are not outright GPL/AGPL (notably LGPL,
+and LGPL with linking exceptions) are not automatically disqualifying, but they
+carry obligations that must be evaluated for our specific distribution model
+before adoption. See [Geometry kernel licensing](#geometry-kernel-licensing).
 
 Versions below are the ranges declared in `package.json`, verified against the
 npm registry on 2026-08-14. Licences were read from published package metadata.
@@ -30,7 +33,74 @@ That is the entire runtime dependency list. Notably absent:
 - **No HTTP client.** By design — CAD Fixer makes no network requests.
 - **No geometry kernel.** Manifold, Geogram, lib3mf, OpenVDB, CGAL, and
   OpenCascade are all deliberately absent. They are evaluated separately, with
-  licensing as a first-class criterion.
+  licensing as a first-class criterion — see below.
+- **No third-party STL parser.** The STL codec in `packages/file-formats` is our
+  own. Parsing is the trusted boundary for hostile input; we do not delegate it,
+  and specifically do not use Three.js's `STLLoader`, which is a rendering
+  convenience rather than a validating parser.
+
+## Geometry kernel licensing
+
+No geometry kernel is installed, and none may be added without an explicit
+decision. This section records what the licences actually say, because an
+earlier draft of this document flattened them into "GPL/AGPL, therefore
+unusable", which is not accurate for either CGAL or OCCT.
+
+**This is an engineering summary of upstream licence text, not legal advice.**
+Anything adopted needs review by someone qualified, against our actual
+distribution model.
+
+### CGAL — licensing is per package
+
+CGAL is not under a single licence. Upstream states that some parts are
+available under the LGPL and other parts under the GPL, and the per-package
+licence is listed in CGAL's Package Overview.
+
+- The **kernel and support libraries** are LGPL, deliberately chosen as the less
+  constraining licence so others can build on top.
+- **Advanced algorithms and data structures** are typically GPL, to protect
+  their commercial value.
+- Using a **GPL-covered CGAL package** in proprietary distributed software
+  requires GPL compliance — which for a proprietary product generally means
+  obtaining a commercial licence instead. GeometryFactory sells commercial CGAL
+  licences precisely for the case where the open-source terms do not work.
+- Using only **LGPL-covered CGAL packages** is a materially different analysis
+  from the GPL case and must be evaluated on its own terms.
+
+Practical consequence: "can we use CGAL?" is not answerable in general. It is
+answerable only for the specific packages an algorithm needs.
+
+Source: <https://www.cgal.org/license.html> (checked 2026-08-14).
+
+### OCCT — LGPL 2.1 with an additional exception
+
+Open CASCADE Technology is distributed under **LGPL 2.1 plus an additional
+exception** (`OCCT_LGPL_EXCEPTION.txt` in the distribution). The exception
+covers, among other things, distributing object code incorporating material from
+OCCT header files under terms of your choice given prominent notice, and
+combining or linking a "work that uses the Library" and distributing that work
+under terms of your choice — provided those terms permit modification for the
+customer's own use and reverse engineering for debugging such modifications.
+
+That is not the same as "unusable in a proprietary product". It does carry
+obligations that must be evaluated for our distribution model, and the
+reverse-engineering-for-debugging condition in particular deserves attention.
+Open Cascade also offers commercial arrangements if the open-source obligations
+turn out to be undesirable.
+
+Note for this project specifically: LGPL's relinking/modification expectations
+were written for native dynamic linking. How they apply to a **statically linked
+WebAssembly bundle shipped to a browser** is a question that must be answered
+before adoption, not after.
+
+Sources: <https://github.com/Open-Cascade-SAS/OCCT>,
+<https://occt3d.com/open-cascade-technology/index.html> (checked 2026-08-14).
+
+### Others not yet evaluated
+
+Manifold, Geogram, lib3mf, and OpenVDB have not been assessed. Each needs the
+same treatment — current upstream licence text, read against our distribution
+model — before it can be considered.
 
 ## Development dependencies
 

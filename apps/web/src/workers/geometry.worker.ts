@@ -4,6 +4,7 @@ import {
   toTransferables,
   type MessageEndpoint,
 } from '@cadfixer/geometry-runtime';
+import { stlExportHandler, stlImportHandler } from './stl-handlers';
 
 /**
  * The geometry worker entry point.
@@ -36,6 +37,9 @@ const endpoint: MessageEndpoint = {
 };
 
 const host = new GeometryWorkerHost(endpoint);
+
+host.register('stl/import', stlImportHandler);
+host.register('stl/export', stlExportHandler);
 
 host.register(
   'runtime/self-test',

@@ -72,22 +72,41 @@ visible diff in a config file, not a quiet line in a component.
 to an `AppError` without a type error, so geometry cannot reach a log through
 the normal error path.
 
-**File contents are not read at all in Stage 0.** The import surface touches
-`File.name` and `File.size` only. A unit test asserts that neither
-`File.arrayBuffer()` nor `File.text()` is called on a dropped file.
+**File reading happens in exactly one place.** `runtime/import-service.ts` is
+the only module in the application that calls `File.arrayBuffer()`. That is a
+privacy control as much as an architectural one: "does this application read
+your file anywhere unexpected?" is answerable by reading one file. A unit test
+asserts a refused file is never opened at all.
 
-**An end-to-end test asserts network silence.** The Playwright suite records
-every request the page makes, including during a worker round trip, and fails if
-anything targets an origin other than the application's own.
+**Model bytes are moved, never broadcast.** The file buffer goes to the worker
+by transfer and comes back as canonical geometry by transfer. It is never
+serialised to text, never put in a URL, and never attached to an error.
+
+**Export is a local `Blob`.** `runtime/download.ts` builds a `Blob` from bytes
+already in memory and hands it to the browser's own download mechanism. No
+request is made, no server is involved, and the object URL is revoked afterwards
+so the buffer is not pinned for the life of the document.
+
+**Exported files carry no user-supplied text.** The binary STL header is a fixed
+string and the ASCII solid name is a constant. The source filename is never
+written into an exported file, so a model shared onward cannot leak the name of
+the project it came from. Tests assert this for both writers.
+
+**An end-to-end test asserts network silence, twice over.** The Playwright suite
+records every request the page makes across a full import AND export cycle. One
+test fails if anything targets a foreign origin; a second fails if any request
+carries a body or uses a method other than GET/HEAD — because "no external
+requests" alone would not catch a POST back to our own origin.
 
 **No third-party runtime dependencies that fetch.** The runtime tree is React,
 React DOM, and Three.js. Only system fonts are used, so no font is fetched.
 
 ## 6. Data at rest
 
-Nothing is persisted in Stage 0 — no localStorage, no IndexedDB, no cookies, no
-service worker cache of user data. When local persistence is added it must be
-visible to the user and clearable by them.
+Nothing is persisted — no localStorage, no IndexedDB, no cookies, no service
+worker cache of user data. An imported model lives in memory only and is gone
+when the tab closes. When local persistence is added it must be visible to the
+user and clearable by them.
 
 ## 7. Threat model note
 
@@ -95,7 +114,16 @@ The screening step at the import boundary is a **usability filter, not a
 security control**. It checks a filename extension and a declared size. It reads
 no bytes and establishes no trust.
 
-The real boundary is the future parser, which will handle untrusted, potentially
-hostile files. Its requirements are recorded in
-[ARCHITECTURE.md](ARCHITECTURE.md) §4 and are not satisfied by anything in
-Stage 0, because no parser exists.
+The real boundary is the STL parser, which handles untrusted, potentially
+hostile files. It runs in a worker, treats every declared value as adversarial,
+preflights every allocation against a typed budget, and rejects rather than
+repairs what it cannot represent. Its requirements are recorded in
+[ARCHITECTURE.md](ARCHITECTURE.md) §4, and the adversarial cases it is tested
+against are in `packages/file-formats/src/stl/stl-reader.test.ts`.
+
+Note what this does and does not protect against. It protects the tab from
+malformed and hostile files: no unbounded allocation, no unchecked offset, no
+catastrophic backtracking, no silent corruption of coordinates. It does **not**
+make an untrusted model safe to trust as geometry — a structurally valid file
+can still describe a nonsensical part. That is a diagnostics problem, not a
+security one.

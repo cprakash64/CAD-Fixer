@@ -1,34 +1,18 @@
-import { unsupportedFile, type CancellationToken } from '@cadfixer/shared';
+import { unsupportedFile } from '@cadfixer/shared';
 import type { CanonicalMesh } from '@cadfixer/mesh-core';
+import type { FormatReadContext, FormatWriteContext, MeshReadResult } from './context';
 import { describeFormat, type MeshFormatId } from './formats';
 
 /**
  * The seam between file bytes and the canonical mesh.
  *
- * NO CODEC IS IMPLEMENTED IN STAGE 0. The registry below is intentionally
- * empty, so every lookup fails loudly rather than returning a stub that
- * pretends to work. These interfaces exist now so that when STL, OBJ, and 3MF
- * codecs are written they slot in behind a fixed contract, and so the worker
- * and UI layers can be built against something real.
+ * STL is implemented as of Stage 1 and registers itself (see `./stl`). OBJ and
+ * 3MF are not, and every lookup for them fails loudly rather than returning a
+ * stub that pretends to work — a test enforces that.
  *
  * Implementations must run inside a worker: they touch whole-file buffers and
  * are the single most likely place for a hostile file to cause a stall.
  */
-
-export interface FormatProgressReporter {
-  /** `fraction` is 0..1. Implementations should throttle; the transport does not. */
-  report(fraction: number, note?: string): void;
-}
-
-export interface FormatReadContext {
-  readonly cancellation: CancellationToken;
-  readonly progress: FormatProgressReporter;
-}
-
-export interface FormatWriteContext {
-  readonly cancellation: CancellationToken;
-  readonly progress: FormatProgressReporter;
-}
 
 export interface MeshReader {
   readonly formatId: MeshFormatId;
@@ -40,11 +24,16 @@ export interface MeshReader {
    * allocations, and poll `context.cancellation`. The caller is responsible for
    * validating the returned mesh — see `assertMeshStructure`.
    */
-  read(bytes: Uint8Array, context: FormatReadContext): Promise<CanonicalMesh>;
+  read(bytes: Uint8Array, context: FormatReadContext): Promise<MeshReadResult>;
 }
 
 export interface MeshWriter {
   readonly formatId: MeshFormatId;
+  /**
+   * Encodings this writer can produce, e.g. `binary` and `ascii` for STL. The
+   * first is the default.
+   */
+  readonly encodings: readonly string[];
   /** Serialises a canonical mesh. Must not mutate the input mesh. */
   write(mesh: CanonicalMesh, context: FormatWriteContext): Promise<Uint8Array>;
 }

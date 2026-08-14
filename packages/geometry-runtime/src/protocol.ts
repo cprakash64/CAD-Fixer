@@ -1,4 +1,5 @@
-import type { OperationId, SerializedAppError } from '@cadfixer/shared';
+import type { Diagnostic, OperationId, SerializedAppError } from '@cadfixer/shared';
+import type { CanonicalMesh, MeshBounds } from '@cadfixer/mesh-core';
 
 /**
  * Wire protocol between the main thread and geometry workers.
@@ -36,6 +37,82 @@ export interface OperationMap {
     payload: SelfTestPayload;
     result: SelfTestResult;
   };
+  'stl/import': {
+    payload: StlImportPayload;
+    result: StlImportResult;
+  };
+  'stl/export': {
+    payload: StlExportPayload;
+    result: StlExportResult;
+  };
+}
+
+/* -------------------------------------------------------------- stl import -- */
+
+export interface StlImportPayload {
+  /**
+   * The whole file. Transferred, so the main thread loses access the moment
+   * dispatch returns — see docs/ARCHITECTURE.md on transfer ownership.
+   */
+  readonly bytes: ArrayBufferLike;
+  /**
+   * Optional limit overrides. Shaped as plain numbers rather than the
+   * format layer's `ImportBudget` type so the protocol does not depend on
+   * `@cadfixer/file-formats`.
+   */
+  readonly budget?: Readonly<Record<string, number>>;
+}
+
+/**
+ * Everything the application needs about an imported model.
+ *
+ * Statistics are computed IN THE WORKER, during the pass that already has the
+ * positions in cache. That is not an optimisation for its own sake: it means
+ * the main thread never walks a multi-million-triangle buffer to fill in a
+ * details panel.
+ */
+export interface StlImportResult {
+  readonly mesh: CanonicalMesh;
+  /** `binary` or `ascii`, as actually detected — never guessed from the name. */
+  readonly encoding: string;
+  readonly bounds: MeshBounds | undefined;
+  readonly triangleCount: number;
+  readonly vertexCount: number;
+  /**
+   * Per-vertex normals derived from the geometry, for display only.
+   *
+   * Kept out of the `CanonicalMesh` deliberately: they are not what the file
+   * said, and canonical data must not be rewritten for presentation. Computed
+   * here rather than on the main thread because deriving them is a per-triangle
+   * cross product over the whole mesh.
+   */
+  readonly renderNormals: Float32Array;
+  readonly warnings: readonly Diagnostic[];
+  /** Structural validation summary. The import already passed the gate. */
+  readonly validation: MeshValidationSummary;
+}
+
+export interface MeshValidationSummary {
+  readonly valid: boolean;
+  readonly issueCount: number;
+  readonly warningCount: number;
+  readonly truncated: boolean;
+  /** Issue codes, deduplicated, for display. Never geometry. */
+  readonly codes: readonly string[];
+}
+
+/* -------------------------------------------------------------- stl export -- */
+
+export interface StlExportPayload {
+  readonly mesh: CanonicalMesh;
+  readonly encoding: string;
+}
+
+export interface StlExportResult {
+  /** Encoded file bytes, transferred back to the caller. */
+  readonly bytes: ArrayBufferLike;
+  readonly byteLength: number;
+  readonly encoding: string;
 }
 
 export type OperationName = keyof OperationMap;

@@ -1,15 +1,25 @@
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { App } from './App';
+import { GeometryClientProvider } from './runtime/client-context';
+import { GeometryClient } from './runtime/geometry-client';
 import { WorkspaceProvider } from './state/store-context';
 import { WORKFLOWS } from './state/workflows';
 import { WorkspaceStore } from './state/workspace-store';
 
+/**
+ * The worker is injected, exactly as `main.tsx` injects it. The `Worker` global
+ * is stubbed in `vitest.setup.ts` and never replies, so any test that appeared
+ * to receive a worker result would be reading a fake — which is why none do.
+ */
 function renderApp(): WorkspaceStore {
   const store = new WorkspaceStore();
+  const client = new GeometryClient({ onDiagnostic: (): void => undefined });
   render(
     <WorkspaceProvider store={store}>
-      <App />
+      <GeometryClientProvider client={client}>
+        <App />
+      </GeometryClientProvider>
     </WorkspaceProvider>,
   );
   return store;
@@ -106,38 +116,68 @@ describe('file intake at the UI boundary', () => {
     expect(screen.getByTestId('status-list')).toHaveTextContent(/supported extension/i);
   });
 
-  it('does not claim success for a supported extension, because import is unimplemented', () => {
+  it('says OBJ import is unimplemented rather than pretending to open it', () => {
+    // OBJ has a descriptor and a recognised extension but no codec. Starting an
+    // import that could only fail deeper in would be worse than saying so.
     renderApp();
 
-    dropFiles([new File(['solid'], 'bracket.stl')]);
+    dropFiles([new File(['a'], 'part.obj')]);
 
     const log = screen.getByTestId('status-list');
-    expect(within(log).getByText(/importing models is not implemented yet/i)).toBeInTheDocument();
-    expect(log.textContent).not.toMatch(/imported|loaded successfully|ready to repair/i);
+    expect(within(log).getByText(/OBJ import is not implemented yet/i)).toBeInTheDocument();
+    expect(log.textContent).not.toMatch(/loaded|imported successfully/i);
   });
 
-  it('screens each file in a multi-file drop', () => {
+  it('starts a real import for an STL file and reads it locally', async () => {
+    // STL import IS implemented as of Stage 1, so the file is genuinely read —
+    // the opposite of the Stage 0 assertion this replaces.
     renderApp();
+    const file = new File([new Uint8Array(84)], 'bracket.stl');
+    const readAsBuffer = vi.spyOn(file, 'arrayBuffer');
 
-    dropFiles([new File(['a'], 'good.obj'), new File(['b'], 'bad.gcode')]);
+    dropFiles([file]);
 
-    const log = screen.getByTestId('status-list');
-    expect(within(log).getByText(/not implemented yet/i)).toBeInTheDocument();
-    expect(within(log).getByText(/\.gcode files are not supported/)).toBeInTheDocument();
+    expect(await screen.findByTestId('import-progress')).toBeInTheDocument();
+    expect(readAsBuffer).toHaveBeenCalledTimes(1);
   });
 
-  it('never reads the contents of a dropped file', () => {
+  it('does not claim the model is loaded while the import is still running', async () => {
+    // The worker stub never replies, so the import stays pending forever. That
+    // is the point: nothing may report success before a result arrives.
     renderApp();
-    const file = new File(['solid ascii stl body'], 'bracket.stl');
+
+    dropFiles([new File([new Uint8Array(84)], 'bracket.stl')]);
+    await screen.findByTestId('import-progress');
+
+    expect(screen.getByTestId('model-empty')).toBeInTheDocument();
+    expect(screen.getByTestId('status-list').textContent).not.toMatch(
+      /loaded|imported|ready to repair/i,
+    );
+  });
+
+  it('never reads a file it has already refused', () => {
+    renderApp();
+    const file = new File(['x'], 'drawing.zip');
     const readAsBuffer = vi.spyOn(file, 'arrayBuffer');
     const readAsText = vi.spyOn(file, 'text');
 
     dropFiles([file]);
 
-    // Screening is a filename check. Reading contents would mean a parser
-    // exists, and none does.
+    // Screening is a filename check, and a refused file must never be opened.
     expect(readAsBuffer).not.toHaveBeenCalled();
     expect(readAsText).not.toHaveBeenCalled();
+  });
+
+  it('uses only the first file of a multi-file drop and says so', () => {
+    // One model is open at a time, so silently ignoring the rest would be
+    // confusing.
+    renderApp();
+
+    dropFiles([new File(['a'], 'first.obj'), new File(['b'], 'second.stl')]);
+
+    const log = screen.getByTestId('status-list');
+    expect(within(log).getByText(/Only one model can be open at a time/i)).toBeInTheDocument();
+    expect(within(log).getByText(/OBJ import is not implemented yet/i)).toBeInTheDocument();
   });
 
   it('reports an empty drop instead of doing nothing', () => {
