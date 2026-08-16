@@ -126,9 +126,9 @@ it('measures STL import and export across representative sizes', async () => {
     // model exceeds the default intake limit — a real consequence of ASCII
     // being about 5.2x larger, not a bug in the benchmark. Skipped rather than
     // raising the budget, because the limit is the thing being characterised.
-    const asciiFitsBudget = asciiOut.value.byteLength <= DEFAULT_IMPORT_BUDGET.maxInputBytes;
+    const asciiFitsBudget = asciiOut.value.bytes.byteLength <= DEFAULT_IMPORT_BUDGET.maxInputBytes;
     const asciiParse = asciiFitsBudget
-      ? await measureAsync(() => readStl(asciiOut.value, context()))
+      ? await measureAsync(() => readStl(asciiOut.value.bytes, context()))
       : undefined;
 
     const positionBytes = mesh.positions.byteLength;
@@ -145,12 +145,12 @@ it('measures STL import and export across representative sizes', async () => {
         `  validate         ${validated.ms.toFixed(0).padStart(6)} ms`,
         `  bounds           ${bounds.ms.toFixed(0).padStart(6)} ms`,
         `  render normals   ${normals.ms.toFixed(0).padStart(6)} ms`,
-        `  write binary     ${binaryOut.ms.toFixed(0).padStart(6)} ms  -> ${mib(binaryOut.value.byteLength)}`,
-        `  write ascii      ${asciiOut.ms.toFixed(0).padStart(6)} ms  -> ${mib(asciiOut.value.byteLength)}`,
+        `  write binary     ${binaryOut.ms.toFixed(0).padStart(6)} ms  -> ${mib(binaryOut.value.bytes.byteLength)}`,
+        `  write ascii      ${asciiOut.ms.toFixed(0).padStart(6)} ms  -> ${mib(asciiOut.value.bytes.byteLength)}`,
         asciiParse === undefined
-          ? `  parse ascii         skipped   (${mib(asciiOut.value.byteLength)} exceeds the ${mib(DEFAULT_IMPORT_BUDGET.maxInputBytes)} intake limit)`
+          ? `  parse ascii         skipped   (${mib(asciiOut.value.bytes.byteLength)} exceeds the ${mib(DEFAULT_IMPORT_BUDGET.maxInputBytes)} intake limit)`
           : `  parse ascii      ${asciiParse.ms.toFixed(0).padStart(6)} ms   ` +
-            `(${((asciiOut.value.byteLength / (1024 * 1024) / asciiParse.ms) * 1000).toFixed(0)} MiB/s)`,
+            `(${((asciiOut.value.bytes.byteLength / (1024 * 1024) / asciiParse.ms) * 1000).toFixed(0)} MiB/s)`,
         `  positions ${mib(positionBytes)} | indices ${mib(indexBytes)} | render normals ${mib(normalBytes)}`,
         `  canonical ${mib(canonicalBytes)} (${(canonicalBytes / bytes.byteLength).toFixed(2)}x input)` +
           `  working ${mib(workingBytes)} (${(workingBytes / bytes.byteLength).toFixed(2)}x input)`,

@@ -25,6 +25,16 @@ const geometryClient = new GeometryClient({
   onDiagnostic: (message, details): void => {
     store.pushStatus(StatusSeverity.Warning, `${message} (${JSON.stringify(details)})`);
   },
+  onWorkerLost: (reason): void => {
+    // The worker held the ONLY copy of the authoritative geometry. Nothing is
+    // reconstructed from the render snapshot, so the model is discarded rather
+    // than left on screen looking operable.
+    store.loseGeometrySession(reason);
+    store.pushStatus(
+      StatusSeverity.Error,
+      `${reason} The loaded model was held in that worker and is gone. Re-import the file to continue.`,
+    );
+  },
 });
 
 createRoot(container).render(

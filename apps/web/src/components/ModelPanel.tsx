@@ -1,50 +1,19 @@
-import { useCallback, type ReactNode } from 'react';
-import { toAppError } from '@cadfixer/shared';
+import type { ReactNode } from 'react';
 import { describeUnit } from '../state/model';
-import { ExportState, StatusSeverity } from '../state/workspace-store';
-import { useWorkspaceState, useWorkspaceStore } from '../state/store-context';
-import { useGeometryClient } from '../runtime/client-context';
-import { deriveExportName, downloadBytes } from '../runtime/download';
+import { useWorkspaceState } from '../state/store-context';
+import { useModelExport } from '../state/use-model-export';
 
 /**
  * Model information and STL re-export.
  *
- * Every number shown here was computed in the worker during import. This
- * component performs no geometry work — it formats values that already exist.
+ * PRESENTATION ONLY. Every number shown here was computed in the worker during
+ * import, and the export button calls a hook that owns the operation. This
+ * component dispatches no worker operations, builds no filenames, and triggers
+ * no downloads — that all moved to `runtime/export-service`.
  */
 export function ModelPanel(): ReactNode {
-  const store = useWorkspaceStore();
-  const { model, exportState } = useWorkspaceState();
-  const client = useGeometryClient();
-
-  const exportStl = useCallback(
-    (encoding: 'binary' | 'ascii'): void => {
-      if (model === undefined || client === undefined) return;
-
-      store.setExportState(ExportState.Working);
-      const handle = client.exportStl(model.mesh, encoding, () => undefined);
-
-      handle.promise.then(
-        (result) => {
-          store.setExportState(ExportState.Idle);
-          const fileName = deriveExportName(
-            model.source.fileName,
-            encoding === 'binary' ? '' : '-ascii',
-          );
-          downloadBytes(new Uint8Array(result.bytes), fileName, 'model/stl');
-          store.pushStatus(
-            StatusSeverity.Success,
-            `Exported ${fileName} (${encoding} STL, ${formatBytes(result.byteLength)}).`,
-          );
-        },
-        (cause: unknown) => {
-          store.setExportState(ExportState.Idle);
-          store.pushStatus(StatusSeverity.Error, `Export failed: ${toAppError(cause).message}`);
-        },
-      );
-    },
-    [client, model, store],
-  );
+  const { model } = useWorkspaceState();
+  const { exportModel, cancelExport, isExporting, fraction, encoding } = useModelExport();
 
   if (model === undefined) {
     return (
@@ -58,7 +27,7 @@ export function ModelPanel(): ReactNode {
   }
 
   const { bounds } = model;
-  const busy = exportState === ExportState.Working;
+  const percent = Math.round(fraction * 100);
 
   return (
     <section className="panel" aria-label="Model information">
@@ -75,7 +44,7 @@ export function ModelPanel(): ReactNode {
           testId="fact-triangles"
         />
         <Fact label="Vertices" value={model.vertexCount.toLocaleString()} testId="fact-vertices" />
-        <Fact label="Units" value={describeUnit(model.mesh)} testId="fact-units" />
+        <Fact label="Units" value={describeUnit(model.source)} testId="fact-units" />
         {bounds === undefined ? null : (
           <>
             <Fact
@@ -99,8 +68,11 @@ export function ModelPanel(): ReactNode {
         {model.validation.valid ? 'Structurally valid' : 'Structurally invalid'}
       </p>
       <p className="panel__note">
-        Structurally valid means the mesh data is well formed. It does <strong>not</strong> mean the
-        model is watertight, manifold, or printable — those checks are not implemented yet.
+        Structurally valid means the file&rsquo;s mesh data is well formed. It is a claim about the
+        data, not about the surface. Topology &mdash; boundaries, manifoldness, winding, components
+        &mdash; is reported separately in <strong>Mesh Health</strong>. Self-intersections and wall
+        thickness are not checked at all yet, so no result here or there establishes that a model
+        will print.
       </p>
 
       {model.warnings.length > 0 ? (
@@ -121,9 +93,9 @@ export function ModelPanel(): ReactNode {
           type="button"
           className="action"
           onClick={() => {
-            exportStl('binary');
+            exportModel('binary');
           }}
-          disabled={busy}
+          disabled={isExporting}
           data-testid="export-binary"
         >
           Export binary STL
@@ -132,14 +104,37 @@ export function ModelPanel(): ReactNode {
           type="button"
           className="action"
           onClick={() => {
-            exportStl('ascii');
+            exportModel('ascii');
           }}
-          disabled={busy}
+          disabled={isExporting}
           data-testid="export-ascii"
         >
           Export ASCII STL
         </button>
       </div>
+
+      {isExporting ? (
+        <div className="import__progress" data-testid="export-progress">
+          <div className="import__progress-row">
+            <span>Writing {encoding} STL</span>
+            <span data-testid="export-percent">{percent}%</span>
+          </div>
+          <progress
+            className="import__bar"
+            max={100}
+            value={percent}
+            aria-label={`Export progress: ${String(percent)}%`}
+          />
+          <button
+            type="button"
+            className="import__cancel"
+            onClick={cancelExport}
+            data-testid="cancel-export"
+          >
+            Cancel export
+          </button>
+        </div>
+      ) : null}
     </section>
   );
 }

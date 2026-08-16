@@ -1,4 +1,10 @@
-import { resourceLimitExceeded, throwIfCancelled } from '@cadfixer/shared';
+import {
+  diagnostic,
+  internalError,
+  resourceLimitExceeded,
+  throwIfCancelled,
+  type Diagnostic,
+} from '@cadfixer/shared';
 import { triangleCount, triangleNormal, type CanonicalMesh } from '@cadfixer/mesh-core';
 import {
   BINARY_FACET_BYTES,
@@ -6,7 +12,8 @@ import {
   BINARY_PREFIX_BYTES,
   binaryStlByteLength,
 } from './detect';
-import type { FormatWriteContext } from '../context';
+import type { FormatWriteContext, MeshWriteResult } from '../context';
+import { StlWarningCode } from './warnings';
 
 /**
  * STL writers.
@@ -46,10 +53,42 @@ const ASCII_SOLID_NAME = 'cadfixer';
  */
 const ASCII_FRACTION_DIGITS = 8;
 
+/**
+ * Upper bound on the bytes one ASCII facet can occupy — derived, not guessed.
+ *
+ * `toExponential(8)` produces at most sign + "d.dddddddd" + "e" + sign + two
+ * exponent digits = 15 characters for any float32 (the widest float32 exponent
+ * is e+38 / e-45). A facet is then:
+ *
+ *   "  facet normal " + 3 numbers + 2 spaces + newline     = 15 + 47 + 1 = 63
+ *   "    outer loop\n"                                                   = 15
+ *   3 x ("      vertex " + 3 numbers + 2 spaces + newline) = 3 x 61      = 183
+ *   "    endloop\n" + "  endfacet\n"                       = 12 + 11     = 23
+ *
+ * 284 in total. The constant rounds up, and a test pins that real output never
+ * exceeds it — so the pre-flight estimate is provably conservative rather than
+ * merely believed to be.
+ */
+const MAX_ASCII_BYTES_PER_FACET = 300;
+
+/** Generous allowance for one `solid`/`endsolid` pair. */
+const ASCII_SOLID_OVERHEAD_BYTES = 128;
+
+/**
+ * Conservative upper bound on the ASCII output for a mesh.
+ *
+ * Exported so the application can decide — and tell the user — before starting
+ * an export it would refuse.
+ */
+export function estimateAsciiStlBytes(triangleCount: number, groupCount = 0): number {
+  const solids = Math.max(1, groupCount);
+  return solids * ASCII_SOLID_OVERHEAD_BYTES + triangleCount * MAX_ASCII_BYTES_PER_FACET;
+}
+
 export async function writeBinaryStl(
   mesh: CanonicalMesh,
   context: FormatWriteContext,
-): Promise<Uint8Array> {
+): Promise<MeshWriteResult> {
   const budget = context.budget;
   const triangles = triangleCount(mesh);
   const byteLength = binaryStlByteLength(triangles);
@@ -111,28 +150,57 @@ export async function writeBinaryStl(
 
   throwIfCancelled(context.cancellation);
   context.progress.report(1, 'writing');
-  return output;
+
+  // METADATA LOSS, STATED. Binary STL has no multi-solid construct at all, so
+  // grouping that survived import cannot survive this export. Saying so is the
+  // difference between a documented loss and a silent one — the user may well
+  // prefer ASCII once they know.
+  const warnings: Diagnostic[] = [];
+  if ((mesh.groups?.length ?? 0) > 1) {
+    warnings.push(
+      diagnostic(
+        StlWarningCode.GroupsFlattened,
+        'Binary STL cannot store separate solids, so this model\u2019s groups were merged into one. Export as ASCII STL to keep them.',
+        { groupCount: mesh.groups?.length ?? 0 },
+      ),
+    );
+  }
+
+  return { bytes: output, warnings };
 }
 
 export async function writeAsciiStl(
   mesh: CanonicalMesh,
   context: FormatWriteContext,
-): Promise<Uint8Array> {
+): Promise<MeshWriteResult> {
   const budget = context.budget;
   const triangles = triangleCount(mesh);
 
-  // ASCII output size is not known exactly in advance, but it is bounded: each
-  // facet is at most this many bytes with 9-significant-digit exponential
-  // coordinates. Checked before building the output.
-  const maxBytesPerFacet = 320;
-  const estimatedBytes = 64 + triangles * maxBytesPerFacet;
-  if (estimatedBytes > budget.maxOutputBytes) {
-    throw resourceLimitExceeded('This model is too large to export as an ASCII STL file.', {
-      operation: 'stl/export/ascii',
-      requested: estimatedBytes,
-      limit: budget.maxOutputBytes,
-      triangleCount: triangles,
-    });
+  // SELF-ROUND-TRIP POLICY.
+  //
+  // ASCII STL runs about 5x the size of the same model in binary, so a model
+  // near the top of the supported range produces an ASCII file this application
+  // would then refuse to open. Emitting output that violates our own import
+  // contract is a trap: the user only finds out when they try to load it back.
+  //
+  // The estimate is therefore compared against the RE-IMPORT budget rather than
+  // the output budget, and it is a proven upper bound (see
+  // MAX_ASCII_BYTES_PER_FACET) — under-estimating here would let through
+  // precisely the file the policy exists to prevent.
+  const groupCount = mesh.groups?.length ?? 0;
+  const estimatedBytes = estimateAsciiStlBytes(triangles, groupCount);
+  const reimportLimit = Math.min(budget.maxInputBytes, budget.maxOutputBytes);
+  if (estimatedBytes > reimportLimit) {
+    throw resourceLimitExceeded(
+      'This model is too large to export as ASCII STL. Export it as binary STL instead — the same geometry, about a fifth of the size.',
+      {
+        operation: 'stl/export/ascii',
+        requested: estimatedBytes,
+        limit: reimportLimit,
+        triangleCount: triangles,
+        recommendedEncoding: 'binary',
+      },
+    );
   }
 
   // Encoded incrementally rather than by building one enormous string and
@@ -141,7 +209,7 @@ export async function writeAsciiStl(
   // encoded bytes would triple peak memory at the worst moment.
   const byteChunks: Uint8Array[] = [];
   let totalBytes = 0;
-  let pending = `solid ${ASCII_SOLID_NAME}\n`;
+  let pending = '';
 
   const flush = (): void => {
     if (pending.length === 0) return;
@@ -151,45 +219,74 @@ export async function writeAsciiStl(
     pending = '';
   };
 
+  // GROUP PRESERVATION. A file that arrived as several `solid` blocks is written
+  // back as several `solid` blocks, so the structure survives the round trip
+  // instead of being silently flattened into one.
+  //
+  // Names are GENERATED, never copied from the source. A solid name is
+  // user-controlled text that routinely carries a filesystem path or a project
+  // name, and writing it into an exported file would leak it to whoever that
+  // file is shared with.
+  const groups = mesh.groups ?? [];
+  const solids =
+    groups.length > 0
+      ? groups.map((group, index) => ({
+          name: `${ASCII_SOLID_NAME}_solid_${String(index + 1).padStart(4, '0')}`,
+          firstTriangle: Math.floor(group.indexOffset / 3),
+          triangleCount: Math.floor(group.indexCount / 3),
+        }))
+      : [{ name: ASCII_SOLID_NAME, firstTriangle: 0, triangleCount: triangles }];
+
   const normal = new Float64Array(3);
+  let written = 0;
 
-  for (let triangle = 0; triangle < triangles; triangle += 1) {
-    if (triangle % TRIANGLES_PER_BATCH === 0) {
-      throwIfCancelled(context.cancellation);
-      context.progress.report(triangles === 0 ? 1 : triangle / triangles, 'writing');
-      flush();
-      await context.yieldToEventLoop();
-      throwIfCancelled(context.cancellation);
+  for (const solid of solids) {
+    pending += `solid ${solid.name}\n`;
+    const lastTriangle = solid.firstTriangle + solid.triangleCount;
+
+    for (let triangle = solid.firstTriangle; triangle < lastTriangle; triangle += 1) {
+      if (written % TRIANGLES_PER_BATCH === 0) {
+        throwIfCancelled(context.cancellation);
+        context.progress.report(triangles === 0 ? 1 : written / triangles, 'writing');
+        flush();
+        await context.yieldToEventLoop();
+        throwIfCancelled(context.cancellation);
+      }
+      written += 1;
+
+      triangleNormal(mesh, triangle, normal);
+      pending += `  facet normal ${formatNumber(normal[0] ?? 0)} ${formatNumber(
+        normal[1] ?? 0,
+      )} ${formatNumber(normal[2] ?? 0)}\n    outer loop\n`;
+
+      const base = triangle * 3;
+      for (let corner = 0; corner < 3; corner += 1) {
+        const vertex = (mesh.indices[base + corner] ?? 0) * 3;
+        pending += `      vertex ${formatNumber(mesh.positions[vertex] ?? 0)} ${formatNumber(
+          mesh.positions[vertex + 1] ?? 0,
+        )} ${formatNumber(mesh.positions[vertex + 2] ?? 0)}\n`;
+      }
+
+      pending += '    endloop\n  endfacet\n';
     }
 
-    triangleNormal(mesh, triangle, normal);
-    pending += `  facet normal ${formatNumber(normal[0] ?? 0)} ${formatNumber(
-      normal[1] ?? 0,
-    )} ${formatNumber(normal[2] ?? 0)}\n    outer loop\n`;
-
-    const base = triangle * 3;
-    for (let corner = 0; corner < 3; corner += 1) {
-      const vertex = (mesh.indices[base + corner] ?? 0) * 3;
-      pending += `      vertex ${formatNumber(mesh.positions[vertex] ?? 0)} ${formatNumber(
-        mesh.positions[vertex + 1] ?? 0,
-      )} ${formatNumber(mesh.positions[vertex + 2] ?? 0)}\n`;
-    }
-
-    pending += '    endloop\n  endfacet\n';
+    pending += `endsolid ${solid.name}\n`;
   }
 
-  pending += `endsolid ${ASCII_SOLID_NAME}\n`;
   flush();
 
   throwIfCancelled(context.cancellation);
   context.progress.report(1, 'writing');
 
-  if (totalBytes > budget.maxOutputBytes) {
-    throw resourceLimitExceeded('This model is too large to export as an ASCII STL file.', {
-      operation: 'stl/export/ascii',
-      requested: totalBytes,
-      limit: budget.maxOutputBytes,
-      triangleCount: triangles,
+  // The estimate above is a proven upper bound, so this cannot fire in normal
+  // operation. It is kept as an assertion rather than deleted because the
+  // failure it guards — output that silently exceeds the limit it was checked
+  // against — is exactly what the policy exists to prevent. If the formatting
+  // ever changes without MAX_ASCII_BYTES_PER_FACET changing with it, this stops
+  // the file before it reaches the user instead of after.
+  if (totalBytes > estimatedBytes) {
+    throw internalError('ASCII STL output exceeded its own conservative size estimate.', {
+      details: { produced: totalBytes, estimated: estimatedBytes, triangleCount: triangles },
     });
   }
 
@@ -199,7 +296,19 @@ export async function writeAsciiStl(
     output.set(chunk, offset);
     offset += chunk.byteLength;
   }
-  return output;
+
+  const warnings: Diagnostic[] = [];
+  if (solids.length > 1) {
+    warnings.push(
+      diagnostic(
+        StlWarningCode.GroupsRenamed,
+        `Exported ${String(solids.length)} solids with generated names. Original solid names are not written into exported files.`,
+        { solidCount: solids.length },
+      ),
+    );
+  }
+
+  return { bytes: output, warnings };
 }
 
 /**

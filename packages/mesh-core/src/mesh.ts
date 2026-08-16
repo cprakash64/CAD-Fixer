@@ -21,12 +21,33 @@ import type { LengthUnit } from '@cadfixer/shared';
  * a real hazard for repair and boolean work, where coincident-vertex welding
  * depends on absolute tolerances. This alias exists so the decision can be
  * changed in one place after benchmarking against real files. Do not inline
- * `Float32Array` at call sites. See docs/adr/0004-canonical-mesh-model.md.
+ * `Float32Array` at call sites — allocate through `createPositionArray`.
+ * See docs/adr/0004-canonical-mesh-model.md.
  */
 export type PositionArray = Float32Array;
 
 /** Triangle indices. Uint32 supports meshes beyond the 65 535-vertex Uint16 limit. */
 export type IndexArray = Uint32Array;
+
+/**
+ * Allocates a canonical position buffer.
+ *
+ * A FACTORY, not a bare `new Float32Array`, because a type alias cannot be
+ * constructed. Without this, every codec would name the concrete type at its
+ * allocation site and `PositionArray` would isolate nothing — which is exactly
+ * what had happened: the alias claimed the Float32/Float64 decision changed in
+ * one place while four call sites hard-coded `Float32Array`.
+ *
+ * Every producer of canonical geometry must allocate through here.
+ */
+export function createPositionArray(length: number): PositionArray {
+  return new Float32Array(length);
+}
+
+/** Allocates a canonical index buffer. See `createPositionArray`. */
+export function createIndexArray(length: number): IndexArray {
+  return new Uint32Array(length);
+}
 
 /** Per-vertex normals, same length and ordering as positions. */
 export type NormalArray = Float32Array;

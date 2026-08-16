@@ -24,6 +24,15 @@ export default defineConfig({
         },
       },
       {
+        // Repository tooling: the Node version guard and anything else that has
+        // to run before a build exists.
+        test: {
+          name: 'tooling',
+          environment: 'node',
+          include: ['scripts/**/*.test.ts'],
+        },
+      },
+      {
         plugins: [react()],
         test: {
           name: 'web',

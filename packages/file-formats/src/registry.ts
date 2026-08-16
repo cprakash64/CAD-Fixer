@@ -1,6 +1,11 @@
 import { unsupportedFile } from '@cadfixer/shared';
 import type { CanonicalMesh } from '@cadfixer/mesh-core';
-import type { FormatReadContext, FormatWriteContext, MeshReadResult } from './context';
+import type {
+  FormatReadContext,
+  FormatWriteContext,
+  MeshReadResult,
+  MeshWriteResult,
+} from './context';
 import { describeFormat, type MeshFormatId } from './formats';
 
 /**
@@ -35,7 +40,7 @@ export interface MeshWriter {
    */
   readonly encodings: readonly string[];
   /** Serialises a canonical mesh. Must not mutate the input mesh. */
-  write(mesh: CanonicalMesh, context: FormatWriteContext): Promise<Uint8Array>;
+  write(mesh: CanonicalMesh, context: FormatWriteContext): Promise<MeshWriteResult>;
 }
 
 const readers = new Map<MeshFormatId, MeshReader>();

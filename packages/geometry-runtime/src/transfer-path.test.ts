@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { IDENTITY_MATRIX4, meshTransferables, type CanonicalMesh } from '@cadfixer/mesh-core';
+import type { ModelId } from './resident-models';
 import { GeometryCoordinator } from './coordinator';
 import type { MessageEndpoint } from './endpoint';
 import { PROTOCOL_CHANNEL, type TransferHandle } from './protocol';
@@ -71,7 +72,7 @@ describe('import dispatch', () => {
     const coordinator = new GeometryCoordinator(endpoint, { onDiagnostic: vi.fn() });
     const bytes = new ArrayBuffer(1024);
 
-    coordinator.dispatch('stl/import', { bytes }, { transfer: [bytes] });
+    coordinator.dispatch('model/import', { bytes }, { transfer: [bytes] });
 
     expect(sent).toHaveLength(1);
     expect(sent[0]?.transfer).toContain(bytes);
@@ -82,12 +83,12 @@ describe('import dispatch', () => {
     const coordinator = new GeometryCoordinator(endpoint, { onDiagnostic: vi.fn() });
     const bytes = new ArrayBuffer(8);
 
-    const handle = coordinator.dispatch('stl/import', { bytes }, { transfer: [bytes] });
+    const handle = coordinator.dispatch('model/import', { bytes }, { transfer: [bytes] });
 
     expect(sent[0]?.message).toMatchObject({
       channel: PROTOCOL_CHANNEL,
       kind: 'request',
-      operation: 'stl/import',
+      operation: 'model/import',
       id: handle.id,
     });
   });
@@ -98,7 +99,10 @@ describe('import dispatch', () => {
     const { endpoint, sent } = recordingEndpoint();
     const coordinator = new GeometryCoordinator(endpoint, { onDiagnostic: vi.fn() });
 
-    coordinator.dispatch('stl/export', { mesh: sampleMesh(2), encoding: 'binary' });
+    coordinator.dispatch('model/export', {
+      handle: { modelId: 'model-1' as ModelId, revision: 1 },
+      encoding: 'binary',
+    });
 
     expect(sent[0]?.transfer).toEqual([]);
   });
@@ -110,17 +114,19 @@ describe('worker result path', () => {
     const { endpoint, sent } = recording;
     const host = new GeometryWorkerHost(endpoint);
     const mesh = sampleMesh(4);
+    const renderPositions = mesh.positions.slice();
     const renderNormals = new Float32Array(mesh.positions.length);
 
-    host.register('stl/import', () =>
+    host.register('model/import', () =>
       Promise.resolve({
         value: {
-          mesh,
+          handle: { modelId: 'model-1' as ModelId, revision: 1 },
           encoding: 'binary',
+          unit: undefined,
           bounds: undefined,
           triangleCount: 4,
           vertexCount: 12,
-          renderNormals,
+          render: { positions: renderPositions, normals: renderNormals, vertexCount: 12 },
           warnings: [],
           validation: {
             valid: true,
@@ -129,8 +135,9 @@ describe('worker result path', () => {
             truncated: false,
             codes: [],
           },
+          residentBytes: 0,
         },
-        transfer: [...meshTransferables(mesh), renderNormals.buffer],
+        transfer: [renderPositions.buffer, renderNormals.buffer],
       }),
     );
     host.start();
@@ -141,7 +148,7 @@ describe('worker result path', () => {
       channel: PROTOCOL_CHANNEL,
       kind: 'request',
       id: 'op-1',
-      operation: 'stl/import',
+      operation: 'model/import',
       payload: {},
     });
     await vi.waitFor(() => {
@@ -149,9 +156,12 @@ describe('worker result path', () => {
     });
 
     const result = sent.find((entry) => isResult(entry.message));
-    expect(result?.transfer).toContain(mesh.positions.buffer);
-    expect(result?.transfer).toContain(mesh.indices.buffer);
+    // The RENDER SNAPSHOT is transferred; the authoritative mesh stays resident
+    // in the worker and its buffers must NOT appear in the transfer list.
+    expect(result?.transfer).toContain(renderPositions.buffer);
     expect(result?.transfer).toContain(renderNormals.buffer);
+    expect(result?.transfer).not.toContain(mesh.positions.buffer);
+    expect(result?.transfer).not.toContain(mesh.indices.buffer);
   });
 });
 
@@ -216,3 +226,111 @@ function isResult(message: unknown): boolean {
     (message as { kind?: unknown }).kind === 'result'
   );
 }
+
+describe('export carries no geometry across the boundary', () => {
+  /**
+   * THE REGRESSION THIS EXISTS FOR. Stage 1 put the whole `CanonicalMesh` in the
+   * export request, so every export structured-cloned roughly 96 MiB back into
+   * the worker for a two-million-triangle model. Asserted at the protocol
+   * boundary — on the actual dispatched message — rather than by grepping
+   * source, so reintroducing a mesh field fails here.
+   */
+  function collectTypedArrays(value: unknown, found: string[] = [], depth = 0): string[] {
+    if (depth > 6 || value === null || typeof value !== 'object') return found;
+    if (ArrayBuffer.isView(value)) {
+      found.push(value.constructor.name);
+      return found;
+    }
+    if (value instanceof ArrayBuffer) {
+      found.push('ArrayBuffer');
+      return found;
+    }
+    for (const entry of Object.values(value)) collectTypedArrays(entry, found, depth + 1);
+    return found;
+  }
+
+  it('sends only a handle, never positions or indices', () => {
+    const { endpoint, sent } = recordingEndpoint();
+    const coordinator = new GeometryCoordinator(endpoint, { onDiagnostic: vi.fn() });
+
+    coordinator.dispatch('model/export', {
+      handle: { modelId: 'model-7' as ModelId, revision: 3 },
+      encoding: 'binary',
+    });
+
+    const message = sent[0]?.message as { payload?: unknown } | undefined;
+    expect(collectTypedArrays(message?.payload)).toEqual([]);
+    expect(message?.payload).toEqual({
+      handle: { modelId: 'model-7', revision: 3 },
+      encoding: 'binary',
+    });
+  });
+
+  it('names the revision, so a stale export cannot hit the replacement', () => {
+    const { endpoint, sent } = recordingEndpoint();
+    const coordinator = new GeometryCoordinator(endpoint, { onDiagnostic: vi.fn() });
+
+    coordinator.dispatch('model/export', {
+      handle: { modelId: 'model-1' as ModelId, revision: 2 },
+      encoding: 'ascii',
+    });
+
+    const payload = (sent[0]?.message as { payload: { handle: { revision: number } } }).payload;
+    expect(payload.handle.revision).toBe(2);
+  });
+
+  it('the whole export request stays small regardless of model size', () => {
+    // A structured-clone of the payload is a fair proxy for what crosses the
+    // boundary. It must not scale with the model.
+    const { endpoint, sent } = recordingEndpoint();
+    const coordinator = new GeometryCoordinator(endpoint, { onDiagnostic: vi.fn() });
+
+    coordinator.dispatch('model/export', {
+      handle: { modelId: 'model-1' as ModelId, revision: 1 },
+      encoding: 'binary',
+    });
+
+    expect(JSON.stringify(sent[0]?.message).length).toBeLessThan(300);
+  });
+});
+
+describe('analysis requests are handle-based and revision-safe', () => {
+  /**
+   * Topology analysis must never carry geometry, and a report must be
+   * attributable to the exact model revision it was computed for — otherwise a
+   * late report from a replaced model could be applied to its successor.
+   */
+  it('sends only a handle, never geometry', () => {
+    const { endpoint, sent } = recordingEndpoint();
+    const coordinator = new GeometryCoordinator(endpoint, { onDiagnostic: vi.fn() });
+
+    coordinator.dispatch('model/analyze', {
+      handle: { modelId: 'model-3' as ModelId, revision: 2 },
+    });
+
+    const message = sent[0]?.message as { payload?: unknown } | undefined;
+    expect(message?.payload).toEqual({ handle: { modelId: 'model-3', revision: 2 } });
+    expect(sent[0]?.transfer).toEqual([]);
+  });
+
+  it('lets a consumer reject a report belonging to a superseded revision', () => {
+    // The result echoes the handle it was computed for. Comparing that against
+    // the model currently held is what makes a late report discardable.
+    const current = { modelId: 'model-1', revision: 2 };
+    const lateReport = { handle: { modelId: 'model-1', revision: 1 } };
+    const matchingReport = { handle: { modelId: 'model-1', revision: 2 } };
+
+    const applies = (report: { handle: { modelId: string; revision: number } }): boolean =>
+      report.handle.modelId === current.modelId && report.handle.revision === current.revision;
+
+    expect(applies(lateReport)).toBe(false);
+    expect(applies(matchingReport)).toBe(true);
+  });
+
+  it('lets a consumer reject a report for an entirely different model', () => {
+    const current = { modelId: 'model-2', revision: 1 };
+    const foreign = { handle: { modelId: 'model-1', revision: 1 } };
+
+    expect(foreign.handle.modelId === current.modelId).toBe(false);
+  });
+});

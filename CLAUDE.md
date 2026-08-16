@@ -13,16 +13,23 @@ matter more than moving fast.
 Five workflows are planned: **Repair, Convert, Split, Texture, Hollow**. Target
 formats: **STL, OBJ, 3MF**.
 
-**Current stage: Stage 1 complete — STL import/export vertical slice.**
+**Current stage: Stage 2 complete — resident geometry runtime and topology
+diagnostics.**
 Implemented: structural STL encoding detection, hand-written binary and ASCII
 STL parsers with resource budgets, worker-based parsing with progress and
 working cancellation, a real Three.js viewport with camera controls, model
-statistics, and binary/ASCII STL export that round-trips through our own parser.
+statistics, binary/ASCII STL export that round-trips through our own parser,
+worker-resident authoritative geometry addressed by handle+revision, and
+read-only topology diagnostics with a Mesh Health panel and viewport overlays.
 
 NOT implemented, and not to be implemented unless a task explicitly asks: mesh
-repair, welding, hole filling, booleans, remeshing, OBJ or 3MF codecs, format
-conversion, splitting, connectors, texturing, hollowing, drainage holes, and
-topological diagnostics (manifoldness, self-intersection, orientation).
+repair, tolerance welding, hole filling, booleans, remeshing, OBJ or 3MF codecs,
+format conversion, splitting, connectors, texturing, hollowing, drainage holes,
+self-intersection detection, and wall-thickness analysis.
+
+**Topology diagnoses; it never repairs.** Connectivity is recovered from exact
+stored coordinates with no tolerance, and analysis leaves the canonical buffers
+byte-identical. See `docs/adr/0009-exact-topology-recovery.md`.
 
 **Parsing is not repair.** Import preserves exactly what the file contains — no
 welding, no dropping degenerate or duplicate triangles, no reorientation, no
@@ -94,6 +101,7 @@ apps/web/                   React application shell
 packages/shared/            typed errors, units, ids, cancellation
 packages/mesh-core/         canonical mesh + structural validation
 packages/file-formats/      format descriptors, screening, budgets, STL codec
+packages/mesh-topology/     read-only topology analysis (no mutation, no welding)
 packages/geometry-runtime/  worker protocol, coordinator, worker host
 docs/                       architecture, dependencies, privacy, deployment
 docs/adr/                   architecture decision records
@@ -101,10 +109,14 @@ e2e/                        Playwright specs
 ```
 
 Dependency direction is one-way:
-`shared ← mesh-core ← file-formats`, `shared ← mesh-core ← geometry-runtime`,
-all ← `apps/web`. `geometry-runtime` gained a `mesh-core` dependency in Stage 1
-because geometry operations speak `CanonicalMesh`; it must NOT depend on
-`file-formats`, so codecs stay behind the worker's operation handlers.
+`shared ← mesh-core ← file-formats`, `shared ← mesh-core ← mesh-topology`,
+`shared ← mesh-core ← mesh-topology ← geometry-runtime`, all ← `apps/web`.
+`geometry-runtime` gained a `mesh-core` dependency in Stage 1 because geometry
+operations speak `CanonicalMesh`, and a **type-only** `mesh-topology` dependency
+in Stage 2 because `model/analyze` returns a topology report and an untyped
+result at that boundary would let the worker and its consumer drift apart. It
+must NOT depend on `file-formats`, so codecs stay behind the worker's operation
+handlers.
 
 ## Commands
 
@@ -119,7 +131,10 @@ npm run typecheck    # TypeScript, all projects
 npm test             # Vitest unit and component tests
 npm run test:e2e     # Playwright end-to-end (needs `npx playwright install chromium`)
 npm run verify       # format:check + lint + typecheck + test + build
-npm run bench:stl    # STL performance benchmark (NOT in CI; see docs/PERFORMANCE_BASELINE.md)
+npm run bench:stl      # STL parser benchmark (NOT in CI)
+npm run bench:topology # small topology benchmark (NOT in CI)
+npm run bench:pipeline # whole-pipeline benchmark, 1/10/50/100 MiB (NOT in CI)
+npm run check:node     # runtime version guard; also runs before test/build/verify
 ```
 
 Before declaring work complete, run `npm run verify`. Run `npm run test:e2e` as
@@ -160,6 +175,20 @@ well when you have touched the shell, the worker, or the build.
   declaration and the registry in agreement.
 - **`ByteScanner.isAtEnd()` is a method, not a getter, because it mutates.**
   Getters that skip whitespace confuse both readers and TypeScript's narrowing.
+- **The worker owns authoritative geometry.** The main thread holds a
+  `ModelHandle` plus a render snapshot, never a `CanonicalMesh`. Operations name
+  a model by handle + revision; a stale revision must fail rather than apply to
+  whatever replaced it. See `docs/adr/0008-worker-resident-geometry.md`.
+- **Allocate canonical arrays through `createPositionArray` / `createIndexArray`.**
+  A bare `new Float32Array` at a call site defeats the whole point of the
+  `PositionArray` alias, which exists so the open Float32/Float64 decision
+  changes in one place.
+- **Render buffers are concretely `Float32Array`, not the canonical alias.**
+  Float32 is the selected WebGL/Three.js vertex-attribute representation. Naming
+  it concretely keeps render precision decoupled from canonical precision, so
+  whatever ADR 0004 decides for stored geometry — and whatever a future geometry
+  kernel computes in — the snapshot converts at the boundary instead of tracking
+  it.
 
 ## Honesty rules for the interface
 
@@ -167,6 +196,15 @@ well when you have touched the shell, the worker, or the build.
   says so plainly.
 - **Never report success for work that did not happen.** Screening a filename is
   not importing a model.
+- **Never turn diagnostic uncertainty into interface certainty.** No UI path may
+  say _printable_, _watertight_, _valid mesh_, _error free_, or _hole_. Stage 2
+  checks exact-coordinate topology and nothing else; self-intersections and wall
+  thickness are unchecked, and every report says so beside its verdict. The
+  banned terms are listed in `apps/web/src/state/topology-presentation.ts` and a
+  test asserts none of them can be emitted.
+- **Edge manifoldness and vertex manifoldness are separate**, and the interface
+  reports them separately. Collapsing them into one "manifold" flag hides the
+  bow-tie case, which is precisely the case naive tools miss.
 - **Never register a stub codec.** STL is real; OBJ and 3MF must keep failing
   loudly. Two tests hold this line: `registry.test.ts` asserts unimplemented
   formats throw rather than returning a placeholder, and `capabilities.test.ts`

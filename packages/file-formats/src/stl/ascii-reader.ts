@@ -5,7 +5,7 @@ import {
   throwIfCancelled,
   type Diagnostic,
 } from '@cadfixer/shared';
-import type { MeshGroup } from '@cadfixer/mesh-core';
+import { createIndexArray, createPositionArray, type MeshGroup } from '@cadfixer/mesh-core';
 import { checkAllocation, planAllocation, type ImportBudget } from '../budget';
 import type { FormatReadContext } from '../context';
 import { ByteScanner, StlKeyword } from './detect';
@@ -176,8 +176,8 @@ async function parseFacets(
   budget: ImportBudget,
 ): Promise<StlRawGeometry> {
   const scanner = new ByteScanner(bytes, budget.maxTokenBytes);
-  const positions = new Float32Array(expectedTriangles * 9);
-  const indices = new Uint32Array(expectedTriangles * 3);
+  const positions = createPositionArray(expectedTriangles * 9);
+  const indices = createIndexArray(expectedTriangles * 3);
   const groups: MeshGroup[] = [];
   const warnings: Diagnostic[] = [];
 

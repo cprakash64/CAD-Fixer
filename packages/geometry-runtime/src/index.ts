@@ -13,14 +13,48 @@ export type {
   RequestMessage,
   ResultMessage,
   MeshValidationSummary,
+  ModelAnalyzePayload,
+  ModelAnalyzeResult,
+  ModelExportPayload,
+  ModelImportResult,
+  ModelReleasePayload,
+  ModelReleaseResult,
+  RenderSnapshot,
   SelfTestPayload,
   SelfTestResult,
-  StlExportPayload,
   StlExportResult,
   StlImportPayload,
-  StlImportResult,
   TransferHandle,
 } from './protocol';
+
+/**
+ * Re-exported so the application layer can name what `model/analyze` returns
+ * without depending on `mesh-topology` directly. The application consumes the
+ * report; it must never reach for the engine that produced it.
+ */
+export type {
+  BoundaryComponentSummary,
+  ComponentSummary,
+  TopologyDetail,
+  TopologyReport,
+} from '@cadfixer/mesh-topology';
+export { BoundaryKind, PrintabilityStatus, SelfIntersectionStatus, VolumeStatus } from './topology';
+
+export {
+  checkExportPeak,
+  checkImportPeak,
+  checkResident,
+  DEFAULT_SESSION_MEMORY_BUDGET,
+  estimateExportPeak,
+  estimateImportPeak,
+  renderBytesFor,
+  requestAnalysisWorkspace,
+  residentBytesFor,
+} from './memory-budget';
+export type { MemoryEstimate, SessionMemoryBudget } from './memory-budget';
+
+export { meshByteLength, ResidentModelStore } from './resident-models';
+export type { ModelHandle, ModelId, ResidentModelStats } from './resident-models';
 
 export type { MessageEndpoint } from './endpoint';
 

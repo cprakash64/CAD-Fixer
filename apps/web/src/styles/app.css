@@ -97,7 +97,9 @@ button:disabled {
 
 .app__body {
   display: grid;
-  grid-template-columns: 17rem minmax(0, 1fr);
+  /* Viewport keeps the flexible middle column. The diagnostics column is wide
+     enough for the component table without stealing the working area. */
+  grid-template-columns: 17rem minmax(0, 1fr) 24rem;
   min-height: 0;
 }
 
@@ -114,6 +116,18 @@ button:disabled {
 .app__main {
   display: grid;
   grid-template-rows: minmax(0, 1fr) auto;
+  min-width: 0;
+}
+
+.app__diagnostics {
+  display: flex;
+  flex-direction: column;
+  padding: var(--space-4);
+  background: var(--surface-panel);
+  border-left: 1px solid var(--border-subtle);
+  /* The report is long by nature. It scrolls in its own column so the viewport
+     never has to shrink to accommodate a model with many components. */
+  overflow-y: auto;
   min-width: 0;
 }
 
@@ -577,6 +591,21 @@ button:disabled {
 
 /* ----------------------------------------------------------- responsive -- */
 
+/* Diagnostics drop below the viewport before the sidebar does: at this width
+   the table needs the full page width more than it needs its own column. */
+@media (max-width: 84rem) {
+  .app__body {
+    grid-template-columns: 17rem minmax(0, 1fr);
+  }
+
+  .app__diagnostics {
+    grid-column: 1 / -1;
+    border-left: none;
+    border-top: 1px solid var(--border-subtle);
+    max-height: 32rem;
+  }
+}
+
 @media (max-width: 60rem) {
   .app {
     height: auto;
@@ -592,6 +621,10 @@ button:disabled {
     border-bottom: 1px solid var(--border-subtle);
   }
 
+  .app__diagnostics {
+    max-height: none;
+  }
+
   .viewport {
     min-height: 24rem;
   }
@@ -604,4 +637,156 @@ button:disabled {
     animation-duration: 0.01ms !important;
     transition-duration: 0.01ms !important;
   }
+}
+
+.import__lost {
+  margin-top: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--severity-error);
+  border-radius: var(--radius);
+  font-size: 0.75rem;
+  color: var(--severity-error);
+}
+
+/* -------------------------------------------------- mesh health diagnostics -- */
+
+.facts--muted .facts__value {
+  color: var(--text-secondary);
+}
+
+.facts__value--flag {
+  color: var(--severity-warning);
+  font-variant-numeric: tabular-nums;
+}
+
+.analysis__progress {
+  margin-top: var(--space-3);
+}
+
+.analysis__error {
+  margin-top: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--severity-error);
+  border-radius: var(--radius);
+}
+
+.analysis__error-message {
+  font-size: 0.8rem;
+  color: var(--severity-error);
+}
+
+.boundary-list {
+  margin-top: var(--space-2);
+  padding-left: var(--space-4);
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  list-style: disc;
+}
+
+/* The table is wide by nature. It scrolls inside its own container so the
+   page body never scrolls sideways. */
+.component-table__scroll {
+  overflow-x: auto;
+  margin-top: var(--space-2);
+}
+
+.component-table {
+  border-collapse: collapse;
+  font-size: 0.7rem;
+  white-space: nowrap;
+}
+
+.component-table__caption {
+  caption-side: bottom;
+  margin-top: var(--space-2);
+  font-size: 0.7rem;
+  color: var(--text-secondary);
+  text-align: left;
+  white-space: normal;
+}
+
+.component-table th,
+.component-table td {
+  padding: 0.2rem 0.45rem;
+  border-bottom: 1px solid var(--border-subtle);
+  text-align: right;
+}
+
+.component-table th {
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+.component-table td {
+  font-variant-numeric: tabular-nums;
+}
+
+.overlays {
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin-top: var(--space-2);
+  list-style: none;
+}
+
+.overlays__label {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  cursor: pointer;
+}
+
+.overlays__label:has(input:disabled) {
+  cursor: default;
+  opacity: 0.55;
+}
+
+/* Decorative only. Every overlay is identified by its name and count as well,
+   so colour is never the sole carrier of meaning. */
+.overlays__swatch {
+  width: 0.85rem;
+  height: 0.2rem;
+  border-radius: 1px;
+  flex: none;
+}
+
+.overlays__swatch--boundaryEdges {
+  background: #ffb020;
+}
+
+.overlays__swatch--nonManifoldEdges {
+  background: #ff4d4d;
+}
+
+.overlays__swatch--windingConflictEdges {
+  background: #3fa9ff;
+}
+
+.overlays__swatch--degenerateFaces {
+  background: #ff59d6;
+}
+
+.overlays__name {
+  flex: 1 1 auto;
+  font-size: 0.8rem;
+}
+
+.overlays__count {
+  font-variant-numeric: tabular-nums;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+.overlays__help,
+.overlays__sampling {
+  margin-top: 0.15rem;
+  padding-left: 1.6rem;
+  font-size: 0.7rem;
+  color: var(--text-secondary);
+}
+
+.overlays__sampling {
+  color: var(--severity-warning);
 }

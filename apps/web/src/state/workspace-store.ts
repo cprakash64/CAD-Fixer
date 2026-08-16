@@ -1,3 +1,4 @@
+import type { ModelHandle, TopologyDetail, TopologyReport } from '@cadfixer/geometry-runtime';
 import type { WorkflowId } from './workflows';
 import type { LoadedModel } from './model';
 
@@ -58,6 +59,14 @@ export const ImportState = {
 
 export type ImportState = (typeof ImportState)[keyof typeof ImportState];
 
+declare const importTokenBrand: unique symbol;
+
+/**
+ * Identifies one import attempt. Branded so a plain number cannot be passed
+ * where a token is required.
+ */
+export type ImportToken = number & { readonly [importTokenBrand]: true };
+
 export interface ImportProgressState {
   readonly state: ImportState;
   /** 0..1 across the whole import. */
@@ -74,6 +83,117 @@ export const ExportState = {
 
 export type ExportState = (typeof ExportState)[keyof typeof ExportState];
 
+declare const exportTokenBrand: unique symbol;
+
+/** Identifies one export attempt, for the same reason imports have tokens. */
+export type ExportToken = number & { readonly [exportTokenBrand]: true };
+
+export interface ExportProgressState {
+  readonly state: ExportState;
+  /** 0..1, meaningful only while `state` is `working`. */
+  readonly fraction: number;
+  readonly encoding?: string;
+}
+
+export const AnalysisState = {
+  /** No model is loaded, so there is nothing to analyse. */
+  Unavailable: 'unavailable',
+  /** A model is loaded and analysis has not run for it yet. */
+  Idle: 'idle',
+  Analyzing: 'analyzing',
+  Ready: 'ready',
+  Failed: 'failed',
+  Cancelled: 'cancelled',
+} as const;
+
+export type AnalysisState = (typeof AnalysisState)[keyof typeof AnalysisState];
+
+declare const analysisTokenBrand: unique symbol;
+
+/** Identifies one analysis attempt, for the same reason imports have tokens. */
+export type AnalysisToken = number & { readonly [analysisTokenBrand]: true };
+
+export interface AnalysisFailure {
+  readonly message: string;
+  readonly code: string;
+  /**
+   * Whether offering "try again" makes sense.
+   *
+   * A resource-limit refusal will refuse identically next time, so a retry
+   * button there would be a button that does nothing. A cancelled or
+   * transiently-failed analysis is worth retrying.
+   */
+  readonly retryable: boolean;
+}
+
+/**
+ * Topology analysis, always bound to the model handle it describes.
+ *
+ * `handle` is the load-bearing field. Analysis is asynchronous and a user can
+ * import a second file while the first is still being analysed, so "which model
+ * is this report about?" cannot be answered by timing. Every write is checked
+ * against the model currently loaded, and a report for revision M0 is discarded
+ * rather than shown beside M1's geometry.
+ */
+export interface AnalysisSnapshot {
+  readonly state: AnalysisState;
+  /** The model this state describes. `undefined` only when unavailable. */
+  readonly handle: ModelHandle | undefined;
+  /** 0..1, meaningful only while `state` is `analyzing`. */
+  readonly fraction: number;
+  /** Already translated for display by the analysis service. */
+  readonly phase: string | undefined;
+  /**
+   * The last COMPLETE report for `handle`.
+   *
+   * Deliberately survives the start of a re-analysis: a user who re-runs
+   * analysis should keep seeing the previous answer until a new one exists,
+   * rather than watching the panel empty itself. Cleared when the model changes.
+   */
+  readonly report: TopologyReport | undefined;
+  readonly detail: TopologyDetail | undefined;
+  readonly error: AnalysisFailure | undefined;
+  readonly durationMs: number | undefined;
+}
+
+const EMPTY_ANALYSIS: AnalysisSnapshot = {
+  state: AnalysisState.Unavailable,
+  handle: undefined,
+  fraction: 0,
+  phase: undefined,
+  report: undefined,
+  detail: undefined,
+  error: undefined,
+  durationMs: undefined,
+};
+
+/**
+ * Which diagnostic overlays the viewport should draw.
+ *
+ * View state, but held in the workspace store rather than in a component
+ * because two separate subtrees need it: the Mesh Health panel owns the
+ * toggles and the viewport owns the GPU buffers. Threading it through props
+ * would couple the panel to the viewport's position in the tree.
+ *
+ * All default to off. Drawing 50,000 boundary edges over a model the instant it
+ * loads would bury the geometry the user actually wants to look at.
+ */
+export interface OverlayVisibility {
+  readonly boundaryEdges: boolean;
+  readonly nonManifoldEdges: boolean;
+  readonly windingConflictEdges: boolean;
+  readonly degenerateFaces: boolean;
+}
+
+export type OverlayId = keyof OverlayVisibility;
+
+const OVERLAYS_HIDDEN: OverlayVisibility = {
+  boundaryEdges: false,
+  nonManifoldEdges: false,
+  windingConflictEdges: false,
+  degenerateFaces: false,
+};
+
 export interface WorkspaceState {
   /** `undefined` means no workflow is open. No workflow can be opened yet. */
   readonly selectedWorkflow: WorkflowId | undefined;
@@ -86,7 +206,10 @@ export interface WorkspaceState {
    */
   readonly model: LoadedModel | undefined;
   readonly importProgress: ImportProgressState;
-  readonly exportState: ExportState;
+  readonly exportProgress: ExportProgressState;
+  /** Topology diagnostics for `model`, or the unavailable state when empty. */
+  readonly analysis: AnalysisSnapshot;
+  readonly overlays: OverlayVisibility;
   readonly status: readonly StatusEntry[];
   readonly runtime: RuntimeState;
   /**
@@ -97,6 +220,16 @@ export interface WorkspaceState {
    * and it must survive the viewport component remounting.
    */
   readonly viewportFailure: string | undefined;
+  /**
+   * Set when the geometry worker died, taking every resident model with it.
+   *
+   * POLICY A — the model is CLEARED, not left on screen. The worker held the
+   * only copy of the authoritative geometry, so keeping a render snapshot
+   * visible would show something no operation could act on: export would fail,
+   * diagnostics would fail, and the picture would imply a working session that
+   * does not exist. Showing nothing and saying why is less misleading.
+   */
+  readonly geometrySessionLost: string | undefined;
 }
 
 /** Bounded so a chatty session cannot grow the log without limit. */
@@ -106,10 +239,13 @@ const INITIAL_STATE: WorkspaceState = {
   selectedWorkflow: undefined,
   model: undefined,
   importProgress: { state: ImportState.Idle, fraction: 0 },
-  exportState: ExportState.Idle,
+  exportProgress: { state: ExportState.Idle, fraction: 0 },
+  analysis: EMPTY_ANALYSIS,
+  overlays: OVERLAYS_HIDDEN,
   status: [],
   runtime: { selfTest: SelfTestState.Idle, progress: 0 },
   viewportFailure: undefined,
+  geometrySessionLost: undefined,
 };
 
 export class WorkspaceStore {
@@ -117,6 +253,12 @@ export class WorkspaceStore {
   private readonly listeners = new Set<() => void>();
   private nextStatusId = 1;
   private nextModelRevision = 1;
+  private nextImportToken = 1;
+  private currentImportToken: ImportToken | undefined;
+  private nextExportToken = 1;
+  private currentExportToken: ExportToken | undefined;
+  private nextAnalysisToken = 1;
+  private currentAnalysisToken: AnalysisToken | undefined;
 
   public getSnapshot = (): WorkspaceState => this.state;
 
@@ -156,52 +298,303 @@ export class WorkspaceStore {
     this.update({ viewportFailure: message });
   }
 
-  public setImportProgress(progress: ImportProgressState): void {
+  /**
+   * Claims the import slot and returns the token that identifies this attempt.
+   *
+   * WHY A TOKEN. Two imports can be in flight at once — the user drops a second
+   * file while the first is still parsing — and the results can arrive in
+   * either order. A small file started second can easily finish before a large
+   * file started first. Without an identity per attempt, the late result of a
+   * superseded import would overwrite the newer model, and the user would be
+   * looking at geometry that does not match the filename beside it.
+   *
+   * A boolean "importing" flag cannot express this: by the time the stale
+   * result arrives the flag is true again, for a different import. The token is
+   * monotonic, so "is this still the current attempt?" is answerable without
+   * any reference to timing.
+   */
+  public beginImport(fileName: string): ImportToken {
+    const token = this.nextImportToken as ImportToken;
+    this.nextImportToken += 1;
+    this.currentImportToken = token;
+    this.update({
+      importProgress: { state: ImportState.Screening, fraction: 0, fileName },
+    });
+    return token;
+  }
+
+  /** True while `token` is the most recently started import. */
+  public isCurrentImport(token: ImportToken): boolean {
+    return this.currentImportToken === token;
+  }
+
+  /** Progress from a superseded import is discarded rather than displayed. */
+  public reportImportProgress(token: ImportToken, progress: ImportProgressState): void {
+    if (!this.isCurrentImport(token)) return;
     this.update({ importProgress: progress });
   }
 
   /**
-   * Installs a successfully imported model, replacing any previous one.
+   * Installs a model, but only if `token` is still the current import.
    *
-   * The revision counter is what lets the viewport distinguish "same model,
-   * re-render" from "new model, rebuild GPU buffers", without comparing
-   * multi-megabyte typed arrays.
+   * Returns whether the model was installed, so the caller can tell a genuine
+   * commit from a discarded stale result.
    */
-  public setModel(model: Omit<LoadedModel, 'revision'>): void {
+  public commitImport(token: ImportToken, model: Omit<LoadedModel, 'revision'>): boolean {
+    if (!this.isCurrentImport(token)) return false;
+    this.currentImportToken = undefined;
+
     const revision = this.nextModelRevision;
     this.nextModelRevision += 1;
+
+    // A new model invalidates the previous model's diagnostics completely. The
+    // in-flight analysis token is dropped so a report for the model being
+    // replaced cannot install itself against the replacement, and the report
+    // itself goes rather than lingering beside different geometry.
+    this.currentAnalysisToken = undefined;
+
     this.update({
       model: { ...model, revision },
       importProgress: { state: ImportState.Ready, fraction: 1 },
+      analysis: {
+        ...EMPTY_ANALYSIS,
+        state: AnalysisState.Idle,
+        handle: model.handle,
+      },
+      // A successful import means a live worker, so any previous loss notice is
+      // stale and must go.
+      geometrySessionLost: undefined,
     });
+    return true;
+  }
+
+  /**
+   * Claims the analysis slot for `handle`.
+   *
+   * The previous report is deliberately KEPT while the new analysis runs. A
+   * re-analysis of the same model should not blank the panel the user is
+   * reading; if the new run is cancelled or fails, what was already known is
+   * still true and still shown.
+   */
+  public beginAnalysis(handle: ModelHandle): AnalysisToken {
+    const token = this.nextAnalysisToken as AnalysisToken;
+    this.nextAnalysisToken += 1;
+    this.currentAnalysisToken = token;
+
+    const previous = this.state.analysis;
+    this.update({
+      analysis: {
+        ...previous,
+        state: AnalysisState.Analyzing,
+        handle,
+        fraction: 0,
+        phase: undefined,
+        error: undefined,
+        // Report and detail intentionally carried forward.
+        report: sameHandle(previous.handle, handle) ? previous.report : undefined,
+        detail: sameHandle(previous.handle, handle) ? previous.detail : undefined,
+      },
+    });
+    return token;
+  }
+
+  public isCurrentAnalysis(token: AnalysisToken): boolean {
+    return this.currentAnalysisToken === token;
+  }
+
+  public setOverlayVisible(overlay: OverlayId, visible: boolean): void {
+    if (this.state.overlays[overlay] === visible) return;
+    this.update({ overlays: { ...this.state.overlays, [overlay]: visible } });
+  }
+
+  public reportAnalysisProgress(token: AnalysisToken, fraction: number, phase: string): void {
+    if (!this.isCurrentAnalysis(token)) return;
+    const analysis = this.state.analysis;
+    // Coalesced at the source: a worker phase can emit many updates per second,
+    // and re-rendering for a fraction that rounds to the same displayed percent
+    // is work nobody sees. Phase changes always pass through.
+    if (
+      analysis.phase === phase &&
+      Math.round(analysis.fraction * 100) === Math.round(fraction * 100)
+    ) {
+      return;
+    }
+    this.update({ analysis: { ...analysis, state: AnalysisState.Analyzing, fraction, phase } });
+  }
+
+  /**
+   * Installs a report, but only for the model that is actually loaded.
+   *
+   * TWO GATES, not one. The token rejects a superseded analysis; the handle
+   * comparison rejects a report whose model is no longer current even if the
+   * token somehow survived. Either alone would leave a path for M0's topology
+   * to be displayed beside M1's geometry.
+   */
+  public commitAnalysis(
+    token: AnalysisToken,
+    handle: ModelHandle,
+    report: TopologyReport,
+    detail: TopologyDetail,
+    durationMs: number,
+  ): boolean {
+    if (!this.isCurrentAnalysis(token)) return false;
+    if (!sameHandle(this.state.model?.handle, handle)) return false;
+    this.currentAnalysisToken = undefined;
+
+    this.update({
+      analysis: {
+        state: AnalysisState.Ready,
+        handle,
+        fraction: 1,
+        phase: undefined,
+        report,
+        detail,
+        error: undefined,
+        durationMs,
+      },
+    });
+    return true;
+  }
+
+  /**
+   * Records that analysis did not produce a report.
+   *
+   * Does NOT touch `model`: a failed analysis leaves the imported geometry fully
+   * usable. Losing a successfully imported model because diagnostics ran out of
+   * memory would be a worse outcome than having no diagnostics.
+   */
+  public failAnalysis(token: AnalysisToken, error: AnalysisFailure): boolean {
+    if (!this.isCurrentAnalysis(token)) return false;
+    this.currentAnalysisToken = undefined;
+
+    const analysis = this.state.analysis;
+    this.update({
+      analysis: { ...analysis, state: AnalysisState.Failed, fraction: 0, phase: undefined, error },
+    });
+    return true;
+  }
+
+  /**
+   * Records a cancelled analysis.
+   *
+   * Falls back to `ready` when a complete earlier report for the same model is
+   * still held — cancelling a re-run should not discard the answer the user
+   * already had. A partial report is never installed by any path.
+   */
+  public cancelAnalysis(token: AnalysisToken): boolean {
+    if (!this.isCurrentAnalysis(token)) return false;
+    this.currentAnalysisToken = undefined;
+
+    const analysis = this.state.analysis;
+    const hasEarlierReport = analysis.report !== undefined;
+    this.update({
+      analysis: {
+        ...analysis,
+        state: hasEarlierReport ? AnalysisState.Ready : AnalysisState.Cancelled,
+        fraction: hasEarlierReport ? 1 : 0,
+        phase: undefined,
+        error: undefined,
+      },
+    });
+    return true;
   }
 
   /**
    * Records that an import did not succeed.
    *
    * Deliberately does NOT touch `model`. A failed or cancelled replacement must
-   * leave the previously loaded model exactly as it was.
+   * leave whatever was already loaded exactly as it was — losing the user's
+   * model because the next file turned out to be broken would be its own kind
+   * of data loss. A stale failure is ignored entirely, so a superseded import
+   * cannot put the interface into an error state that belongs to nothing.
    */
-  public failImport(): void {
-    this.update({ importProgress: { state: ImportState.Error, fraction: 0 } });
-  }
-
-  /** Returns the import indicator to rest without disturbing the model. */
-  public resetImportProgress(): void {
+  public failImport(token: ImportToken): boolean {
+    if (!this.isCurrentImport(token)) return false;
+    this.currentImportToken = undefined;
     this.update({
       importProgress: {
-        state: this.state.model === undefined ? ImportState.Idle : ImportState.Ready,
+        state: this.state.model === undefined ? ImportState.Error : ImportState.Ready,
         fraction: this.state.model === undefined ? 0 : 1,
       },
     });
+    return true;
   }
 
-  public setExportState(exportState: ExportState): void {
-    this.update({ exportState });
+  /**
+   * Claims the export slot.
+   *
+   * Tokened for the same reason imports are: a second export started while the
+   * first is still writing would otherwise have its progress bar driven by
+   * whichever operation reported last. Progress from a superseded export is
+   * discarded rather than displayed.
+   */
+  /**
+   * Records total loss of worker-side geometry and discards the model.
+   *
+   * POLICY A. The worker held the ONLY copy of the authoritative mesh, so there
+   * is nothing left to operate on. Nothing is reconstructed from the render
+   * snapshot — pixels are not geometry — and leaving the picture on screen would
+   * imply a working session that no longer exists: export would fail, and so
+   * would every future diagnostic. Showing nothing and saying why is the less
+   * misleading of the two options.
+   *
+   * In-flight tokens are cleared so a late reply from the dead worker cannot
+   * install anything afterwards.
+   */
+  public loseGeometrySession(reason: string): void {
+    this.currentImportToken = undefined;
+    this.currentExportToken = undefined;
+    this.currentAnalysisToken = undefined;
+    this.update({
+      model: undefined,
+      geometrySessionLost: reason,
+      importProgress: { state: ImportState.Idle, fraction: 0 },
+      exportProgress: { state: ExportState.Idle, fraction: 0 },
+      // The report described geometry that no longer exists. Keeping it on
+      // screen would describe a model the user cannot export, overlay, or act
+      // on — the same reason the model itself is cleared.
+      analysis: EMPTY_ANALYSIS,
+    });
+  }
+
+  public beginExport(encoding: string): ExportToken {
+    const token = this.nextExportToken as ExportToken;
+    this.nextExportToken += 1;
+    this.currentExportToken = token;
+    this.update({ exportProgress: { state: ExportState.Working, fraction: 0, encoding } });
+    return token;
+  }
+
+  public isCurrentExport(token: ExportToken): boolean {
+    return this.currentExportToken === token;
+  }
+
+  public reportExportProgress(token: ExportToken, fraction: number, encoding: string): void {
+    if (!this.isCurrentExport(token)) return;
+    this.update({ exportProgress: { state: ExportState.Working, fraction, encoding } });
+  }
+
+  /** Ends the export, whether it succeeded, failed, or was cancelled. */
+  public finishExport(token: ExportToken): boolean {
+    if (!this.isCurrentExport(token)) return false;
+    this.currentExportToken = undefined;
+    this.update({ exportProgress: { state: ExportState.Idle, fraction: 0 } });
+    return true;
   }
 
   private update(patch: Partial<WorkspaceState>): void {
     this.state = { ...this.state, ...patch };
     for (const listener of [...this.listeners]) listener();
   }
+}
+
+/**
+ * Handle equality: same model AND same revision.
+ *
+ * Comparing only `modelId` would accept a report computed before the model was
+ * replaced in place, which is exactly what the revision exists to catch.
+ */
+function sameHandle(left: ModelHandle | undefined, right: ModelHandle | undefined): boolean {
+  if (left === undefined || right === undefined) return false;
+  return left.modelId === right.modelId && left.revision === right.revision;
 }

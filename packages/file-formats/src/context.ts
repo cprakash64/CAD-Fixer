@@ -62,6 +62,20 @@ export interface FormatWriteContext {
  * option. The seam was defined before any codec existed; this widens it once,
  * with the mesh still the primary result.
  */
+/**
+ * What a writer returns.
+ *
+ * Bytes alone were not enough. Binary STL has no way to represent the multiple
+ * `solid` blocks an ASCII file can carry, so exporting a grouped model to
+ * binary genuinely discards information. Returning that as a warning is the
+ * difference between a documented loss and a silent one.
+ */
+export interface MeshWriteResult {
+  readonly bytes: Uint8Array;
+  /** Non-fatal findings, e.g. metadata that could not be represented. */
+  readonly warnings: readonly Diagnostic[];
+}
+
 export interface MeshReadResult {
   readonly mesh: CanonicalMesh;
   /** The encoding actually detected, e.g. `binary` or `ascii`. */

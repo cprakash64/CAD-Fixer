@@ -86,3 +86,152 @@ export function truncatedBinaryStl(): Buffer {
   generated.bytes.writeUInt32LE(9000, 80);
   return generated.bytes;
 }
+
+/* ------------------------------------------------- topology fixtures -- */
+
+export type Point = readonly [number, number, number];
+
+/**
+ * Writes an arbitrary triangle list as a binary STL.
+ *
+ * The topology fixtures below are generated at test time and imported through
+ * the real file picker, so the browser tests exercise the same parse → resident
+ * model → analyze path a user would. Coordinates are written as float32, which
+ * is exactly what the format holds, so what the engine recovers is what the file
+ * actually says.
+ */
+export function binaryStlFrom(triangles: readonly (readonly [Point, Point, Point])[]): Buffer {
+  const bytes = Buffer.alloc(BINARY_PREFIX_BYTES + triangles.length * BINARY_FACET_BYTES);
+  bytes.write('cadfixer topology fixture', 0, 'ascii');
+  bytes.writeUInt32LE(triangles.length, 80);
+
+  triangles.forEach((triangle, index) => {
+    const offset = BINARY_PREFIX_BYTES + index * BINARY_FACET_BYTES;
+    // Normal left at zero: stored normals are advisory and the engine ignores
+    // them, deriving orientation from vertex order instead.
+    triangle.forEach((point, corner) => {
+      const base = offset + 12 + corner * 12;
+      bytes.writeFloatLE(point[0], base);
+      bytes.writeFloatLE(point[1], base + 4);
+      bytes.writeFloatLE(point[2], base + 8);
+    });
+  });
+
+  return bytes;
+}
+
+/** A closed tetrahedron, wound outward. No topological defects. */
+export function tetrahedronStl(): Buffer {
+  const a: Point = [0, 0, 0];
+  const b: Point = [10, 0, 0];
+  const c: Point = [0, 10, 0];
+  const d: Point = [0, 0, 10];
+  return binaryStlFrom([
+    [a, c, b],
+    [a, b, d],
+    [a, d, c],
+    [b, c, d],
+  ]);
+}
+
+/** One triangle: three boundary edges forming one simple loop. */
+export function singleTriangleStl(): Buffer {
+  return binaryStlFrom([
+    [
+      [0, 0, 0],
+      [10, 0, 0],
+      [0, 10, 0],
+    ],
+  ]);
+}
+
+/** Three triangles sharing one edge: exactly one non-manifold edge. */
+export function nonManifoldEdgeStl(): Buffer {
+  const a: Point = [0, 0, 0];
+  const b: Point = [10, 0, 0];
+  return binaryStlFrom([
+    [a, b, [0, 10, 0]],
+    [a, b, [0, 0, 10]],
+    [a, b, [0, -10, 0]],
+  ]);
+}
+
+/**
+ * THE BOW-TIE. Two square patches meeting at exactly one vertex.
+ *
+ * No edge is shared between the patches, so every edge has at most two incident
+ * faces. Only genuine vertex-fan analysis finds the pinch — which is why this
+ * fixture is in the browser suite and not only the unit suite: it proves the
+ * interface did not reduce manifoldness to an edge count somewhere on the way to
+ * the screen.
+ */
+export function bowTieStl(): Buffer {
+  const apex: Point = [0, 0, 0];
+  return binaryStlFrom([
+    [apex, [10, 0, 0], [10, 10, 0]],
+    [apex, [10, 10, 0], [0, 10, 0]],
+    [apex, [-10, 0, 0], [-10, -10, 0]],
+    [apex, [-10, -10, 0], [0, -10, 0]],
+  ]);
+}
+
+/**
+ * Two adjacent triangles that traverse their shared edge the SAME way.
+ *
+ * Worked through explicitly, because "reverse one of them" is easy to get
+ * backwards. The first triangle (a,b,c) traverses its edges a→b, b→c, c→a, so
+ * it crosses the shared edge {a,c} in the direction c→a. A consistently wound
+ * neighbour must therefore cross it a→c. This one is (d,c,a): its edges are
+ * d→c, c→a, a→d — it crosses c→a as well, which is the conflict.
+ */
+export function windingConflictStl(): Buffer {
+  const a: Point = [0, 0, 0];
+  const b: Point = [10, 0, 0];
+  const c: Point = [10, 10, 0];
+  const d: Point = [0, 10, 0];
+  return binaryStlFrom([
+    [a, b, c],
+    [d, c, a],
+  ]);
+}
+
+/** A valid triangle plus one whose three corners are exactly collinear. */
+export function degenerateFaceStl(): Buffer {
+  return binaryStlFrom([
+    [
+      [0, 0, 0],
+      [10, 0, 0],
+      [0, 10, 0],
+    ],
+    [
+      [0, 0, 0],
+      [10, 0, 0],
+      [20, 0, 0],
+    ],
+  ]);
+}
+
+/**
+ * A grid of open quads, large enough that analysis takes measurable time.
+ *
+ * Used for cancellation and responsiveness. Height varies with grid position so
+ * neighbouring quads genuinely share vertices — a fixture where every quad has
+ * its own corners would exercise the hash table's insert path and almost none of
+ * its merging, which is the part that costs.
+ */
+export function analysisHeavyStl(side: number): GeneratedStl {
+  const triangles: (readonly [Point, Point, Point])[] = [];
+  const height = (x: number, y: number): number => ((x * 7 + y * 13) % 17) * 0.01;
+
+  for (let row = 0; row < side; row += 1) {
+    for (let col = 0; col < side; col += 1) {
+      const p00: Point = [col, row, height(col, row)];
+      const p10: Point = [col + 1, row, height(col + 1, row)];
+      const p01: Point = [col, row + 1, height(col, row + 1)];
+      const p11: Point = [col + 1, row + 1, height(col + 1, row + 1)];
+      triangles.push([p00, p10, p01], [p10, p11, p01]);
+    }
+  }
+
+  return { bytes: binaryStlFrom(triangles), triangles: triangles.length };
+}

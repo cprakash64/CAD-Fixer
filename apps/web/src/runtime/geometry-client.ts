@@ -6,11 +6,13 @@ import {
   type OperationHandle,
   type ProgressUpdate,
   type SelfTestResult,
+  type ModelAnalyzeResult,
+  type ModelHandle,
+  type ModelImportResult,
+  type ModelReleaseResult,
   type StlExportResult,
-  type StlImportResult,
 } from '@cadfixer/geometry-runtime';
-import type { CanonicalMesh } from '@cadfixer/mesh-core';
-import { internalError } from '@cadfixer/shared';
+import { modelUnavailable } from '@cadfixer/shared';
 
 /**
  * The browser-side transport adapter and the application's single entry point
@@ -43,13 +45,34 @@ function createWorkerEndpoint(worker: Worker): MessageEndpoint {
 
 export interface GeometryClientOptions {
   readonly onDiagnostic: DiagnosticSink;
+  /**
+   * Called when the worker dies, taking every resident model with it.
+   *
+   * The application must treat this as total loss of authoritative geometry:
+   * the worker held the only copy, and nothing is reconstructed from the render
+   * snapshot. See docs/adr/0008-worker-resident-geometry.md.
+   */
+  readonly onWorkerLost?: (reason: string) => void;
 }
+
+/**
+ * Monotonic across every client this document creates, so a handle from a dead
+ * worker can never be mistaken for one from its replacement.
+ */
+let nextSessionId = 1;
 
 export class GeometryClient {
   private readonly worker: Worker;
   private readonly coordinator: GeometryCoordinator;
+  private readonly onWorkerLost: ((reason: string) => void) | undefined;
+  private readonly session: number;
+  private lost = false;
 
   public constructor(options: GeometryClientOptions) {
+    this.session = nextSessionId;
+    nextSessionId += 1;
+    this.onWorkerLost = options.onWorkerLost;
+
     this.worker = new Worker(new URL('../workers/geometry.worker.ts', import.meta.url), {
       type: 'module',
       name: 'cadfixer-geometry',
@@ -59,22 +82,56 @@ export class GeometryClient {
       onDiagnostic: options.onDiagnostic,
     });
 
-    // A worker that fails to load, or a message that cannot be cloned, produces
-    // no protocol reply. Without these handlers every pending operation would
-    // hang and the interface would wait forever on a result that is not coming.
+    this.attachFailureHandlers();
+  }
+
+  /**
+   * A worker that fails to load, or a message that cannot be cloned, produces no
+   * protocol reply. Without these handlers every pending operation would hang
+   * and the interface would wait forever on a result that is not coming.
+   *
+   * Worker death is also LOSS OF ALL GEOMETRY: the worker held the only copy of
+   * every resident model. Nothing is reconstructed from the render snapshot —
+   * pixels are not geometry — so the application is told, and it clears the
+   * model rather than leaving something on screen that no operation can act on.
+   */
+  private attachFailureHandlers(): void {
     this.worker.addEventListener('error', (event: ErrorEvent) => {
-      this.coordinator.failAllPending(
-        internalError('The geometry worker failed to start or crashed.', {
-          details: { detail: event.message },
-        }),
+      this.handleWorkerLoss(
+        event.message.length > 0
+          ? `The geometry worker crashed: ${event.message}`
+          : 'The geometry worker crashed.',
       );
     });
 
     this.worker.addEventListener('messageerror', () => {
-      this.coordinator.failAllPending(
-        internalError('A message from the geometry worker could not be deserialised.'),
-      );
+      this.handleWorkerLoss('A message from the geometry worker could not be deserialised.');
     });
+  }
+
+  private handleWorkerLoss(reason: string): void {
+    if (this.lost) return;
+    this.lost = true;
+
+    this.coordinator.failAllPending(modelUnavailable(reason));
+    this.onWorkerLost?.(reason);
+  }
+
+  /**
+   * Whether the worker that produced `sessionId` is still the live one.
+   *
+   * Handles are namespaced per worker session because a replacement worker
+   * starts its model ids from scratch: without this, a stale handle naming
+   * `model-1` from a dead session would match the FIRST model imported into the
+   * replacement. That is precisely the aliasing the revision guard exists to
+   * prevent, one level up.
+   */
+  public get sessionId(): number {
+    return this.session;
+  }
+
+  public get isLost(): boolean {
+    return this.lost;
   }
 
   /**
@@ -97,41 +154,62 @@ export class GeometryClient {
   }
 
   /**
-   * Parses an STL file in the worker.
+   * Parses an STL file in the worker and commits it as the resident model.
    *
    * `bytes` is TRANSFERRED: the caller's buffer is detached as soon as this
-   * returns and must not be read again. The parsed mesh and its render normals
-   * come back by transfer too, so nothing large is ever cloned on this path.
+   * returns and must not be read again. What comes back is a handle plus a
+   * render snapshot — the authoritative geometry stays in the worker.
    */
-  public importStl(
+  public importModel(
     bytes: ArrayBuffer,
     onProgress: (update: ProgressUpdate) => void,
     budget?: Readonly<Record<string, number>>,
-  ): OperationHandle<StlImportResult> {
+  ): OperationHandle<ModelImportResult> {
     return this.coordinator.dispatch(
-      'stl/import',
+      'model/import',
       budget === undefined ? { bytes } : { bytes, budget },
       { onProgress, transfer: [bytes] },
     );
   }
 
   /**
-   * Encodes a mesh as STL in the worker.
+   * Encodes a resident model as STL.
    *
-   * The mesh is CLONED rather than transferred, because the main thread is
-   * still displaying it — transferring would detach the buffers the viewport is
-   * rendering from. That clone is the one unavoidable copy in the export path,
-   * and it is not free: structured-cloning a 2-million-triangle mesh copies
-   * about 96 MiB. Eliminating it means keeping canonical geometry worker-side
-   * and never handing it to the main thread at all. Recorded under "Not yet
-   * measured" in docs/PERFORMANCE_BASELINE.md.
+   * Nothing larger than a handle crosses the boundary. Stage 1 sent the whole
+   * canonical mesh back into the worker on every export — about 96 MiB for a
+   * two-million-triangle model — because the main thread owned it.
    */
-  public exportStl(
-    mesh: CanonicalMesh,
+  public exportModel(
+    handle: ModelHandle,
     encoding: string,
     onProgress: (update: ProgressUpdate) => void,
   ): OperationHandle<StlExportResult> {
-    return this.coordinator.dispatch('stl/export', { mesh, encoding }, { onProgress });
+    return this.coordinator.dispatch('model/export', { handle, encoding }, { onProgress });
+  }
+
+  /**
+   * Runs read-only topology analysis on a resident model.
+   *
+   * Sends a handle and a sample cap; the authoritative geometry never moves.
+   * What returns is counts, statuses, and bounded diagnostic samples — the
+   * samples ARE geometry-derived, deliberately, because the viewport has to draw
+   * the defects somewhere.
+   */
+  public analyzeModel(
+    handle: ModelHandle,
+    onProgress: (update: ProgressUpdate) => void,
+    sampleLimit?: number,
+  ): OperationHandle<ModelAnalyzeResult> {
+    return this.coordinator.dispatch(
+      'model/analyze',
+      sampleLimit === undefined ? { handle } : { handle, sampleLimit },
+      { onProgress },
+    );
+  }
+
+  /** Frees a model the application no longer displays. */
+  public releaseModel(modelId: string): OperationHandle<ModelReleaseResult> {
+    return this.coordinator.dispatch('model/release', { modelId });
   }
 
   public dispose(): void {

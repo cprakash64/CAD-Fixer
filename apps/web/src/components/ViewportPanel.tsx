@@ -14,7 +14,7 @@ export function ViewportPanel(): ReactNode {
   const containerRef = useRef<HTMLDivElement>(null);
   const viewportRef = useRef<ViewportHandle | undefined>(undefined);
   const store = useWorkspaceStore();
-  const { viewportFailure, model } = useWorkspaceState();
+  const { viewportFailure, model, analysis, overlays } = useWorkspaceState();
 
   useEffect(() => {
     const container = containerRef.current;
@@ -61,14 +61,51 @@ export function ViewportPanel(): ReactNode {
     }
 
     viewport.setModel({
-      positions: model.mesh.positions,
-      indices: model.mesh.indices,
-      normals: model.renderNormals,
+      positions: model.render.positions,
+      normals: model.render.normals,
       center: model.bounds?.center ?? [0, 0, 0],
       radius: model.bounds?.radius ?? 1,
       revision: model.revision,
     });
   }, [model]);
+
+  /**
+   * Pushes diagnostic overlays for the model that is actually displayed.
+   *
+   * THE STALE-REPORT GUARD. `analysis.handle` is compared against the loaded
+   * model's handle before anything is drawn. An analysis of M0 that completes
+   * after M1 has been imported carries M0's handle, fails this comparison, and
+   * clears the overlays instead of decorating M1 with M0's defects. The viewport
+   * repeats the check on revision, so neither layer relies on the other.
+   */
+  useEffect(() => {
+    const viewport = viewportRef.current;
+    if (viewport === undefined) return;
+
+    const detail = analysis.detail;
+    const belongsToLoadedModel =
+      model !== undefined &&
+      analysis.handle?.modelId === model.handle.modelId &&
+      analysis.handle.revision === model.handle.revision;
+
+    if (detail === undefined || !belongsToLoadedModel) {
+      viewport.setOverlays(undefined);
+      return;
+    }
+
+    viewport.setOverlays({
+      samples: {
+        boundaryEdges: detail.boundaryEdges,
+        nonManifoldEdges: detail.nonManifoldEdges,
+        windingConflictEdges: detail.windingConflictEdges,
+        degenerateFaces: detail.degenerateFaces,
+        sampleVertexIds: detail.sampleVertexIds,
+        sampleVertexPositions: detail.sampleVertexPositions,
+      },
+      visibility: overlays,
+      revision: model.revision,
+    });
+  }, [analysis.detail, analysis.handle, model, overlays]);
 
   return (
     <section className="viewport" aria-label="3D workspace">

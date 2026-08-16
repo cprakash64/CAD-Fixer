@@ -1,4 +1,11 @@
-export { IDENTITY_MATRIX4, meshTransferables, triangleCount, vertexCount } from './mesh';
+export {
+  createIndexArray,
+  createPositionArray,
+  IDENTITY_MATRIX4,
+  meshTransferables,
+  triangleCount,
+  vertexCount,
+} from './mesh';
 export type {
   CanonicalMesh,
   IndexArray,

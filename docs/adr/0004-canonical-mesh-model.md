@@ -93,7 +93,9 @@ Summary of what changed:
 
 - **The memory cost is now measured, not estimated.** Float64 positions add 75%
   to canonical mesh size (96 MiB → 168 MiB for a 100 MiB STL), plus a conversion
-  pass and a transient extra copy on every GPU upload, since GPUs take Float32.
+  pass and a transient extra copy on every GPU upload, since the render snapshot
+  uses float32 — the selected WebGL/Three.js vertex-attribute representation,
+  chosen so render precision does not track canonical precision.
 - **The benefit for STL import specifically is zero.** Binary STL stores Float32,
   so widening the canonical type stores identical values in twice the space. The
   only implemented workflow cannot motivate the change.

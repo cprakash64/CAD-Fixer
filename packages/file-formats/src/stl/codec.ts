@@ -1,6 +1,11 @@
 import { internalError } from '@cadfixer/shared';
 import type { CanonicalMesh } from '@cadfixer/mesh-core';
-import type { FormatReadContext, FormatWriteContext, MeshReadResult } from '../context';
+import type {
+  FormatReadContext,
+  FormatWriteContext,
+  MeshReadResult,
+  MeshWriteResult,
+} from '../context';
 import { MeshFormatId } from '../formats';
 import type { MeshReader, MeshWriter } from '../registry';
 import { StlEncoding } from './detect';
@@ -21,7 +26,7 @@ export const stlWriter: MeshWriter = {
   // Binary first: it is the default because it is roughly a fifth of the size
   // and is what slicers expect.
   encodings: [StlEncoding.Binary, StlEncoding.Ascii],
-  write(mesh: CanonicalMesh, context: FormatWriteContext): Promise<Uint8Array> {
+  write(mesh: CanonicalMesh, context: FormatWriteContext): Promise<MeshWriteResult> {
     const encoding = context.encoding ?? StlEncoding.Binary;
     if (encoding === StlEncoding.Binary) return writeBinaryStl(mesh, context);
     if (encoding === StlEncoding.Ascii) return writeAsciiStl(mesh, context);
