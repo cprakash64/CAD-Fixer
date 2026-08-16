@@ -1,0 +1,9 @@
+{
+  "//": "Research package. Unlike the geometry packages it may use Node APIs: the isolation test reads the repository to prove this package is unreachable from production.",
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2023"],
+    "types": ["node"]
+  },
+  "include": ["src/**/*.ts"]
+}
