@@ -1,0 +1,161 @@
+{
+  "startedAt": "2026-08-16T22:28:22.039Z",
+  "harnessVersion": "stage-3a-3b.1",
+  "environment": "chromium via playwright; node v22.22.2 darwin/arm64",
+  "corpusVersion": "e42e7be9ad00a58a",
+  "artifactShas": {
+    "manifold": "8bd72c68df6d2785d316f2ce701f8d82638229c3527129238f7696e2ba7bde61",
+    "geogram": "73cabc53caeb3d85d66acd2abd0ddeea43cbedae0bacb18dd1cb165fc4947bd8",
+    "pmp": "a4e1263cb8f41abc25b33c4142a08525e38bf587fefdc6e552f5abc56bc3105f"
+  },
+  "browser": {
+    "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.7922.34 Safari/537.36",
+    "crossOriginIsolated": true,
+    "hasSharedArrayBuffer": true,
+    "hardwareConcurrency": 8,
+    "origin": "http://127.0.0.1:4174"
+  },
+  "note": "Worker.terminate() against real candidate WASM work. Termination latency is an OBSERVATION BOUND from the page, not a measured kernel-stop time: the platform exposes no termination event, so what is measured is that nothing further arrived during a quiet window.",
+  "cancellation": [
+    {
+      "candidateId": "manifold",
+      "workload": "boolean union of two large tessellated spheres",
+      "workloadTriangles": 210680,
+      "calibratedKernelMs": 705.9250000119209,
+      "workerCreateMs": 0.2549999952316284,
+      "glueImportMs": 2.1800000071525574,
+      "wasmInstantiateMs": 3.915000021457672,
+      "initTotalMs": 24.27000004053116,
+      "operationStartLatencyMs": 57.5799999833107,
+      "stillRunningAtTerminate": true,
+      "pendingAtTerminate": 1,
+      "terminateCallMs": 0.014999985694885254,
+      "observedQuietMs": 1202.5250000357628,
+      "lateMessages": 0,
+      "mainThreadResponsiveMs": 22.360000014305115,
+      "sourceDigestBefore": "31a1a0a8/e91c81b8",
+      "sourceDigestAfter": "31a1a0a8/e91c81b8",
+      "sourceIntact": true,
+      "restartInitMs": 22.889999985694885,
+      "recoveryKernelMs": 2.409999966621399,
+      "recoveryOutputTriangles": 4,
+      "verdict": "PASS",
+      "note": null
+    },
+    {
+      "candidateId": "geogram",
+      "workload": "intersection resolution on two interpenetrating spheres",
+      "workloadTriangles": 57120,
+      "calibratedKernelMs": 561.6499999761581,
+      "workerCreateMs": 0.1499999761581421,
+      "glueImportMs": 2.325000047683716,
+      "wasmInstantiateMs": 9.169999957084656,
+      "initTotalMs": 16.549999952316284,
+      "operationStartLatencyMs": 8.389999985694885,
+      "stillRunningAtTerminate": true,
+      "pendingAtTerminate": 1,
+      "terminateCallMs": 0.009999990463256836,
+      "observedQuietMs": 1202.574999988079,
+      "lateMessages": 0,
+      "mainThreadResponsiveMs": 0.5900000333786011,
+      "sourceDigestBefore": "cf7a4924/3823e12f",
+      "sourceDigestAfter": "cf7a4924/3823e12f",
+      "sourceIntact": true,
+      "restartInitMs": 21.115000009536743,
+      "recoveryKernelMs": 5.349999964237213,
+      "recoveryOutputTriangles": 4,
+      "verdict": "PASS",
+      "note": null
+    },
+    {
+      "candidateId": "pmp",
+      "workload": "hole fill on a sphere with a large boundary loop",
+      "workloadTriangles": 487900,
+      "calibratedKernelMs": 42731.35000002384,
+      "workerCreateMs": 11.069999992847443,
+      "glueImportMs": 12.590000033378601,
+      "wasmInstantiateMs": 28.849999964237213,
+      "initTotalMs": 125.22000002861023,
+      "operationStartLatencyMs": 137.22000002861023,
+      "stillRunningAtTerminate": true,
+      "pendingAtTerminate": 1,
+      "terminateCallMs": 0.6650000214576721,
+      "observedQuietMs": 1200.9449999928474,
+      "lateMessages": 0,
+      "mainThreadResponsiveMs": 16.82499998807907,
+      "sourceDigestBefore": "52a70ffe/3bac7d84",
+      "sourceDigestAfter": "52a70ffe/3bac7d84",
+      "sourceIntact": true,
+      "restartInitMs": 84.75999999046326,
+      "recoveryKernelMs": 0.5550000071525574,
+      "recoveryOutputTriangles": 4,
+      "verdict": "PASS",
+      "note": null
+    }
+  ],
+  "workerCost": [
+    {
+      "candidateId": "manifold",
+      "mode": "persistent",
+      "operations": 5,
+      "totalMs": 12.375,
+      "perOperationMs": 2.475,
+      "initMsTotal": 8.169999957084656,
+      "kernelMsTotal": 2.680000126361847
+    },
+    {
+      "candidateId": "manifold",
+      "mode": "disposable",
+      "operations": 5,
+      "totalMs": 55.439999997615814,
+      "perOperationMs": 11.087999999523163,
+      "initMsTotal": 40.54999989271164,
+      "kernelMsTotal": 12.244999945163727
+    },
+    {
+      "candidateId": "geogram",
+      "mode": "persistent",
+      "operations": 5,
+      "totalMs": 31.030000030994415,
+      "perOperationMs": 6.206000006198883,
+      "initMsTotal": 25.5900000333786,
+      "kernelMsTotal": 4.875000059604645
+    },
+    {
+      "candidateId": "geogram",
+      "mode": "disposable",
+      "operations": 5,
+      "totalMs": 97.01499998569489,
+      "perOperationMs": 19.402999997138977,
+      "initMsTotal": 74.55500000715256,
+      "kernelMsTotal": 20.78000009059906
+    },
+    {
+      "candidateId": "pmp",
+      "mode": "persistent",
+      "operations": 5,
+      "totalMs": 8.7049999833107,
+      "perOperationMs": 1.74099999666214,
+      "initMsTotal": 7.155000030994415,
+      "kernelMsTotal": 0.8799999356269836
+    },
+    {
+      "candidateId": "pmp",
+      "mode": "disposable",
+      "operations": 5,
+      "totalMs": 40.79000002145767,
+      "perOperationMs": 8.158000004291534,
+      "initMsTotal": 34.425000071525574,
+      "kernelMsTotal": 4.105000019073486
+    }
+  ],
+  "staleWorkerTests": [
+    {
+      "terminatedSession": 1,
+      "replacementSession": 2,
+      "replacementOutputTriangles": 4,
+      "staleMessagesObserved": 0,
+      "staleDetail": []
+    }
+  ]
+}

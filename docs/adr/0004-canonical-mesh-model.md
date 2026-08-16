@@ -240,3 +240,53 @@ decisions.
 **Status: OPEN.** The evidence now favours float64 canonical storage more
 strongly than it did, but the memory and render costs that would justify or
 refute it have not been measured.
+
+---
+
+## Stage 3A-3B — NARROWED (still not fully closed)
+
+Browser and scaling evidence now supports a **layered** precision policy rather
+than one global answer. Forcing a single binary decision would misstate what the
+measurements say.
+
+### Decided
+
+1. **Render snapshots remain Float32.** Unchanged, and now reinforced: it is the
+   selected WebGL vertex-attribute representation and nothing in this stage
+   argues against it.
+2. **The repair WORKING representation must be Float64.** Two of the three
+   shortlisted kernels already work in double (Manifold via `MeshGL64`, Geogram
+   natively), the transfer form is already Float64, and generated coordinates —
+   boolean intersection vertices, hole-fill interiors — are computed at working
+   precision. Narrowing the working representation would discard exactly the
+   values a repair constructs most carefully. PMP's Float32 is a **known
+   deficiency of that candidate**, not a target to match.
+
+### Still open
+
+3. **Canonical source storage precision is UNDECIDED**, and deliberately so.
+
+The argument for Float64 is stronger than it was: a Float32 canonical store
+quantises at import, and widening afterwards **does not recover the lost bits**
+— it only avoids a second rounding. Anything a kernel computes at double
+precision is then thrown away when it is stored back.
+
+The argument against is now quantified. Doubling canonical storage interacts
+with measured memory pressure that is already significant: a 45 MiB boolean pair
+drove Manifold's WASM heap to 1,116 MiB, and PMP's ingest reached 353 MiB on
+52 MiB of input. Canonical storage is not the dominant term, but it is additive
+against a browser tab budget, and it adds a per-frame conversion on the render
+path.
+
+### What would close it
+
+- Peak browser memory for a realistic end-to-end session (import → analyse →
+  repair → render) at Float32 versus Float64 canonical storage. **Not measured**
+  — this stage measured candidate operations in isolation, not a whole session.
+- Render-path cost of the Float64 → Float32 snapshot conversion at 1–5M
+  triangles. **Not measured.**
+
+**Status: NARROWED.** Render Float32 decided; repair working representation
+Float64 decided; canonical storage open pending a session-level memory
+measurement. That is a real narrowing, not a deferral — two of the three layers
+are now settled on evidence.

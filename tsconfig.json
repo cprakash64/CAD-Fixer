@@ -11,7 +11,9 @@
     "vitest.config.ts",
     "vitest.bench.config.ts",
     "playwright.config.ts",
+    "playwright.browser-harness.config.ts",
     "e2e/**/*.ts",
+    "e2e-browser/**/*.ts",
     "scripts/**/*.ts"
   ]
 }

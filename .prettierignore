@@ -12,6 +12,7 @@ experiments/repair-kernels/.toolchain
 experiments/repair-kernels/*/upstream
 experiments/repair-kernels/*/build
 experiments/repair-kernels/*/build-native
+experiments/browser-harness/.cases
 experiments/repair-kernels/*/artifacts
 
 # Machine-generated bakeoff output. Serialisation is owned by the result

@@ -59,6 +59,7 @@ export default tseslint.config(
       // `compiler_depend.ts` which are Makefile fragments, not TypeScript, and
       // the parser chokes on them.
       'experiments/repair-kernels/*/build-native/**',
+      'experiments/browser-harness/.cases/**',
       'experiments/repair-kernels/*/artifacts/**',
     ],
   },
@@ -133,7 +134,7 @@ export default tseslint.config(
 
   // Node-hosted tooling and end-to-end specs.
   {
-    files: ['*.config.ts', 'e2e/**/*.ts', 'eslint.config.js'],
+    files: ['*.config.ts', 'e2e/**/*.ts', 'e2e-browser/**/*.ts', 'eslint.config.js'],
     languageOptions: {
       globals: globals.node,
     },
@@ -165,6 +166,29 @@ export default tseslint.config(
     rules: {
       '@typescript-eslint/explicit-function-return-type': 'off',
       'no-restricted-globals': 'off',
+    },
+  },
+
+  // The Stage 3A-3B experimental browser harness.
+  //
+  // These files run IN A BROWSER — a page and a module Worker — so they need
+  // browser and worker globals, not Node's. They are plain JavaScript on
+  // purpose: they are served to the browser as raw bytes, because putting them
+  // (or the Emscripten glue they load) through a bundler is exactly the defect
+  // that fabricated 321 "crashes" in Stage 3A-2. Return-type syntax does not
+  // exist in JavaScript, and the Playwright-facing surface is typed in
+  // `e2e-browser/harness.d.ts`, which IS checked.
+  //
+  // NOTE: `no-restricted-globals` stays ON. The repo-wide network-API ban
+  // applies here too, and the harness deliberately contains no network call —
+  // the candidate glue performs its own same-origin `.wasm` fetch.
+  {
+    files: ['experiments/browser-harness/**/*.js'],
+    languageOptions: {
+      globals: { ...globals.browser, ...globals.worker },
+    },
+    rules: {
+      '@typescript-eslint/explicit-function-return-type': 'off',
     },
   },
 

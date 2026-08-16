@@ -60,13 +60,60 @@ triangles), so the Stage 3A-2 negative result stands unchanged and remains a
 negative result **at that scale only**: no heap growth was observed because
 nothing here is large enough to cause any.
 
-Explicitly **not** measured, and required before any runtime architecture
-decision:
+All of that was deferred to Stage 3A-3B, which has now run it.
 
-- Browser `WebAssembly.Memory` buffer length before and after an operation.
-- Copy amplification across the JS↔WASM boundary at realistic sizes.
-- Whether memory returns after worker disposal or restart.
-- 1 / 10 / 50 MiB scaling.
+---
 
-All of that is Stage 3A-3B. Nothing in this document should be read as evidence
-about large-model memory behaviour.
+## Stage 3A-3B — measured WASM memory at 1 / 10 / 50 MiB
+
+**These are `WebAssembly.Memory` buffer lengths observed inside the candidate
+Worker. They are NOT process RSS**, and the browser does not expose physical
+reclamation, so no claim about RAM returning to the operating system is made
+anywhere in this document.
+
+| Candidate | Operation      | Input    | WASM heap before → after | Amplification       |
+| --------- | -------------- | -------- | ------------------------ | ------------------- |
+| manifold  | Boolean Add    | 0.86 MiB | 32 → 32 MiB              | within initial heap |
+| manifold  | Boolean Add    | 11.0 MiB | 32 → 288 MiB             | ~26×                |
+| manifold  | Boolean Add    | 45.0 MiB | 32 → **1,116 MiB**       | **~25×**            |
+| geogram   | repairTopology | 1.16 MiB | 64 → 64 MiB              | within initial heap |
+| geogram   | repairTopology | 10.4 MiB | 64 → 64 MiB              | within initial heap |
+| geogram   | repairTopology | 50.8 MiB | 64 → 207 MiB             | ~4×                 |
+| pmp       | ingest         | 1.01 MiB | 32 → 32 MiB              | within initial heap |
+| pmp       | ingest         | 9.69 MiB | 32 → 80 MiB              | ~8×                 |
+| pmp       | ingest         | 52.1 MiB | 32 → 353 MiB             | ~7×                 |
+
+### Copy amplification, measured rather than assumed
+
+Stage 3A-2 assumed "three copies". The live representations at peak, per
+operation, are actually:
+
+1. the page's authoritative mesh (Float32 canonical, retained),
+2. the Worker's structured-clone copy (Float64 transfer form),
+3. the WASM ingest copy inside linear memory,
+4. the candidate's own internal working representation,
+5. the WASM output buffer,
+6. the extracted `Float64Array`/`Uint32Array` result.
+
+All six coexist at the extraction moment. (1) is not freed because the page owns
+it — that is the safety property, not waste. (2) is not freed until the Worker
+dies, which is one more reason the disposable-worker model is attractive.
+
+**Manifold's (4) dominates everything else** at ~25× input, which is where the
+1,116 MiB comes from. Geogram at ~4× and PMP at ~7× are unremarkable by
+comparison.
+
+### Consequence for production
+
+Extrapolating Manifold linearly, a 100 MiB boolean would want ~2.4 GiB of WASM
+heap. A browser tab cannot be relied on to provide that. **A production boolean
+must estimate before it starts and refuse above a ceiling** rather than
+discovering the limit by aborting. Refusing is an acceptable product behaviour;
+crashing the tab is not.
+
+### Reclamation
+
+After `Worker.terminate()` the entire Worker and its WASM heap **become
+unreachable from application state**. That is the accurate statement. Whether
+the browser returns those pages to the operating system is not observable from
+the page, and is not claimed.

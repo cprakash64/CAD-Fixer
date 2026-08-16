@@ -91,3 +91,66 @@ a hang costs exactly one row.
 
 All of that is Stage 3A-3B. **`CANCELLATION_GATE` remains unresolved**;
 process-kill at Node granularity is not evidence about browser workers.
+
+---
+
+## Stage 3A-3B — the browser cancellation gate is now MEASURED, and PASSED
+
+`CANCELLATION_GATE: PASS` for all three candidates, in real Chromium, against
+real candidate WASM work.
+
+The architecture tested is the one the product would use: the **page holds the
+authoritative geometry**, a dedicated Worker receives a structured-clone copy,
+and cancellation is `Worker.terminate()` from the page. No attempt is made to
+interrupt synchronous WASM from inside the blocked thread, because that is not
+possible and pretending otherwise would design in a hang.
+
+|                                        | manifold            | geogram                 | pmp                   |
+| -------------------------------------- | ------------------- | ----------------------- | --------------------- |
+| Real workload                          | 210,680-tri boolean | 57,120-tri intersection | 487,900-tri hole fill |
+| Kernel duration if left alone          | 713 ms              | 570 ms                  | **48,829 ms**         |
+| Confirmed still computing at terminate | yes                 | yes                     | yes                   |
+| `terminate()` call returns in          | 0.33 ms             | 0.01 ms                 | 0.33 ms               |
+| Late messages, 1.2 s quiet window      | 0                   | 0                       | 0                     |
+| Authoritative geometry digest          | unchanged           | unchanged               | unchanged             |
+| Fresh worker re-initialises            | 87.0 ms             | 32.5 ms                 | 16.4 ms               |
+| Recovery operation succeeds            | yes                 | yes                     | yes                   |
+
+**Wording discipline.** Termination is NOT described as instant. What was
+measured is that the `terminate()` call returns in well under a millisecond and
+that nothing further arrived during a quiet window. The platform exposes no
+termination event, so the observation is a **bound**, not a kernel-stop time.
+
+**The main thread stayed responsive** throughout — a DOM write plus a frame
+completed in 0.48–13.8 ms while kernels ran. That is the whole justification for
+paying the copying cost of an off-thread kernel.
+
+### Stale results
+
+Every message carries `(sessionId, opId)`; the page drops anything not matching
+a live session. A terminated worker's replacement returned its own result
+(4 triangles), never the dead worker's boolean.
+
+Precisely: **0 stale messages were observed.** `terminate()` stopped the worker
+posting at all, so the guard was not exercised by a real late message here. It
+is retained and asserted regardless — the guard is cheap and the failure it
+prevents is one that produces plausible, wrong evidence.
+
+### Disposable workers are affordable
+
+| Candidate | Persistent per-op | Disposable per-op | Penalty  |
+| --------- | ----------------- | ----------------- | -------- |
+| manifold  | 3.19 ms           | 10.42 ms          | +7.2 ms  |
+| geogram   | 5.20 ms           | 21.61 ms          | +16.4 ms |
+| pmp       | 1.74 ms           | 8.21 ms           | +6.5 ms  |
+
+6–17 ms per operation against repairs that take hundreds of milliseconds to
+tens of seconds. **The assumption that disposable workers are too expensive is
+not supported.**
+
+### What this changes about the hazard
+
+The uninterruptible synchronous call is still real — PMP's 48.8-second hole fill
+is proof. What has changed is that a safe, measured, recoverable cancellation
+now exists for it in the browser. The hazard is no longer a blocker; it is a
+constraint the architecture must respect.
