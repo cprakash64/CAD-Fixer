@@ -64,3 +64,35 @@ None is an algorithm modification.
 | `pmp::VertexProperty` is a namespace template, not nested             | binding           | Corrected the qualified name                                                                    |
 
 `MAJOR_FORK_REQUIRED`: **not triggered for any candidate.**
+
+---
+
+## Stage 3A-3A rebuilds
+
+Both WASM candidates were rebuilt from the **same pinned commits** — no upstream
+source was modified, and the licence gate ran and passed on every build.
+
+| Artifact                  | Change                                                                           | Bytes                     | New SHA-256 (prefix) |
+| ------------------------- | -------------------------------------------------------------------------------- | ------------------------- | -------------------- |
+| `geogram-candidate.wasm`  | binding now imports `algo` + `sys` argument groups; `cf_g_set_init_mode` added   | 1,368,082 (was 1,319,496) | `73cabc53caeb3d85…`  |
+| `manifold-candidate.wasm` | `cf_merge_changed` export; `CF_OP_SELF_UNION` renamed `CF_OP_SELF_UNION_INVALID` | 296,938 (was 296,885)     | `8bd72c68df6d2785…`  |
+| `pmp-candidate.wasm`      | **unchanged**                                                                    | 246,095                   | `a4e1263cb8f41abc…`  |
+
+### New: native Geogram reference
+
+`experiments/repair-kernels/geogram/build-native.sh` builds a native executable
+from the **same** pinned commit `c8529bb0` with the **same** CMake options, so
+the compiler target is the only variable when comparing against WASM.
+
+|              |                                                                                                  |
+| ------------ | ------------------------------------------------------------------------------------------------ |
+| Platform     | `Darwin-aarch64-clang`, Release, static                                                          |
+| Options      | identical to the WASM build, including `GEOGRAM_WITH_TETGEN=OFF` and `GEOGRAM_WITH_TRIANGLE=OFF` |
+| Licence gate | **runs and passed** — a research binary is not exempt from the obligation                        |
+| Artifact     | `geogram-reference`, 4,832,368 bytes, `d6b0e5c930a395e1…`                                        |
+| Build time   | 152 s                                                                                            |
+
+**`documented capability` versus `compiled and verified capability`:** everything
+in the two tables above is _compiled and verified_. PMP's double-precision build
+option (`-DPMP_SCALAR_TYPE=64`) is **documented capability only** — it exists in
+`CMakeLists.txt:167` and has not been built or measured here.

@@ -54,7 +54,7 @@ em++ -O3 \
   -sALLOW_MEMORY_GROWTH=1 \
   -sINITIAL_MEMORY=33554432 \
   -sENVIRONMENT=web,worker,node \
-  -sEXPORTED_FUNCTIONS='["_cf_run","_cf_boolean","_cf_status","_cf_kernel_reported_success","_cf_vertex_count","_cf_triangle_count","_cf_positions","_cf_triangles","_cf_genus","_cf_volume","_cf_surface_area","_cf_component_count","_cf_reset","_malloc","_free"]' \
+  -sEXPORTED_FUNCTIONS='["_cf_run","_cf_boolean","_cf_status","_cf_kernel_reported_success","_cf_vertex_count","_cf_triangle_count","_cf_positions","_cf_triangles","_cf_genus","_cf_volume","_cf_surface_area","_cf_component_count","_cf_merge_changed","_cf_reset","_malloc","_free"]' \
   -sEXPORTED_RUNTIME_METHODS='["HEAPF64","HEAPU32","getValue"]' \
   --no-entry \
   > "$BUILD/link.log" 2>&1 || { tail -30 "$BUILD/link.log"; exit 1; }

@@ -29,5 +29,7 @@ test-results/
 experiments/repair-kernels/.toolchain/
 experiments/repair-kernels/*/upstream/
 experiments/repair-kernels/*/build/
+experiments/repair-kernels/*/build-native/
 experiments/repair-kernels/*/artifacts/*.wasm
 experiments/repair-kernels/*/artifacts/*.js
+experiments/repair-kernels/geogram/artifacts/geogram-reference

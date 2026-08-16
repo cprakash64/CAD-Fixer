@@ -171,3 +171,72 @@ operation interfaces both need something concrete to be written against.
 - The Float32/Float64 question remains open, so some memory and precision
   characteristics are not yet settled.
 - Optional attributes mean every consumer must handle their absence.
+
+---
+
+## Stage 3A-3A evidence (ADR remains OPEN)
+
+Stage 3A-2's precision rows came from **non-mutating** operations, which cannot
+show coordinate generation, so they could not settle this. Stage 3A-3A adds
+evidence from operations that actually generate and move coordinates. **This
+updates the evidence section only; no storage-precision decision is taken.**
+
+### 1. The corpus cannot answer the scalar question — because of this ADR
+
+`PositionArray = Float32Array` (`packages/mesh-core/src/mesh.ts:27`), so every
+corpus fixture is **already float32** before a candidate sees it. Asking a
+candidate whether it narrows to float32 using corpus geometry cannot return yes.
+R26 is blind twice over: its coordinates are integers below 2^24, exact in
+binary32 at any storage precision.
+
+This is a direct consequence of the open decision recorded here, and it went
+unnoticed through two stages. It is the strongest procedural argument for
+closing this ADR deliberately rather than by default.
+
+### 2. Candidate scalar behaviour, measured by a probe that bypasses the corpus
+
+| Candidate             | Verdict              |
+| --------------------- | -------------------- |
+| Manifold (`MeshGL64`) | `PRESERVES_FLOAT64`  |
+| Geogram               | `PRESERVES_FLOAT64`  |
+| PMP (as built)        | `NARROWS_TO_FLOAT32` |
+
+**Two of the three shortlisted kernels work in float64.** A float32 canonical
+store quantises the model on import, before either of them ever sees it —
+feeding a float64 kernel float32 data discards precision the kernel could have
+used.
+
+### 3. Generated-coordinate error is worse at small scale than at large
+
+Manifold boolean output versus exact set algebra:
+
+| Coordinate magnitude | Relative volume error |
+| -------------------- | --------------------- |
+| ~1e1                 | 0 (exact)             |
+| ~1e6                 | 1.5e-12               |
+| ~1e-4                | **9.9e-08**           |
+
+The small-scale case is five orders of magnitude worse than the large-scale one
+— the opposite of the usual "large coordinates lose precision" intuition, and a
+result any future tolerance or storage decision has to accommodate.
+
+### 4. Tolerance interacts with storage precision
+
+R19's crack is 1e-3 and R21's intentional gap is 5e-4 — both comfortably above
+float32 resolution at those coordinate magnitudes, so **the R19/R21 conflict is
+not a precision artefact.** It is a genuine modelling conflict and would survive
+a move to float64. Storage precision and tolerance policy are separable
+decisions.
+
+### Still missing before this can close
+
+- Whether float64 canonical storage is affordable in browser memory at 50–100
+  MiB model sizes — **not measured** (Stage 3A-3B).
+- Render-path cost: the snapshot is Float32 by deliberate choice, so a float64
+  canonical store adds a conversion per frame-buffer build. Unmeasured.
+- Whether PMP would be rebuilt in double (`-DPMP_SCALAR_TYPE=64`) if selected;
+  artifact and memory cost unmeasured.
+
+**Status: OPEN.** The evidence now favours float64 canonical storage more
+strongly than it did, but the memory and render costs that would justify or
+refute it have not been measured.

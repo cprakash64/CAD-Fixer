@@ -297,3 +297,57 @@ conflated:
 
 A kernel that only _detects_ is still valuable: detection alone closes Stage 2's
 largest diagnostic gap and is the precondition for any printability claim.
+
+---
+
+## Stage 3A-3A — measurement supersedes documentation
+
+Everything below replaces a documentation-derived claim with a compiled and
+verified one. `BROWSER_GATE_PENDING` applies to all three candidates: none has
+executed in a browser.
+
+### Manifold v3.5.2 (`11235e6b`)
+
+- **Two-solid booleans verified.** `Manifold::Boolean(const Manifold&, OpType)`
+  (`manifold.h:222`) with `OpType::{Add,Subtract,Intersect}` (`common.h:626`).
+  Union, difference and intersection all produce closed manifold solids with
+  volumes exactly matching set algebra, deterministic across 3 runs.
+- **Resolves interpenetrating shells** — R16, decomposed into its two closed
+  boxes and unioned, yields 1 component, 0 boundary edges, volume 1875 exactly.
+  Supersedes the Stage 3A-2 "inconclusive" verdict, which came from an invalid
+  binding.
+- **Disjoint union creates no bridge** (MB02: 2 components preserved).
+- **Preserves geometry it need not touch** — a containment union returns the
+  outer cube to within 3.2e-15.
+- **`MeshGL64` preserves float64 coordinates**, verified by probe.
+- **`Merge()` modifies broken input but rescues none of it** — changed 4 of 6
+  test meshes; none became ingestible.
+- **Precondition is topological, not geometric.** It accepts R16 and R17, both
+  self-intersecting, because both are topologically clean. Acceptance is not a
+  claim of printability.
+
+### Geogram v1.10.0 (`c8529bb0`)
+
+- **Colocate/tolerance works.** The Stage 3A-2 failure was our missing
+  `CmdLine::import_arg_group("algo")`/`("sys")`, proven by a native-versus-WASM,
+  initialisation-crossed 2×2. **No timeouts exist**; runs take ~5–15 ms.
+- **Tolerance response is monotonic** (R20: 4→4→3→2→2 components).
+- **No single global tolerance is viable.** The tolerance that heals R19's 1e-3
+  crack (1e-3) is exactly the one that destroys R21's intentional 5e-4 gap.
+- **`MeshSurfaceIntersection::intersect()` is mutating**, not a detector: its
+  documented substeps insert intersection points and retriangulate. There is
+  **no non-mutating detection or pair-enumeration API** in the pinned version;
+  `set_dry_run` is documented for benchmarking, not as a query interface. This
+  materially weakens Geogram's fit for a read-only self-intersection diagnostic.
+- **Preserves float64 coordinates**, verified by probe.
+- Idempotent at fixed parameters across 26 measured cases.
+
+### PMP (`af4725cc`)
+
+- **Narrows coordinates to float32**, verified by probe at two magnitudes, exactly
+  matching the binary32 prediction. `using Scalar = float` (`types.h:17-21`); our
+  build does not define `PMP_SCALAR_TYPE_64`. A double build is supported and
+  **was not built or measured**.
+- **Hole filling is idempotent** on R08; refuses R28 as `UNSUPPORTED_INPUT_CLASS`.
+- Role boundary confirmed: it operates on 2-manifold surfaces and refuses the
+  rest before any algorithm runs.

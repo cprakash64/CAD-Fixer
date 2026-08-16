@@ -55,6 +55,10 @@ export default tseslint.config(
       'experiments/repair-kernels/.toolchain/**',
       'experiments/repair-kernels/*/upstream/**',
       'experiments/repair-kernels/*/build/**',
+      // The native Geogram reference build tree. CMake emits stub files named
+      // `compiler_depend.ts` which are Makefile fragments, not TypeScript, and
+      // the parser chokes on them.
+      'experiments/repair-kernels/*/build-native/**',
       'experiments/repair-kernels/*/artifacts/**',
     ],
   },

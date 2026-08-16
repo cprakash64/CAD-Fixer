@@ -119,6 +119,10 @@ export async function loadManifold() {
         genus: mod._cf_genus(),
         volume: mod._cf_volume(),
         components: mod._cf_component_count(),
+        // -1 when Merge was not part of this operation. Distinguishes "Merge
+        // did nothing" from "Merge was never called", which Stage 3A-2 could
+        // not tell apart because it discarded Merge's return value.
+        mergeChanged: mod._cf_merge_changed(),
       };
       mod._cf_reset();
       return { ...out, ...extra };
@@ -177,13 +181,24 @@ export async function loadManifold() {
 
 /* -------------------------------------------------------------- geogram -- */
 
-export async function loadGeogram() {
+/**
+ * @param {{ initMode?: number }} [options]
+ *
+ * `initMode` selects the Geogram initialisation under test — 0 is Stage 3A-2's
+ * sequence, kept as the negative control, and 1 imports the `algo` and `sys`
+ * argument groups the colocate path actually reads. It must be set before the
+ * first call, because `GEO::initialize()` runs once per module instance.
+ */
+export async function loadGeogram(options = {}) {
   const dir = join(ROOT, 'geogram', 'artifacts');
   const { default: create } = await import(join(dir, 'geogram-candidate.js'));
   const wasmBinary = readFileSync(join(dir, 'geogram-candidate.wasm'));
   const startedAt = performance.now();
   const mod = await create({ wasmBinary });
   const initMs = performance.now() - startedAt;
+
+  const initMode = options.initMode ?? 1;
+  mod._cf_g_set_init_mode(initMode);
 
   // Each name is ONE Geogram API, never a generic "repair".
   const OPS = {
@@ -197,6 +212,7 @@ export async function loadGeogram() {
   return {
     id: 'geogram',
     initMs,
+    initMode,
     artifact: artifactInfo('geogram', 'geogram-candidate.wasm'),
     supports: Object.keys(OPS),
     run(operation, positions, triangles, epsilon = 0) {

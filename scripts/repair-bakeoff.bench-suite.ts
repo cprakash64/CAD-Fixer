@@ -4,10 +4,14 @@ import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { it } from 'vitest';
-import { createIndexArray, createPositionArray, IDENTITY_MATRIX4 } from '@cadfixer/mesh-core';
-import type { CanonicalMesh } from '@cadfixer/mesh-core';
-import { recoverVertexIdentity } from '@cadfixer/mesh-topology';
-import { CORPUS, FixtureScale, diagnose, summariseReport } from '@cadfixer/repair-evaluation';
+import {
+  CORPUS,
+  FixtureScale,
+  diagnose,
+  fromTransfer,
+  summariseReport,
+  toTransfer,
+} from '@cadfixer/repair-evaluation';
 import type { RepairFixture, TopologySummaryRow } from '@cadfixer/repair-evaluation';
 
 /**
@@ -19,6 +23,11 @@ import type { RepairFixture, TopologySummaryRow } from '@cadfixer/repair-evaluat
  *
  * THE EXAM IS NOT EDITED HERE. Fixtures and expectations come from the
  * committed evaluation package exactly as Stage 3A-1 froze them.
+ *
+ * THE TRANSFER REPRESENTATION LIVES IN THE EVALUATION PACKAGE, not here. It is
+ * the code that fabricated Stage 3A-2's first set of results by handing
+ * candidates de-indexed soup, so it now has one implementation with regression
+ * tests around it — see packages/repair-evaluation/src/transfer.ts.
  *
  * CANDIDATES RUN IN A CHILD PROCESS. Emscripten's ES6 glue does not survive
  * Vite's transform — see run-candidates.mjs. This file prepares meshes, spawns
@@ -40,57 +49,6 @@ const CANDIDATE_SHAS: Readonly<Record<string, string>> = {
   geogram: 'c8529bb00838186938ab31d96008a59b6a892dee',
   pmp: 'af4725ccf6aa308e7ffad9a7bb927c6381b7c858',
 };
-
-/**
- * The candidate-neutral transfer representation: WELDED positions plus indices.
- *
- * THIS IS THE CORRECTION THAT MADE THE BAKEOFF MEAN ANYTHING. The first version
- * handed candidates de-indexed soup — every triangle with its own three
- * corners. Under that representation no two faces share a vertex, so PMP
- * ingested the bow-tie and the non-manifold-edge fixtures without complaint
- * (every triangle is an isolated, trivially manifold island) and Manifold
- * rejected almost everything as non-manifold. Both results were artefacts of
- * the harness, not properties of the kernels.
- *
- * Welding uses the approved Stage 2 exact-coordinate identity — the same
- * connectivity recovery the product performs — so each candidate receives the
- * topology a production integration would actually hand it. No tolerance is
- * applied: identity is exact, as ADR 0009 requires.
- */
-function toTransfer(mesh: CanonicalMesh): { positions: Float64Array; triangles: Uint32Array } {
-  const identity = recoverVertexIdentity(mesh);
-  const positions = new Float64Array(identity.vertexCount * 3);
-  for (let v = 0; v < identity.vertexCount; v += 1) {
-    const corner = (identity.vertexRepresentativeCorner[v] ?? 0) * 3;
-    positions[v * 3] = mesh.positions[corner] ?? 0;
-    positions[v * 3 + 1] = mesh.positions[corner + 1] ?? 0;
-    positions[v * 3 + 2] = mesh.positions[corner + 2] ?? 0;
-  }
-
-  const triangles = new Uint32Array(mesh.indices.length);
-  for (let i = 0; i < mesh.indices.length; i += 1) {
-    triangles[i] = identity.cornerToVertex[mesh.indices[i] ?? 0] ?? 0;
-  }
-  return { positions, triangles };
-}
-
-/** Rebuilds a canonical soup mesh from candidate output, for OUR validators. */
-function fromCandidate(positions: readonly number[], triangles: readonly number[]): CanonicalMesh {
-  const out = createPositionArray(triangles.length * 3);
-  const indices = createIndexArray(triangles.length);
-  for (let i = 0; i < triangles.length; i += 1) {
-    const source = (triangles[i] ?? 0) * 3;
-    out[i * 3] = positions[source] ?? 0;
-    out[i * 3 + 1] = positions[source + 1] ?? 0;
-    out[i * 3 + 2] = positions[source + 2] ?? 0;
-    indices[i] = i;
-  }
-  return {
-    positions: out,
-    indices,
-    metadata: { sourceFormat: 'stl', transform: IDENTITY_MATRIX4 },
-  };
-}
 
 /** Which operations each candidate's ROLE calls for on a given fixture. */
 function operationsFor(
@@ -366,7 +324,7 @@ it('runs the frozen R01-R30 corpus against the compiled candidates', () => {
       } else if (result.outPositions.some((value) => !Number.isFinite(value))) {
         status = 'NON_FINITE';
       } else {
-        const output = fromCandidate(result.outPositions, result.outTriangles);
+        const output = fromTransfer(result.outPositions, result.outTriangles);
         outputTriangleCount = output.indices.length / 3;
         // OUR oracle decides, never the candidate.
         const startedAt = performance.now();
