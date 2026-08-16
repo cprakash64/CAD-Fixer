@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>CAD Fixer — experimental candidate harness</title>
+    <meta name="robots" content="noindex, nofollow" />
+  </head>
+  <body>
+    <!--
+      EXPERIMENTAL RESEARCH PAGE — Stage 3A-3B.
+
+      This is not part of the CAD Fixer application. It exists solely so that
+      candidate geometry-kernel WASM artifacts can be qualified in a real
+      browser, under the same cross-origin isolation the application runs in,
+      without any of that code entering the production bundle.
+
+      No kernel is integrated. Repair is not implemented.
+    -->
+    <h1>CAD Fixer experimental candidate harness</h1>
+    <p>
+      Research only. Drives candidate WASM in a dedicated Worker. Not part of the application, not
+      shipped, and not reachable from it.
+    </p>
+    <p>main-thread liveness beat: <span id="beat">-</span></p>
+    <script type="module" src="/harness.js"></script>
+  </body>
+</html>

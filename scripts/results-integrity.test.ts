@@ -27,6 +27,11 @@ const GENERATED = [
   { file: 'manifold-boolean.json', corpus: false, artifacts: 'explicit' },
   { file: 'idempotence-preservation.json', corpus: true, artifacts: 'map' },
   { file: 'scalar-precision.json', corpus: false, artifacts: 'rows' },
+  // Stage 3A-3B browser evidence. Same rules: a browser result that cannot name
+  // the artifact and corpus that produced it is as useless as a Node one.
+  { file: 'browser-qualification.json', corpus: true, artifacts: 'map' },
+  { file: 'browser-cancellation.json', corpus: true, artifacts: 'map' },
+  { file: 'browser-scaling.json', corpus: true, artifacts: 'map' },
 ] as const;
 
 /**
@@ -189,6 +194,46 @@ describe('generated bakeoff results', () => {
       rows.map((row) => `${String(row.engine)}/${String(row.initMode)}`),
     );
     expect([...combinations].sort()).toEqual(['native/0', 'native/1', 'wasm/0', 'wasm/1']);
+  });
+
+  /**
+   * BROWSER AND NODE EVIDENCE MUST NOT BE CONFUSED (P5).
+   *
+   * The two were measured in different runtimes and answer different questions.
+   * Every browser file must say so in its own environment field, so a reader
+   * cannot mistake a Chromium measurement for a Node one or vice versa.
+   */
+  it('browser results declare the browser they ran in', () => {
+    for (const file of [
+      'browser-qualification.json',
+      'browser-cancellation.json',
+      'browser-scaling.json',
+    ]) {
+      const run = load(file);
+      const browser = run.browser as Record<string, unknown> | undefined;
+      expect(browser, `${file}.browser`).toBeDefined();
+      expect(text(browser?.userAgent, ''), `${file} user agent`).toContain('Chrome');
+      // The isolation context is a precondition of the whole experiment.
+      expect(browser?.crossOriginIsolated, `${file} cross-origin isolation`).toBe(true);
+    }
+  });
+
+  it('the browser qualification records a local-only request audit', () => {
+    const run = load('browser-qualification.json');
+    const network = run.network as Record<string, unknown> | undefined;
+    expect(network, 'network audit present').toBeDefined();
+    expect(Number(network?.requestCount ?? 0)).toBeGreaterThan(0);
+    expect(network?.foreignOriginRequests, 'no foreign-origin request').toBe(0);
+    expect(network?.origins, 'exactly one origin').toEqual(['http://127.0.0.1:4174']);
+  });
+
+  it('memory figures are labelled as WASM heap, never as process RSS', () => {
+    const run = load('browser-scaling.json');
+    const note = text(run.note, '');
+    // The wording matters: claiming RSS from a WebAssembly.Memory length would
+    // be a false claim about the machine, not just an imprecise one.
+    expect(note).toContain('WebAssembly.Memory');
+    expect(note).toContain('NOT process RSS');
   });
 
   it('the invalidated Manifold experiment is recorded and marked invalid', () => {

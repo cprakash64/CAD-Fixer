@@ -30,6 +30,10 @@ experiments/repair-kernels/.toolchain/
 experiments/repair-kernels/*/upstream/
 experiments/repair-kernels/*/build/
 experiments/repair-kernels/*/build-native/
+# Stage 3A-3B browser harness scratch: prepared cases and raw browser output.
+# Intermediates between the prepare, drive and validate steps; the committed
+# artefact is docs/repair/bakeoff/browser-*.json.
+experiments/browser-harness/.cases/
 experiments/repair-kernels/*/artifacts/*.wasm
 experiments/repair-kernels/*/artifacts/*.js
 experiments/repair-kernels/geogram/artifacts/geogram-reference

@@ -4,11 +4,15 @@ Stage 3A-2, corrected and extended by **Stage 3A-3A**. **Experimental. No kernel
 is integrated into the CAD Fixer runtime, and user-facing Repair remains
 disabled.**
 
-> **Stage 3A-3A does NOT include browser qualification.** No candidate has been
-> executed in a browser, no `Worker.terminate()` behaviour has been measured, and
-> no large-model scaling has been run. Every candidate therefore remains
-> `BROWSER_GATE_PENDING` regardless of how good its Node and native evidence is.
-> Browser qualification is Stage 3A-3B.
+> **Stage 3A-3B has now run the browser gate.** All three candidates load,
+> instantiate, compute and return independently-validated geometry inside a
+> cross-origin-isolated Chromium worker; `Worker.terminate()` cancels real WASM
+> work safely for all three; and scaling was measured to 50 MiB. No kernel is
+> integrated and Repair remains disabled.
+>
+> **Evidence classes are kept separate throughout:** `Node/native verified`,
+> `browser verified`, `production integrated`. **Nothing is production
+> integrated.**
 
 ## Artifact generations — do not mix rows across them
 
@@ -590,3 +594,218 @@ the opposite of the usual intuition and worth carrying into ADR 0004.
 - No large-model scaling — the corpus remains tiny (≤ 200 triangles).
 - No independent self-intersection oracle.
 - No production integration, and Repair remains disabled.
+
+---
+
+# Stage 3A-3B — browser qualification, cancellation, scaling
+
+Generated files: `browser-qualification.json`, `browser-cancellation.json`,
+`browser-scaling.json`. Harness `stage-3a-3b.1`, corpus `e42e7be9ad00a58a`
+(unchanged and unedited).
+
+Re-run with:
+
+```bash
+npx vitest run --config vitest.bench.config.ts scripts/browser-prepare.bench-suite.ts
+npx playwright test --config playwright.browser-harness.config.ts
+npx vitest run --config vitest.bench.config.ts scripts/browser-validate.bench-suite.ts
+```
+
+## The harness
+
+A plain `node:http` server on `127.0.0.1:4174` sends the **same** COOP/COEP
+headers as the application (`same-origin` / `require-corp` / CORP
+`same-origin`), serves the harness page, a module Worker, and each candidate's
+artifacts as raw bytes. **Vite is not involved** — its transform destroys
+Emscripten's ES6 glue, which fabricated 321 "crashes" in Stage 3A-2 — so the
+browser instantiates the byte-identical artifact whose SHA-256 the manifests
+record.
+
+Three separated steps: prepare (vitest) → drive (Playwright) → **validate
+(vitest, separate process, CAD Fixer's own Stage 2 oracle)**. A candidate cannot
+influence its own verdict, and neither can the driver.
+
+|                       |                                                          |
+| --------------------- | -------------------------------------------------------- |
+| Browser               | Chromium `HeadlessChrome/151.0.7922.34`                  |
+| `crossOriginIsolated` | **true** — asserted in the browser, not read off headers |
+| `SharedArrayBuffer`   | available                                                |
+| WASM loading          | the glue's own streaming fetch of a same-origin `.wasm`  |
+
+## Browser candidate matrix — all three pass
+
+Every artifact SHA is the Stage 3A-3A artifact, unchanged. **No rebuild was
+required for the browser.**
+
+| Candidate | Artifact SHA-256    | Worker  | Glue import | WASM instantiate | Init total | Initial heap |
+| --------- | ------------------- | ------- | ----------- | ---------------- | ---------- | ------------ |
+| manifold  | `8bd72c68df6d2785…` | 0.88 ms | 20.2 ms     | 23.6 ms          | 55.0 ms    | 32 MiB       |
+| geogram   | `73cabc53caeb3d85…` | 0.09 ms | 5.3 ms      | 16.9 ms          | 29.5 ms    | 64 MiB       |
+| pmp       | `a4e1263cb8f41abc…` | 0.10 ms | 2.2 ms      | 6.0 ms           | 15.6 ms    | 32 MiB       |
+
+**16 VALIDATED, 1 UNSUPPORTED_INPUT_CLASS, 0 failures.**
+
+| Case | Candidate | Result                                                   | Kernel | CAD Fixer verdict       |
+| ---- | --------- | -------------------------------------------------------- | ------ | ----------------------- |
+| BM01 | manifold  | clean solid ingest, 12 tris, volume 1000                 | 4.2 ms | VALIDATED               |
+| BM02 | manifold  | overlapping union, 36 tris, 1 component, volume 1875     | 4.6 ms | VALIDATED               |
+| BM03 | manifold  | disjoint union, **2 components, no bridge**              | 0.2 ms | VALIDATED               |
+| BM04 | manifold  | R16 two-shell union, 1 closed component, volume 1875     | 0.5 ms | VALIDATED               |
+| BM05 | manifold  | near-coplanar 1e-6 overlap, 24 tris, volume 2000         | 0.6 ms | VALIDATED               |
+| BM06 | manifold  | boolean at 1e6, volume 1875.000000002794                 | 0.3 ms | VALIDATED               |
+| BM07 | manifold  | boolean at 1e-4, volume 1.8750001853e-12                 | 0.3 ms | VALIDATED               |
+| BG01 | geogram   | clean cube unchanged, 12 tris                            | 5.0 ms | VALIDATED               |
+| BG02 | geogram   | R28 mixed defects                                        | 0.3 ms | VALIDATED               |
+| BG03 | geogram   | R19 tolerance 1e-5 — **does not weld**, 2 components     | 1.1 ms | VALIDATED               |
+| BG04 | geogram   | R19 tolerance 1e-3 — **welds**, 1 component              | 0.2 ms | VALIDATED               |
+| BG05 | geogram   | R21 tolerance 5e-4 — **gap survives**, 2 components      | 0.1 ms | VALIDATED               |
+| BG06 | geogram   | R21 tolerance 1e-3 — **control destroyed**, 1 component  | 0.1 ms | VALIDATED               |
+| BG07 | geogram   | R17 intersection/remeshing, 44 tris (from 12)            | 6.0 ms | VALIDATED               |
+| BP01 | pmp       | clean manifold ingest, 12 tris                           | 1.3 ms | VALIDATED               |
+| BP02 | pmp       | R08 explicit hole fill, boundary 4 → 0                   | 1.8 ms | VALIDATED               |
+| BP03 | pmp       | R11 non-manifold — **refused by our adapter, status 10** | 0.9 ms | UNSUPPORTED_INPUT_CLASS |
+
+**Browser reproduces Node exactly.** Every Manifold volume matches the Stage
+3A-3A Node figure to the digit, including `1875.000000002794` at 1e6 and
+`1.8750001853186634e-12` at 1e-4. BG06's damage to R21 measures RMS 2.5e-04 /
+max 5.0e-04 in the browser — the same numbers Node produced. The R19/R21
+tolerance conflict is not a host artefact.
+
+## Privacy — request audit
+
+9 requests, **1 origin**, **0 foreign-origin requests**:
+
+```
+http://127.0.0.1:4174/  /harness.js  /candidate-worker.js  /scale-meshes.mjs
+/artifacts/{manifold,geogram,pmp}/*-candidate.js
+/artifacts/{manifold,geogram,pmp}/*-candidate.wasm
+```
+
+No CDN, no remote WASM, no telemetry, no external module loader. The harness
+code contains no network API at all — the candidate glue performs its own
+same-origin `.wasm` fetch, which is what makes the loading path the real one.
+
+## Worker cancellation — HARD GATE PASSED by all three
+
+Real candidate CPU work, sized at run time until it exceeded 700 ms, then
+terminated 200 ms in. No `setTimeout`, no sleep, no unrelated busy-loop. The
+page holds the authoritative geometry; the worker gets a structured-clone copy.
+
+|                                       | manifold                | geogram                                    | pmp                            |
+| ------------------------------------- | ----------------------- | ------------------------------------------ | ------------------------------ |
+| Workload                              | sphere ∪ sphere boolean | intersection of 2 interpenetrating spheres | hole fill, large boundary loop |
+| Triangles                             | 210,680                 | 57,120                                     | 487,900                        |
+| Calibrated kernel time                | 713 ms                  | 570 ms                                     | **48,829 ms**                  |
+| Still computing at terminate          | **yes** (1 pending)     | **yes** (1 pending)                        | **yes** (1 pending)            |
+| Main thread responsive during kernel  | 13.8 ms                 | 0.48 ms                                    | 6.7 ms                         |
+| `terminate()` call                    | 0.33 ms                 | 0.01 ms                                    | 0.33 ms                        |
+| Late messages in a 1.2 s quiet window | **0**                   | **0**                                      | **0**                          |
+| Authoritative geometry digest         | unchanged               | unchanged                                  | unchanged                      |
+| Restart init                          | 87.0 ms                 | 32.5 ms                                    | 16.4 ms                        |
+| Recovery operation                    | 2.4 ms, 4 tris          | 7.4 ms, 4 tris                             | 0.4 ms, 4 tris                 |
+| **Verdict**                           | **PASS**                | **PASS**                                   | **PASS**                       |
+
+**Termination latency is an OBSERVATION BOUND, not a kernel-stop time.** The
+platform exposes no termination event, so what was measured is that the
+`terminate()` call itself returns in well under a millisecond and that nothing
+further arrived during a 1.2 s quiet window. It is _not_ a measurement of when
+the WASM instruction stream stopped, and it is not described as one.
+
+**Source geometry survives.** FNV-1a digests over the raw bytes are identical
+before and after termination, and the buffer is not detached — the harness posts
+without a transfer list on purpose, because transferring would have destroyed
+the only copy.
+
+### Stale-result protection
+
+A worker terminated mid-boolean, replaced, and the replacement ran its own
+small operation: it returned **4 triangles** (its own tetrahedron), not the
+sphere boolean the dead worker was computing. Every message carries
+`(sessionId, opId)` and the page drops anything that does not match a live
+session.
+
+**Stated precisely: 0 stale messages were actually observed.** `terminate()`
+prevented the dead worker from posting at all, so the identity guard was not
+exercised by a real late message in this run. The guard exists and is asserted;
+this run shows the platform did not need it.
+
+## Persistent versus disposable worker — measured, not assumed
+
+Five operations each. The received wisdom is that a disposable worker per
+operation is too expensive; that is measurable, so it was measured.
+
+| Candidate | Persistent per-op | Disposable per-op | Disposable penalty |
+| --------- | ----------------- | ----------------- | ------------------ |
+| manifold  | 3.19 ms           | 10.42 ms          | **+7.2 ms**        |
+| geogram   | 5.20 ms           | 21.61 ms          | **+16.4 ms**       |
+| pmp       | 1.74 ms           | 8.21 ms           | **+6.5 ms**        |
+
+**The disposable model costs 6–17 ms per operation.** Against repair operations
+that take hundreds of milliseconds to tens of seconds at realistic sizes, that
+is noise. The assumption that disposable workers are too expensive is **not
+supported by the measurements**.
+
+## Scaling — 1 / 10 / 50 MiB, sequential
+
+Geometry generated **in the page** (an earlier version built it in Node and
+killed the test runner with a JS heap OOM crossing the Playwright bridge).
+Sizes are actual transfer bytes. Every size ran; none hit the safety budget;
+the page survived all of them.
+
+| Candidate | Operation      | Input    | Triangles | Ingest | Kernel       | Extract | WASM heap before → after | Output   |
+| --------- | -------------- | -------- | --------- | ------ | ------------ | ------- | ------------------------ | -------- |
+| manifold  | Boolean Add    | 0.86 MiB | 37,536    | 0.0 ms | 104 ms       | 0.0 ms  | 32 → 32 MiB              | 0.65 MiB |
+| manifold  | Boolean Add    | 11.0 MiB | 482,160   | 0.0 ms | 782 ms       | 0.0 ms  | 32 → **288 MiB**         | 8.25 MiB |
+| manifold  | Boolean Add    | 45.0 MiB | 1,964,160 | 0.0 ms | **3,508 ms** | 0.0 ms  | 32 → **1,116 MiB**       | 33.5 MiB |
+| geogram   | repairTopology | 1.16 MiB | 50,176    | 0.1 ms | 19 ms        | 0.2 ms  | 64 → 64 MiB              | 1.16 MiB |
+| geogram   | repairTopology | 10.4 MiB | 451,584   | 1.0 ms | 121 ms       | 1.0 ms  | 64 → 64 MiB              | 10.4 MiB |
+| geogram   | repairTopology | 50.8 MiB | 2,214,144 | 4.2 ms | **546 ms**   | 18.8 ms | 64 → **207 MiB**         | 50.8 MiB |
+| pmp       | ingest         | 1.01 MiB | 44,310    | 0.3 ms | 35 ms        | 0.1 ms  | 32 → 32 MiB              | 1.01 MiB |
+| pmp       | ingest         | 9.69 MiB | 423,150   | 1.1 ms | 261 ms       | 1.0 ms  | 32 → 80 MiB              | 9.69 MiB |
+| pmp       | ingest         | 52.1 MiB | 2,277,080 | 9.1 ms | **1,619 ms** | 19.9 ms | 32 → **353 MiB**         | 52.1 MiB |
+
+### The memory finding
+
+**Manifold's boolean is the memory outlier: ~25× the input.** A 45 MiB pair of
+solids drove the WASM heap to 1,116 MiB. Geogram's topology repair reached 207
+MiB on a _larger_ 50.8 MiB input (~4×), and PMP's ingest 353 MiB on 52.1 MiB
+(~7×). Extrapolating Manifold linearly, a 100 MiB boolean would want ~2.4 GiB
+of WASM heap — beyond what a browser tab can be relied on to provide. **A
+production boolean must impose a size ceiling and refuse above it.**
+
+These are `WebAssembly.Memory` buffer lengths observed inside the worker. They
+are **not** process RSS and are not reported as such.
+
+### PMP hole filling does not scale with the loop
+
+| Boundary loop                   | Triangles | Kernel        |
+| ------------------------------- | --------- | ------------- |
+| 24                              | 504       | 15 ms         |
+| 48                              | 2,160     | 37 ms         |
+| 96                              | 8,928     | 96 ms         |
+| ~220 (cancellation calibration) | 487,900   | **48,829 ms** |
+
+Growth is steep and clearly superlinear. **PMP hole filling must be bounded by
+boundary-loop length, not by mesh size**, and a production integration has to
+refuse or chunk long loops rather than start a 49-second uninterruptible call.
+This is exactly why the cancellation architecture matters.
+
+## Large-run preservation
+
+| Candidate | Operation      | 50 MiB output                   | Expected                                 | Reading                                                        |
+| --------- | -------------- | ------------------------------- | ---------------------------------------- | -------------------------------------------------------------- |
+| pmp       | ingest         | area 12.566325, volume 4.188760 | 4π = 12.566371, 4π/3 = 4.188790          | sphere preserved; residual is tessellation, not damage         |
+| geogram   | repairTopology | area 1,107,072 exactly          | 2 × 744² grid area                       | **exact**, no geometry change                                  |
+| manifold  | Boolean Add    | area 16.964485, volume 6.298015 | converging (16.9587 → 16.9641 → 16.9645) | converges with refinement, as a union of two unit spheres must |
+
+No non-finite coordinate was produced at any size by any candidate.
+
+## What Stage 3A-3B still does NOT establish
+
+- **No independent self-intersection oracle.** R16's browser union is
+  topologically clean and has exactly the volume set algebra predicts, but
+  volume agreement is not an intersection test. Self-intersection absence is
+  **NOT PROVEN** for any output.
+- Geogram's `intersect()` remains a mutating retriangulation, not a read-only
+  detector.
+- No production integration of any kind.

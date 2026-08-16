@@ -123,3 +123,57 @@ here for ADR 0004.
   pipelines. Feeding a kernel float64 is pointless if the model was already
   quantised on import. ADR 0004 stays **open**; this is evidence, not a decision.
 - Browser-side precision is unmeasured (`BROWSER_GATE_PENDING`).
+
+---
+
+## Stage 3A-3B — browser precision, and the widening trap
+
+### Browser reproduces Node exactly
+
+Every Manifold volume matched the Node figure to the last digit:
+
+| Case                | Browser volume         | Node volume (Stage 3A-3A) |
+| ------------------- | ---------------------- | ------------------------- |
+| overlapping union   | 1875                   | 1875                      |
+| union at 1e6        | 1875.000000002794      | 1875.000000002794         |
+| union at 1e-4 scale | 1.8750001853186634e-12 | 1.8750001853186634e-12    |
+
+Precision behaviour is a property of the candidate, not of the host. The
+small-scale case remains **five orders of magnitude worse** than the
+large-coordinate case (9.9e-08 vs 1.5e-12 relative), in the browser too.
+
+### The layered picture, stated carefully
+
+| Layer                         | Precision                                               | Verified                    |
+| ----------------------------- | ------------------------------------------------------- | --------------------------- |
+| Canonical source storage      | **Float32** (`PositionArray`, mesh-core/src/mesh.ts:27) | by inspection               |
+| Transfer to candidate         | Float64                                                 | by construction             |
+| Manifold working precision    | Float64 (`MeshGL64`)                                    | probe, Node + browser       |
+| Geogram working precision     | Float64                                                 | probe, Node + browser       |
+| PMP working precision         | **Float32** (`Scalar = float`)                          | probe, Node                 |
+| Generated boolean coordinates | Float64 quality                                         | volume vs exact set algebra |
+| Render snapshot               | Float32                                                 | by design (ADR 0004)        |
+
+### WIDENING IS NOT RECOVERY
+
+Float32 canonical coordinates widened to Float64 before a kernel **do not
+regain the bits lost at import**. The widening is not useless — it stops the
+kernel from adding a _second_ rounding, and it is what lets a boolean compute
+new intersection coordinates at full double precision — but it cannot undo the
+first one.
+
+This distinction decides where precision actually matters:
+
+- **Preserved coordinates** — nothing is recovered by widening. If the source
+  was quantised at import, that is permanent.
+- **Newly constructed coordinates** — boolean intersection vertices, hole-fill
+  interiors, future offsets — are computed at working precision and _are_
+  affected. This is where Float64 earns its cost, and where storing the result
+  back into a Float32 canonical buffer would immediately throw away what the
+  kernel just computed carefully.
+
+### Not done
+
+A double-precision PMP build (`-DPMP_SCALAR_TYPE=64`) was **not** produced. The
+comparison was optional and the browser gate was the priority; PMP's
+float32-ness is already established by direct probe.

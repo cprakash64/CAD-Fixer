@@ -96,3 +96,31 @@ the compiler target is the only variable when comparing against WASM.
 in the two tables above is _compiled and verified_. PMP's double-precision build
 option (`-DPMP_SCALAR_TYPE=64`) is **documented capability only** — it exists in
 `CMakeLists.txt:167` and has not been built or measured here.
+
+---
+
+## Stage 3A-3B — no rebuild was required for the browser
+
+**Every browser result used the Stage 3A-3A artifact, byte for byte.** No
+candidate needed a browser-specific build, no artifact SHA changed, and no new
+manifest was created.
+
+| Artifact                  | SHA-256             | Bytes     | Browser load            |
+| ------------------------- | ------------------- | --------- | ----------------------- |
+| `manifold-candidate.wasm` | `8bd72c68df6d2785…` | 296,938   | instantiated in 23.6 ms |
+| `geogram-candidate.wasm`  | `73cabc53caeb3d85…` | 1,368,082 | instantiated in 16.9 ms |
+| `pmp-candidate.wasm`      | `a4e1263cb8f41abc…` | 246,095   | instantiated in 6.0 ms  |
+
+That the same `-sENVIRONMENT=web,worker,node` artifacts run unmodified under
+Node, in a module Worker, and under cross-origin isolation is itself a build
+finding: the build mode chosen in Stage 3A-2 was correct for the product target.
+
+**Serving matters as much as building.** The artifacts are served as raw bytes
+by a plain `node:http` server. Passing them through Vite destroys Emscripten's
+ES6 glue — the defect that fabricated 321 "crashes" in Stage 3A-2 — so any
+future production integration must treat the glue as an asset, never as a
+bundler input.
+
+`documented capability` vs `compiled and verified capability` vs **`browser
+verified`**: all three artifacts above are now browser verified. PMP's
+double-precision build option remains `documented capability` only.

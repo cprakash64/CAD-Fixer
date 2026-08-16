@@ -351,3 +351,45 @@ executed in a browser.
 - **Hole filling is idempotent** on R08; refuses R28 as `UNSUPPORTED_INPUT_CLASS`.
 - Role boundary confirmed: it operates on 2-manifold surfaces and refuses the
   rest before any algorithm runs.
+
+---
+
+## Stage 3A-3B — browser verified
+
+`BROWSER_GATE: PASS` for all three. `CANCELLATION_GATE: PASS` for all three.
+**None is production integrated.**
+
+### Manifold v3.5.2 — the boolean engine
+
+- Browser verified: loads, instantiates (23.6 ms), computes and returns
+  independently validated geometry; volumes identical to Node.
+- Cancellation verified: a 210k-triangle, 713 ms boolean terminated safely,
+  source geometry intact, worker restarted and recovered.
+- **Memory is its limiting property: ~25× input.** A 45 MiB boolean pair drove
+  the WASM heap to 1,116 MiB, and 1.96M triangles took 3.5 s. A production
+  boolean needs a size ceiling and a pre-flight estimate.
+- Still not a general repair engine, and still no self-intersection oracle.
+
+### Geogram v1.10.0 — the topology/tolerance engine
+
+- Browser verified, including the full explicit-tolerance matrix. BG03–BG06
+  reproduce the Node finding exactly: 1e-5 does not weld R19, 1e-3 does, 5e-4
+  preserves R21, **1e-3 destroys R21** (RMS 2.5e-04, max 5.0e-04 — same numbers
+  as Node).
+- Cancellation verified on a 570 ms intersection workload.
+- **Best scaling of the three for topology work**: 2.2M triangles repaired in
+  546 ms with the heap reaching only 207 MiB (~4×), and exact area preservation.
+- `intersect()` is still a mutating retriangulation with no read-only detector.
+
+### PMP — the local surface-operation engine
+
+- Browser verified; the fastest to initialise (15.6 ms) and the smallest
+  artifact.
+- Ingest scales acceptably: 2.28M triangles in 1.6 s, heap ~7×.
+- **Hole filling does not scale with the boundary loop.** 15 ms → 37 ms → 96 ms
+  for loops of 24/48/96, and **48.8 seconds** for a ~220-vertex loop on a
+  488k-triangle mesh. A production integration must bound the loop length it
+  accepts.
+- Precondition enforcement works in the browser: R11 was refused with a typed
+  `UNSUPPORTED_INPUT_CLASS` before any algorithm ran.
+- Float32 scalar remains its distinguishing weakness.
