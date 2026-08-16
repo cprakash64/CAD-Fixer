@@ -1,0 +1,58 @@
+{
+  "//": "IMMUTABLE candidate source identities for the Stage 3A-2 bakeoff. Every entry is a commit SHA, never a branch name: a bakeoff pinned to a moving branch cannot be reproduced, and a result that cannot be reproduced is an anecdote. Resolved from the GitHub API on 2026-08-16.",
+  "resolvedAt": "2026-08-16",
+  "toolchain": {
+    "emsdk": "4.0.16",
+    "note": "One pinned Emscripten for every candidate, so build-mode differences cannot be mistaken for algorithmic differences. A candidate needing a different version must have that recorded and explained."
+  },
+  "candidates": [
+    {
+      "id": "manifold",
+      "repository": "https://github.com/elalish/manifold",
+      "tag": "v3.5.2",
+      "sha": "11235e6b8ebea2dbed8aec4285685aafd3d95667",
+      "tagIsImmutable": true,
+      "stage3a1Label": "v3.5.2",
+      "discrepancy": null,
+      "role": "solid/boolean, self-union, downstream split",
+      "licence": "Apache-2.0",
+      "buildNotes": "Sequential WASM only. MANIFOLD_PAR is deliberately OFF: upstream warns parallel Emscripten builds risk memory corruption, and pthreads are not needed to answer this stage's architectural questions."
+    },
+    {
+      "id": "geogram",
+      "repository": "https://github.com/BrunoLevy/geogram",
+      "tag": "v1.10.0",
+      "sha": "c8529bb00838186938ab31d96008a59b6a892dee",
+      "tagIsImmutable": true,
+      "stage3a1Label": "v1.10.0",
+      "discrepancy": null,
+      "role": "front-line malformed-mesh repair, intersection detection and resolution",
+      "licence": "BSD-3-Clause core; bundles AGPL tetgen and non-free Triangle",
+      "buildNotes": "GATED. Must not be benchmarked until the build-input audit proves tetgen and triangle are absent from the compiled and linked source set."
+    },
+    {
+      "id": "pmp",
+      "repository": "https://github.com/pmp-library/pmp-library",
+      "tag": null,
+      "sha": "af4725ccf6aa308e7ffad9a7bb927c6381b7c858",
+      "tagIsImmutable": true,
+      "stage3a1Label": "main (MUTABLE)",
+      "discrepancy": "Stage 3A-1 recorded the mutable branch `main`, which is not reproducible. Resolved to the branch head as of 2026-08-03T21:44:03Z and pinned. Release 3.0.0 (f2fb04f4a4188a5c1ab137e83b96e62fa99c639f, 2023-08-24) was considered and rejected as nearly three years old; the branch head is the code a new integration would actually use. This pins the candidate; it does not change the exam.",
+      "role": "local operations on 2-manifold surfaces: hole filling, remeshing",
+      "licence": "MIT",
+      "buildNotes": "Algorithms only. The visualisation layer is excluded: it pulls GL dependencies and is not what is being measured."
+    }
+  ],
+  "excluded": [
+    {
+      "id": "meshlib",
+      "status": "COMMERCIAL DECISION REQUIRED",
+      "reason": "Non-Commercial & Education licence. Not built, not benchmarked."
+    },
+    {
+      "id": "cgal-pmp",
+      "status": "REFERENCE ONLY",
+      "reason": "GPL v3-or-later. No code enters this repository."
+    }
+  ]
+}

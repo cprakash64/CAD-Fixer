@@ -18,3 +18,16 @@ test-results/
 # Machine-local Claude Code permissions. The shared project rules in CLAUDE.md
 # and the review agents in .claude/agents/ are committed; this file is not.
 .claude/settings.local.json
+
+# Stage 3A-2 geometry-kernel bakeoff.
+#
+# Upstream sources, the Emscripten SDK, and build trees are FETCHED by the
+# pinned scripts in experiments/repair-kernels/scripts, never committed: they
+# are gigabytes, they belong to their upstreams, and committing them would make
+# the licence position of this repository unclear. What IS committed is the
+# scripts, our bindings, our patches, the manifests, and the results.
+experiments/repair-kernels/.toolchain/
+experiments/repair-kernels/*/upstream/
+experiments/repair-kernels/*/build/
+experiments/repair-kernels/*/artifacts/*.wasm
+experiments/repair-kernels/*/artifacts/*.js

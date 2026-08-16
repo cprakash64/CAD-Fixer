@@ -49,6 +49,13 @@ export default tseslint.config(
       'playwright-report/**',
       'test-results/**',
       'coverage/**',
+      // Stage 3A-2 bakeoff: third-party sources and the Emscripten SDK are
+      // fetched, not authored here. Our own scripts and bindings under
+      // experiments/ ARE linted; only the fetched trees are excluded.
+      'experiments/repair-kernels/.toolchain/**',
+      'experiments/repair-kernels/*/upstream/**',
+      'experiments/repair-kernels/*/build/**',
+      'experiments/repair-kernels/*/artifacts/**',
     ],
   },
 
@@ -131,10 +138,11 @@ export default tseslint.config(
     },
   },
 
-  // Config file is plain JS and outside any tsconfig, so type-aware rules
-  // cannot run against it.
+  // Plain JS and .mjs live outside any tsconfig, so type-aware rules cannot run
+  // against them. `.mjs` is included because the Stage 3A-2 experiment scripts
+  // must be runnable by a bare `node` with no build step.
   {
-    files: ['**/*.js'],
+    files: ['**/*.js', '**/*.mjs'],
     extends: [tseslint.configs.disableTypeChecked],
   },
 
@@ -146,7 +154,7 @@ export default tseslint.config(
   // files only because JavaScript has no return-type syntax to satisfy it —
   // the types are declared in the accompanying `.d.ts`, which IS checked.
   {
-    files: ['scripts/**/*.js'],
+    files: ['scripts/**/*.js', 'experiments/**/*.mjs'],
     languageOptions: {
       globals: globals.node,
     },
