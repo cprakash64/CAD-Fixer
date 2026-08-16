@@ -62,15 +62,15 @@ probe).
 
 ## Geogram
 
-|                          |                                                                                                                                                                  |
-| ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Upstream                 | https://github.com/BrunoLevy/geogram                                                                                                                             |
-| Version reviewed         | **v1.10.0**, released 2026-05-27                                                                                                                                 |
-| Licence (core)           | **BSD 3-Clause**, © Inria. No additional clauses.                                                                                                                |
-| Bundled licence concerns | **Serious — see below.**                                                                                                                                         |
-| WebAssembly              | Yes; upstream ships in-browser demos built with Emscripten.                                                                                                      |
-| Threading                | Parallel algorithms available natively (notably parallel Delaunay); browser threading not established from primary sources.                                      |
-| Precision                | **Exact predicates and exact-number arithmetic** are a foundational component; constrained Delaunay "supports intersecting constraints, in arbitrary precision". |
+|                          |                                                                                                                                                                                                                    |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Upstream                 | https://github.com/BrunoLevy/geogram                                                                                                                                                                               |
+| Version reviewed         | **v1.10.0**, released 2026-05-27                                                                                                                                                                                   |
+| Licence (core)           | **BSD 3-Clause**, © Inria. No additional clauses.                                                                                                                                                                  |
+| Bundled licence concerns | **Serious — see below.**                                                                                                                                                                                           |
+| WebAssembly              | Yes; upstream ships in-browser demos built with Emscripten.                                                                                                                                                        |
+| Threading                | Parallel algorithms available natively (notably parallel Delaunay); browser threading not established from primary sources.                                                                                        |
+| Precision                | **Robust/exact PREDICATES** are a foundational component; constrained Delaunay "supports intersecting constraints, in arbitrary precision". See the precision note below — this does not mean exact constructions. |
 
 **Capabilities**
 
@@ -81,6 +81,13 @@ probe).
 - Booleans: yes, including CSG.
 - Hole filling: reconstruction-oriented rather than a documented local hole-fill.
 - Exact predicates: yes — the strongest of the shortlist on robustness.
+
+**PRECISION WORDING (corrected in Stage 3A-2).** Calling Geogram simply "exact"
+is too broad and this document no longer does. Exact predicates answer
+orientation and in-sphere questions robustly; mesh coordinates are still stored
+in floating point, constructed intersection coordinates are **not** exact, and
+exact predicates do not make every algorithm numerically exact. Three separate
+properties; only the first is claimed. See `bakeoff/PRECISION.md`.
 
 **The bundled-dependency trap.** `src/lib/geogram/third_party/` contains, as of
 this review: `HLBFGS`, `OpenNL`, `PoissonRecon`, `amgcl`, `libMeshb`, `lua`,
@@ -139,8 +146,9 @@ precondition by construction.
 - Repair: not a general repair library.
 - Self-intersection: none found in primary sources.
 - Booleans: none.
-- Hole filling: a hole-filling algorithm exists in the library; not documented in
-  the README reviewed, so treated as **unverified pending Stage 3A-2**.
+- Hole filling: `src/pmp/algorithms/hole_filling.{h,cpp}` exists and is
+  **VERIFIED WORKING in Stage 3A-2** — on R08 it closed a four-edge boundary
+  loop, 10 to 12 triangles, boundary edges 4 to 0.
 - Remeshing / decimation / subdivision / smoothing: yes, documented.
 
 **Assessment.** PMP is a clean, permissive, browser-capable **local surface

@@ -51,7 +51,7 @@ before adoption.
 | Commercial restrictions         | See the two entries below                                                                                                                                                           |
 | Attribution obligations         | BSD 3-Clause notice retention; plus notices for every bundled component that remains                                                                                                |
 | Source/distribution obligations | None from BSD 3-Clause itself                                                                                                                                                       |
-| **Status**                      | **ELIGIBLE FOR BAKEOFF, GATED**                                                                                                                                                     |
+| **Status**                      | **ELIGIBLE FOR BAKEOFF, GATED — GATE PASSED in Stage 3A-2**, see `bakeoff/LICENSE_BUILD_AUDIT.md`                                                                                   |
 
 ### Gate condition
 

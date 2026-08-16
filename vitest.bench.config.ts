@@ -16,6 +16,11 @@ export default defineConfig({
   test: {
     globals: false,
     environment: 'node',
+    // The Stage 3A-2 kernel bakeoff lives here too. It is deliberately NOT
+    // matched under experiments/: adding that glob made Vite crawl the 2 GB
+    // Emscripten SDK and fetched upstream trees, which turned a 30-second run
+    // into a ten-minute one. The suite lives in scripts/ and reaches into
+    // experiments/ by relative import instead.
     include: ['scripts/**/*.bench-suite.ts'],
     pool: 'forks',
     maxWorkers: 1,

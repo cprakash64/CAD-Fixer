@@ -4,3 +4,11 @@ coverage
 playwright-report
 test-results
 package-lock.json
+
+# Stage 3A-2 bakeoff: fetched upstream sources, the Emscripten SDK, and build
+# trees are third-party or generated. Formatting them is meaningless and
+# scanning ~2 GB of them makes `prettier --check .` appear to hang.
+experiments/repair-kernels/.toolchain
+experiments/repair-kernels/*/upstream
+experiments/repair-kernels/*/build
+experiments/repair-kernels/*/artifacts
