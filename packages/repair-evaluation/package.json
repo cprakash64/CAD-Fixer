@@ -1,0 +1,19 @@
+{
+  "name": "@cadfixer/repair-evaluation",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "sideEffects": false,
+  "description": "RESEARCH ONLY. Adversarial repair corpus, kernel-neutral evaluation contracts, and the bakeoff harness. Never imported by the application or by any worker.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@cadfixer/mesh-core": "*",
+    "@cadfixer/mesh-topology": "*",
+    "@cadfixer/shared": "*"
+  }
+}
