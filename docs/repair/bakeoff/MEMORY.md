@@ -50,3 +50,23 @@ What Stage 3A-2 did **not** measure, and a later stage must:
 - the 32-bit 4 GiB linear-memory ceiling in practice, and WASM64 availability;
 - SIMD and thread behaviour (all builds are sequential and non-SIMD);
 - peak resident set of the hosting process, as distinct from WASM heap.
+
+---
+
+## Stage 3A-3A
+
+**No new memory evidence.** Stage 3A-3A ran the same tiny corpus (≤ 200
+triangles), so the Stage 3A-2 negative result stands unchanged and remains a
+negative result **at that scale only**: no heap growth was observed because
+nothing here is large enough to cause any.
+
+Explicitly **not** measured, and required before any runtime architecture
+decision:
+
+- Browser `WebAssembly.Memory` buffer length before and after an operation.
+- Copy amplification across the JS↔WASM boundary at realistic sizes.
+- Whether memory returns after worker disposal or restart.
+- 1 / 10 / 50 MiB scaling.
+
+All of that is Stage 3A-3B. Nothing in this document should be read as evidence
+about large-model memory behaviour.

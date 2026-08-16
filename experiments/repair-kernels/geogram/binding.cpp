@@ -20,6 +20,8 @@
 
 #include <emscripten/emscripten.h>
 
+#include <geogram/basic/command_line.h>
+#include <geogram/basic/command_line_args.h>
 #include <geogram/basic/common.h>
 #include <geogram/basic/geometry.h>
 #include <geogram/mesh/mesh.h>
@@ -32,13 +34,58 @@ std::vector<double> g_out_positions;
 std::vector<uint32_t> g_out_triangles;
 int g_status = 0;
 int g_initialised = 0;
+int g_arg_groups_imported = 0;
+int g_init_mode = 1;
 int g_intersection_count = -1;
 int g_moebius_facets = 0;
 
+/**
+ * STAGE 3A-3A ROOT-CAUSE FIX.
+ *
+ * Stage 3A-2 called `GEO::initialize()` and nothing else, and Geogram's
+ * colocate path then aborted on `geo_assert(variable_exists)` at
+ * `basic/environment.cpp:217`. That was OUR defect, not Geogram's, and the
+ * pinned source says so exactly:
+ *
+ *   mesh_repair.cpp:1186   epsilon == 0 -> Geom::colocate_by_lexico_sort()
+ *                          epsilon != 0 -> Geom::colocate()
+ *   colocate.cpp:231       Geom::colocate -> NearestNeighborSearch::create(dim, "default")
+ *   nn_search.cpp:133      name == "default" -> CmdLine::get_arg("algo:nn_search")
+ *   colocate.cpp:238       CmdLine::get_arg_bool("sys:multithread")
+ *
+ * `algo:nn_search` is declared only by `import_arg_group_algo()`
+ * (command_line_args.cpp:187) and `sys:multithread` only by
+ * `import_arg_group_sys()` (command_line_args.cpp:306). `GEO::initialize()`
+ * imports NEITHER — it imports no argument group at all. Reading an undeclared
+ * variable reaches `Environment::get_value`, which logs "Probably missing
+ * CmdLine::import_arg_group(...)" and then asserts.
+ *
+ * This also explains why only colocate failed: `repairTopology`,
+ * `repairDuplicateFacets` and `reorient` all pass epsilon 0 and take the
+ * lexicographic path, which consults no environment variable.
+ *
+ * Upstream corroborates the requirement rather than us inferring it from a
+ * name: `src/tests/test_nn_search/main.cpp:72` imports "algo" before using the
+ * same factory, as do vorpalite and vorpastat.
+ *
+ * ONLY THESE TWO GROUPS. Upstream tools usually import "standard" as well,
+ * which pulls global/nl/log/biblio; this operation demonstrably reads none of
+ * them, and importing subsystems a benchmark does not exercise would make the
+ * measurement less honest, not more convenient.
+ *
+ * `g_init_mode` keeps Stage 3A-2's exact sequence available as mode 0. It is a
+ * negative control, not a fallback: it is what lets the native/WASM comparison
+ * vary initialisation while holding everything else fixed.
+ */
 void EnsureInitialised() {
   if (g_initialised == 0) {
     GEO::initialize();
     g_initialised = 1;
+  }
+  if (g_init_mode >= 1 && g_arg_groups_imported == 0) {
+    GEO::CmdLine::import_arg_group("algo");
+    GEO::CmdLine::import_arg_group("sys");
+    g_arg_groups_imported = 1;
   }
 }
 
@@ -168,6 +215,14 @@ int cf_g_run(int operation, const double* positions, int vertex_count, const uin
     return -1;
   }
 }
+
+// 0 reproduces Stage 3A-2's initialisation verbatim (the negative control);
+// 1 adds the two argument groups the colocate path actually reads. Must be set
+// before the first `cf_g_run`, because `GEO::initialize()` happens once.
+EMSCRIPTEN_KEEPALIVE
+void cf_g_set_init_mode(int mode) { g_init_mode = mode; }
+
+EMSCRIPTEN_KEEPALIVE int cf_g_init_mode() { return g_init_mode; }
 
 EMSCRIPTEN_KEEPALIVE int cf_g_status() { return g_status; }
 EMSCRIPTEN_KEEPALIVE int cf_g_vertex_count() { return static_cast<int>(g_out_positions.size() / 3); }

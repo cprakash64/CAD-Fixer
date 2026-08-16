@@ -42,6 +42,28 @@ export {
 } from './harness';
 export type { HarnessOptions } from './harness';
 
+export {
+  DEFAULT_SURFACE_DISTANCE_OPTIONS,
+  symmetricSampledSurfaceDistance,
+} from './surface-distance';
+export type {
+  DirectionalSurfaceDistance,
+  SurfaceDistanceOptions,
+  SymmetricSampledSurfaceDistanceResult,
+} from './surface-distance';
+
+export {
+  bruteForceNearestDistanceSquared,
+  buildTriangleBvh,
+  flattenTriangles,
+  nearestTriangleDistanceSquared,
+  pointTriangleDistanceSquared,
+} from './bvh';
+export type { TriangleBvh } from './bvh';
+
+export { fromTransfer, toTransfer } from './transfer';
+export type { TransferMesh } from './transfer';
+
 export { HARD_GATES, KernelRole, SCORING_MODEL, TOTAL_WEIGHT } from './scoring';
 export { toJson, toMarkdown } from './report';
 export type { BakeoffRun } from './report';

@@ -60,3 +60,34 @@ destroy the user's model — precisely the outcome ADR 0008 exists to prevent.
 
 This is now supported by measurement rather than by prediction. **It is still not
 a decision**: the browser-side equivalent must be measured first.
+
+---
+
+## Stage 3A-3A update
+
+**The 28-minute uninterruptible call is no longer reproducible, and the reason
+matters.** It was Geogram's colocate path aborting on an assertion caused by our
+own missing `CmdLine::import_arg_group("algo")` — not an algorithmic hang. With
+initialisation corrected, every colocate run completes in ~5-15 ms against a
+20 s budget. See RESULTS.md, "Geogram colocate — ROOT CAUSE FOUND".
+
+That removes the most acute observed instance of the hazard. **It does not
+remove the hazard.** A synchronous WASM call still cannot be interrupted from
+inside its own process, and nothing here changes that.
+
+**Isolation was tightened.** Stage 3A-2 ran a whole fixture per process, so one
+non-returning call took every later case down with it and those cases were
+recorded as TIMEOUT without being attempted — a fixture's result depended on
+which fixture ran before it. Stage 3A-3A runs **one operation per process**
+(`run-geogram-single.mjs`, `run-manifold-single.mjs`, `run-idempotence.mjs`), so
+a hang costs exactly one row.
+
+**Still not measured, and required before any architecture decision:**
+
+- `Worker.terminate()` in a real browser: time to termination, page
+  responsiveness during and after, and whether a fresh worker re-initialises.
+- Whether the authoritative source mesh survives a cancellation byte-identical.
+- Persistent-worker versus disposable-per-operation cost.
+
+All of that is Stage 3A-3B. **`CANCELLATION_GATE` remains unresolved**;
+process-kill at Node granularity is not evidence about browser workers.

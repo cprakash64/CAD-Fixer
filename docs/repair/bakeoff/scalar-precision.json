@@ -1,0 +1,96 @@
+{
+  "startedAt": "2026-08-16T19:13:15.884Z",
+  "harnessVersion": "stage-3a-3a.1",
+  "environment": "node v22.22.2 darwin/arm64",
+  "canonicalStore": {
+    "type": "Float32Array",
+    "source": "packages/mesh-core/src/mesh.ts:27 (PositionArray)",
+    "consequence": "Corpus fixtures are float32 before any candidate sees them, so the corpus cannot detect candidate float32 narrowing. This probe bypasses the corpus."
+  },
+  "pmpScalarConfiguration": {
+    "typedef": "using Scalar = float",
+    "source": "src/pmp/types.h:17-21, selected when PMP_SCALAR_TYPE_64 is NOT defined",
+    "doubleBuildSupported": true,
+    "doubleBuildFlag": "-DPMP_SCALAR_TYPE=64 (CMakeLists.txt:167 defines PMP_SCALAR_TYPE_64)",
+    "ourBuildDefinesIt": false,
+    "evidence": "PMP_SCALAR_TYPE absent from the build CMakeCache, and absent from the em++ command line that compiles binding.cpp."
+  },
+  "manifoldScalarConfiguration": {
+    "typedef": "MeshGL64 (double precision vertex properties)",
+    "source": "binding.cpp uses manifold::MeshGL64 deliberately"
+  },
+  "rows": [
+    {
+      "candidateId": "manifold",
+      "artifactSha256": "8bd72c68df6d2785d316f2ce701f8d82638229c3527129238f7696e2ba7bde61",
+      "harnessVersion": "stage-3a-3a.1",
+      "operation": "ingest",
+      "coordinateOffset": 0,
+      "outcome": "RAN",
+      "kernelStatus": null,
+      "float32Prediction": 4.7683716086766026e-8,
+      "observedMaxCoordinateDelta": 0,
+      "verdict": "PRESERVES_FLOAT64"
+    },
+    {
+      "candidateId": "manifold",
+      "artifactSha256": "8bd72c68df6d2785d316f2ce701f8d82638229c3527129238f7696e2ba7bde61",
+      "harnessVersion": "stage-3a-3a.1",
+      "operation": "ingest",
+      "coordinateOffset": 1000000,
+      "outcome": "RAN",
+      "kernelStatus": null,
+      "float32Prediction": 0.025000000023283064,
+      "observedMaxCoordinateDelta": 0,
+      "verdict": "PRESERVES_FLOAT64"
+    },
+    {
+      "candidateId": "geogram",
+      "artifactSha256": "73cabc53caeb3d85d66acd2abd0ddeea43cbedae0bacb18dd1cb165fc4947bd8",
+      "harnessVersion": "stage-3a-3a.1",
+      "operation": "repairTopology",
+      "coordinateOffset": 0,
+      "outcome": "RAN",
+      "kernelStatus": null,
+      "float32Prediction": 4.7683716086766026e-8,
+      "observedMaxCoordinateDelta": 0,
+      "verdict": "PRESERVES_FLOAT64"
+    },
+    {
+      "candidateId": "geogram",
+      "artifactSha256": "73cabc53caeb3d85d66acd2abd0ddeea43cbedae0bacb18dd1cb165fc4947bd8",
+      "harnessVersion": "stage-3a-3a.1",
+      "operation": "repairTopology",
+      "coordinateOffset": 1000000,
+      "outcome": "RAN",
+      "kernelStatus": null,
+      "float32Prediction": 0.025000000023283064,
+      "observedMaxCoordinateDelta": 0,
+      "verdict": "PRESERVES_FLOAT64"
+    },
+    {
+      "candidateId": "pmp",
+      "artifactSha256": "a4e1263cb8f41abc25b33c4142a08525e38bf587fefdc6e552f5abc56bc3105f",
+      "harnessVersion": "stage-3a-3a.1",
+      "operation": "ingest",
+      "coordinateOffset": 0,
+      "outcome": "RAN",
+      "kernelStatus": 0,
+      "float32Prediction": 4.7683716086766026e-8,
+      "observedMaxCoordinateDelta": 4.7683716086766026e-8,
+      "verdict": "NARROWS_TO_FLOAT32"
+    },
+    {
+      "candidateId": "pmp",
+      "artifactSha256": "a4e1263cb8f41abc25b33c4142a08525e38bf587fefdc6e552f5abc56bc3105f",
+      "harnessVersion": "stage-3a-3a.1",
+      "operation": "ingest",
+      "coordinateOffset": 1000000,
+      "outcome": "RAN",
+      "kernelStatus": 0,
+      "float32Prediction": 0.025000000023283064,
+      "observedMaxCoordinateDelta": 0.025000000023283064,
+      "verdict": "NARROWS_TO_FLOAT32"
+    }
+  ]
+}

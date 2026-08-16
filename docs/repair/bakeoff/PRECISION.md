@@ -66,3 +66,60 @@ The one thing this stage adds: since candidates work in double and at least one
 narrows to float internally, a future architecture of _Float32 source ingest →
 Float64 repair working representation_ is not contradicted by anything observed
 — but it is not yet supported by measurement either.
+
+---
+
+## Stage 3A-3A — measured scalar behaviour, and a corpus blind spot
+
+**The corpus cannot detect candidate float32 narrowing.**
+`PositionArray = Float32Array` (`packages/mesh-core/src/mesh.ts:27`), so every
+fixture is already float32 before a candidate sees it. R26 is blind twice over:
+its coordinates are integers below 2^24, which binary32 represents exactly.
+
+This does not make the fixtures defective — they test what they were built to
+test — but it means the Stage 3A-1/3A-2 description of R26/R27 as the strongest
+precision evidence is wrong **for this question**. No fixture was changed. A
+separate probe (`scripts/scalar-precision.bench-suite.ts`) bypasses the corpus,
+feeding the Float64 transfer buffers coordinates binary32 cannot hold, with the
+expected delta stated in advance as `|v - Math.fround(v)|`.
+
+| Candidate | offset 0 (predicted 4.77e-08) | offset 1e6 (predicted 2.50e-02) | Verdict                  |
+| --------- | ----------------------------- | ------------------------------- | ------------------------ |
+| Manifold  | 0                             | 0                               | `PRESERVES_FLOAT64`      |
+| Geogram   | 0                             | 0                               | `PRESERVES_FLOAT64`      |
+| PMP       | 4.768e-08                     | 2.500e-02                       | **`NARROWS_TO_FLOAT32`** |
+
+### PMP configuration, verified against the pinned source and the built artifact
+
+- `using Scalar = float` — `src/pmp/types.h:17-21`, selected because
+  `PMP_SCALAR_TYPE_64` is **not** defined.
+- Not defined in our build: absent from the build `CMakeCache.txt` and from the
+  `em++` command line that compiles `binding.cpp`.
+- A double build **is** supported: `-DPMP_SCALAR_TYPE=64` causes
+  `CMakeLists.txt:167` to define `PMP_SCALAR_TYPE_64`.
+- **Not rebuilt in double.** Artifact size and memory cost of a double build are
+  unmeasured. This describes only the benchmarked artifact
+  (`a4e1263c…`, 246,095 bytes).
+
+### Generated-coordinate precision — the evidence Stage 3A-2 lacked
+
+Stage 3A-2's precision rows came from **non-mutating** operations, which cannot
+show coordinate generation. Manifold booleans generate intersection vertices;
+compared against exact set algebra:
+
+| Case | Magnitude | Kernel volume          | Exact     | Relative error |
+| ---- | --------- | ---------------------- | --------- | -------------- |
+| MB01 | ~1e1      | 1875                   | 1875      | 0              |
+| MB06 | ~1e6      | 1875.000000002794      | 1875      | 1.5e-12        |
+| MB07 | ~1e-4     | 1.8750001853186634e-12 | 1.875e-12 | 9.9e-08        |
+
+**The small-scale case is five orders of magnitude worse than the large-scale
+one** — the opposite of the usual intuition, and the single most useful number
+here for ADR 0004.
+
+### Open
+
+- A float32 canonical store is coarser than Manifold's and Geogram's float64
+  pipelines. Feeding a kernel float64 is pointless if the model was already
+  quantised on import. ADR 0004 stays **open**; this is evidence, not a decision.
+- Browser-side precision is unmeasured (`BROWSER_GATE_PENDING`).

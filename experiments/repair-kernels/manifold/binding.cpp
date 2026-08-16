@@ -41,6 +41,9 @@ int g_genus = 0;
 double g_volume = 0.0;
 double g_surface_area = 0.0;
 int g_decomposed_count = 0;
+// -1 = Merge was not invoked for this operation, 0 = ran and changed nothing,
+// 1 = ran and modified the mesh.
+int g_merge_changed = -1;
 
 manifold::MeshGL64 MakeMeshGL64(const double* positions, int vertex_count,
                                 const uint32_t* triangles, int triangle_count) {
@@ -87,7 +90,24 @@ extern "C" {
 enum CfOperation {
   CF_OP_INGEST = 0,        // construct only; reports whether input was accepted
   CF_OP_MERGE_INGEST = 1,  // EXPLICIT Merge() first. Never invisible.
-  CF_OP_SELF_UNION = 2,    // Boolean(Add) against an empty manifold
+  /*
+   * INVALID_EXPERIMENT — retained deliberately, excluded from all scoring.
+   *
+   * Stage 3A-2 implemented "self-union" as `Boolean(Manifold(), OpType::Add)`.
+   * A default-constructed Manifold is EMPTY, and union with the empty set is
+   * the identity: the call returned its input unchanged (R16 went 24 -> 24
+   * triangles, 2 -> 2 components) and was then read as evidence that Manifold
+   * could not resolve interpenetrating shells. It was measuring nothing.
+   *
+   * Upstream exposes no self-union operation, and inventing one here would be
+   * worse than admitting the gap. Resolving interpenetration means unioning the
+   * DECOMPOSED solids against each other, which is what `cf_boolean` does and
+   * what the R16 experiment now performs.
+   *
+   * Kept rather than deleted so the results file can carry the correction: a
+   * silently removed experiment teaches nobody why the number was wrong.
+   */
+  CF_OP_SELF_UNION_INVALID = 2,
 };
 
 EMSCRIPTEN_KEEPALIVE
@@ -96,11 +116,17 @@ int cf_run(int operation, const double* positions, int vertex_count, const uint3
   try {
     manifold::MeshGL64 mesh = MakeMeshGL64(positions, vertex_count, triangles, triangle_count);
 
+    g_merge_changed = -1;
     if (operation == CF_OP_MERGE_INGEST) {
       // Reported as its own operation in the results. Manifold's Merge only
       // recovers input that is ALREADY nearly manifold; treating it as a repair
       // would overstate what the kernel does.
-      mesh.Merge();
+      //
+      // The RETURN VALUE is recorded. `MeshGL64::Merge()` (mesh.h:182) reports
+      // whether it actually changed anything, which separates "Merge ran and
+      // did nothing" from "Merge repaired the input" — a distinction Stage 3A-2
+      // could not make, because it discarded the bool.
+      g_merge_changed = mesh.Merge() ? 1 : 0;
     }
 
     manifold::Manifold value(mesh);
@@ -109,9 +135,11 @@ int cf_run(int operation, const double* positions, int vertex_count, const uint3
       return g_status;
     }
 
-    if (operation == CF_OP_SELF_UNION) {
-      // Self-union is Manifold's only route to resolving intersections, and it
-      // is a RECONSTRUCTION rather than a repair. Labelled as such in results.
+    if (operation == CF_OP_SELF_UNION_INVALID) {
+      // RETAINED ONLY TO REPRODUCE THE INVALID STAGE 3A-2 RESULT. This unions
+      // against a default-constructed (EMPTY) Manifold, which is the identity:
+      // the value returned is the input. Kept so the correction can be
+      // demonstrated rather than merely asserted, and excluded from scoring.
       value = value.Boolean(manifold::Manifold(), manifold::OpType::Add);
     }
 
@@ -165,6 +193,7 @@ EMSCRIPTEN_KEEPALIVE int cf_genus() { return g_genus; }
 EMSCRIPTEN_KEEPALIVE double cf_volume() { return g_volume; }
 EMSCRIPTEN_KEEPALIVE double cf_surface_area() { return g_surface_area; }
 EMSCRIPTEN_KEEPALIVE int cf_component_count() { return g_decomposed_count; }
+EMSCRIPTEN_KEEPALIVE int cf_merge_changed() { return g_merge_changed; }
 
 // Releases the retained result. The harness calls this between cases so peak
 // heap reflects one operation rather than an accumulating history.

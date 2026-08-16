@@ -93,7 +93,7 @@ em++ -O3 \
   -sALLOW_MEMORY_GROWTH=1 \
   -sINITIAL_MEMORY=67108864 \
   -sENVIRONMENT=web,worker,node \
-  -sEXPORTED_FUNCTIONS='["_cf_g_run","_cf_g_status","_cf_g_vertex_count","_cf_g_triangle_count","_cf_g_positions","_cf_g_triangles","_cf_g_intersection_count","_cf_g_moebius_facets","_cf_g_reset","_malloc","_free"]' \
+  -sEXPORTED_FUNCTIONS='["_cf_g_run","_cf_g_status","_cf_g_vertex_count","_cf_g_triangle_count","_cf_g_positions","_cf_g_triangles","_cf_g_intersection_count","_cf_g_moebius_facets","_cf_g_set_init_mode","_cf_g_init_mode","_cf_g_reset","_malloc","_free"]' \
   -sEXPORTED_RUNTIME_METHODS='["HEAPF64","HEAPU32"]' \
   --no-entry \
   > "$BUILD/link.log" 2>&1 || { echo "LINK FAILED"; tail -40 "$BUILD/link.log"; exit 1; }

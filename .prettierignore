@@ -11,4 +11,19 @@ package-lock.json
 experiments/repair-kernels/.toolchain
 experiments/repair-kernels/*/upstream
 experiments/repair-kernels/*/build
+experiments/repair-kernels/*/build-native
 experiments/repair-kernels/*/artifacts
+
+# Machine-generated bakeoff output. Serialisation is owned by the result
+# generators in scripts/*.bench-suite.ts, not by Prettier: each generator is the
+# single writer of its file, and a formatter rewriting that output would make
+# every re-run dirty the tree for reasons unrelated to the experiment.
+#
+# This is NOT unchecked. Integrity is asserted separately — parsing, schema
+# shape, corpus and artifact provenance, absence of raw geometry, and stale-row
+# contamination — by scripts/results-integrity.test.ts, which DOES run in CI.
+#
+# Narrow by design: only the generated JSON in this one directory. Every other
+# file under docs/, including the Markdown in this same directory, is
+# hand-maintained and stays formatted.
+docs/repair/bakeoff/*.json
