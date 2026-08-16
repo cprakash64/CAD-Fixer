@@ -138,5 +138,23 @@ export default tseslint.config(
     extends: [tseslint.configs.disableTypeChecked],
   },
 
+  // Node-hosted scripts that must run as plain JavaScript.
+  //
+  // `scripts/check-node-version.js` cannot be TypeScript: it guards the project
+  // against unsupported runtimes and therefore has to execute before any build
+  // or loader exists. `explicit-function-return-type` is turned off for these
+  // files only because JavaScript has no return-type syntax to satisfy it —
+  // the types are declared in the accompanying `.d.ts`, which IS checked.
+  {
+    files: ['scripts/**/*.js'],
+    languageOptions: {
+      globals: globals.node,
+    },
+    rules: {
+      '@typescript-eslint/explicit-function-return-type': 'off',
+      'no-restricted-globals': 'off',
+    },
+  },
+
   prettier,
 );

@@ -127,3 +127,58 @@ catastrophic backtracking, no silent corruption of coordinates. It does **not**
 make an untrusted model safe to trust as geometry — a structurally valid file
 can still describe a nonsensical part. That is a diagnostics problem, not a
 security one.
+
+## Stage 2 — topology diagnostics
+
+Diagnostics changed what moves between the worker and the main thread, so the
+claim is restated precisely rather than left to inference.
+
+### What crosses the worker boundary
+
+| Direction     | Carries                                                                                       |
+| ------------- | --------------------------------------------------------------------------------------------- |
+| main → worker | A model handle, a revision, and a sample cap. For import only, the file bytes. Never a mesh.  |
+| worker → main | Counts, statuses, render snapshots, encoded export bytes, and **bounded diagnostic samples**. |
+
+Diagnostic samples are geometry-derived, deliberately: an overlay cannot draw a
+boundary edge without its coordinates. They are capped by a sample limit rather
+than by mesh size, so the payload does not grow with the model — measured at
+0.1 MiB for a 100 MiB input.
+
+**None of this leaves the browser.** The boundary above is between two threads in
+one tab.
+
+### What leaves the machine
+
+Nothing. Verified three ways rather than asserted:
+
+1. **Lint** bans `fetch`, `XMLHttpRequest`, `WebSocket`, `EventSource`, and
+   `navigator.sendBeacon` repo-wide.
+2. **The build output** contains none of those identifiers in either shipped
+   chunk. Vite's module-preload polyfill, which used to contribute the single
+   `fetch(` in the bundle, is disabled in `vite.config.ts` so the grep result has
+   no exception to explain.
+3. **An end-to-end test** records every network request the page makes during
+   import, automatic analysis, overlay use, and export, and asserts each is a
+   same-origin `GET`/`HEAD` for a first-party asset with no request body and no
+   model identity in the URL.
+
+### What diagnostics may log or report
+
+- **No `console` calls exist** in application or package source.
+- **Typed errors carry counts, never coordinates.** The analysis guard's details
+  are position and index array _lengths_; the resource-limit refusal's details
+  are face and corner counts plus byte estimates. A test asserts the refusal
+  payload contains no geometry key.
+- **No filename appears in any error payload or diagnostic detail.** Filenames
+  are displayed in the interface, which is local, and written into exported files
+  the user chose to save.
+- **No analytics, telemetry, or crash reporting of any kind exists.**
+
+### Untrusted content
+
+STL solid names and filenames come from files the user opened and are treated as
+untrusted text. They are rendered as React children, which escapes them, and the
+application contains no `innerHTML`, `dangerouslySetInnerHTML`, `eval`, or
+`Function` constructor. On export, **solid names are generated, never copied from
+the source**, so a hostile name cannot round-trip into a file the user shares.

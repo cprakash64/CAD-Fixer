@@ -95,6 +95,17 @@ export function computeBounds(mesh: CanonicalMesh): MeshBounds | undefined {
  * the buffer.
  */
 export function computeVertexNormals(mesh: CanonicalMesh): Float32Array {
+  // Float32Array, concretely and deliberately — NOT `NormalArray`. This is a
+  // RENDER buffer, and float32 is the vertex-attribute representation this
+  // application has SELECTED for its WebGL/Three.js pipeline. (WebGL can accept
+  // other attribute formats; it cannot accept float64, and Three.js's
+  // `BufferAttribute` path is float32 here.)
+  //
+  // The point of naming the concrete type is to decouple render precision from
+  // canonical precision: whatever ADR 0004 eventually decides for stored
+  // geometry, and whatever precision a future geometry kernel works in, the
+  // render snapshot stays float32 and converts at the boundary. Using the
+  // canonical alias here would silently tie those two decisions together.
   const positions = mesh.positions;
   const indices = mesh.indices;
   const normals = new Float32Array(positions.length);

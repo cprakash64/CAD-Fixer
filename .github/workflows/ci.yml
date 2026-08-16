@@ -24,7 +24,12 @@ jobs:
 
       - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          # Read from .nvmrc so CI and local development cannot drift. A
+          # floating `22` would have silently satisfied itself on a runner whose
+          # Node predated the version jsdom's undici requires — the exact class
+          # of failure that cost a session when a local shell fell back to
+          # Node 20 and the entire jsdom test project was skipped.
+          node-version-file: .nvmrc
           cache: npm
 
       # `npm ci` installs strictly from package-lock.json and fails if the
@@ -57,7 +62,12 @@ jobs:
 
       - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          # Read from .nvmrc so CI and local development cannot drift. A
+          # floating `22` would have silently satisfied itself on a runner whose
+          # Node predated the version jsdom's undici requires — the exact class
+          # of failure that cost a session when a local shell fell back to
+          # Node 20 and the entire jsdom test project was skipped.
+          node-version-file: .nvmrc
           cache: npm
 
       - name: Install dependencies

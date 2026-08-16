@@ -1,4 +1,5 @@
 import { diagnostic, malformedFile, throwIfCancelled, type Diagnostic } from '@cadfixer/shared';
+import { createIndexArray, createPositionArray } from '@cadfixer/mesh-core';
 import { checkAllocation, planAllocation } from '../budget';
 import type { FormatReadContext } from '../context';
 import {
@@ -67,8 +68,8 @@ export async function readBinaryStl(
   // from its own offset and length rather than the whole underlying buffer.
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
 
-  const positions = new Float32Array(plan.vertices * 3);
-  const indices = new Uint32Array(plan.vertices);
+  const positions = createPositionArray(plan.vertices * 3);
+  const indices = createIndexArray(plan.vertices);
 
   let invalidStoredNormals = 0;
   let zeroStoredNormals = 0;

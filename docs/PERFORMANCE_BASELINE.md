@@ -121,8 +121,9 @@ Doubling position width doubles the largest buffer:
 | 50 MiB  | 36.0 MiB          | 72.0 MiB          | 48.0 → 84.0 MiB  | +75%     |
 | 100 MiB | 72.0 MiB          | 144.0 MiB         | 96.0 → 168.0 MiB | +75%     |
 
-Including render normals (which would stay Float32 — GPUs do not accept
-Float64), a 100 MiB model's working set goes from 168 MiB to 240 MiB.
+Including render normals (which would stay Float32: float32 is the selected
+WebGL/Three.js vertex-attribute representation, and render precision is
+deliberately decoupled from canonical precision), a 100 MiB model's working set goes from 168 MiB to 240 MiB.
 
 ### Conversion cost
 
@@ -202,3 +203,175 @@ than admitting they are missing:
   thread, on every export. It has not been timed. The fix is architectural
   rather than an optimisation: keep canonical geometry worker-side and hand the
   main thread only render buffers, so there is nothing to copy back.
+
+---
+
+# Performance baseline — Stage 2
+
+Adds worker-resident geometry and topology diagnostics. Reproduce with:
+
+```bash
+npm run bench:pipeline
+```
+
+Sizes are configurable: `CADFIXER_PIPELINE_MB=1,10,50,100 npm run bench:pipeline`.
+A smaller topology-only run is `npm run bench:topology`.
+
+**Still not tested in CI**, for the same reason as Stage 1: a timing assertion on
+shared hardware fails for reasons unrelated to the code.
+
+## Environment
+
+|         |                                              |
+| ------- | -------------------------------------------- |
+| Date    | 2026-08-16                                   |
+| Machine | Apple M1, 8 cores, 8 GB RAM                  |
+| OS      | macOS 27.0 (darwin/arm64)                    |
+| Runtime | Node v22.22.2                                |
+| Harness | Vitest 4.1.10, single worker, no parallelism |
+
+## Whole pipeline, Node
+
+Every stage the worker runs, in order, measured in one process so the numbers
+relate to each other. The fixture is a triangulated height grid whose
+neighbouring quads share bit-identical corners, so vertex canonicalisation does
+real merging rather than exercising only the hash table's insert path.
+
+| Input    | Triangles | Corners   | Recovered vertices | Unique edges | Components |
+| -------- | --------- | --------- | ------------------ | ------------ | ---------- |
+| 1.0 MiB  | 20,808    | 62,424    | 10,609             | 31,416       | 1          |
+| 9.9 MiB  | 208,658   | 625,974   | 104,976            | 313,633      | 1          |
+| 50.0 MiB | 1,048,352 | 3,145,056 | 525,625            | 1,573,976    | 1          |
+| 99.8 MiB | 2,093,058 | 6,279,174 | 1,048,576          | 3,141,633    | 1          |
+
+| Stage                      | 1 MiB  | 10 MiB | 50 MiB | 100 MiB  |
+| -------------------------- | ------ | ------ | ------ | -------- |
+| Parse                      | 6 ms   | 18 ms  | 52 ms  | 99 ms    |
+| Structural validation      | 9 ms   | 27 ms  | 98 ms  | 199 ms   |
+| Render snapshot            | 12 ms  | 14 ms  | 66 ms  | 145 ms   |
+| — canonicalizing vertices  | 9 ms   | 45 ms  | 193 ms | 299 ms   |
+| — building edges           | 2 ms   | 6 ms   | 43 ms  | 23 ms    |
+| — grouping edges           | 32 ms  | 27 ms  | 162 ms | 135 ms   |
+| — analyzing edge incidence | 4 ms   | 5 ms   | 17 ms  | 14 ms    |
+| — analyzing vertex fans    | 17 ms  | 38 ms  | 148 ms | 242 ms   |
+| — finding components       | 5 ms   | 11 ms  | 29 ms  | 40 ms    |
+| — analyzing boundaries     | 4 ms   | 12 ms  | 32 ms  | 40 ms    |
+| — checking faces           | 10 ms  | 26 ms  | 126 ms | 204 ms   |
+| — measuring geometry       | 11 ms  | 23 ms  | 54 ms  | 62 ms    |
+| — preparing report         | 10 ms  | 29 ms  | 114 ms | 220 ms   |
+| **Topology total**         | 105 ms | 223 ms | 918 ms | 1,280 ms |
+| Binary export              | 10 ms  | 25 ms  | 75 ms  | 99 ms    |
+
+**On reading these numbers.** Four data points do not establish asymptotic
+complexity, and nothing here should be read as evidence of sub-linear growth:
+analysis must visit every corner and every face, so it cannot be below Ω(N). The
+implemented complexity is O(N) expected for the hashing and radix stages plus
+O(F log F) for the one comparison sort in duplicate-face detection. What the
+table is good for is noticing a catastrophe — a size increase that cost far more
+than proportionally would mean quadratic behaviour crept in.
+
+## Memory, modelled
+
+**Modelled, not measured RSS.** Typed arrays live outside the JS heap, so
+`process.memoryUsage()` would not tell the truth here. These are computed from
+actual typed-array byte lengths, and the estimator column is what the preflight
+would have predicted before allocating — which is the number that has to be
+right, because it is what decides whether an analysis is allowed to start.
+
+| Input   | Resident canonical | Render snapshot | Topology scratch (est.) | Bounded detail | Modelled app peak |
+| ------- | ------------------ | --------------- | ----------------------- | -------------- | ----------------- |
+| 1 MiB   | 1.0 MiB            | 1.4 MiB         | 4.7 MiB                 | 0.0 MiB        | 7.1 MiB           |
+| 10 MiB  | 9.6 MiB            | 14.3 MiB        | 47.0 MiB                | 0.0 MiB        | 70.9 MiB          |
+| 50 MiB  | 48.0 MiB           | 72.0 MiB        | 235.9 MiB               | 0.1 MiB        | 356.0 MiB         |
+| 100 MiB | 95.8 MiB           | 143.7 MiB       | 471.1 MiB               | 0.1 MiB        | 710.7 MiB         |
+
+Resident and render figures matched their estimators exactly at every size.
+
+**The detail payload does not scale with the model.** It is bounded by the
+sample limit, not by mesh size: 0.1 MiB at 100 MiB of input, against a ceiling of
+8.6 MiB at the default limit of 50,000 samples per category.
+
+**100 MiB is accepted, not refused.** Projected topology scratch of 471 MiB sits
+under the 1,024 MiB analysis ceiling. The refusal path is exercised by a unit
+test that decides from counts alone — roughly 4.8M triangles and 14.4M corners,
+a ~230 MiB file — without allocating anything, which is the property that matters:
+a preflight that needed the workspace in order to decide whether the workspace
+fits would not be a preflight.
+
+## Browser
+
+Recorded with Playwright against the production build:
+
+```bash
+CADFIXER_BROWSER_BENCH=1 npx playwright test e2e/browser-benchmark.spec.ts
+```
+
+Skipped by default — it is slow, and it belongs to a deliberate measuring
+session rather than to every E2E run. It records file-to-visible, file-to-report,
+export time, the longest main-thread frame gap, and whether controls still
+respond. There is exactly one assertion in it, and it is that the run completed;
+turning wall-clock numbers into CI thresholds teaches people to ignore failures.
+
+### Environment
+
+|                       |                                         |
+| --------------------- | --------------------------------------- |
+| Date                  | 2026-08-16                              |
+| Host                  | Apple M1, 8 cores, 8 GB RAM, macOS 27.0 |
+| Browser               | Chromium 151.0.7922.34 (Playwright)     |
+| `hardwareConcurrency` | 8                                       |
+| `deviceMemory`        | not exposed (reported 0)                |
+
+The user-agent string this Chromium reports claims Windows; that is Playwright's
+stock UA and says nothing about the host. The host row above is the real machine.
+
+### Results
+
+| Triangles | Input    | File → visible | File → Mesh Health | Analysis window | Binary export | Longest frame gap | Fit-view click |
+| --------- | -------- | -------------- | ------------------ | --------------- | ------------- | ----------------- | -------------- |
+| 45,000    | 2.1 MiB  | 571 ms         | 850 ms             | 279 ms          | 65 ms         | 231 ms            | 27 ms          |
+| 180,000   | 8.6 MiB  | 1,344 ms       | 1,490 ms           | 146 ms          | 137 ms        | 592 ms            | 30 ms          |
+| 405,000   | 19.3 MiB | 3,041 ms       | 3,400 ms           | 359 ms          | 270 ms        | 1,361 ms          | 33 ms          |
+
+**Reading the frame gaps honestly.** The longest gap grows with model size, and
+it is _not_ topology: it is the first-frame GPU upload of the render snapshot and
+the initial camera fit, both of which are unavoidable main-thread work at the
+moment a model appears. The evidence is the last column — a `Fit view` click
+still answered in under 35 ms at every size, and the analysis window (the period
+during which topology actually runs) does not track the gap: 180k triangles
+analysed _faster_ than 45k here, because the larger fixture has proportionally
+more shared vertices.
+
+The E2E responsiveness test `J1` isolates this properly by measuring during a
+re-analysis of an already-rendered model, where nothing else touches the main
+thread.
+
+**Interaction latency, not throughput, is the number that matters** for the claim
+this architecture makes. Throughput is bounded by the machine; responsiveness is
+bounded by where the work runs.
+
+A separate E2E test (`J1`) does assert responsiveness, but as a **ratio against
+an idle baseline measured on the same machine**, and it measures during a
+re-analysis of an already-rendered model so that the first frame's GPU upload is
+not attributed to topology.
+
+## Bundle
+
+| Chunk                  | Size     | Contains                                 |
+| ---------------------- | -------- | ---------------------------------------- |
+| `index-*.js`           | 789.7 kB | React, Three.js, UI, worker transport    |
+| `geometry.worker-*.js` | 47.7 kB  | STL codecs, topology engine, worker host |
+| `index-*.css`          | 11.1 kB  | Application styles                       |
+
+The topology engine is in the worker chunk and **not** in the main bundle,
+verified by grepping the build output for engine-only string literals
+(`exact-stored-coordinate` and friends): present in the worker chunk, absent
+from the main one. The main bundle carries only the small status-value
+restatement in `geometry-runtime/topology.ts`, which exists precisely so the UI
+can compare against report values without importing the engine.
+
+Neither shipped chunk contains `fetch`, `XMLHttpRequest`, `WebSocket`,
+`sendBeacon`, or `EventSource`. The one `fetch` that used to appear was Vite's
+module-preload polyfill; it is now disabled in `vite.config.ts`, because "no code
+here can talk to a network" should be checkable by grep with no exceptions to
+explain.

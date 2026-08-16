@@ -1,5 +1,11 @@
 import type { Diagnostic, OperationId, SerializedAppError } from '@cadfixer/shared';
-import type { CanonicalMesh, MeshBounds } from '@cadfixer/mesh-core';
+import type { MeshBounds } from '@cadfixer/mesh-core';
+// Type-only, so no topology code is pulled into the main-thread bundle. The
+// analysis contract is described here rather than left as `unknown`: this is a
+// module boundary, and an unchecked one would let the worker and its consumer
+// drift apart silently.
+import type { TopologyDetail, TopologyReport } from '@cadfixer/mesh-topology';
+import type { ModelHandle } from './resident-models';
 
 /**
  * Wire protocol between the main thread and geometry workers.
@@ -37,13 +43,21 @@ export interface OperationMap {
     payload: SelfTestPayload;
     result: SelfTestResult;
   };
-  'stl/import': {
+  'model/import': {
     payload: StlImportPayload;
-    result: StlImportResult;
+    result: ModelImportResult;
   };
-  'stl/export': {
-    payload: StlExportPayload;
+  'model/export': {
+    payload: ModelExportPayload;
     result: StlExportResult;
+  };
+  'model/release': {
+    payload: ModelReleasePayload;
+    result: ModelReleaseResult;
+  };
+  'model/analyze': {
+    payload: ModelAnalyzePayload;
+    result: ModelAnalyzeResult;
   };
 }
 
@@ -64,32 +78,61 @@ export interface StlImportPayload {
 }
 
 /**
- * Everything the application needs about an imported model.
+ * Geometry the UI needs in order to DRAW a model — and nothing more.
  *
- * Statistics are computed IN THE WORKER, during the pass that already has the
- * positions in cache. That is not an optimisation for its own sake: it means
- * the main thread never walks a multi-million-triangle buffer to fill in a
- * details panel.
+ * THE DISTINCTION THAT MATTERS: the authoritative `CanonicalMesh` stays in the
+ * worker. This is a derived, read-only view of it, safe to transfer to the main
+ * thread and hand to the GPU. The two must not be confused: the snapshot is
+ * regenerable at any time, whereas the canonical mesh is the user's data.
+ *
+ * Positions are NON-INDEXED. STL is triangle soup, so its indices are the
+ * sequence 0,1,2,3,… and carry no information; sending them would cost 24 MiB
+ * per two million triangles to tell the GPU what it already assumes. The worker
+ * keeps the real index buffer because later operations need it.
  */
-export interface StlImportResult {
-  readonly mesh: CanonicalMesh;
-  /** `binary` or `ascii`, as actually detected — never guessed from the name. */
-  readonly encoding: string;
-  readonly bounds: MeshBounds | undefined;
-  readonly triangleCount: number;
-  readonly vertexCount: number;
+export interface RenderSnapshot {
+  /** Interleaved XYZ, three vertices per triangle, drawn non-indexed. */
+  readonly positions: Float32Array;
   /**
    * Per-vertex normals derived from the geometry, for display only.
    *
-   * Kept out of the `CanonicalMesh` deliberately: they are not what the file
-   * said, and canonical data must not be rewritten for presentation. Computed
-   * here rather than on the main thread because deriving them is a per-triangle
-   * cross product over the whole mesh.
+   * They are not what the file said, and canonical data is never rewritten for
+   * presentation. Computed in the worker because deriving them is a
+   * per-triangle cross product over the whole mesh.
    */
-  readonly renderNormals: Float32Array;
+  readonly normals: Float32Array;
+  readonly vertexCount: number;
+}
+
+/**
+ * Everything the application needs about an imported model.
+ *
+ * Statistics are computed IN THE WORKER, during the pass that already has the
+ * positions in cache, so the main thread never walks a multi-million-triangle
+ * buffer to fill in a details panel.
+ */
+export interface ModelImportResult {
+  /** Identifies the geometry that now lives in the worker. */
+  readonly handle: ModelHandle;
+  /** `binary` or `ascii`, as actually detected — never guessed from the name. */
+  readonly encoding: string;
+  /**
+   * The unit the source stated, or `undefined` when it stated none.
+   *
+   * Carried explicitly because the main thread no longer holds the mesh and so
+   * cannot read its metadata. `undefined` is meaningful — STL has no unit field
+   * — and must not be flattened into a default on the way across.
+   */
+  readonly unit: string | undefined;
+  readonly bounds: MeshBounds | undefined;
+  readonly triangleCount: number;
+  readonly vertexCount: number;
+  readonly render: RenderSnapshot;
   readonly warnings: readonly Diagnostic[];
   /** Structural validation summary. The import already passed the gate. */
   readonly validation: MeshValidationSummary;
+  /** Bytes of authoritative geometry the worker now holds for this model. */
+  readonly residentBytes: number;
 }
 
 export interface MeshValidationSummary {
@@ -103,9 +146,68 @@ export interface MeshValidationSummary {
 
 /* -------------------------------------------------------------- stl export -- */
 
-export interface StlExportPayload {
-  readonly mesh: CanonicalMesh;
+/**
+ * Export names a resident model rather than carrying geometry.
+ *
+ * This is the whole point of the resident runtime: Stage 1 structured-cloned
+ * the entire canonical mesh from the main thread into the worker on every
+ * export — about 96 MiB for a two-million-triangle model. Now nothing larger
+ * than a handle crosses the boundary.
+ */
+export interface ModelExportPayload {
+  readonly handle: ModelHandle;
   readonly encoding: string;
+}
+
+/**
+ * Topology analysis names a resident model rather than sending one.
+ *
+ * WHAT ACTUALLY CROSSES, precisely:
+ *
+ *   main → worker   a handle, a revision, and configuration. Nothing else. The
+ *                   main thread never sends canonical geometry into the worker
+ *                   for analysis, because it does not hold any.
+ *   worker → main   counts, statuses, and BOUNDED DIAGNOSTIC SAMPLES. The
+ *                   samples are geometry-derived on purpose — sampled vertex
+ *                   positions and edge endpoints exist so the viewport can draw
+ *                   the defects — and they are capped by `sampleLimit`, not by
+ *                   mesh size.
+ *
+ * Authoritative canonical geometry stays worker-resident throughout and is never
+ * returned by this operation. Render snapshots are a separate, separately
+ * defined transfer and are likewise not the authoritative geometry.
+ *
+ * "No geometry crosses the boundary" would be a convenient thing to say here
+ * and it would be false: bounded samples are geometry, deliberately.
+ *
+ * The handle carries the revision the caller believes it is analysing, so an
+ * analysis queued against a model that has since been replaced fails rather
+ * than silently producing a report for different geometry.
+ */
+export interface ModelAnalyzePayload {
+  readonly handle: ModelHandle;
+  /** Caps retained detail samples per category. */
+  readonly sampleLimit?: number;
+}
+
+/**
+ * The report, plus the identity it was computed for.
+ *
+ * `handle` is echoed so a consumer can discard a late report belonging to a
+ * model it has already replaced — the application cannot rely on arrival order.
+ */
+export interface ModelAnalyzeResult {
+  readonly handle: ModelHandle;
+  readonly report: TopologyReport;
+  readonly detail: TopologyDetail;
+}
+
+export interface ModelReleasePayload {
+  readonly modelId: string;
+}
+
+export interface ModelReleaseResult {
+  readonly released: boolean;
 }
 
 export interface StlExportResult {
@@ -113,6 +215,8 @@ export interface StlExportResult {
   readonly bytes: ArrayBufferLike;
   readonly byteLength: number;
   readonly encoding: string;
+  /** Non-fatal findings, e.g. grouping that the chosen encoding cannot carry. */
+  readonly warnings: readonly Diagnostic[];
 }
 
 export type OperationName = keyof OperationMap;

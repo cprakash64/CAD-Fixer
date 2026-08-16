@@ -8,22 +8,24 @@ exported entirely in the browser using Web Workers, WebAssembly, and your own
 CPU and GPU. There is no server-side geometry processing, no upload endpoint,
 and no analytics.
 
-> **Current status: Stage 1 — STL import, viewing, and export.**
-> You can open a binary or ASCII STL file, inspect it in a real 3D viewport, and
-> export it again as binary or ASCII STL, entirely on your own machine. **None
-> of the five workflows is implemented yet** — see
-> [What is and is not implemented](#what-is-and-is-not-implemented). Nothing in
-> this repository fakes a working feature.
+> **Current status: Stage 2 — STL import, viewing, export, and topology
+> diagnostics.**
+> You can open a binary or ASCII STL file, inspect it in a real 3D viewport,
+> read a full topology report about it, highlight its defects in 3D, and export
+> it again — entirely on your own machine. **None of the five workflows is
+> implemented yet**: diagnostics tell you what is wrong, and nothing repairs it.
+> See [What is and is not implemented](#what-is-and-is-not-implemented). Nothing
+> in this repository fakes a working feature.
 
 ## Planned workflows
 
-| Workflow | Purpose                                                 | Status          |
-| -------- | ------------------------------------------------------- | --------------- |
-| Repair   | Close holes, fix normals, resolve non-manifold geometry | Not implemented |
-| Convert  | Translate between STL, OBJ, and 3MF                     | Not implemented |
-| Split    | Cut oversized models into parts and add connectors      | Not implemented |
-| Texture  | Apply surface displacement patterns                     | Not implemented |
-| Hollow   | Hollow solid models and place drainage holes            | Not implemented |
+| Workflow | Purpose                                                 | Status                        |
+| -------- | ------------------------------------------------------- | ----------------------------- |
+| Repair   | Close holes, fix normals, resolve non-manifold geometry | Diagnosis only; no repair yet |
+| Convert  | Translate between STL, OBJ, and 3MF                     | Not implemented               |
+| Split    | Cut oversized models into parts and add connectors      | Not implemented               |
+| Texture  | Apply surface displacement patterns                     | Not implemented               |
+| Hollow   | Hollow solid models and place drainage holes            | Not implemented               |
 
 Target formats: **STL, OBJ, 3MF**.
 
@@ -85,6 +87,19 @@ running first.
   high-DPI handling, and correct GPU resource disposal when a model is replaced.
 - **Model statistics** — triangle and vertex counts, file size, encoding,
   bounding box and radius, and unit status.
+- **Topology diagnostics**, run automatically after import, in the worker:
+  recovered vertices and edges, connected components, boundary edges and their
+  loop/chain/branched structure, non-manifold edges, non-manifold vertices
+  (including bow-tie points that edge-only checks miss), winding conflicts,
+  duplicate and degenerate faces, Euler characteristic, surface area, and
+  algebraic signed volume. Connectivity is recovered from **exact stored
+  coordinates** — no tolerance welding, and the mesh is never modified. See
+  [ADR 0009](docs/adr/0009-exact-topology-recovery.md).
+- **A Mesh Health panel** reporting all of the above with per-component detail,
+  and **viewport overlays** highlighting boundary edges, non-manifold edges,
+  winding conflicts, and degenerate triangles.
+- **Analysis progress and cancellation**, with a report that can never be
+  attached to a model it does not describe.
 - **STL export**, binary and ASCII, written locally with no network involvement
   and no gating. Both writers round-trip exactly through our own parser, which
   is asserted in tests.
@@ -119,11 +134,18 @@ running first.
   OpenCascade — these need licence and WASM-portability evaluation first. The
   licence question is per-kernel (and for CGAL, per package); see
   [Geometry kernel licensing](docs/DEPENDENCIES.md#geometry-kernel-licensing).
-- **No topological validation.** Structural validation checks buffer and index
-  integrity. A model reported as _structurally valid_ is **not** thereby
-  watertight, manifold, or printable, and the interface says so. Manifoldness,
-  boundary edges, self-intersection, and orientation consistency are not
-  implemented.
+- **No self-intersection detection.** No triangle/triangle intersection test
+  exists. A model with zero topological defects can still pass through itself,
+  and the interface says so on every report rather than in a footnote.
+- **No wall-thickness analysis**, and therefore **no printability verdict**. The
+  report's printability status is never "printable"; the most it says is "not
+  yet determined".
+- **No tolerance welding.** Two corners one float apart are two vertices, and
+  the edge between them is reported as a boundary. That is what the file says.
+  A future repair step will offer welding explicitly, with a stated tolerance
+  and an undo — not as an invisible side effect of opening a file.
+- **No mesh repair of any kind.** Diagnostics identify defects; nothing fixes
+  them.
 - **No units for STL.** STL files carry no unit, so CAD Fixer reports
   "Unspecified by STL" rather than assuming millimetres.
 - **No accounts, authentication, payments, pricing, or download gating.** Usage

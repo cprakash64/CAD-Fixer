@@ -25,7 +25,7 @@ import { useModelImport } from '../state/use-model-import';
  */
 export function ImportDropZone(): ReactNode {
   const store = useWorkspaceStore();
-  const { importProgress } = useWorkspaceState();
+  const { importProgress, geometrySessionLost } = useWorkspaceState();
   const { importFile, cancelImport, isImporting } = useModelImport();
   const inputRef = useRef<HTMLInputElement>(null);
   const [isDragging, setDragging] = useState(false);
@@ -133,6 +133,13 @@ export function ImportDropZone(): ReactNode {
           }}
         />
       </div>
+
+      {geometrySessionLost !== undefined ? (
+        <p className="import__lost" role="alert" data-testid="session-lost">
+          The geometry session was lost: {geometrySessionLost} The model was held in memory by that
+          worker and cannot be recovered. Open the file again to continue.
+        </p>
+      ) : null}
 
       {isImporting ? (
         <div className="import__progress" data-testid="import-progress">

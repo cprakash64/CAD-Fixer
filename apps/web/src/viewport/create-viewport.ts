@@ -17,6 +17,12 @@ import {
   WebGLRenderer,
 } from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import {
+  createOverlays,
+  type OverlayHandle,
+  type OverlaySamples,
+  type OverlayVisibility,
+} from './create-overlays';
 
 /**
  * The 3D workspace viewport.
@@ -38,9 +44,14 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
  */
 
 export interface ViewportModel {
-  /** Canonical positions. Referenced, never copied or modified. */
+  /**
+   * Render-snapshot positions, three vertices per triangle, drawn NON-INDEXED.
+   *
+   * These are display buffers owned by the main thread, not the authoritative
+   * geometry — that stays in the worker. No index buffer is supplied because
+   * STL soup indices are 0,1,2,3,… and a non-indexed draw assumes exactly that.
+   */
   readonly positions: Float32Array;
-  readonly indices: Uint32Array;
   /** Normals derived from geometry in the worker. Display data. */
   readonly normals: Float32Array;
   /** Bounding box centre in model coordinates. */
@@ -51,13 +62,31 @@ export interface ViewportModel {
   readonly revision: number;
 }
 
+/**
+ * Diagnostic samples to draw over the model.
+ *
+ * `revision` names the model these belong to. The viewport refuses samples
+ * whose revision does not match the model it is currently showing — an analysis
+ * that finishes after the user has already imported a different file must not
+ * decorate the new model with the old one's defects.
+ */
+export interface ViewportOverlayData {
+  readonly samples: OverlaySamples;
+  readonly visibility: OverlayVisibility;
+  readonly revision: number;
+}
+
 export interface ViewportHandle {
   /** Replaces the displayed model, disposing whatever was there. */
   setModel(model: ViewportModel | undefined): void;
+  /** Replaces the diagnostic overlays. `undefined` clears them. */
+  setOverlays(data: ViewportOverlayData | undefined): void;
   /** Frames the current model. No-op when the workspace is empty. */
   fitView(): void;
   /** Number of GPU-backed objects currently in the scene. For leak tests. */
   readonly renderedObjectCount: number;
+  /** Overlay objects currently in the scene. For leak tests. */
+  readonly overlayObjectCount: number;
   dispose(): void;
 }
 
@@ -121,6 +150,14 @@ export function createViewport(
   const modelGroup = new Group();
   scene.add(modelGroup);
 
+  // Overlays are added to the SAME group as the model, so the display-only
+  // centring offset applies to both by construction. Registering them any other
+  // way — a sibling group with its own copy of the offset, or coordinates
+  // adjusted at build time — would leave two places that have to agree, and they
+  // would eventually not.
+  const overlays: OverlayHandle = createOverlays();
+  modelGroup.add(overlays.group);
+
   let currentMesh: Mesh<BufferGeometry, MeshStandardMaterial> | undefined;
   let currentModel: ViewportModel | undefined;
   let disposed = false;
@@ -137,7 +174,11 @@ export function createViewport(
   const publishRenderStats = (): void => {
     canvas.dataset.drawCalls = String(renderer.info.render.calls);
     canvas.dataset.renderedTriangles = String(renderer.info.render.triangles);
-    canvas.dataset.modelObjects = String(modelGroup.children.length);
+    // The overlay group is a permanent child of `modelGroup`, so it is excluded
+    // here: this number must stay at one loaded model no matter how many models
+    // or overlays have come and gone.
+    canvas.dataset.modelObjects = String(modelGroup.children.length - 1);
+    canvas.dataset.overlayObjects = String(overlays.objectCount);
   };
 
   const render = (): void => {
@@ -200,6 +241,10 @@ export function createViewport(
 
   const setModel = (model: ViewportModel | undefined): void => {
     disposeCurrentMesh();
+    // Overlays describe the model being replaced. Clearing them here rather
+    // than waiting for the next report means there is no frame in which one
+    // model's geometry is drawn under another model's defects.
+    overlays.setSamples(undefined, undefined);
     currentModel = model;
 
     if (model === undefined) {
@@ -210,13 +255,11 @@ export function createViewport(
     }
 
     const geometry = new BufferGeometry();
-    // The canonical position buffer is REFERENCED, not copied: one Float32Array
-    // backs both the workspace's canonical mesh and the GPU attribute. Three.js
-    // uploads it and does not write to it, and nothing here calls a geometry
-    // transform, so the canonical coordinates stay exactly as parsed.
+    // The render snapshot's buffers are REFERENCED, not copied again: they were
+    // transferred here from the worker and belong to the main thread now.
+    // Three.js uploads them and does not write to them.
     geometry.setAttribute('position', new BufferAttribute(model.positions, 3));
     geometry.setAttribute('normal', new BufferAttribute(model.normals, 3));
-    geometry.setIndex(new BufferAttribute(model.indices, 1));
 
     // ASSIGNED, NOT COMPUTED — do not delete this.
     //
@@ -273,11 +316,40 @@ export function createViewport(
   observer.observe(container);
   resize();
 
+  /**
+   * Installs diagnostic overlays for the CURRENT model only.
+   *
+   * The revision check is the last line of defence against a stale report. The
+   * application already gates on handles, but this is the layer that would
+   * actually put the wrong lines on screen, so it verifies rather than trusting
+   * that everything upstream got it right.
+   */
+  const setOverlays = (data: ViewportOverlayData | undefined): void => {
+    if (data === undefined || currentModel === undefined) {
+      overlays.setSamples(undefined, undefined);
+      render();
+      return;
+    }
+    if (data.revision !== currentModel.revision) {
+      overlays.setSamples(undefined, undefined);
+      render();
+      return;
+    }
+
+    overlays.setSamples(data.samples, currentModel.positions);
+    overlays.setVisibility(data.visibility);
+    render();
+  };
+
   return {
     setModel,
+    setOverlays,
     fitView,
     get renderedObjectCount(): number {
-      return modelGroup.children.length;
+      return modelGroup.children.length - 1;
+    },
+    get overlayObjectCount(): number {
+      return overlays.objectCount;
     },
     dispose(): void {
       disposed = true;
@@ -286,6 +358,7 @@ export function createViewport(
       controls.removeEventListener('change', render);
       controls.dispose();
       disposeCurrentMesh();
+      overlays.dispose();
       grid.geometry.dispose();
       disposeMaterial(grid);
       axes.geometry.dispose();

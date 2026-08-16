@@ -12,7 +12,9 @@
     "apps/*"
   ],
   "scripts": {
+    "check:node": "node scripts/check-node-version.js",
     "dev": "npm run dev --workspace @cadfixer/web",
+    "prebuild": "npm run check:node",
     "build": "npm run build --workspace @cadfixer/web",
     "preview": "npm run preview --workspace @cadfixer/web",
     "typecheck": "tsc --noEmit -p tsconfig.json && npm run typecheck --workspaces --if-present",
@@ -20,11 +22,15 @@
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
+    "pretest": "npm run check:node",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
     "bench:stl": "vitest run --config vitest.bench.config.ts",
-    "verify": "npm run format:check && npm run lint && npm run typecheck && npm run test && npm run build"
+    "preverify": "npm run check:node",
+    "verify": "npm run format:check && npm run lint && npm run typecheck && npm run test && npm run build",
+    "bench:topology": "vitest run --config vitest.bench.config.ts scripts/topology.bench-suite.ts",
+    "bench:pipeline": "vitest run --config vitest.bench.config.ts scripts/pipeline.bench-suite.ts"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

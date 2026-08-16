@@ -492,10 +492,20 @@ describe('hostile and malformed input', () => {
     await expectAppError(() => readStl(bytes, testContext()), AppErrorCode.MalformedFile);
   });
 
-  it('parses a long ASCII file in linear time', async () => {
-    // A guard against accidentally reintroducing quadratic scanning or a
-    // backtracking regex. Asserting the shape of the work, not a wall-clock
-    // threshold, so it cannot flake on a slow machine.
+  it('parses a many-thousand-facet ASCII file without stalling or mis-counting', async () => {
+    // RENAMED, deliberately. This was called "parses a long ASCII file in
+    // linear time" and measured no time at all — it would have passed against a
+    // quadratic scanner or a backtracking regex at this size, so the name
+    // promised a guarantee the assertions never checked.
+    //
+    // What it actually verifies is that a large, well-formed ASCII input parses
+    // to completion with the right facet count. That is worth having. The
+    // linear-time property is established structurally instead: the scanner has
+    // a single monotonically advancing cursor and there is no regular
+    // expression anywhere in the parse path. Complexity is measured, not
+    // asserted, by `npm run bench:stl` — see docs/PERFORMANCE_BASELINE.md, where
+    // the ASCII throughput figures across 1/10/50 MiB inputs would expose
+    // super-linear behaviour immediately.
     const many = Array.from({ length: 4000 }, (_unused, index) => triangleAt(index));
     const bytes = buildAsciiStl(many);
 

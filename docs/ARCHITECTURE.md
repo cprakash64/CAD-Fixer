@@ -1,6 +1,7 @@
 # CAD Fixer Architecture
 
-Status: Stage 1 (STL import, viewing, and export). This document describes the
+Status: Stage 2 (STL import, viewing, export, and read-only topology
+diagnostics). This document describes the
 architecture as built, plus the intended shape of layers that do not exist yet.
 Where a layer is not implemented, its responsibilities are defined so that later
 work has somewhere to go, and it is labelled as such.
@@ -43,8 +44,8 @@ Four constraints shape every decision below.
       ┌──────────────────────────────────▼──────────────────────────────────┐
       │                        Geometry worker thread                        │
       │  ┌────────────────────────┐      ┌──────────────────────────────┐    │
-      │  │ STL codec + seams      │      │ Geometry operations          │    │
-      │  │ packages/file-formats  │      │ (not implemented)            │    │
+      │  │ STL codec + seams      │      │ Read-only topology analysis  │    │
+      │  │ packages/file-formats  │      │ packages/mesh-topology       │    │
       │  └───────────┬────────────┘      └──────────────┬───────────────┘    │
       │              │                                  │                    │
       │  ┌───────────▼──────────────────────────────────▼───────────────┐    │
@@ -81,6 +82,7 @@ browser dependency creeping in breaks the test run.
 | `apps/web/src/workers`      | Worker entry point; wires handlers to the host               | Business logic beyond registration          |
 | `packages/geometry-runtime` | Protocol, coordinator, worker host, cancellation, transfers  | DOM, React, Three.js, geometry algorithms   |
 | `packages/mesh-core`        | Canonical mesh contract, structural validation               | File formats, rendering, algorithms         |
+| `packages/mesh-topology`    | Read-only topology recovery, diagnostics, area/volume        | Mutating geometry, welding, UI, rendering   |
 | `packages/file-formats`     | Format descriptors, screening, budgets, the STL codec        | UI, rendering, worker protocol              |
 | `packages/shared`           | Typed errors, units, ids, cancellation primitive             | Everything domain-specific                  |
 
@@ -88,7 +90,7 @@ Dependency direction is strictly one way:
 
 ```
 shared ← mesh-core ← file-formats
-shared ← mesh-core ← geometry-runtime
+shared ← mesh-core ← mesh-topology ← geometry-runtime
 all of the above ← apps/web
 ```
 
@@ -104,9 +106,13 @@ rules themselves are covered end to end.
 
 `geometry-runtime` gained its `mesh-core` dependency in Stage 1: the operation
 map is a compile-time contract, and geometry operations genuinely speak
-`CanonicalMesh`. It deliberately does **not** depend on `file-formats` — codecs
-stay behind the worker's operation handlers, so the protocol never knows which
-formats exist.
+`CanonicalMesh`. Stage 2 added a **type-only** `mesh-topology` dependency for
+the same reason — `model/analyze` returns a `TopologyReport`, and describing it
+as `unknown` would put an unchecked contract on a module boundary that two
+threads have to agree about. Type-only, so no topology code enters the
+main-thread bundle. It deliberately does **not** depend on `file-formats` —
+codecs stay behind the worker's operation handlers, so the protocol never knows
+which formats exist.
 
 ## 4. File ingestion
 
@@ -133,8 +139,33 @@ The production import path, as implemented for STL:
    gate**: the import succeeds only if `assertMeshStructure` passes.
 8. **Derive display data** — bounds and render normals, computed in the worker
    so the main thread never walks the mesh.
-9. **Transfer back** — canonical buffers and render normals are moved, not
-   cloned, and installed in the workspace.
+9. **Commit as resident** — the canonical mesh is committed to the worker's
+   `ResidentModelStore` and STAYS THERE. Only a `ModelHandle` and a render
+   snapshot cross back to the main thread.
+
+### Geometry ownership
+
+**The worker owns authoritative geometry. The main thread owns pixels.**
+
+|             | Holds                                                | Why                                           |
+| ----------- | ---------------------------------------------------- | --------------------------------------------- |
+| Worker      | `CanonicalMesh` — positions + indices                | Every operation that reads geometry runs here |
+| Main thread | `ModelHandle` + render snapshot (positions, normals) | The GPU needs vertex data; nothing else does  |
+
+Stage 1 did the opposite: it transferred the canonical mesh to the main thread,
+so export had to structured-clone roughly 96 MiB back into the worker for a
+two-million-triangle model, and diagnostics, repair and booleans would each have
+paid the same toll. See
+[ADR 0008](adr/0008-worker-resident-geometry.md).
+
+A handle carries an id AND a revision. Operations name the revision they expect,
+so an operation queued against a model that has since been replaced fails loudly
+instead of silently applying to different geometry.
+
+Import is **transactional**: the candidate is parsed, validated and prepared
+before anything is committed, so a parse failure, a validation failure, a budget
+rejection or a cancellation leaves the previously resident model exactly as it
+was.
 
 Only STL is implemented. OBJ and 3MF have descriptors but no codec; the
 interface says so rather than starting an import that cannot finish. Capability
@@ -177,6 +208,59 @@ None are implemented. When they are, each must:
 Point 5 is the mechanism behind constraint 3. An operation that returns a mesh
 which fails validation has failed, and must surface `GEOMETRY_VALIDATION_FAILED`
 rather than hand the user a broken model.
+
+## 6a. Topology diagnostics
+
+Analysis follows the same shape as import and export, and for the same reason:
+presentation components must not sequence worker operations.
+
+```
+MeshHealthPanel  (presentation only — renders a report)
+      |
+useTopologyAnalysis  (React binding: starts, cancels, routes to the store)
+      |
+runtime/analysis-service  (framework-free: dispatch, phase translation,
+      |                    handle verification, cancel-after-result guard)
+      |
+GeometryClient.analyzeModel
+      |
+model/analyze  ->  worker  ->  ResidentModelStore.resolve  ->  mesh-topology
+```
+
+**Analysis starts automatically after a successful import**, because topology
+defects are the reason a user opens this tool and a button between them and the
+answer serves nobody. It is nonetheless _decoupled_ from import: analysis that is
+refused for want of memory, cancelled, or failed leaves the imported model fully
+loaded, renderable, and exportable. Diagnostics are additional information about
+a model, not a precondition for having one.
+
+### A report can only ever be shown beside the geometry it describes
+
+Three independent gates, because this is the failure that would look completely
+plausible on screen:
+
+1. **The service** compares the handle the worker echoes against the handle it
+   requested, and refuses a mismatch.
+2. **The store** refuses a report whose token is superseded _or_ whose handle
+   does not match the currently loaded model — either check alone would leave a
+   path open.
+3. **The viewport** compares the revision again before installing overlays, so
+   the layer that would actually draw the wrong lines verifies rather than trusts
+   its callers.
+
+Importing a new model clears the previous report and detail outright rather than
+flagging them stale: a report kept "just in case" is a report some later code
+path can render.
+
+### Exact counts, bounded samples
+
+The report carries **exact** counts for every category and **bounded** samples for
+visualisation. A mesh with two million boundary edges reports two million and
+ships at most `sampleLimit` of them, with a flag saying so — and the interface
+says "showing N of M" rather than implying the sample is the whole.
+
+The DOM has its own separate ceilings on rendered component and boundary rows, so
+a hostile model cannot turn an exact count into a million React children.
 
 ## 7. Web Workers
 

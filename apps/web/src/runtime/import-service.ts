@@ -1,6 +1,6 @@
 import { operationCancelled, unsupportedFile } from '@cadfixer/shared';
 import { screenFile } from '@cadfixer/file-formats';
-import type { StlImportResult } from '@cadfixer/geometry-runtime';
+import type { ModelImportResult } from '@cadfixer/geometry-runtime';
 import type { GeometryClient } from './geometry-client';
 
 /**
@@ -22,11 +22,12 @@ import type { GeometryClient } from './geometry-client';
  *   2. That buffer is TRANSFERRED to the worker, not copied. From the moment
  *      `dispatch` returns, the main thread's view is detached and reading it
  *      throws. Nothing here retains a reference to it afterwards.
- *   3. The worker returns the canonical mesh and render normals by transfer, so
- *      the parsed geometry is moved back rather than cloned.
+ *   3. The worker KEEPS the parsed geometry and returns a handle plus a render
+ *      snapshot, transferred rather than cloned. The main thread never holds the
+ *      authoritative mesh at all.
  *
- * Peak main-thread memory is therefore one file buffer OR one parsed mesh, not
- * both, and never two copies of either.
+ * Peak main-thread memory is therefore one file buffer OR one render snapshot,
+ * never the canonical mesh as well.
  */
 
 export const ImportPhase = {
@@ -51,7 +52,7 @@ export interface ImportCallbacks {
 }
 
 export interface ImportSession {
-  readonly promise: Promise<StlImportResult>;
+  readonly promise: Promise<ModelImportResult>;
   /** Cooperative. Safe to call at any point, including before the read starts. */
   cancel(): void;
 }
@@ -81,7 +82,7 @@ export function importStlFile(request: ImportRequest): ImportSession {
     callbacks?.onProgress?.(note === undefined ? { phase, fraction } : { phase, fraction, note });
   };
 
-  const run = async (): Promise<StlImportResult> => {
+  const run = async (): Promise<ModelImportResult> => {
     report(ImportPhase.Screening, 0);
 
     // Filename and declared size only. This is the same usability filter the
@@ -99,7 +100,7 @@ export function importStlFile(request: ImportRequest): ImportSession {
 
     report(ImportPhase.Parsing, 0.05);
 
-    const handle = client.importStl(
+    const handle = client.importModel(
       buffer,
       (update) => {
         const phase = update.fraction >= 0.85 ? ImportPhase.Validating : ImportPhase.Parsing;

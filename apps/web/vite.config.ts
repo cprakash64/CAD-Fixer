@@ -36,5 +36,24 @@ export default defineConfig({
   build: {
     target: 'es2022',
     sourcemap: true,
+    modulePreload: {
+      /**
+       * NO MODULE-PRELOAD POLYFILL.
+       *
+       * Vite injects a small polyfill that calls `fetch()` on the document's own
+       * `<link rel="modulepreload">` hrefs for browsers that do not support the
+       * hint. It is harmless in itself — same-origin, first-party assets only —
+       * but it put the single `fetch(` in the shipped bundle, and this project
+       * bans network APIs repo-wide so that "no code here can talk to a network"
+       * is a claim anyone can verify by grepping the build output. An exception
+       * that has to be explained every time it is found is worth more than the
+       * preload hint.
+       *
+       * Safe to disable: the application already requires cross-origin isolation
+       * and an ES2022 target, so every browser that can run it supports
+       * `modulepreload` natively.
+       */
+      polyfill: false,
+    },
   },
 });

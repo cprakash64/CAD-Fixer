@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import { AppHeader } from './components/AppHeader';
 import { ImportDropZone } from './components/ImportDropZone';
+import { MeshHealthPanel } from './components/MeshHealthPanel';
 import { ModelPanel } from './components/ModelPanel';
 import { RuntimePanel } from './components/RuntimePanel';
 import { StatusPanel } from './components/StatusPanel';
@@ -28,6 +29,13 @@ export function App(): ReactNode {
           <ViewportPanel />
           <ImportDropZone />
         </main>
+        {/* Diagnostics get their own column rather than sharing the sidebar:
+            the report is long, and burying it under the model facts would make
+            the numbers a user opens this tool for the hardest thing to reach.
+            The viewport keeps the middle and stays the working area. */}
+        <aside className="app__diagnostics">
+          <MeshHealthPanel />
+        </aside>
       </div>
       <StatusPanel />
     </div>

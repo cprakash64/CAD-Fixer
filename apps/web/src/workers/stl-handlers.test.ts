@@ -8,7 +8,7 @@ import {
 } from '@cadfixer/shared';
 import { IDENTITY_MATRIX4, type CanonicalMesh } from '@cadfixer/mesh-core';
 import type { OperationContext } from '@cadfixer/geometry-runtime';
-import { stlExportHandler, stlImportHandler } from './stl-handlers';
+import { modelExportHandler, modelImportHandler, residentModels } from './stl-handlers';
 
 /**
  * The worker handlers are thin, but they own two things nothing else does: the
@@ -55,7 +55,7 @@ async function rejection(run: () => Promise<unknown>): Promise<AppErrorCode | un
 
 describe('import handler', () => {
   it('parses a valid STL and reports what the worker measured', async () => {
-    const outcome = await stlImportHandler({ bytes: binaryStl(3) }, context());
+    const outcome = await modelImportHandler({ bytes: binaryStl(3) }, context());
 
     expect(outcome.value.encoding).toBe('binary');
     expect(outcome.value.triangleCount).toBe(3);
@@ -63,29 +63,31 @@ describe('import handler', () => {
     expect(outcome.value.validation.valid).toBe(true);
     expect(outcome.value.bounds).toBeDefined();
     // Derived in the worker precisely so the main thread never walks the mesh.
-    expect(outcome.value.renderNormals).toHaveLength(27);
+    expect(outcome.value.render.normals).toHaveLength(27);
   });
 
   it('transfers the mesh buffers instead of cloning them', async () => {
-    const outcome = await stlImportHandler({ bytes: binaryStl(2) }, context());
+    const outcome = await modelImportHandler({ bytes: binaryStl(2) }, context());
 
-    expect(outcome.transfer).toContain(outcome.value.mesh.positions.buffer);
-    expect(outcome.transfer).toContain(outcome.value.mesh.indices.buffer);
-    expect(outcome.transfer).toContain(outcome.value.renderNormals.buffer);
+    // Only the RENDER SNAPSHOT is transferred. The authoritative mesh stays
+    // resident in the worker, which is the whole point of the resident runtime.
+    expect(outcome.transfer).toContain(outcome.value.render.positions.buffer);
+    expect(outcome.transfer).toContain(outcome.value.render.normals.buffer);
+    expect(residentModels.has(outcome.value.handle)).toBe(true);
   });
 
   it('rejects a payload that is not a transferable buffer', async () => {
     // A malformed or hostile message must not reach the parser.
     const badPayload = { bytes: 'not a buffer' } as unknown as { bytes: ArrayBufferLike };
 
-    expect(await rejection(() => stlImportHandler(badPayload, context()))).toBe(
+    expect(await rejection(() => modelImportHandler(badPayload, context()))).toBe(
       AppErrorCode.MalformedFile,
     );
   });
 
   it('honours a budget override that LOWERS a limit', async () => {
     const outcome = await rejection(() =>
-      stlImportHandler({ bytes: binaryStl(10), budget: { maxTriangles: 2 } }, context()),
+      modelImportHandler({ bytes: binaryStl(10), budget: { maxTriangles: 2 } }, context()),
     );
 
     expect(outcome).toBe(AppErrorCode.ResourceLimitExceeded);
@@ -97,7 +99,7 @@ describe('import handler', () => {
     // belong to the sender rather than to the budget.
     const raised = { maxInputBytes: Number.MAX_SAFE_INTEGER, maxTriangles: 1e12 };
 
-    const outcome = await stlImportHandler({ bytes: binaryStl(2), budget: raised }, context());
+    const outcome = await modelImportHandler({ bytes: binaryStl(2), budget: raised }, context());
 
     // Still parses — the defaults are ample for two triangles — and the raised
     // ceiling had no effect, which the next assertion pins.
@@ -105,7 +107,7 @@ describe('import handler', () => {
   });
 
   it('ignores unknown and nonsensical override keys instead of trusting them', async () => {
-    const outcome = await stlImportHandler(
+    const outcome = await modelImportHandler(
       {
         bytes: binaryStl(2),
         budget: { notARealLimit: 1, maxTriangles: Number.NaN, maxVertices: -5 },
@@ -123,7 +125,7 @@ describe('import handler', () => {
     };
 
     expect(
-      await rejection(() => stlImportHandler({ bytes: binaryStl(2) }, context(cancelled))),
+      await rejection(() => modelImportHandler({ bytes: binaryStl(2) }, context(cancelled))),
     ).toBe(AppErrorCode.OperationCancelled);
   });
 });
@@ -146,7 +148,10 @@ describe('the structural validation gate', () => {
 
   it('refuses to export a structurally invalid mesh', async () => {
     const outcome = await rejection(() =>
-      stlExportHandler({ mesh: invalidMesh(), encoding: 'binary' }, context()),
+      modelExportHandler(
+        { handle: residentModels.commit(invalidMesh()), encoding: 'binary' },
+        context(),
+      ),
     );
 
     expect(outcome).toBe(AppErrorCode.GeometryValidationFailed);
@@ -160,7 +165,9 @@ describe('the structural validation gate', () => {
     };
 
     expect(
-      await rejection(() => stlExportHandler({ mesh: empty, encoding: 'binary' }, context())),
+      await rejection(() =>
+        modelExportHandler({ handle: residentModels.commit(empty), encoding: 'binary' }, context()),
+      ),
     ).toBe(AppErrorCode.GeometryValidationFailed);
   });
 
@@ -169,7 +176,10 @@ describe('the structural validation gate', () => {
     // that another tool would then choke on.
     let produced: unknown;
     try {
-      produced = await stlExportHandler({ mesh: invalidMesh(), encoding: 'ascii' }, context());
+      produced = await modelExportHandler(
+        { handle: residentModels.commit(invalidMesh()), encoding: 'ascii' },
+        context(),
+      );
     } catch {
       produced = undefined;
     }
@@ -186,7 +196,10 @@ describe('export handler', () => {
   };
 
   it.each(['binary', 'ascii'])('writes %s STL and transfers the result', async (encoding) => {
-    const outcome = await stlExportHandler({ mesh: validMesh, encoding }, context());
+    const outcome = await modelExportHandler(
+      { handle: residentModels.commit(validMesh), encoding },
+      context(),
+    );
 
     expect(outcome.value.encoding).toBe(encoding);
     expect(outcome.value.byteLength).toBeGreaterThan(0);
@@ -195,14 +208,17 @@ describe('export handler', () => {
 
   it('produces exactly 134 bytes for a one-triangle binary STL', () => {
     // 84-byte prefix plus one 50-byte facet.
-    return stlExportHandler({ mesh: validMesh, encoding: 'binary' }, context()).then((outcome) => {
+    return modelExportHandler(
+      { handle: residentModels.commit(validMesh), encoding: 'binary' },
+      context(),
+    ).then((outcome: { value: { byteLength: number } }) => {
       expect(outcome.value.byteLength).toBe(134);
     });
   });
 
   it('rejects an unknown encoding rather than guessing', async () => {
     const outcome = await rejection(() =>
-      stlExportHandler({ mesh: validMesh, encoding: 'gltf' }, context()),
+      modelExportHandler({ handle: residentModels.commit(validMesh), encoding: 'gltf' }, context()),
     );
 
     expect(outcome).toBeDefined();
@@ -211,7 +227,10 @@ describe('export handler', () => {
   it('does not mutate the mesh it was given', async () => {
     const before = [...validMesh.positions];
 
-    await stlExportHandler({ mesh: validMesh, encoding: 'binary' }, context());
+    await modelExportHandler(
+      { handle: residentModels.commit(validMesh), encoding: 'binary' },
+      context(),
+    );
 
     expect([...validMesh.positions]).toEqual(before);
   });

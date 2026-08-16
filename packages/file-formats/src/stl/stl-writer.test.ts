@@ -7,10 +7,38 @@ import {
   type CanonicalMesh,
 } from '@cadfixer/mesh-core';
 import { DEFAULT_IMPORT_BUDGET } from '../budget';
+import { estimateAsciiStlBytes } from './stl-writer';
+import { asciiToBytes } from './fixtures';
 import { BINARY_HEADER_BYTES, binaryStlByteLength, StlEncoding } from './detect';
-import { buildBinaryStl, testContext, triangleAt, UNIT_TRIANGLE, type Triangle } from './fixtures';
+import {
+  buildBinaryStl,
+  testContext,
+  triangleAt,
+  UNIT_TRIANGLE,
+  type RecordingContext,
+  type Triangle,
+} from './fixtures';
 import { readStl } from './stl-reader';
 import { writeAsciiStl, writeBinaryStl } from './stl-writer';
+
+/**
+ * Writers return `{ bytes, warnings }`. Most tests only care about the bytes, so
+ * these thin helpers keep the assertions readable; the warning-specific tests
+ * call the writers directly.
+ */
+async function binaryBytes(
+  mesh: CanonicalMesh,
+  context: RecordingContext = testContext(),
+): Promise<Uint8Array> {
+  return (await writeBinaryStl(mesh, context)).bytes;
+}
+
+async function asciiBytes(
+  mesh: CanonicalMesh,
+  context: RecordingContext = testContext(),
+): Promise<Uint8Array> {
+  return (await writeAsciiStl(mesh, context)).bytes;
+}
 
 /** Builds a canonical mesh by importing generated STL bytes, so the writers are
  * always fed exactly what the production import path produces. */
@@ -33,13 +61,13 @@ const SAMPLE: readonly Triangle[] = [
 
 describe('binary STL writer', () => {
   it('produces a file of exactly the right length', async () => {
-    const bytes = await writeBinaryStl(await meshFrom(SAMPLE), testContext());
+    const bytes = await binaryBytes(await meshFrom(SAMPLE), testContext());
 
     expect(bytes.byteLength).toBe(binaryStlByteLength(SAMPLE.length));
   });
 
   it('writes the triangle count as little-endian uint32', async () => {
-    const bytes = await writeBinaryStl(await meshFrom(SAMPLE), testContext());
+    const bytes = await binaryBytes(await meshFrom(SAMPLE), testContext());
     const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
 
     expect(view.getUint32(BINARY_HEADER_BYTES, true)).toBe(SAMPLE.length);
@@ -55,7 +83,7 @@ describe('binary STL writer', () => {
       )
     ).mesh;
 
-    const bytes = await writeBinaryStl(mesh, testContext());
+    const bytes = await binaryBytes(mesh, testContext());
     let header = '';
     for (let index = 0; index < BINARY_HEADER_BYTES; index += 1) {
       const byte = bytes[index] ?? 0;
@@ -67,7 +95,7 @@ describe('binary STL writer', () => {
   });
 
   it('writes zero for the attribute byte count', async () => {
-    const bytes = await writeBinaryStl(await meshFrom([UNIT_TRIANGLE]), testContext());
+    const bytes = await binaryBytes(await meshFrom([UNIT_TRIANGLE]), testContext());
     const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
 
     expect(view.getUint16(84 + 48, true)).toBe(0);
@@ -75,7 +103,7 @@ describe('binary STL writer', () => {
 
   it('computes facet normals from the geometry rather than trusting the source', async () => {
     const backwards: Triangle = { ...UNIT_TRIANGLE, normal: [0, 0, -1] };
-    const bytes = await writeBinaryStl(await meshFrom([backwards]), testContext());
+    const bytes = await binaryBytes(await meshFrom([backwards]), testContext());
     const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
 
     // Winding is counter-clockwise in the XY plane, so the true normal is +Z,
@@ -95,7 +123,7 @@ describe('binary STL writer', () => {
       ],
     };
 
-    const bytes = await writeBinaryStl(await meshFrom([degenerate]), testContext());
+    const bytes = await binaryBytes(await meshFrom([degenerate]), testContext());
     const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
 
     for (const offset of [84, 88, 92]) {
@@ -109,7 +137,7 @@ describe('binary STL writer', () => {
     const mesh = await meshFrom(SAMPLE);
     const before = [...mesh.positions];
 
-    await writeBinaryStl(mesh, testContext());
+    await binaryBytes(mesh, testContext());
 
     expect([...mesh.positions]).toEqual(before);
   });
@@ -130,6 +158,12 @@ describe('binary STL writer', () => {
   });
 });
 
+function decodeAscii(bytes: Uint8Array): string {
+  let text = '';
+  for (const byte of bytes) text += String.fromCharCode(byte);
+  return text;
+}
+
 describe('ASCII STL writer', () => {
   function decode(bytes: Uint8Array): string {
     let text = '';
@@ -140,8 +174,8 @@ describe('ASCII STL writer', () => {
   it('produces well-formed, deterministic output', async () => {
     const mesh = await meshFrom(SAMPLE);
 
-    const first = decode(await writeAsciiStl(mesh, testContext()));
-    const second = decode(await writeAsciiStl(mesh, testContext()));
+    const first = decode(await asciiBytes(mesh, testContext()));
+    const second = decode(await asciiBytes(mesh, testContext()));
 
     expect(first).toBe(second);
     expect(first.startsWith('solid cadfixer\n')).toBe(true);
@@ -153,7 +187,7 @@ describe('ASCII STL writer', () => {
   it('formats numbers without locale separators', async () => {
     // `toLocaleString` would emit "1,5" across much of Europe and silently
     // corrupt every exported file, so the writer must not depend on locale.
-    const text = decode(await writeAsciiStl(await meshFrom(SAMPLE), testContext()));
+    const text = decode(await asciiBytes(await meshFrom(SAMPLE), testContext()));
     const numbers = text.match(/-?\d\.\d+e[+-]\d+/g) ?? [];
 
     expect(numbers.length).toBeGreaterThan(0);
@@ -162,7 +196,7 @@ describe('ASCII STL writer', () => {
   });
 
   it('emits only ASCII bytes', async () => {
-    const bytes = await writeAsciiStl(await meshFrom(SAMPLE), testContext());
+    const bytes = await asciiBytes(await meshFrom(SAMPLE), testContext());
     for (const byte of bytes) expect(byte).toBeLessThan(128);
   });
 
@@ -174,14 +208,14 @@ describe('ASCII STL writer', () => {
       )
     ).mesh;
 
-    expect(decode(await writeAsciiStl(mesh, testContext()))).not.toContain('client-confidential');
+    expect(decode(await asciiBytes(mesh, testContext()))).not.toContain('client-confidential');
   });
 
   it('does not mutate the source mesh', async () => {
     const mesh = await meshFrom(SAMPLE);
     const before = [...mesh.positions];
 
-    await writeAsciiStl(mesh, testContext());
+    await asciiBytes(mesh, testContext());
 
     expect([...mesh.positions]).toEqual(before);
   });
@@ -197,8 +231,8 @@ describe('round trip through our own parser', () => {
   async function roundTrip(mesh: CanonicalMesh, encoding: StlEncoding): Promise<CanonicalMesh> {
     const bytes =
       encoding === StlEncoding.Binary
-        ? await writeBinaryStl(mesh, testContext())
-        : await writeAsciiStl(mesh, testContext());
+        ? await binaryBytes(mesh, testContext())
+        : await asciiBytes(mesh, testContext());
     const reimported = await readStl(bytes, testContext());
     expect(reimported.encoding).toBe(encoding);
     assertMeshStructure(reimported.mesh, `stl round trip (${encoding})`);
@@ -302,5 +336,160 @@ describe('round trip through our own parser', () => {
     }
 
     expect([...mesh.positions]).toEqual(expected);
+  });
+});
+
+/* ------------------------------------------------- ascii size policy (A5) -- */
+
+describe('ASCII self-round-trip policy', () => {
+  /**
+   * ASCII STL is ~5x the size of binary, so a model near the top of the
+   * supported range produces a file this application would then refuse to open.
+   * Emitting output that violates our own import contract is a trap the user
+   * only discovers on the way back in.
+   */
+  it('estimates conservatively — real output never exceeds the estimate', async () => {
+    // The property the whole policy rests on. If the estimate could
+    // under-shoot, the check would let through exactly the file it exists to
+    // prevent.
+    for (const count of [1, 2, 17, 500]) {
+      const triangles = Array.from({ length: count }, (_unused, index) => triangleAt(index));
+      const mesh = await meshFrom(triangles);
+
+      const produced = (await asciiBytes(mesh)).byteLength;
+
+      expect(produced).toBeLessThanOrEqual(estimateAsciiStlBytes(count));
+    }
+  });
+
+  it('holds even for coordinates with the widest possible exponents', async () => {
+    const extreme: readonly Triangle[] = [
+      {
+        normal: [0, 0, 1],
+        vertices: [
+          [-3.4e38, 1.4e-45, 3.4e38],
+          [3.4e38, -1.4e-45, -3.4e38],
+          [-1.17e-38, 1.17e38, -1.17e-38],
+        ],
+      },
+    ];
+    const mesh = await meshFrom(extreme);
+
+    expect((await asciiBytes(mesh)).byteLength).toBeLessThanOrEqual(estimateAsciiStlBytes(1));
+  });
+
+  it('refuses ASCII export whose output could not be re-imported', async () => {
+    const mesh = await meshFrom(SAMPLE);
+    // A budget under which this model's ASCII form would exceed what we accept
+    // back in.
+    const context = testContext({
+      budget: { ...DEFAULT_IMPORT_BUDGET, maxInputBytes: 200 },
+    });
+
+    try {
+      await writeAsciiStl(mesh, context);
+      expect.unreachable('expected the ASCII export to be refused');
+    } catch (caught) {
+      expect(isAppError(caught)).toBe(true);
+      if (!isAppError(caught)) return;
+      expect(caught.code).toBe(AppErrorCode.ResourceLimitExceeded);
+      expect(caught.details.operation).toBe('stl/export/ascii');
+      // And it tells the user what to do instead, rather than just refusing.
+      expect(caught.details.recommendedEncoding).toBe('binary');
+      expect(caught.message).toContain('binary');
+    }
+  });
+
+  it('still allows binary export of the same model', async () => {
+    // The recommendation has to be real: binary must actually fit where ASCII
+    // did not.
+    const mesh = await meshFrom(SAMPLE);
+    const context = testContext({
+      budget: { ...DEFAULT_IMPORT_BUDGET, maxInputBytes: 200 },
+    });
+
+    expect((await binaryBytes(mesh, context)).byteLength).toBe(84 + SAMPLE.length * 50);
+  });
+});
+
+/* ------------------------------------------------ multi-solid export (A6) -- */
+
+describe('group preservation on export', () => {
+  /** An ASCII source with two named solids, which import keeps as groups. */
+  async function groupedMesh(): Promise<CanonicalMesh> {
+    const solid = (name: string, offset: number): string =>
+      `solid ${name}\nfacet normal 0 0 1\nouter loop\n` +
+      `vertex ${String(offset)} 0 0\nvertex ${String(offset + 1)} 0 0\nvertex ${String(offset)} 1 0\n` +
+      `endloop\nendfacet\nendsolid ${name}\n`;
+    const bytes = asciiToBytes(`${solid('alpha', 0)}${solid('beta', 5)}`);
+    return (await readStl(bytes, testContext())).mesh;
+  }
+
+  it('writes one solid block per group instead of flattening them', async () => {
+    const mesh = await groupedMesh();
+    expect(mesh.groups).toHaveLength(2);
+
+    const text = decodeAscii(await asciiBytes(mesh));
+
+    expect(text.match(/^solid /gm)).toHaveLength(2);
+    expect(text.match(/^endsolid /gm)).toHaveLength(2);
+  });
+
+  it('round-trips group boundaries through our own parser', async () => {
+    const mesh = await groupedMesh();
+
+    const reimported = (await readStl(await asciiBytes(mesh), testContext())).mesh;
+
+    expect(reimported.groups).toHaveLength(2);
+    expect(reimported.groups?.[0]?.indexCount).toBe(3);
+    expect(reimported.groups?.[1]?.indexCount).toBe(3);
+    expect([...reimported.positions]).toEqual([...mesh.positions]);
+  });
+
+  it('uses generated names, never the source names', async () => {
+    // A solid name is user-controlled text that routinely holds a path or a
+    // project name. Copying it into an exported file would leak it onward.
+    const bytes = asciiToBytes(
+      'solid /home/alice/acme-prosthetic-v4\nfacet normal 0 0 1\nouter loop\n' +
+        'vertex 0 0 0\nvertex 1 0 0\nvertex 0 1 0\nendloop\nendfacet\nendsolid /home/alice/acme-prosthetic-v4\n',
+    );
+    const mesh = (await readStl(bytes, testContext())).mesh;
+
+    const text = decodeAscii(await asciiBytes(mesh));
+
+    expect(text).not.toContain('acme-prosthetic');
+    expect(text).not.toContain('/home/alice');
+  });
+
+  it('warns that ASCII export renamed the solids', async () => {
+    const result = await writeAsciiStl(await groupedMesh(), testContext());
+
+    expect(result.warnings.map((warning) => warning.code)).toContain('STL_GROUPS_RENAMED');
+  });
+
+  it('WARNS that binary export discards grouping rather than losing it silently', async () => {
+    // Binary STL has no multi-solid construct at all. The loss is real; saying
+    // so is the difference between documented and silent.
+    const result = await writeBinaryStl(await groupedMesh(), testContext());
+
+    const warning = result.warnings.find((entry) => entry.code === 'STL_GROUPS_FLATTENED');
+    expect(warning).toBeDefined();
+    expect(warning?.message).toContain('ASCII');
+    expect(warning?.details?.groupCount).toBe(2);
+  });
+
+  it('does not warn about grouping when there is none to lose', async () => {
+    const plain = await meshFrom(SAMPLE);
+
+    expect((await writeBinaryStl(plain, testContext())).warnings).toEqual([]);
+    expect((await writeAsciiStl(plain, testContext())).warnings).toEqual([]);
+  });
+
+  it('preserves every triangle across a grouped ASCII round trip', async () => {
+    const mesh = await groupedMesh();
+
+    const reimported = (await readStl(await asciiBytes(mesh), testContext())).mesh;
+
+    expect(triangleCount(reimported)).toBe(triangleCount(mesh));
   });
 });

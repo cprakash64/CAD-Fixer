@@ -28,6 +28,16 @@ export const AppErrorCode = {
   GeometryValidationFailed: 'GEOMETRY_VALIDATION_FAILED',
   /** The caller cancelled the operation. Not a defect. */
   OperationCancelled: 'OPERATION_CANCELLED',
+  /**
+   * The named model is not available: released, replaced by a newer revision,
+   * or lost because the geometry worker died.
+   *
+   * NOT an internal error. It is the expected outcome when an operation is
+   * queued against a model the user has since replaced, and the interface has
+   * to tell those two situations apart — "re-import your file" is useful advice,
+   * "CAD Fixer has a bug" is not.
+   */
+  ModelUnavailable: 'MODEL_UNAVAILABLE',
   /** A defect in CAD Fixer itself. */
   Internal: 'INTERNAL_ERROR',
 } as const;
@@ -150,6 +160,10 @@ export function geometryValidationFailed(message: string, details?: ErrorDetails
 
 export function operationCancelled(message = 'Operation cancelled.'): AppError {
   return new AppError(AppErrorCode.OperationCancelled, message);
+}
+
+export function modelUnavailable(message: string, details?: ErrorDetails): AppError {
+  return new AppError(AppErrorCode.ModelUnavailable, message, details ? { details } : {});
 }
 
 export function internalError(message: string, options?: AppErrorOptions): AppError {

@@ -172,28 +172,91 @@ test('loading many models does not grow the scene graph', async ({ page }) => {
 test('the main thread stays responsive while a large STL parses', async ({ page }) => {
   await page.goto('/');
 
-  // Big enough that parsing on the UI thread would visibly block. The assertion
-  // is not a millisecond threshold — those flake across machines — but that the
-  // page keeps responding to real input while the parse is in flight.
-  const { bytes } = binaryStl(900_000);
+  // WHY THIS SHAPE. The previous version of this test asserted that the progress
+  // indicator was still visible while it poked at the page — which is a race:
+  // on a fast machine the import finishes first and the assertion fails for a
+  // reason unrelated to responsiveness.
+  //
+  // Instead this measures the LONGEST GAP between consecutive animation frames
+  // across the whole import, and compares it against the import's own duration.
+  // That comparison is self-scaling: it has no millisecond threshold in it, and
+  // it fails hard for the one reason we care about. If parsing ran on the main
+  // thread, the frame loop would be starved for the entire parse, so the
+  // longest gap would approach the whole duration. With the parse in a worker,
+  // frames keep arriving at display cadence no matter how slow the machine is.
+  const { bytes, triangles } = binaryStl(900_000);
   await openFile(page, 'large.stl', bytes);
 
-  await expect(page.getByTestId('import-progress')).toBeVisible({ timeout: 20_000 });
+  // The sampler starts AFTER the file has been handed to the page. Playwright
+  // materialising a 45 MB File is its own multi-second main-thread stall, and
+  // measuring it would say nothing about our code.
+  //
+  // It also stops the moment the model appears. That bound matters: a
+  // measurement running past the import picks up a ~1 s stall that occurs after
+  // the model is already on screen — garbage collection of the detached file
+  // buffer and the ~75 MB of geometry that replaced it. That stall is real and
+  // recorded in docs/PERFORMANCE_BASELINE.md, but it has nothing to do with
+  // whether parsing blocked the interface, which is what this test exists to
+  // prove.
+  await page.evaluate(() => {
+    const gaps: number[] = [];
+    let previous = performance.now();
+    const startedAt = previous;
+    let running = true;
+    let finishedAt: number | undefined;
 
-  // Interact with the page while the worker is busy. If parsing were happening
-  // on the main thread these clicks could not be serviced until it finished.
-  let interactionsDuringParse = 0;
-  for (let attempt = 0; attempt < 5; attempt += 1) {
-    if (await page.getByTestId('import-progress').isVisible()) {
-      await page.getByTestId('workflow-repair').hover({ timeout: 2000 });
-      interactionsDuringParse += 1;
-    }
-  }
-  expect(interactionsDuringParse).toBeGreaterThan(0);
+    const tick = (): void => {
+      if (!running) return;
+      const now = performance.now();
+      if (finishedAt === undefined) gaps.push(now - previous);
+      previous = now;
+      requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
 
-  await expect(page.getByTestId('fact-triangles')).toHaveText((900_000).toLocaleString(), {
+    // The deterministic end of the import window: the moment the model's
+    // triangle count is in the document.
+    const observer = new MutationObserver(() => {
+      if (finishedAt !== undefined) return;
+      if (document.querySelector('[data-testid="fact-triangles"]') !== null) {
+        finishedAt = performance.now();
+        observer.disconnect();
+      }
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+
+    Object.assign(globalThis, {
+      __stopFrames: (): { frames: number; longestGapMs: number; durationMs: number } => {
+        running = false;
+        observer.disconnect();
+        return {
+          frames: gaps.length,
+          longestGapMs: gaps.length === 0 ? 0 : Math.max(...gaps),
+          durationMs: (finishedAt ?? performance.now()) - startedAt,
+        };
+      },
+    });
+  });
+
+  // Wait on the operation actually completing — a deterministic signal — rather
+  // than on a transient UI state.
+  await expect(page.getByTestId('fact-triangles')).toHaveText(triangles.toLocaleString(), {
     timeout: 120_000,
   });
+
+  const measurement = await page.evaluate(() =>
+    (
+      globalThis as unknown as {
+        __stopFrames: () => { frames: number; longestGapMs: number; durationMs: number };
+      }
+    ).__stopFrames(),
+  );
+
+  // The frame loop kept running throughout the import.
+  expect(measurement.frames).toBeGreaterThan(5);
+  // And no single stall came close to swallowing it. A main-thread parse would
+  // produce a gap on the order of the whole import duration.
+  expect(measurement.longestGapMs).toBeLessThan(measurement.durationMs / 3);
 });
 
 test('a cancelled import leaves the previous model in place', async ({ page }) => {
@@ -201,9 +264,25 @@ test('a cancelled import leaves the previous model in place', async ({ page }) =
   await openFile(page, 'keep-me.stl', binaryStl(500).bytes);
   await expect(page.getByTestId('fact-triangles')).toHaveText('500', { timeout: 20_000 });
 
+  // The cancel click is driven by a MutationObserver installed BEFORE the import
+  // starts, so it fires in the same microtask the control appears rather than on
+  // Playwright's polling interval. That removes the window in which a fast
+  // machine could finish the import before the test managed to click.
+  await page.evaluate(() => {
+    const clickWhenPresent = (): boolean => {
+      const button = document.querySelector<HTMLButtonElement>('[data-testid="cancel-import"]');
+      if (button === null) return false;
+      button.click();
+      return true;
+    };
+    if (clickWhenPresent()) return;
+    const observer = new MutationObserver(() => {
+      if (clickWhenPresent()) observer.disconnect();
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+  });
+
   await openFile(page, 'huge.stl', binaryStl(900_000).bytes);
-  await expect(page.getByTestId('import-progress')).toBeVisible({ timeout: 20_000 });
-  await page.getByTestId('cancel-import').click();
 
   await expect(page.getByTestId('status-list')).toContainText('cancelled', { timeout: 60_000 });
   await expect(page.getByTestId('fact-filename')).toHaveText('keep-me.stl');
