@@ -2,8 +2,14 @@
  * The five workflows CAD Fixer will offer.
  *
  * `implemented` is the single source of truth for whether a workflow can be
- * entered. Every entry is `false` in Stage 0 and the navigation renders from
- * this list, so a workflow cannot appear enabled until it genuinely exists.
+ * entered. The navigation renders from this list, so a workflow cannot appear
+ * enabled until it genuinely exists.
+ *
+ * REPAIR IS THE FIRST ONE TO FLIP, and its summary was rewritten when it did.
+ * The old wording promised closing openings and resolving non-manifold geometry;
+ * conservative repair does neither, and a navigation label that describes a
+ * capability the screen behind it does not have is the first false claim a user
+ * meets. See docs/repair/REPAIR_POLICY.md.
  */
 
 export const WorkflowId = {
@@ -28,8 +34,9 @@ export const WORKFLOWS: readonly WorkflowDescriptor[] = Object.freeze([
   {
     id: WorkflowId.Repair,
     label: 'Repair',
-    summary: 'Close holes, fix normals, and resolve non-manifold geometry.',
-    implemented: false,
+    summary:
+      'Conservative repair: remove exact duplicate and degenerate triangles, and unify relative face winding.',
+    implemented: true,
   },
   {
     id: WorkflowId.Convert,

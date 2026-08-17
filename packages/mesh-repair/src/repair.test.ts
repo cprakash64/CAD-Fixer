@@ -598,6 +598,115 @@ describe('CR25 scale', () => {
   });
 });
 
+/**
+ * THE ESTIMATOR IS CHECKED AGAINST REAL BUFFERS.
+ *
+ * `estimateRepairMemory` is what the worker's preflight refuses on, so an
+ * estimate that is wrong in the optimistic direction is not a reporting bug —
+ * it is a repair that gets past the guard and takes the tab with it.
+ *
+ * Compared against the ACTUAL typed arrays a repair produces, rather than
+ * against a hand-copied byte count that would drift the moment the canonical
+ * representation changed.
+ */
+describe('CR26 memory estimate against observed buffers', () => {
+  function gridWithDuplicates(faces: number): CanonicalMesh {
+    const triangles: (readonly [
+      readonly [number, number, number],
+      readonly [number, number, number],
+      readonly [number, number, number],
+    ])[] = [];
+    for (let i = 0; i < faces; i += 1) {
+      const x = (i % 64) * 2;
+      const y = Math.floor(i / 64) * 2;
+      const face = [
+        [x, y, 0],
+        [x + 1, y, 0],
+        [x, y + 1, 0],
+      ] as const;
+      triangles.push(face);
+      if (i % 4 === 0) triangles.push(face);
+    }
+    return soup(triangles);
+  }
+
+  it('models the candidate as the worst case, and the real one never exceeds it', () => {
+    const mesh = gridWithDuplicates(4_000);
+    const sourceReport = report(mesh);
+    const { plan } = planConservativeRepair({
+      mesh,
+      report: sourceReport,
+      modelId: 'm',
+      sourceRevision: 1,
+      requested: [RepairOperation.RemoveDuplicateFaces],
+    });
+    const outcome = repair(mesh, [RepairOperation.RemoveDuplicateFaces]);
+    const candidate = must(outcome.candidate, 'candidate');
+
+    const observedCandidateBytes = candidate.positions.byteLength + candidate.indices.byteLength;
+    const observedSourceBytes = mesh.positions.byteLength + mesh.indices.byteLength;
+
+    // The estimate assumes nothing is removed, so it equals the SOURCE size and
+    // is an upper bound on the candidate. Under-estimating here would be the
+    // dangerous direction.
+    expect(plan.memory.candidateBytes).toBe(observedSourceBytes);
+    expect(observedCandidateBytes).toBeLessThanOrEqual(plan.memory.candidateBytes);
+  });
+
+  it('models the inverse patch at no less than the patch actually built', () => {
+    const mesh = gridWithDuplicates(4_000);
+    const sourceReport = report(mesh);
+    const { plan } = planConservativeRepair({
+      mesh,
+      report: sourceReport,
+      modelId: 'm',
+      sourceRevision: 1,
+      requested: [RepairOperation.RemoveDuplicateFaces],
+    });
+    const outcome = repair(mesh, [RepairOperation.RemoveDuplicateFaces]);
+    const inverse = must(outcome.inverse, 'inverse patch');
+
+    expect(inverse.byteLength).toBeGreaterThan(0);
+    expect(plan.memory.inverseBytes).toBeGreaterThanOrEqual(inverse.byteLength);
+  });
+
+  it('counts BOTH meshes in the peak, because they coexist by design', () => {
+    // The coexistence is the safety property: M0 survives until commit succeeds.
+    // An estimate that counted only the candidate would under-report by roughly
+    // half, which is exactly the amount that decides whether a tab survives.
+    const mesh = gridWithDuplicates(4_000);
+    const sourceReport = report(mesh);
+    const { plan } = planConservativeRepair({
+      mesh,
+      report: sourceReport,
+      modelId: 'm',
+      sourceRevision: 1,
+      requested: [RepairOperation.RemoveDuplicateFaces],
+    });
+
+    const observedSourceBytes = mesh.positions.byteLength + mesh.indices.byteLength;
+
+    expect(plan.memory.peakBytes).toBeGreaterThan(observedSourceBytes * 2);
+    expect(plan.memory.peakBytes).toBe(
+      observedSourceBytes +
+        plan.memory.candidateBytes +
+        plan.memory.workspaceBytes +
+        plan.memory.validationBytes +
+        plan.memory.inverseBytes,
+    );
+  });
+
+  it('reports what a full copy would have cost, so the patch choice stays measurable', () => {
+    // Retained deliberately: for a repair that removes most of a mesh the patch
+    // is NOT smaller, and a future stage may want to choose per repair.
+    const mesh = gridWithDuplicates(1_000);
+    const outcome = repair(mesh, [RepairOperation.RemoveDuplicateFaces]);
+    const inverse = must(outcome.inverse, 'inverse patch');
+
+    expect(fullCopyBytes(mesh)).toBeGreaterThan(inverse.byteLength);
+  });
+});
+
 describe('invariant properties', () => {
   it('is unaffected by coordinate translation', () => {
     const base = concat(duplicateSameOrientation(), collinearTriangle());

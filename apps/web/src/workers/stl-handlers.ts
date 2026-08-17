@@ -19,7 +19,11 @@ import {
   type ImportBudget,
 } from '@cadfixer/file-formats';
 import { analyseTopology, estimateTopologyWorkspaceBytes } from '@cadfixer/mesh-topology';
-import { RepairCandidateStore } from '@cadfixer/geometry-runtime';
+import {
+  RepairCandidateStore,
+  RepairHistoryStore,
+  TopologyReportCache,
+} from '@cadfixer/geometry-runtime';
 import {
   checkImportPeak,
   estimateImportPeak,
@@ -65,6 +69,26 @@ registerBuiltInFormats();
  */
 export const repairCandidates = new RepairCandidateStore();
 
+/**
+ * Undo information for repairs that have already been committed.
+ *
+ * Held in the worker for the same reason the models are: undo restores
+ * AUTHORITATIVE geometry, and the main thread holds none. Exactly one repair per
+ * model is reversible — see `repair-history.ts` for why a deeper stack was not
+ * built here.
+ */
+export const repairHistory = new RepairHistoryStore();
+
+/**
+ * The latest topology report per resident model.
+ *
+ * Analysis runs automatically on import and repair is planned from its result,
+ * so without this the same unchanged mesh was analysed once to diagnose it,
+ * again to plan a repair, and a third time to build a candidate. Keyed by
+ * revision, so a report is never reused for geometry it does not describe.
+ */
+export const topologyReports = new TopologyReportCache();
+
 export const residentModels = new ResidentModelStore();
 
 /**
@@ -78,7 +102,7 @@ export const residentModels = new ResidentModelStore();
  * This is what makes cancellation real. The cancel message is queued behind the
  * running handler; yielding is the only thing that lets the worker read it.
  */
-function yieldToEventLoop(): Promise<void> {
+export function yieldToEventLoop(): Promise<void> {
   return new Promise<void>((resolve) => {
     const channel = new MessageChannel();
     channel.port1.onmessage = (): void => {
@@ -289,7 +313,13 @@ export const modelExportHandler: OperationHandler<'model/export'> = async (paylo
 };
 
 export const modelReleaseHandler: OperationHandler<'model/release'> = (payload) => {
-  const released = residentModels.release(payload.modelId as ModelId);
+  const modelId = payload.modelId as ModelId;
+  const released = residentModels.release(modelId);
+  // The repair history for a released model describes geometry that no longer
+  // exists. Retaining its inverse patch would hold bytes for a repair nothing
+  // can reverse, and its report would describe a mesh nothing can resolve.
+  repairHistory.releaseModel(modelId);
+  topologyReports.release(modelId);
   const value: ModelReleaseResult = { released };
   return Promise.resolve({ value });
 };
@@ -335,6 +365,11 @@ export const modelAnalyzeHandler: OperationHandler<'model/analyze'> = async (pay
   // analysis is still observed rather than being overtaken by the result.
   await yieldToEventLoop();
   throwIfCancelled(context.cancellation);
+
+  // Retained for the repair workflow, which is planned from a report and would
+  // otherwise recompute this one immediately. Stored against the handle, so it
+  // is returned only for the revision it actually describes.
+  topologyReports.set(payload.handle, result.report);
 
   const value: ModelAnalyzeResult = {
     // Echoed so a late report can be matched against the model the application

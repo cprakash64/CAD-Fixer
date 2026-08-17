@@ -10,6 +10,13 @@ import {
   type ModelHandle,
   type ModelImportResult,
   type ModelReleaseResult,
+  type RepairCandidateHandle,
+  type RepairCandidateResult,
+  type RepairCommitResult,
+  type RepairDiscardResult,
+  type RepairOperation,
+  type RepairPlanOperationResult,
+  type RepairUndoResult,
   type StlExportResult,
 } from '@cadfixer/geometry-runtime';
 import { modelUnavailable } from '@cadfixer/shared';
@@ -205,6 +212,104 @@ export class GeometryClient {
       sampleLimit === undefined ? { handle } : { handle, sampleLimit },
       { onProgress },
     );
+  }
+
+  /**
+   * Asks what a conservative repair WOULD do, without allocating anything.
+   *
+   * Planning is separate from creating a candidate on purpose: the user must be
+   * able to see which operations apply, which are refused and why, and what the
+   * repair would cost, before any memory is committed.
+   *
+   * `memoryBudgetBytes` may only NARROW the worker's own ceiling. The worker
+   * enforces that; a message cannot buy itself more memory.
+   */
+  public planRepair(
+    handle: ModelHandle,
+    requested: readonly RepairOperation[],
+    onProgress: (update: ProgressUpdate) => void,
+    memoryBudgetBytes?: number,
+  ): OperationHandle<RepairPlanOperationResult> {
+    return this.coordinator.dispatch(
+      'repair/plan',
+      memoryBudgetBytes === undefined
+        ? { handle, requested }
+        : { handle, requested, memoryBudgetBytes },
+      { onProgress },
+    );
+  }
+
+  /**
+   * Builds and validates a repair CANDIDATE. The model is not touched.
+   *
+   * What returns is a candidate handle, the validation verdict, exact change
+   * counts, bounded change samples, and a render snapshot for the preview. The
+   * candidate's canonical geometry stays worker-resident exactly as the
+   * authoritative model's does.
+   */
+  public createRepairCandidate(
+    handle: ModelHandle,
+    requested: readonly RepairOperation[],
+    planHash: string,
+    onProgress: (update: ProgressUpdate) => void,
+    options: { readonly memoryBudgetBytes?: number; readonly sampleLimit?: number } = {},
+  ): OperationHandle<RepairCandidateResult> {
+    return this.coordinator.dispatch(
+      'repair/create-candidate',
+      {
+        handle,
+        requested,
+        planHash,
+        ...(options.memoryBudgetBytes === undefined
+          ? {}
+          : { memoryBudgetBytes: options.memoryBudgetBytes }),
+        ...(options.sampleLimit === undefined ? {} : { sampleLimit: options.sampleLimit }),
+      },
+      { onProgress },
+    );
+  }
+
+  /**
+   * Applies a validated candidate, producing a new revision.
+   *
+   * THE TRANSACTION LIVES IN THE WORKER. This method sends three identifiers and
+   * nothing else; every guard — revision currency, candidate state, validation
+   * acceptance, plan identity, single use — is re-checked there. The UI cannot
+   * talk its way past any of them, which is the point.
+   */
+  public commitRepair(
+    candidate: RepairCandidateHandle,
+    expectedSource: ModelHandle,
+    planHash: string,
+    onProgress: (update: ProgressUpdate) => void,
+  ): OperationHandle<RepairCommitResult> {
+    return this.coordinator.dispatch(
+      'repair/commit',
+      { candidate, expectedSource, planHash },
+      { onProgress },
+    );
+  }
+
+  /** Releases a candidate's worker-resident geometry. */
+  public discardRepairCandidate(
+    candidate: RepairCandidateHandle,
+  ): OperationHandle<RepairDiscardResult> {
+    return this.coordinator.dispatch('repair/discard', { candidate });
+  }
+
+  /**
+   * Reverses a committed repair, producing another new revision.
+   *
+   * Not a view change and not a React-held copy: the worker rebuilds the
+   * previous geometry from the inverse patch it retained, validates it, and
+   * swaps it in as a new monotonic revision. See ADR 0011.
+   */
+  public undoRepair(
+    handle: ModelHandle,
+    recordId: string,
+    onProgress: (update: ProgressUpdate) => void,
+  ): OperationHandle<RepairUndoResult> {
+    return this.coordinator.dispatch('repair/undo', { handle, recordId }, { onProgress });
   }
 
   /** Frees a model the application no longer displays. */

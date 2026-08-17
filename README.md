@@ -8,24 +8,49 @@ exported entirely in the browser using Web Workers, WebAssembly, and your own
 CPU and GPU. There is no server-side geometry processing, no upload endpoint,
 and no analytics.
 
-> **Current status: Stage 2 — STL import, viewing, export, and topology
-> diagnostics.**
-> You can open a binary or ASCII STL file, inspect it in a real 3D viewport,
-> read a full topology report about it, highlight its defects in 3D, and export
-> it again — entirely on your own machine. **None of the five workflows is
-> implemented yet**: diagnostics tell you what is wrong, and nothing repairs it.
-> See [What is and is not implemented](#what-is-and-is-not-implemented). Nothing
-> in this repository fakes a working feature.
+> **Current status: Stage 3B-1 — conservative repair, with validated preview
+> and transactional apply.**
+> You can open a binary or ASCII STL file, inspect it in a real 3D viewport, read
+> a full topology report about it, highlight its defects in 3D, **run a
+> conservative repair with a before/after preview, apply it, undo it**, and
+> export the result — entirely on your own machine.
+>
+> **"Conservative" is the operative word and it is not marketing.** The Repair
+> workflow removes exact duplicate triangles, removes safely-removable degenerate
+> triangles, and makes neighbouring triangles agree on their winding. It does
+> **not** weld nearby vertices, close openings in a surface, resolve non-manifold
+> topology, or decide which side of a surface is outside — and it refuses, with a
+> stated reason, anything it cannot decide from the stored coordinates alone.
+> Self-intersections and wall thickness are still not checked at all, so nothing
+> in CAD Fixer tells you a model will print.
+>
+> The other four workflows are not implemented. See
+> [What is and is not implemented](#what-is-and-is-not-implemented). Nothing in
+> this repository fakes a working feature.
 
 ## Planned workflows
 
-| Workflow | Purpose                                                 | Status                        |
-| -------- | ------------------------------------------------------- | ----------------------------- |
-| Repair   | Close holes, fix normals, resolve non-manifold geometry | Diagnosis only; no repair yet |
-| Convert  | Translate between STL, OBJ, and 3MF                     | Not implemented               |
-| Split    | Cut oversized models into parts and add connectors      | Not implemented               |
-| Texture  | Apply surface displacement patterns                     | Not implemented               |
-| Hollow   | Hollow solid models and place drainage holes            | Not implemented               |
+| Workflow | Purpose                                            | Status                                      |
+| -------- | -------------------------------------------------- | ------------------------------------------- |
+| Repair   | Repair and prepare meshes for printing             | **Conservative subset implemented** (below) |
+| Convert  | Translate between STL, OBJ, and 3MF                | Not implemented                             |
+| Split    | Cut oversized models into parts and add connectors | Not implemented                             |
+| Texture  | Apply surface displacement patterns                | Not implemented                             |
+| Hollow   | Hollow solid models and place drainage holes       | Not implemented                             |
+
+### What "conservative repair" covers
+
+| Operation                              | Implemented | Note                                                                   |
+| -------------------------------------- | ----------- | ---------------------------------------------------------------------- |
+| Remove exact duplicate triangles       | Yes         | Same rotational order only. Reversed duplicates are never removed.     |
+| Remove repeated-position triangles     | Yes         | Refused when removal would open the surface or create a defect.        |
+| Remove exact zero-area triangles       | Yes         | Exactly collinear corners. No "nearly flat" judgement, no tolerance.   |
+| Unify relative face winding            | Yes         | RELATIVE to neighbours. CAD Fixer never decides which side is outside. |
+| Weld nearby vertices                   | No          | Would need a tolerance. See the policy document.                       |
+| Close openings in a surface            | No          | An opening may be exactly what the model is meant to have.             |
+| Resolve non-manifold edges or vertices | No          | Reported, and they can block winding unification. Never rewritten.     |
+| Detect or resolve self-intersections   | No          | Not checked at all.                                                    |
+| Determine printability                 | No          | Wall thickness is not measured.                                        |
 
 Target formats: **STL, OBJ, 3MF**.
 
@@ -100,6 +125,29 @@ running first.
   winding conflicts, and degenerate triangles.
 - **Analysis progress and cancellation**, with a report that can never be
   attached to a model it does not describe.
+- **Conservative repair** — the first production repair capability. Four exactly-
+  decidable operations (above), each shown with its own decision: applicable, not
+  needed, refused as unsafe, or blocked by the model's topology, always with a
+  reason. Every operation is listed even when there is nothing for it to do, so
+  you can see what was checked.
+- **A validated before/after preview.** Pressing Preview builds a _candidate_ in
+  the worker and re-analyses it; the candidate is accepted only if the requested
+  defects improved and nothing else regressed. Your model is not touched. The
+  viewport switches between Before and After without moving the camera, and says
+  **"Preview — not applied"** whenever the proposal is on screen.
+- **Change overlays**, highlighting the sampled removed duplicates, removed
+  degenerates and reversed triangles in 3D, with direction markers for reversed
+  triangles derived from corner order rather than from the file's stored normals.
+- **A change summary** giving the exact before/after topology, and labelling a
+  movement as _expected_ only when the validator predicted it. Removing a
+  duplicate can legitimately reveal boundary edges the duplicate was hiding; that
+  is reported as an expected consequence, not as new damage.
+- **Transactional apply**, which swaps one reference in the worker after
+  re-checking every guard — revision currency, candidate state, validation
+  acceptance, plan identity, single use. A double-click cannot commit twice.
+- **Undo of the most recent repair**, restoring the previous geometry from an
+  inverse patch held in the worker and revalidating it. See
+  [ADR 0011](docs/adr/0011-repair-undo-revisions.md).
 - **STL export**, binary and ASCII, written locally with no network involvement
   and no gating. Both writers round-trip exactly through our own parser, which
   is asserted in tests.
@@ -125,11 +173,11 @@ running first.
   that actually register.
 - **No format conversion.** STL in, STL out is re-export, not conversion, and
   the Convert workflow stays disabled until a second format exists.
-- **No mesh repair, boolean operations, splitting, connectors, displacement,
-  hollowing, or drainage holes.** Import deliberately does not weld vertices,
-  drop degenerate triangles, deduplicate facets, reorient winding, or rescale
-  anything — see
-  [ADR 0007](docs/adr/0007-stl-preservation-policy.md). Parsing is not repair.
+- **No boolean operations, splitting, connectors, displacement, hollowing, or
+  drainage holes.** Import deliberately does not weld vertices, drop degenerate
+  triangles, deduplicate facets, reorient winding, or rescale anything — see
+  [ADR 0007](docs/adr/0007-stl-preservation-policy.md). Parsing is not repair,
+  and repair only happens when you ask for it and confirm the preview.
 - **No geometry kernel.** No Manifold, Geogram, lib3mf, OpenVDB, CGAL, or
   OpenCascade — these need licence and WASM-portability evaluation first. The
   licence question is per-kernel (and for CGAL, per package); see
@@ -142,10 +190,16 @@ running first.
   yet determined".
 - **No tolerance welding.** Two corners one float apart are two vertices, and
   the edge between them is reported as a boundary. That is what the file says.
-  A future repair step will offer welding explicitly, with a stated tolerance
-  and an undo — not as an invisible side effect of opening a file.
-- **No mesh repair of any kind.** Diagnostics identify defects; nothing fixes
-  them.
+  There is no epsilon, weld distance or proximity threshold anywhere in the
+  conservative repair API, because Stage 3A established that no single global
+  tolerance can be correct — the value that heals one model's crack destroys
+  another's intentional gap. A future assisted stage will offer welding
+  explicitly, with a stated tolerance you choose and a preview.
+- **No general mesh repair.** Conservative repair fixes four exactly-decidable
+  things and refuses everything else with a reason. Diagnostics identify many
+  defects that nothing in CAD Fixer can currently fix.
+- **No automatic repair.** Nothing is changed without a preview you looked at and
+  an Apply you pressed.
 - **No units for STL.** STL files carry no unit, so CAD Fixer reports
   "Unspecified by STL" rather than assuming millimetres.
 - **No accounts, authentication, payments, pricing, or download gating.** Usage
@@ -188,10 +242,18 @@ a browser dependency breaks the test run.
 
 ## Known issues
 
-- The main JavaScript bundle is ~724 kB raw (~195 kB gzipped), dominated by
+- The main JavaScript bundle is ~842 kB raw (~224 kB gzipped), dominated by
   Three.js. Acceptable for a professional tool; worth code-splitting if first
-  load becomes a concern.
-- The viewport has no camera controls yet. It is a shell.
+  load becomes a concern. The repair ENGINE is not in it — it lives in the
+  ~83 kB worker chunk, and the repair contract's constants are restated in
+  `geometry-runtime` rather than re-exported precisely so that stays true.
+- Only ONE step of undo is retained, for the most recent repair. Redo is not
+  implemented — see [ADR 0011](docs/adr/0011-repair-undo-revisions.md).
+- Cancelling a repair discards the result rather than interrupting the pass
+  already running: the worker finishes the current deterministic pass, then
+  observes the cancel and registers no candidate. Nothing is committed and no
+  memory is retained, but on a very large model the cancel is not instant. This
+  is the same contract topology analysis has had since Stage 2.
 - Component tests run in jsdom, which has no WebGL and no `Worker`; both are
   stubbed. Real rendering and worker behaviour are covered by the Playwright
   suite instead.

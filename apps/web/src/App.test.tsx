@@ -76,25 +76,58 @@ describe('workflow navigation', () => {
     expect(WORKFLOWS).toHaveLength(5);
   });
 
-  it('offers no working workflow, because none is implemented', () => {
+  /**
+   * Repair became the FIRST enabled workflow in Stage 3B-1B, so the assertion
+   * moved from "none of them work" to "exactly the implemented one works".
+   * Deliberately keyed off `WORKFLOWS[].implemented` rather than a hard-coded
+   * name, so the day Convert ships this test still describes the truth instead
+   * of needing to be loosened.
+   */
+  it('enables exactly the workflows that are implemented', () => {
     renderApp();
     const nav = screen.getByRole('navigation', { name: 'Workflows' });
 
     const enabled = within(nav)
       .getAllByRole('button')
-      .filter((button) => !(button as HTMLButtonElement).disabled);
+      .filter((button) => !(button as HTMLButtonElement).disabled)
+      .map((button) => button.textContent);
 
-    expect(enabled).toEqual([]);
+    const expected = WORKFLOWS.filter((workflow) => workflow.implemented).map(
+      (workflow) => workflow.label,
+    );
+
+    expect(enabled).toEqual(expected);
+    // The one that is enabled is Repair, and it is the only one.
+    expect(expected).toEqual(['Repair']);
   });
 
-  it('marks every workflow as not implemented for assistive technology too', () => {
+  it('marks the unimplemented workflows as such for assistive technology too', () => {
     renderApp();
 
     for (const workflow of WORKFLOWS) {
       const button = screen.getByTestId(`workflow-${workflow.id}`);
+      if (workflow.implemented) {
+        expect(button).toBeEnabled();
+        // No badge on a workflow that genuinely exists — the badge is a claim
+        // about absence, and printing it beside a working screen would be the
+        // mirror image of claiming a capability that is missing.
+        expect(button).not.toHaveTextContent('Not implemented');
+        continue;
+      }
       expect(button).toBeDisabled();
       expect(button).toHaveTextContent('Not implemented');
     }
+  });
+
+  it('describes Repair as conservative rather than as general repair', () => {
+    renderApp();
+
+    const summary = screen.getByText(/Conservative repair: remove exact duplicate/);
+    expect(summary).toBeInTheDocument();
+    // The old summary promised closing openings and resolving non-manifold
+    // geometry. Conservative repair does neither, and the navigation must not
+    // advertise a capability the screen behind it does not have.
+    expect(summary.textContent).not.toMatch(/close|non-manifold/i);
   });
 });
 

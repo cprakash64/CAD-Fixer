@@ -375,3 +375,135 @@ Neither shipped chunk contains `fetch`, `XMLHttpRequest`, `WebSocket`,
 module-preload polyfill; it is now disabled in `vite.config.ts`, because "no code
 here can talk to a network" should be checkable by grep with no exceptions to
 explain.
+
+---
+
+# Performance baseline — Stage 3B-1B (conservative repair workflow)
+
+Measured in a real browser through the production build, with the same
+skipped-unless-asked discipline as the Stage 2 browser numbers:
+
+```bash
+npm run bench:repair-browser
+```
+
+Nothing here is a CI gate. Wall-clock numbers on shared hardware make flaky
+builds and teach people to ignore failures; these exist to be read by a person
+and to make a regression visible when someone looks.
+
+## Environment
+
+Same machine as the Stage 2 browser run: Chromium via Playwright, 8 hardware
+threads, production build served by `vite preview` with cross-origin isolation.
+
+## Fixture
+
+A height-varying quad grid in which **every triangle is written twice**. Half the
+model is redundant, so the duplicate scan, the compaction and the revalidation
+all have real work to do — a fixture with a handful of defects would measure the
+harness rather than the repair.
+
+## Results
+
+| Phase                         | 57,600 tris (2.7 MiB) | 230,400 tris (11.0 MiB) |
+| ----------------------------- | --------------------- | ----------------------- |
+| Topology analysis (automatic) | 233–439 ms            | 233–335 ms              |
+| Repair plan                   | 2–4 ms                | 7–41 ms                 |
+| Candidate + validation        | 242–246 ms            | 851–885 ms              |
+| Preview switch Before→After   | 31–33 ms              | 41–43 ms                |
+| Preview switch After→Before   | 47–272 ms             | 47–339 ms               |
+| Apply: click to banner        | 74–274 ms             | 118–890 ms              |
+| Apply: click to reanalysed    | 279 ms                | 634 ms                  |
+| Undo                          | 338–403 ms            | 711–867 ms              |
+| Longest main-thread frame gap | 28–35 ms              | 95–233 ms               |
+
+Ranges are across repeated runs on an otherwise-busy laptop.
+
+## What the numbers say
+
+**The plan is nearly free, and that is the point.** Two to forty milliseconds,
+because planning reuses the topology report the application already computed —
+see the report cache below — and allocates no candidate. Planning being cheap is
+what makes it safe to do automatically, which is what removes a click between the
+user and the answer.
+
+**Candidate creation scales with the mesh and stays in the worker.** 851 ms for
+230,400 triangles covers selection, compaction, a full structural validation and
+a complete re-analysis of the result. The longest main-thread gap over the same
+window was 233 ms — which is not the repair. It is the arrival of the candidate's
+render snapshot (≈16.6 MB for this model) and its upload to the GPU, on the main
+thread, where a buffer upload has to happen. The repair itself never touches it.
+
+**Switching Before↔After does not scale with mesh size.** 31–43 ms in one
+direction at both sizes. That is the shared-transform preview design working as
+intended: both meshes are already uploaded, both sit in the same display group,
+and the switch is a `visible` flag plus a redraw. A design that re-uploaded on
+switch, or that called `setModel`, would show this column growing with the model
+and would also move the camera.
+
+The After→Before figures are noisier because that direction waits for an element
+to DISAPPEAR, which carries Playwright's polling interval as a floor. Read them
+as an upper bound; the property being established is that neither direction grows
+with mesh size.
+
+**Apply is a reference swap plus a render snapshot.** The click-to-banner figure
+is dominated by rebuilding the snapshot for the committed geometry, not by the
+transaction, which is one map assignment. Click-to-reanalysed is the honest
+user-facing number: the point at which Mesh Health describes the repaired model.
+
+**Undo costs about what apply costs**, and for the same reasons: it rebuilds a
+mesh from the inverse patch, validates it structurally, and produces a render
+snapshot. It is a forward transaction, not a cached swap — see
+[ADR 0011](adr/0011-repair-undo-revisions.md).
+
+## The topology report cache
+
+Stage 3B-1B added `TopologyReportCache` after the first integration run made the
+cost obvious: analysis runs automatically on import, the repair plan is derived
+from a report, and building a candidate needs one too. Without the cache the same
+unchanged mesh was analysed **three times** — once to diagnose it, once to plan,
+once to build — and the end-to-end suite's large-model test started timing out
+because of it.
+
+The cache holds one report per model, keyed by revision. Geometry at a revision is
+immutable (`replace` produces a new revision rather than mutating), so a cached
+report describes exactly the mesh its handle resolves to; the revision is compared
+rather than assumed, so a report is never returned for geometry it does not
+describe.
+
+## Memory during a preview
+
+**Not measured as process RSS, and not as `performance.memory`.** RSS includes the
+renderer, the GPU driver and every other tab's share of a shared process.
+`performance.memory` is Chromium-only, heap-only, and excludes the off-heap
+allocations that typed arrays mostly are. Claiming either as "CAD Fixer's memory"
+would be a measurement of something else.
+
+What is modelled — and what the resource preflight actually refuses on — is the
+bytes **we** allocate. During a preview these coexist by design:
+
+| Buffer                            | Where       | Bytes for _n_ triangles  |
+| --------------------------------- | ----------- | ------------------------ |
+| M0 canonical geometry             | worker      | 48 n                     |
+| M0 render snapshot                | main thread | 72 n                     |
+| Candidate canonical geometry      | worker      | ≤ 48 n                   |
+| Candidate render snapshot         | main thread | ≤ 72 n                   |
+| Connectivity + compaction scratch | worker      | ≈ 72 n                   |
+| Validation (topology) workspace   | worker      | ≈ 225 n                  |
+| Inverse patch                     | worker      | 76 per removed face      |
+| Change overlays                   | main thread | ≤ 256 faces per category |
+
+The coexistence IS the safety property: M0 survives until the commit succeeds.
+The preflight in `repair-handlers.ts` therefore models
+`authoritative × 2 + connectivity + validation workspace` and refuses **before any
+bulk array exists** — a repair that cannot fit leaves the model loaded, viewable
+and exportable rather than taking the tab with it.
+
+For 230,400 triangles that is roughly 11 MiB + 11 MiB + 16 MiB + 51 MiB ≈ 89 MiB
+in the worker, plus ≈33 MiB of render snapshots on the main thread. The ceiling is
+`maxRepairPeakBytes`, 1024 MiB, which the modelled peak reaches at roughly 2.7
+million triangles.
+
+**Change overlays are bounded by the engine's sample cap (256 per category), not
+by mesh size**, so they do not appear in the scaling argument at all. That is why
+the sample limit exists.

@@ -197,7 +197,7 @@ vs Float64 question.
 
 ## 6. Geometry operations
 
-None are implemented. When they are, each must:
+Every geometry operation must:
 
 1. run in a worker;
 2. declare what it will modify before running;
@@ -208,6 +208,46 @@ None are implemented. When they are, each must:
 Point 5 is the mechanism behind constraint 3. An operation that returns a mesh
 which fails validation has failed, and must surface `GEOMETRY_VALIDATION_FAILED`
 rather than hand the user a broken model.
+
+**Conservative repair is the first operation to implement all five**, and it is
+the reference for the ones that follow. Point 4 in particular is not a
+suggestion there: the authoritative mesh is never written at all. A candidate is
+built separately, validated independently, and `repair/commit` swaps one
+reference. See section 6b.
+
+## 6b. Conservative repair
+
+The first workflow that CHANGES a user's model, and therefore the first place
+where every rule above has to hold at once.
+
+**Five operations, not one.** `repair/plan`, `repair/create-candidate`,
+`repair/commit`, `repair/discard`, `repair/undo`. Planning must be observable
+without allocating anything; applying must be a separate, explicitly confirmed
+act; undoing must be its own transaction rather than a view the UI can fake. A
+single `repair/apply` would make preview impossible and would make an accidental
+resend destructive.
+
+**`model/analyze` is untouched.** Analysis stays read-only. A repair verb hidden
+inside it would make every diagnosis a potential mutation.
+
+**The transaction lives in the worker.** The application sends identifiers; the
+worker re-checks revision currency, candidate state, validation acceptance, plan
+identity and single use before it swaps anything. React can waste work or show a
+wrong label; it cannot apply a repair the runtime refused.
+
+**Preview does not swap authority.** The viewport holds two render snapshots and
+toggles visibility between them, sharing one display transform and one camera. No
+handle changes, so a preview cannot be exported, cannot be analysed, and cannot
+survive the model being replaced.
+
+**Undo is a forward transaction.** It restores geometry in the worker from an
+inverse patch and commits it as a NEW, higher revision — revision numbers only
+ever move forwards, because every staleness guard in the runtime depends on that.
+See [ADR 0011](adr/0011-repair-undo-revisions.md).
+
+Details, including why the repair contract's constants are RESTATED in
+`geometry-runtime` rather than re-exported, are in
+[docs/repair/REPAIR_ARCHITECTURE.md](repair/REPAIR_ARCHITECTURE.md).
 
 ## 6a. Topology diagnostics
 
@@ -338,11 +378,18 @@ reviewable act rather than an accident.
 
 STL is implemented, read and written. Nothing else is:
 
-No OBJ or 3MF codec, no format conversion, no repair, no welding, no booleans,
-no connectors, no splitting, no displacement, no hollowing, no drainage holes,
-no topological diagnostics (manifoldness, self-intersection, orientation
-consistency), no auth, no billing, no database, no backend, no analytics, no
-persistence — and no stub that pretends to be any of them.
+No OBJ or 3MF codec, no format conversion, no welding, no booleans, no
+connectors, no splitting, no displacement, no hollowing, no drainage holes, no
+self-intersection detection, no wall-thickness analysis, no auth, no billing, no
+database, no backend, no analytics, no persistence — and no stub that pretends to
+be any of them.
+
+Repair is implemented only in its **conservative** form: exact duplicate removal,
+safe degenerate removal, and relative winding unification. It does not weld,
+does not close openings, does not rewrite non-manifold topology, and does not
+decide which side of a surface is outside. Everything it cannot decide from the
+stored coordinates alone is refused with a stated reason rather than guessed. See
+[docs/repair/REPAIR_POLICY.md](repair/REPAIR_POLICY.md).
 
 Two distinctions the interface is careful about, because both are easy to
 overstate:
@@ -352,3 +399,7 @@ overstate:
 - **Structurally valid is not printable.** Validation checks buffer and index
   integrity. It says nothing about whether a model is watertight, manifold, or
   manufacturable.
+- **An accepted repair is not a printable model.** Repair acceptance means the
+  requested defects improved and nothing else regressed, judged by CAD Fixer's
+  own re-analysis. Self-intersections and wall thickness remain unchecked, and
+  every repair verdict says so beside itself.

@@ -83,6 +83,10 @@ export interface OperationMap {
     payload: RepairDiscardPayload;
     result: RepairDiscardResult;
   };
+  'repair/undo': {
+    payload: RepairUndoPayload;
+    result: RepairUndoResult;
+  };
 }
 
 /* ------------------------------------------------------------------ repair -- */
@@ -168,6 +172,19 @@ export interface RepairCommitResult {
   readonly appliedOperations: readonly RepairOperation[];
   readonly render: RenderSnapshot;
   readonly residentBytes: number;
+  /**
+   * Facts about the committed geometry, so the application can update the model
+   * it displays without re-deriving anything from the render snapshot.
+   *
+   * They are computed in the worker, which already holds the mesh. Counting
+   * triangles from a Float32Array on the UI thread would be exactly the
+   * whole-mesh main-thread work this project forbids.
+   */
+  readonly triangleCount: number;
+  readonly vertexCount: number;
+  readonly bounds: MeshBounds | undefined;
+  /** True when this revision can be reversed by `repair/undo`. */
+  readonly undoable: boolean;
 }
 
 export interface RepairDiscardPayload {
@@ -177,6 +194,40 @@ export interface RepairDiscardPayload {
 export interface RepairDiscardResult {
   /** False when there was nothing left to release. Not an error. */
   readonly released: boolean;
+}
+
+/**
+ * UNDO IS A TRANSACTION, not a view change.
+ *
+ * It names the repair it reverses AND the revision it believes is authoritative,
+ * exactly as commit does. Reversing "the last thing" without saying which would
+ * make undo unsafe the moment two operations can be in flight.
+ *
+ * The restored geometry becomes a NEW monotonic revision rather than reviving
+ * the old one — see docs/adr/0011. A revision number that could go backwards
+ * would make every stale-handle check in the runtime ambiguous.
+ */
+export interface RepairUndoPayload {
+  /** The revision the caller believes is authoritative: the repaired one. */
+  readonly handle: ModelHandle;
+  /** Identity of the commit being reversed. */
+  readonly recordId: string;
+}
+
+export interface RepairUndoResult {
+  /** The NEW revision, holding the restored pre-repair geometry. */
+  readonly handle: ModelHandle;
+  /** The revision that was authoritative before the undo. */
+  readonly revertedRevision: number;
+  /** The revision whose geometry has been reproduced. */
+  readonly restoredRevision: number;
+  readonly recordId: string;
+  readonly appliedOperations: readonly RepairOperation[];
+  readonly render: RenderSnapshot;
+  readonly residentBytes: number;
+  readonly triangleCount: number;
+  readonly vertexCount: number;
+  readonly bounds: MeshBounds | undefined;
 }
 
 /* -------------------------------------------------------------- stl import -- */

@@ -235,3 +235,236 @@ export function analysisHeavyStl(side: number): GeneratedStl {
 
   return { bytes: binaryStlFrom(triangles), triangles: triangles.length };
 }
+
+/* -------------------------------------------------- repair fixtures -- */
+
+/**
+ * REPAIR FIXTURES.
+ *
+ * Each one is built to exercise exactly ONE decision of the conservative repair
+ * plan, so a failing end-to-end test names the behaviour that broke rather than
+ * "repair is wrong". They are deliberately tiny: the point is which decision the
+ * engine reaches, not how fast it reaches it.
+ */
+
+const TETRA_A: Point = [0, 0, 0];
+const TETRA_B: Point = [10, 0, 0];
+const TETRA_C: Point = [0, 10, 0];
+const TETRA_D: Point = [0, 0, 10];
+
+/** The four faces of the clean tetrahedron, wound consistently. */
+function tetrahedronFaces(): (readonly [Point, Point, Point])[] {
+  return [
+    [TETRA_A, TETRA_C, TETRA_B],
+    [TETRA_A, TETRA_B, TETRA_D],
+    [TETRA_A, TETRA_D, TETRA_C],
+    [TETRA_B, TETRA_C, TETRA_D],
+  ];
+}
+
+/**
+ * A closed tetrahedron with ONE face written twice in the same rotational order.
+ *
+ * The removable case. The duplicate raises that face's three edges to incidence
+ * three, so the model reads as non-manifold until the copy is gone — which is
+ * exactly why duplicates are removed before winding is solved.
+ */
+export function duplicateFaceStl(): Buffer {
+  const faces = tetrahedronFaces();
+  const first = faces[0];
+  if (first === undefined) throw new Error('tetrahedron fixture is empty');
+  return binaryStlFrom([...faces, first]);
+}
+
+/**
+ * A closed tetrahedron with one face written twice in OPPOSITE order.
+ *
+ * The case conservative repair must refuse to remove. A reversed duplicate may
+ * encode a deliberate zero-thickness feature, so it is reported and left alone.
+ * Written by rotating the corner order rather than by reversing the array, so the
+ * two triangles genuinely traverse their shared edges in opposite directions.
+ */
+export function reversedDuplicateFaceStl(): Buffer {
+  const faces = tetrahedronFaces();
+  const first = faces[0];
+  if (first === undefined) throw new Error('tetrahedron fixture is empty');
+  const reversed: readonly [Point, Point, Point] = [first[0], first[2], first[1]];
+  return binaryStlFrom([...faces, reversed]);
+}
+
+/**
+ * A closed tetrahedron plus a detached, exactly collinear triangle.
+ *
+ * SAFELY removable: the degenerate triangle shares no vertex with the solid, so
+ * deleting it cannot open the surface or create a non-manifold edge. It does
+ * remove one connected component, which the validator allows precisely because
+ * every face of that component was deleted.
+ */
+export function safeDegenerateStl(): Buffer {
+  return binaryStlFrom([
+    ...tetrahedronFaces(),
+    [
+      [100, 0, 0],
+      [110, 0, 0],
+      [120, 0, 0],
+    ],
+  ]);
+}
+
+/**
+ * A closed tetrahedron plus a detached triangle with two identical corners.
+ *
+ * The repeated-position case, kept separate from the zero-area one because they
+ * are different defects and the interface counts them separately.
+ */
+export function safeRepeatedPositionStl(): Buffer {
+  return binaryStlFrom([
+    ...tetrahedronFaces(),
+    [
+      [100, 0, 0],
+      [100, 0, 0],
+      [110, 0, 0],
+    ],
+  ]);
+}
+
+/**
+ * A zero-area triangle that SEALS a closed surface. CR06-equivalent.
+ *
+ * WHY THIS SHAPE AND NOT THE OBVIOUS ONE. A collinear triangle merely touching
+ * other geometry is safely removable — it contributes more boundary edges than it
+ * hides, so deleting it CLOSES nothing and opens nothing. To make removal unsafe
+ * the degenerate face has to be load-bearing: every one of its edges must already
+ * be paired with a real face, so that deleting it opens the surface in three
+ * places at once.
+ *
+ * This is a tetrahedron A-M-B-U whose base A-M-B is exactly collinear: M is the
+ * midpoint of AB. All six edges have two incident faces, so the model reports no
+ * boundary edges at all — and removing the zero-area base would create three.
+ * Conservative repair refuses, because that is a change to the model's shape
+ * rather than a cleanup.
+ */
+export function unsafeDegenerateStl(): Buffer {
+  const a: Point = [0, 0, 0];
+  const m: Point = [5, 0, 0];
+  const b: Point = [10, 0, 0];
+  const u: Point = [5, 4, 3];
+  // The tetrahedron winding pattern, with the collinear base first.
+  return binaryStlFrom([
+    [a, b, m],
+    [a, m, u],
+    [a, u, b],
+    [m, b, u],
+  ]);
+}
+
+/**
+ * ONE triangle, written twice in the same rotational order.
+ *
+ * THE FIXTURE FOR THE NON-MONOTONIC CASE. Two coincident triangles pair each
+ * other's edges, so the model reports ZERO boundary edges and looks closed.
+ * Removing the redundant copy reveals the three boundary edges that were there
+ * all along.
+ *
+ * The engine predicts that exact count before rebuilding and confirms it
+ * afterwards, so it is an expected consequence of a correct repair rather than
+ * damage. An interface that reported "3 new boundary errors" here would be
+ * inventing a problem the engine explicitly reasoned about and allowed.
+ */
+export function hiddenBoundaryDuplicateStl(): Buffer {
+  const face: readonly [Point, Point, Point] = [
+    [0, 0, 0],
+    [10, 0, 0],
+    [0, 10, 0],
+  ];
+  return binaryStlFrom([face, face]);
+}
+
+/**
+ * A winding conflict in a component that also contains a NON-MANIFOLD VERTEX.
+ *
+ * Two square halves that disagree across their shared edge, plus a second patch
+ * touching the first at exactly one vertex and nowhere else. The pinch makes the
+ * vertex non-manifold, and winding unification is blocked rather than propagated
+ * across a fan that is not a fan.
+ *
+ * Worked through explicitly, because "reverse one of them" is easy to get
+ * backwards. Triangle (a,b,c) crosses the shared edge {a,c} in the direction
+ * c -> a. A consistently wound neighbour must cross it a -> c. Triangle (d,c,a)
+ * crosses c -> a as well, which is the conflict.
+ */
+export function windingBlockedByVertexStl(): Buffer {
+  const a: Point = [0, 0, 0];
+  const b: Point = [10, 0, 0];
+  const c: Point = [10, 10, 0];
+  const d: Point = [0, 10, 0];
+  return binaryStlFrom([
+    [a, b, c],
+    [d, c, a],
+    // Second patch, joined to the first at `a` alone.
+    [a, [-10, 0, 0], [-10, -10, 0]],
+    [a, [-10, -10, 0], [0, -10, 0]],
+  ]);
+}
+
+/**
+ * One model carrying a duplicate, a safely removable degenerate, AND a winding
+ * conflict.
+ *
+ * Exercises the deterministic pipeline order end to end: the duplicate is removed
+ * first, which drops three edges from incidence three back to two and makes the
+ * winding solve possible at all; the detached degenerate goes with it; and the
+ * reversed face is turned back the right way relative to its neighbours.
+ */
+export function combinedRepairStl(): Buffer {
+  const faces = tetrahedronFaces();
+  const [first, second, third, fourth] = faces as [
+    readonly [Point, Point, Point],
+    readonly [Point, Point, Point],
+    readonly [Point, Point, Point],
+    readonly [Point, Point, Point],
+  ];
+  // `fourth` reversed: three of its edges now disagree with their neighbours.
+  const flipped: readonly [Point, Point, Point] = [fourth[0], fourth[2], fourth[1]];
+  return binaryStlFrom([
+    first,
+    second,
+    third,
+    flipped,
+    // An exact duplicate of `second`, same rotational order.
+    second,
+    // A detached zero-area triangle, safely removable.
+    [
+      [100, 0, 0],
+      [110, 0, 0],
+      [120, 0, 0],
+    ],
+  ]);
+}
+
+/**
+ * A grid large enough that preparing a repair takes measurable time.
+ *
+ * Every quad is written twice, so the model is half duplicates: the duplicate
+ * scan, the rebuild and the revalidation all have real work to do. Used for the
+ * cancellation test and for the browser performance measurements.
+ */
+export function repairHeavyStl(side: number): GeneratedStl {
+  const triangles: (readonly [Point, Point, Point])[] = [];
+  const height = (x: number, y: number): number => ((x * 7 + y * 13) % 17) * 0.01;
+
+  for (let row = 0; row < side; row += 1) {
+    for (let col = 0; col < side; col += 1) {
+      const p00: Point = [col, row, height(col, row)];
+      const p10: Point = [col + 1, row, height(col + 1, row)];
+      const p01: Point = [col, row + 1, height(col, row + 1)];
+      const p11: Point = [col + 1, row + 1, height(col + 1, row + 1)];
+      const lower: readonly [Point, Point, Point] = [p00, p10, p01];
+      const upper: readonly [Point, Point, Point] = [p10, p11, p01];
+      // Each quad, then an exact duplicate of each of its triangles.
+      triangles.push(lower, upper, lower, upper);
+    }
+  }
+
+  return { bytes: binaryStlFrom(triangles), triangles: triangles.length };
+}

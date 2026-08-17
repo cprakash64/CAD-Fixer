@@ -182,3 +182,66 @@ untrusted text. They are rendered as React children, which escapes them, and the
 application contains no `innerHTML`, `dangerouslySetInnerHTML`, `eval`, or
 `Function` constructor. On export, **solid names are generated, never copied from
 the source**, so a hostile name cannot round-trip into a file the user shares.
+
+---
+
+## Stage 3B-1B — conservative repair
+
+Repair changes the user's geometry. It changes nothing about where that geometry
+goes, and this section records what was checked rather than asserting it.
+
+### What crosses the worker boundary
+
+| Direction     | Repair carries                                                                                                                                                    |
+| ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| main → worker | a model handle and revision, operation names, a plan hash, a candidate id, a repair record id, a memory ceiling, a sample cap. **No geometry, in any operation.** |
+| worker → main | a plan, a validation verdict, counts, warnings, BOUNDED change samples, and render snapshots for the preview and the committed result.                            |
+
+The change samples are face indices, capped at 256 per category by the engine.
+The render snapshots are display data — the same category of thing import has
+returned since Stage 1 — and they are what the GPU needs in order to draw
+anything at all.
+
+**Authoritative canonical geometry never moves in either direction, and neither
+does the candidate's.** A candidate is a second worker-resident mesh; the main
+thread names it with a handle it cannot export.
+
+### What leaves the machine
+
+Nothing. Verified end to end rather than argued: `O16` drives a complete repair
+workflow — import, analysis, planning, preview, view switching, overlay toggling,
+apply, undo and export — while recording every network request the page makes,
+and asserts that each one is a first-party asset, carries no body, uses GET or
+HEAD, and does not contain the model's filename in its URL.
+
+The repair engine, the undo patches and the topology reports all live in the
+worker. There is no code path that could send them anywhere, because there is no
+network API in the codebase at all.
+
+### The narrowing-only memory option
+
+`?repairMemoryCeilingMiB=N` lowers the ceiling at which a repair is refused before
+allocating. It is recorded here because it is the one runtime-addressable
+configuration this stage added, and the privacy-relevant facts about it are:
+
+- it can only ever make CAD Fixer refuse **sooner** — `requestRepairPeak` in the
+  worker ignores any value above the product ceiling, so it is enforced on the
+  side that does not trust the message;
+- it carries no data anywhere, and reads nothing;
+- it is **surfaced in the repair panel whenever it is active**, so it is never
+  hidden state.
+
+### What repair may log or report
+
+Counts, statuses, byte estimates and face indices. Never coordinates, never a
+filename, never a solid name. The resource-refusal error carries `faceCount` and
+a modelled peak; the commit record id is built from a model id, two revisions and
+a plan hash — all identifiers this session generated, none derived from the file's
+contents.
+
+### Untrusted content
+
+Unchanged from Stage 2 and re-checked for the repair surface: no repair-derived
+string reaches the DOM except as a text node. There is no `innerHTML`,
+`dangerouslySetInnerHTML`, `document.write` or `eval` anywhere in the
+application, and no repair path constructs a URL from file contents.

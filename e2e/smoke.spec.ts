@@ -94,11 +94,21 @@ test('the geometry worker round-trips a transferred buffer', async ({ page }) =>
   await expect(page.getByTestId('status-list')).toContainText('Worker self-test passed');
 });
 
-test('no workflow can be opened, because none is implemented', async ({ page }) => {
+/**
+ * Repair is the first workflow to ship, so this assertion changed from "none of
+ * them work" to "exactly one of them does". The four that do not exist must stay
+ * disabled AND keep saying so — a navigation item that looks available and is
+ * not is the first place a tool starts lying to its user.
+ */
+test('only the implemented workflow can be opened', async ({ page }) => {
   await page.goto('/');
 
-  for (const workflow of ['repair', 'convert', 'split', 'texture', 'hollow']) {
-    await expect(page.getByTestId(`workflow-${workflow}`)).toBeDisabled();
+  await expect(page.getByTestId('workflow-repair')).toBeEnabled();
+
+  for (const workflow of ['convert', 'split', 'texture', 'hollow']) {
+    const item = page.getByTestId(`workflow-${workflow}`);
+    await expect(item).toBeDisabled();
+    await expect(item).toContainText('Not implemented');
   }
 });
 
