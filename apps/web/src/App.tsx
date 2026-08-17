@@ -3,6 +3,7 @@ import { AppHeader } from './components/AppHeader';
 import { ImportDropZone } from './components/ImportDropZone';
 import { MeshHealthPanel } from './components/MeshHealthPanel';
 import { ModelPanel } from './components/ModelPanel';
+import { RepairPanel } from './components/RepairPanel';
 import { RuntimePanel } from './components/RuntimePanel';
 import { StatusPanel } from './components/StatusPanel';
 import { ViewportPanel } from './components/ViewportPanel';
@@ -29,11 +30,14 @@ export function App(): ReactNode {
           <ViewportPanel />
           <ImportDropZone />
         </main>
-        {/* Diagnostics get their own column rather than sharing the sidebar:
-            the report is long, and burying it under the model facts would make
-            the numbers a user opens this tool for the hardest thing to reach.
-            The viewport keeps the middle and stays the working area. */}
+        {/* Diagnostics and repair share the right-hand column, in that order of
+            action: what CAD Fixer proposes to change comes first, and the full
+            report it derived that from sits beneath it. Burying either under the
+            model facts would make the things a user opens this tool for the
+            hardest to reach. The viewport keeps the middle and stays the working
+            area at every width. */}
         <aside className="app__diagnostics">
+          <RepairPanel />
           <MeshHealthPanel />
         </aside>
       </div>

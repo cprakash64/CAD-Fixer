@@ -13,6 +13,7 @@ import {
   estimateImportPeak,
   renderBytesFor,
   requestAnalysisWorkspace,
+  requestRepairPeak,
   residentBytesFor,
 } from './memory-budget';
 
@@ -245,5 +246,71 @@ describe('analysis workspace reservation', () => {
 
     expect(requestAnalysisWorkspace('topology/analyze', 50, {}, tight)).toBeUndefined();
     expectLimitError(requestAnalysisWorkspace('topology/analyze', 101, {}, tight));
+  });
+});
+
+/**
+ * THE REPAIR CEILING IS ITS OWN QUANTITY.
+ *
+ * A repair peak is not an analysis workspace: the authoritative mesh and the
+ * candidate coexist by design — that coexistence IS the safety property — so the
+ * peak is both meshes plus connectivity plus the validation workspace. Checking
+ * one against the other's limit would be comparing two different things and
+ * calling the answer a limit.
+ */
+describe('repair peak budget', () => {
+  it('allows a peak within the product ceiling', () => {
+    expect(
+      requestRepairPeak('repair/plan', DEFAULT_SESSION_MEMORY_BUDGET.maxRepairPeakBytes),
+    ).toBeUndefined();
+  });
+
+  it('refuses a peak beyond the product ceiling before anything is allocated', () => {
+    const result = requestRepairPeak(
+      'repair/create-candidate',
+      DEFAULT_SESSION_MEMORY_BUDGET.maxRepairPeakBytes + 1,
+      { faceCount: 9_000_000 },
+    );
+
+    expectLimitError(result);
+    if (!isAppError(result)) return;
+    expect(result.details.operation).toBe('repair/create-candidate');
+    expect(result.details.faceCount).toBe(9_000_000);
+  });
+
+  it('refuses a non-finite estimate rather than trusting it', () => {
+    expectLimitError(requestRepairPeak('repair/plan', Number.NaN));
+    expectLimitError(requestRepairPeak('repair/plan', -1));
+  });
+
+  /**
+   * THE ONE-WAY PROPERTY, which is what makes a caller-supplied ceiling safe to
+   * accept over a message at all. A narrower request is honoured; a wider one is
+   * ignored in favour of the product's own limit.
+   */
+  it('honours a caller ceiling that NARROWS the product limit', () => {
+    expect(requestRepairPeak('repair/plan', 500, {}, 1000)).toBeUndefined();
+    expectLimitError(requestRepairPeak('repair/plan', 1001, {}, 1000));
+  });
+
+  it('ignores a caller ceiling that would WIDEN the product limit', () => {
+    const beyond = DEFAULT_SESSION_MEMORY_BUDGET.maxRepairPeakBytes + 1;
+
+    // Asking for twice the product ceiling does not buy twice the memory.
+    expectLimitError(
+      requestRepairPeak(
+        'repair/plan',
+        beyond,
+        {},
+        DEFAULT_SESSION_MEMORY_BUDGET.maxRepairPeakBytes * 2,
+      ),
+    );
+  });
+
+  it('treats a non-finite or negative caller ceiling as no ceiling at all', () => {
+    // Never as "zero", which would refuse every repair, and never as "infinite",
+    // which would bypass the product limit.
+    expect(requestRepairPeak('repair/plan', 1000, {}, Number.NaN)).toBeUndefined();
+    expectLimitError(requestRepairPeak('repair/plan', 1000, {}, -5));
   });
 });

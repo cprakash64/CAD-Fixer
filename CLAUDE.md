@@ -13,20 +13,23 @@ matter more than moving fast.
 Five workflows are planned: **Repair, Convert, Split, Texture, Hollow**. Target
 formats: **STL, OBJ, 3MF**.
 
-**Current stage: Stage 3B-1A complete — conservative deterministic repair
-engine, transactional commit, undo-ready revision semantics. No repair UI yet.**
-Implemented: structural STL encoding detection, hand-written binary and ASCII
-STL parsers with resource budgets, worker-based parsing with progress and
-working cancellation, a real Three.js viewport with camera controls, model
+**Current stage: Stage 3B-1 complete — conservative deterministic repair,
+end to end.** The engine, the transaction and the user workflow are all
+production. Implemented: structural STL encoding detection, hand-written binary
+and ASCII STL parsers with resource budgets, worker-based parsing with progress
+and working cancellation, a real Three.js viewport with camera controls, model
 statistics, binary/ASCII STL export that round-trips through our own parser,
-worker-resident authoritative geometry addressed by handle+revision, and
-read-only topology diagnostics with a Mesh Health panel and viewport overlays.
+worker-resident authoritative geometry addressed by handle+revision, read-only
+topology diagnostics with a Mesh Health panel and viewport overlays, and the
+**conservative repair workflow**: an automatic plan with a per-operation
+decision and reason, a validated candidate, a before/after preview that shares
+one camera, bounded change overlays, transactional apply, and one step of undo.
 
 NOT implemented, and not to be implemented unless a task explicitly asks:
 tolerance welding, hole filling, booleans, remeshing, OBJ or 3MF codecs, format
 conversion, splitting, connectors, texturing, hollowing, drainage holes,
-self-intersection detection, wall-thickness analysis, and any user-facing repair
-workflow.
+self-intersection detection, wall-thickness analysis, redo, and any repair that
+is not one of the four conservative operations.
 
 **Topology diagnoses; it never repairs.** Connectivity is recovered from exact
 stored coordinates with no tolerance, and analysis leaves the canonical buffers
@@ -136,13 +139,14 @@ npm run verify       # format:check + lint + typecheck + test + build
 npm run bench:stl      # STL parser benchmark (NOT in CI)
 npm run bench:topology # small topology benchmark (NOT in CI)
 npm run bench:pipeline # whole-pipeline benchmark, 1/10/50/100 MiB (NOT in CI)
+npm run bench:repair-browser # repair workflow timings in a real browser (NOT in CI)
 npm run check:node     # runtime version guard; also runs before test/build/verify
 ```
 
 Before declaring work complete, run `npm run verify`. Run `npm run test:e2e` as
 well when you have touched the shell, the worker, or the build.
 
-## Repair invariants (Stage 3B-1A)
+## Repair invariants (Stage 3B-1)
 
 - **NO GEOMETRY KERNEL IN PRODUCTION.** Manifold, Geogram and PMP are research
   artifacts under `experiments/`. Nothing in `apps/**` or `packages/**` may
@@ -165,6 +169,28 @@ well when you have touched the shell, the worker, or the build.
   by Stage 2 and judged against the source.
 - **`selfIntersectionStatus` is always `not-checked`**, and there is no
   `printable` flag. Repair acceptance is not printability acceptance.
+- **React is never the transaction authority.** Apply sends three identifiers and
+  the worker re-checks every guard. Never move a guard into a component or a
+  hook, and never add a code path that commits without going through
+  `repair/commit`.
+- **A preview never swaps authority.** The viewport holds two render snapshots
+  and toggles `visible`. Switching Before/After must not call `setModel`, must
+  not reframe, and must not change any handle.
+- **Undo produces a NEW, higher revision.** Revisions only ever move forwards,
+  because every staleness guard depends on it. Never reactivate a retained prior
+  revision. See `docs/adr/0011-repair-undo-revisions.md`.
+- **Exactly one repair per model is undoable, and redo does not exist.** Undoing
+  retains no forward patch, so redo is not derivable from what is kept — building
+  it would be a new memory commitment, not a symmetry fix.
+- **Repair copy lives in `apps/web/src/state/repair-presentation.ts`, all of it.**
+  A reason string written inline in a component is a bug: two screens drift, and
+  a new `RepairReason` reaches one of them and not the other. The switches there
+  are exhaustive with no `default` on purpose.
+- **`geometry-runtime` RESTATES the repair constants; it does not re-export
+  them.** A value re-export from `@cadfixer/mesh-repair` makes the engine a
+  runtime dependency of the main-thread bundle. `packages/geometry-runtime/src/repair.ts`
+  mirrors them and two tests keep the mirror honest — one at compile time, one on
+  the runtime values.
 
 ## Things that will trip you up
 
@@ -201,6 +227,26 @@ well when you have touched the shell, the worker, or the build.
   declaration and the registry in agreement.
 - **`ByteScanner.isAtEnd()` is a method, not a getter, because it mutates.**
   Getters that skip whitespace confuse both readers and TypeScript's narrowing.
+- **The topology report is CACHED per (modelId, revision).** Analysis runs
+  automatically on import, the repair plan is derived from a report, and the
+  candidate needs one too — without `TopologyReportCache` the same unchanged mesh
+  was analysed three times per repair, and the end-to-end suite started timing
+  out because of it. Safe only because geometry at a revision is immutable.
+- **A repair peak is not an analysis workspace.** `maxRepairPeakBytes` is its own
+  budget field: the authoritative mesh and the candidate coexist by design, so
+  the peak is both meshes plus connectivity plus the validation workspace.
+- **`RepairPlanPayload.memoryBudgetBytes` may only NARROW the ceiling.**
+  `requestRepairPeak` enforces that on the worker side; a message can make CAD
+  Fixer more cautious and never less. The `?repairMemoryCeilingMiB=N` URL option
+  drives it and is surfaced in the panel whenever active.
+- **Cancelling a repair discards, it does not interrupt.** The pipeline is one
+  synchronous pass; the handler yields BEFORE registering the candidate, so a
+  cancel leaves nothing resident. Yielding after registration would leak a
+  candidate that only a discard could clean up.
+- **Change samples are SOURCE face indices for all four categories, including
+  flips.** Overlays therefore index the source render snapshot the main thread
+  already holds. Removed faces are hidden in the After view; flipped faces are
+  not, because a flip moves no vertex.
 - **Boundary edges and surface area are PREDICTED, not forbidden, after
   duplicate removal.** Two coincident triangles pair each other's edges and look
   closed, and Stage 2 sums every face — so removing the redundant copy correctly
@@ -241,6 +287,22 @@ well when you have touched the shell, the worker, or the build.
 - **Edge manifoldness and vertex manifoldness are separate**, and the interface
   reports them separately. Collapsing them into one "manifold" flag hides the
   bow-tie case, which is precisely the case naive tools miss.
+- **Never claim a repair did more than it did.** The repair panel's wording is
+  decided in one file and asserted by test: no string it can emit may say
+  printable, watertight, fully repaired, all errors fixed, ready to print, fix
+  everything, make printable, or hole — and none may claim a repaired model faces
+  outward, because winding is unified RELATIVE to neighbours only. The most that
+  may be said after a committed repair is `Conservative repair applied` plus
+  `Selected topological issues were repaired and revalidated`, always followed by
+  the same unchecked qualifier.
+- **A refusal is not an error, and a preview is not an application.** Refused and
+  blocked operations are rendered as decisions with reasons in their own visual
+  register; a candidate on screen is labelled `Preview — not applied` until it is
+  committed.
+- **An expected delta is not a regression.** Once a candidate is ACCEPTED every
+  remaining difference was predicted before the rebuild and confirmed after it —
+  including a boundary-edge count that rose because a duplicate that was hiding
+  an opening has been removed. Never label one of those an error.
 - **Never register a stub codec.** STL is real; OBJ and 3MF must keep failing
   loudly. Two tests hold this line: `registry.test.ts` asserts unimplemented
   formats throw rather than returning a placeholder, and `capabilities.test.ts`
@@ -251,6 +313,9 @@ well when you have touched the shell, the worker, or the build.
 
 Authentication, accounts, subscriptions, payments, pricing, download gating,
 ads, analytics, databases, backends. Leave clean seams; do not build them.
+
+Also out of scope until a task asks: redo, a multi-step undo history, and any
+repair operation outside the four conservative ones.
 
 Do not install Manifold, Geogram, lib3mf, OpenVDB, CGAL, OpenCascade, or any
 other geometry kernel without an explicit decision — licensing and WASM

@@ -97,9 +97,10 @@ button:disabled {
 
 .app__body {
   display: grid;
-  /* Viewport keeps the flexible middle column. The diagnostics column is wide
-     enough for the component table without stealing the working area. */
-  grid-template-columns: 17rem minmax(0, 1fr) 24rem;
+  /* Viewport keeps the flexible middle column. The right-hand column is wide
+     enough for the component table and the repair decision list without
+     stealing the working area — the model stays the largest thing on screen. */
+  grid-template-columns: 17rem minmax(0, 1fr) 26rem;
   min-height: 0;
 }
 
@@ -602,7 +603,10 @@ button:disabled {
     grid-column: 1 / -1;
     border-left: none;
     border-top: 1px solid var(--border-subtle);
-    max-height: 32rem;
+    /* Taller than the diagnostics alone needed: the repair workflow lives here
+       too, and a user must be able to reach Preview, Apply and Discard by
+       scrolling this column rather than by widening their window. */
+    max-height: 44rem;
   }
 }
 
@@ -789,4 +793,219 @@ button:disabled {
 
 .overlays__sampling {
   color: var(--severity-warning);
+}
+
+/* ------------------------------------------------- conservative repair -- */
+
+/* The repair panel and the Mesh Health report share the right-hand column, so
+   they need a visible separation: without it the two headings read as one very
+   long panel. */
+.app__diagnostics > .panel + .panel {
+  margin-top: var(--space-5);
+  padding-top: var(--space-5);
+  border-top: 1px solid var(--border-subtle);
+}
+
+/* The heading is focusable so the Repair navigation item can move attention
+   here. It is not interactive, so it must not look interactive. */
+.panel__title:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+.repair__operations {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.repair__operation {
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+  /* The tone is carried by a border on the leading edge as well as by the
+     verdict text, so a user who cannot distinguish the colours still has the
+     verdict sentence — colour is never the only signal. */
+  border-left-width: 3px;
+}
+
+.repair__operation--available {
+  border-left-color: var(--severity-success);
+}
+
+.repair__operation--inactive {
+  border-left-color: var(--border-strong);
+}
+
+/* Withheld is NOT an error colour. A refusal is the engine working correctly,
+   and styling it red would teach users that a careful tool is a broken one. */
+.repair__operation--withheld {
+  border-left-color: var(--severity-warning);
+}
+
+.repair__operation-label {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  cursor: pointer;
+}
+
+.repair__operation-label:has(input:disabled) {
+  cursor: default;
+}
+
+.repair__operation-name {
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+
+.repair__operation-verdict {
+  margin: var(--space-2) 0 0;
+  padding-left: 1.6rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.repair__operation-reason,
+.repair__operation-help,
+.repair__operation-counts {
+  margin: 0.2rem 0 0;
+  padding-left: 1.6rem;
+  font-size: 0.7rem;
+  color: var(--text-secondary);
+}
+
+.repair__operation-counts {
+  font-variant-numeric: tabular-nums;
+}
+
+.repair__headline {
+  margin: 0 0 var(--space-2);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.repair__blocked,
+.repair__nothing,
+.repair__applied,
+.repair__candidate {
+  margin-top: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+}
+
+.repair__applied {
+  border-left: 3px solid var(--severity-success);
+}
+
+.repair__applied-list {
+  margin: 0 0 var(--space-2);
+  padding-left: var(--space-4);
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+.repair__error-message {
+  margin: 0 0 var(--space-2);
+  font-size: 0.8125rem;
+  color: var(--severity-error);
+}
+
+/* Warnings are their own register: not an error, not silence. */
+.repair__warnings {
+  margin: var(--space-3) 0 0;
+  padding-left: var(--space-4);
+  font-size: 0.7rem;
+  color: var(--severity-warning);
+}
+
+.repair__warnings li + li {
+  margin-top: var(--space-1);
+}
+
+.repair__exclusions {
+  margin: 0;
+  padding-left: var(--space-4);
+  font-size: 0.7rem;
+  color: var(--text-secondary);
+}
+
+.repair__exclusions li + li {
+  margin-top: var(--space-1);
+}
+
+.repair__progress {
+  margin-top: var(--space-3);
+}
+
+.repair__view {
+  margin: var(--space-3) 0 0;
+  padding: 0 0 var(--space-2);
+  border: none;
+}
+
+.repair__view-option {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+
+.repair__view-option + .repair__view-option {
+  margin-top: var(--space-1);
+}
+
+.repair__metric-note {
+  display: block;
+  margin-top: 0.15rem;
+  font-weight: 400;
+  font-size: 0.65rem;
+  color: var(--severity-warning);
+  text-align: left;
+  white-space: normal;
+}
+
+.overlays__swatch--removedDuplicates {
+  background: #ff7a45;
+}
+
+.overlays__swatch--removedRepeatedPosition {
+  background: #c77dff;
+}
+
+.overlays__swatch--removedZeroArea {
+  background: #ff59d6;
+}
+
+.overlays__swatch--flippedFaces {
+  background: #38e8b0;
+}
+
+/* PART E4. The banner must be readable over any model, at any zoom, and must
+   not depend on colour to say what it says. */
+.viewport__preview-banner {
+  position: absolute;
+  top: var(--space-3);
+  left: 50%;
+  transform: translateX(-50%);
+  margin: 0;
+  padding: var(--space-2) var(--space-4);
+  border: 1px solid var(--severity-warning);
+  border-radius: var(--radius);
+  background: var(--surface-panel);
+  color: var(--severity-warning);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  pointer-events: none;
+  z-index: 2;
 }

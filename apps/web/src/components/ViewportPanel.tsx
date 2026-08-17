@@ -1,7 +1,7 @@
 import { useEffect, useRef, type ReactNode } from 'react';
 import { createViewport, type ViewportHandle } from '../viewport/create-viewport';
 import { useWorkspaceState, useWorkspaceStore } from '../state/store-context';
-import { StatusSeverity } from '../state/workspace-store';
+import { RepairCandidateState, RepairPreviewMode, StatusSeverity } from '../state/workspace-store';
 
 /**
  * React owns the container element; `createViewport` owns everything inside it.
@@ -14,7 +14,23 @@ export function ViewportPanel(): ReactNode {
   const containerRef = useRef<HTMLDivElement>(null);
   const viewportRef = useRef<ViewportHandle | undefined>(undefined);
   const store = useWorkspaceStore();
-  const { viewportFailure, model, analysis, overlays } = useWorkspaceState();
+  const { viewportFailure, model, analysis, overlays, repair } = useWorkspaceState();
+
+  /**
+   * The candidate the viewport may legitimately draw.
+   *
+   * Three conditions, all necessary. It must be READY — a building or failed
+   * candidate has nothing to show. It must carry a render snapshot. And it must
+   * belong to the model that is actually loaded: a candidate for a model the
+   * user has replaced describes geometry that is no longer on screen.
+   */
+  const previewable =
+    repair.candidateState === RepairCandidateState.Ready &&
+    repair.candidate?.render !== undefined &&
+    repair.candidate.source.modelId === model?.handle.modelId &&
+    repair.candidate.source.revision === model.handle.revision
+      ? repair.candidate
+      : undefined;
 
   useEffect(() => {
     const container = containerRef.current;
@@ -107,9 +123,85 @@ export function ViewportPanel(): ReactNode {
     });
   }, [analysis.detail, analysis.handle, model, overlays]);
 
+  /**
+   * Pushes the repair preview.
+   *
+   * Depends on `previewMode` as well as the candidate, because switching Before
+   * and After is a change to what is drawn — but `setPreview` rebuilds nothing
+   * when only the mode changed, so the toggle costs a visibility flag and a
+   * redraw rather than a GPU upload.
+   */
+  useEffect(() => {
+    const viewport = viewportRef.current;
+    if (viewport === undefined) return;
+
+    const render = previewable?.render;
+    if (previewable === undefined || render === undefined || model === undefined) {
+      viewport.setPreview(undefined);
+      return;
+    }
+
+    viewport.setPreview({
+      positions: render.positions,
+      normals: render.normals,
+      // Candidate bounds when the worker measured them; the source bounds
+      // otherwise. Conservative repair only removes and reorders, so the
+      // source's sphere always contains the candidate — it is a safe fallback
+      // rather than a guess.
+      center: previewable.bounds?.center ?? model.bounds?.center ?? [0, 0, 0],
+      radius: previewable.bounds?.radius ?? model.bounds?.radius ?? 1,
+      showing: repair.previewMode === RepairPreviewMode.After ? 'after' : 'before',
+      revision: model.revision,
+      generation: previewable.candidate.generation,
+    });
+  }, [model, previewable, repair.previewMode]);
+
+  /**
+   * Pushes the repair change overlays.
+   *
+   * Built from the SOURCE render snapshot in every case, because every change
+   * sample is a source face index. The viewport hides the removal categories
+   * when the proposed result is being shown, since those triangles do not exist
+   * there.
+   */
+  useEffect(() => {
+    const viewport = viewportRef.current;
+    if (viewport === undefined) return;
+
+    if (previewable === undefined || model === undefined) {
+      viewport.setChangeOverlays(undefined);
+      return;
+    }
+
+    viewport.setChangeOverlays({
+      samples: {
+        removedDuplicates: previewable.samples.removedDuplicateFaces,
+        removedRepeatedPosition: previewable.samples.removedRepeatedPositionFaces,
+        removedZeroArea: previewable.samples.removedZeroAreaFaces,
+        flippedFaces: previewable.samples.flippedFaces,
+      },
+      visibility: repair.changeOverlays,
+      view: repair.previewMode === RepairPreviewMode.After ? 'after' : 'before',
+      revision: model.revision,
+      generation: previewable.candidate.generation,
+    });
+  }, [model, previewable, repair.changeOverlays, repair.previewMode]);
+
+  const showingPreview =
+    previewable !== undefined && repair.previewMode === RepairPreviewMode.After;
+
   return (
     <section className="viewport" aria-label="3D workspace">
       <div className="viewport__canvas" ref={containerRef} data-testid="viewport-canvas" />
+
+      {/* PART E4. Never let a preview be mistaken for the model. The banner is
+          text with a role, not a colour: a user who cannot see the tint still
+          learns that nothing has been applied. */}
+      {showingPreview ? (
+        <p className="viewport__preview-banner" role="status" data-testid="preview-banner">
+          Preview — not applied
+        </p>
+      ) : null}
 
       {viewportFailure !== undefined ? (
         <p className="viewport__error" role="alert" data-testid="viewport-error">

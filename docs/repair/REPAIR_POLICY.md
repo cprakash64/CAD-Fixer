@@ -252,3 +252,108 @@ Repair workflow exists yet — Stage 3B-1B builds that on these contracts.
 
 **General mesh repair is NOT complete**, and nothing in the interface may
 suggest it is.
+
+---
+
+## Implementation status — Stage 3B-1B (the workflow)
+
+The engine's policy is unchanged. What this stage adds is the policy governing
+how that engine is **offered**, which is a separate set of decisions with its own
+ways of going wrong.
+
+### The default selection is all four operations
+
+All four conservative operations are selected by default. This is not
+"repair everything", and the distinction is load-bearing:
+
+- Each is decidable **exactly** from the stored coordinates. No tolerance exists
+  in the API to get wrong.
+- Each **refuses itself** when it cannot be safe. Selecting an operation does not
+  make it run; it makes the engine consider it and say what it decided.
+- Nothing runs on selection. The plan is computed, shown, and only then can a
+  candidate be built — and only then can it be applied.
+
+Defaulting them off would have meant a user seeing four "Not selected" rows and
+having to guess which are safe, which is exactly the judgement CAD Fixer is
+supposed to be making for them.
+
+### Every operation is listed, always
+
+Including the ones with nothing to do, and especially the ones that were refused.
+An absent row leaves a user wondering whether the check ran; a refused row that
+says why is the most useful thing on the screen for a model CAD Fixer cannot fix.
+
+### A refusal is not an error
+
+`REFUSED_UNSAFE` and `BLOCKED_BY_PRECONDITION` are a conservative engine working
+correctly. They are shown as decisions with reasons, in a distinct visual
+register from errors. Styling a considered refusal in red teaches users that a
+careful tool is a broken one, and the next thing they do is look for a tool that
+does not refuse.
+
+### Selection cannot widen what the engine will do
+
+A refused or blocked operation is **not selectable**. Selecting it would produce
+a plan that refuses it again, which reads as the checkbox not working. The plan
+is recomputed when the selection changes — which operations apply depends on
+which others run first, because duplicates are removed before winding is solved.
+
+### The wording rules
+
+Enforced by test against every string
+`apps/web/src/state/repair-presentation.ts` can emit:
+
+| Never say                        | Because                                                          |
+| -------------------------------- | ---------------------------------------------------------------- |
+| printable, ready to print        | wall thickness is not measured; self-intersections are unchecked |
+| watertight                       | implies a verified closed solid                                  |
+| fully repaired, all errors fixed | four defect classes were attempted; the rest were refused        |
+| fix everything, make printable   | the same claim, as an imperative or a promise                    |
+| hole                             | a boundary loop may be an intended opening                       |
+| faces outward, outward-facing    | winding is unified RELATIVE to neighbours only — ADR 0010        |
+
+What may be said, after a validated and committed repair:
+
+> **Conservative repair applied.** Selected topological issues were repaired and
+> revalidated.
+>
+> Self-intersections and wall thickness have not yet been checked.
+
+The qualifier is a required field on every verdict rather than a suffix a caller
+may forget — including on success, which is the case where it is most tempting to
+drop and most misleading to omit.
+
+### An expected change is not a regression
+
+Once the validator ACCEPTS a candidate, every remaining difference was predicted
+before the rebuild and confirmed after it. The interface labels those `(expected)`
+and never as damage.
+
+The case this exists for: removing a duplicate can make the boundary-edge count
+go **up**. Two coincident triangles pair each other's edges and look closed, so
+deleting the redundant copy reveals the boundary that was always there. Reporting
+"3 new boundary errors" would be the interface inventing a problem the engine
+explicitly reasoned about and allowed — and would push a user to undo a correct
+repair.
+
+### Warnings are a third register
+
+Not silence, not an error. A bounding box that changed because removed geometry
+defined an extreme, a signed volume that moved because orientation moved, a
+component that disappeared because every one of its faces was removable — these
+are reported as things worth knowing, in their own styling, beside a repair that
+was accepted.
+
+### A preview is never an application
+
+Nothing in the interface describes a candidate as having changed the model. The
+viewport is labelled while a proposal is shown. Discarding is always available and
+always leaves the model exactly as it was.
+
+### One step of undo, and no redo
+
+Undo is offered for the most recent repair only. Redo is not implemented and is
+not derivable from what is retained — see
+[ADR 0011](../adr/0011-repair-undo-revisions.md). The recourse after an undo is to
+run the repair again, which is safe precisely because conservative repair is
+deterministic.

@@ -37,6 +37,17 @@ export interface SessionMemoryBudget {
   readonly maxExportPeakBytes: number;
   /** Ceiling on scratch space a single analysis may request. */
   readonly maxAnalysisWorkspaceBytes: number;
+  /**
+   * Ceiling on modelled peak during a conservative repair.
+   *
+   * SEPARATE FROM THE ANALYSIS CEILING, deliberately. A repair peak is a
+   * different quantity: the authoritative mesh and the candidate coexist by
+   * design — that coexistence IS the safety property — so the peak is both
+   * meshes plus connectivity plus the validation workspace, not the workspace
+   * alone. Checking a repair peak against an analysis-workspace ceiling would be
+   * comparing two different things and calling the answer a limit.
+   */
+  readonly maxRepairPeakBytes: number;
 }
 
 /**
@@ -56,6 +67,7 @@ export const DEFAULT_SESSION_MEMORY_BUDGET: SessionMemoryBudget = {
   maxImportPeakBytes: 1536 * 1024 * 1024,
   maxExportPeakBytes: 1536 * 1024 * 1024,
   maxAnalysisWorkspaceBytes: 1024 * 1024 * 1024,
+  maxRepairPeakBytes: 1024 * 1024 * 1024,
 };
 
 /** Bytes a canonical mesh of this size occupies: positions + indices. */
@@ -212,6 +224,42 @@ export function requestAnalysisWorkspace(
   }
   if (estimatedBytes > budget.maxAnalysisWorkspaceBytes) {
     return reject(operation, estimatedBytes, budget.maxAnalysisWorkspaceBytes, context);
+  }
+  return undefined;
+}
+
+/**
+ * Asks whether a conservative repair may proceed at its modelled peak.
+ *
+ * REFUSAL HAPPENS BEFORE ANY BULK ALLOCATION, which is the whole point: a repair
+ * that cannot fit must leave the user's model exactly as it was, loaded,
+ * viewable and exportable. An out-of-memory crash mid-rebuild would take the tab
+ * and the session with it.
+ *
+ * `callerCeilingBytes` can only NARROW the budget, never widen it. The protocol
+ * lets a caller state a tighter ceiling than the product's own — a support or
+ * diagnostic scenario on a constrained device — and a caller that asks for more
+ * than the product allows still gets the product's answer.
+ *
+ * `context` carries counts and byte estimates only. Never geometry.
+ */
+export function requestRepairPeak(
+  operation: string,
+  estimatedBytes: number,
+  context: Readonly<Record<string, number>> = {},
+  callerCeilingBytes?: number,
+  budget: SessionMemoryBudget = DEFAULT_SESSION_MEMORY_BUDGET,
+): MemoryCheck {
+  const ceiling =
+    callerCeilingBytes === undefined || !Number.isFinite(callerCeilingBytes)
+      ? budget.maxRepairPeakBytes
+      : Math.min(budget.maxRepairPeakBytes, Math.max(0, callerCeilingBytes));
+
+  if (!Number.isFinite(estimatedBytes) || estimatedBytes < 0) {
+    return reject(operation, Number.POSITIVE_INFINITY, ceiling, context);
+  }
+  if (estimatedBytes > ceiling) {
+    return reject(operation, estimatedBytes, ceiling, context);
   }
   return undefined;
 }

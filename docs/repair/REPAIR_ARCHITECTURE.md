@@ -296,3 +296,127 @@ Every validation carries `selfIntersectionStatus: 'not-checked'`. There is no
 
 See `docs/adr/0010-repair-transactions-and-revisions.md` for the transaction,
 revision and seed-rule decisions.
+
+---
+
+## Stage 3B-1B — the conservative repair WORKFLOW is IMPLEMENTED
+
+Stage 3B-1A built the engine and the transaction. Stage 3B-1B exposes them to a
+user, and adds the two things a user-facing repair needs that a runtime does not:
+a **preview** they can inspect before committing, and an **undo** for after.
+
+### The layers, and where authority lives
+
+```
+RepairPanel.tsx            renders decisions; dispatches; owns NO safety question
+use-conservative-repair.ts binds the service to the store; owns lifecycle
+repair-presentation.ts     decides every sentence; framework-free; tested without a DOM
+repair-service.ts          transport; handle verification; cancellation; ceiling
+geometry-client.ts         the only main-thread code that knows Worker exists
+--- worker boundary ---
+repair-handlers.ts         preflight, plan, candidate, commit, discard, undo
+RepairCandidateStore       the commit guards
+RepairHistoryStore         the undo guards and the inverse patches
+ResidentModelStore         the atomic reference swap
+```
+
+**React is never the transaction authority.** `Apply` sends three identifiers —
+a candidate handle, the revision the UI believes is current, and a plan hash —
+and the worker re-checks every guard before it swaps anything: revision currency,
+candidate state, validation acceptance, plan identity, single use. A bug in the
+panel or the hook can waste work or show a wrong label; it cannot apply a repair
+the runtime refused. That separation is asserted by test rather than described.
+
+### Preview: two snapshots, one authority
+
+The viewport holds the authoritative model's render snapshot and, while a
+candidate exists, the candidate's. **Both are display data.** No handle is
+swapped and no store is written when the user switches views — `setPreview` sets
+a `visible` flag.
+
+Three properties follow from that, and all three are the reason it was built this
+way rather than by calling `setModel` with the candidate:
+
+- **The camera cannot jump.** Before and After share the model group's transform,
+  the orbit target, the zoom and the display offset. Nothing reframes. Comparing
+  two views of a model is impossible if switching moves the camera.
+- **The switch does not scale with mesh size.** Both meshes are already uploaded;
+  measurements are in `docs/PERFORMANCE_BASELINE.md`.
+- **Export cannot resolve the candidate.** `RepairCandidateHandle` is a distinct
+  type from `ModelHandle`, so the compiler refuses to let a candidate reach an
+  operation that takes a model — and the viewport never made it authoritative in
+  the first place.
+
+The preview is labelled **"Preview — not applied"** whenever the proposed result
+is on screen. The label is text with a `role`, not a colour.
+
+### Change overlays
+
+Built from the engine's bounded change samples, which are **source face indices
+for all four categories including flips** — so every overlay indexes the source
+render snapshot the main thread already holds. Nothing asks the worker for
+geometry again and nothing walks a candidate mesh on the UI thread.
+
+One batched object per category. An `Object3D` per changed face would mean an
+object, a draw call and a scene-graph node for every triangle a repair touches.
+
+**Removed faces exist only in the source**, so their overlays are hidden when the
+proposed result is shown, and the panel says why rather than leaving a dead
+checkbox. **Flipped faces occupy the same coordinates in both views** — a flip
+reorders corners and moves no vertex — so they stay visible, with a direction
+marker whose sign differs between the views.
+
+The direction marker is derived from the triangle's CORNER ORDER, never from the
+file's stored normal. STL normals are advisory, frequently disagree with winding,
+and are exactly what this repair refuses to treat as truth (ADR 0010). Both
+markers are built up front so switching views costs no upload.
+
+### Undo
+
+One step, restored in the worker, committed as a new monotonic revision. The
+inverse patch lives in `RepairHistoryStore` beside the models it describes, and
+exactly one repair per model is reversible — a second repair supersedes the first
+and releases its patch. The restored mesh passes `assertMeshStructure` before it
+becomes authoritative: rule 11 applies to undo as much as to any other geometry
+operation, and "the patch promised" is not a check.
+
+The full reasoning, and why the revision does not go backwards, is
+[ADR 0011](../adr/0011-repair-undo-revisions.md).
+
+### The report cache
+
+`repair/plan` and `repair/create-candidate` reuse the topology report the
+application already computed, keyed by `(modelId, revision)`. Without it the same
+unchanged mesh was analysed three times per repair. Safe because geometry at a
+revision is immutable, and the revision is compared rather than assumed.
+
+### Cancellation, honestly
+
+The repair pipeline is one synchronous deterministic pass. A worker handler that
+never returns to the event loop cannot be cancelled — the cancel arrives as a
+message, and a polled flag never changes while the handler runs. So the candidate
+handler is `async` and yields at two points: after analysis, and **before the
+candidate is registered**.
+
+That second yield is the load-bearing one. A cancel observed there means the
+store never learns a candidate existed: no preview, nothing committable, nothing
+resident. Yielding after registration would have created a candidate that only a
+discard could clean up, and a cancel that leaks memory is not a cancel.
+
+What it does NOT mean: the pass already running is not interrupted mid-array. The
+work is discarded, not stopped. This is the same contract topology analysis has
+had since Stage 2, and it is stated rather than implied because the difference is
+observable on a very large model.
+
+### The engines stay out of the application bundle
+
+`geometry-runtime` **restates** the repair contract's constants rather than
+re-exporting them from `@cadfixer/mesh-repair`. A value re-export would make the
+engine — and `mesh-topology` behind it — a runtime dependency of everything that
+imports the protocol, including the main-thread bundle. A few frozen strings keep
+the boundary provable instead of trusting a bundler to shake it back out.
+
+The duplication is guarded twice: by `Exactly<>` at compile time, and by a test
+that compares the runtime VALUES key by key. A type made of string literals is
+satisfied by a constant whose keys were renamed; the interface would then show
+nothing useful for every refusal, forever, without failing a build.

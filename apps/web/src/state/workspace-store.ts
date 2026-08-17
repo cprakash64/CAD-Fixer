@@ -1,4 +1,16 @@
-import type { ModelHandle, TopologyDetail, TopologyReport } from '@cadfixer/geometry-runtime';
+import type {
+  ConservativeRepairPlan,
+  MeshBounds,
+  ModelHandle,
+  RenderSnapshot,
+  RepairCandidateHandle,
+  RepairChangeCounts,
+  RepairChangeSamples,
+  RepairOperation,
+  RepairValidation,
+  TopologyDetail,
+  TopologyReport,
+} from '@cadfixer/geometry-runtime';
 import type { WorkflowId } from './workflows';
 import type { LoadedModel } from './model';
 
@@ -194,6 +206,184 @@ const OVERLAYS_HIDDEN: OverlayVisibility = {
   degenerateFaces: false,
 };
 
+/* ------------------------------------------------ conservative repair -- */
+
+export const RepairPlanState = {
+  /** No model, or no applicable topology report to plan from. */
+  Unavailable: 'unavailable',
+  Planning: 'planning',
+  Ready: 'ready',
+  Failed: 'failed',
+} as const;
+
+export type RepairPlanState = (typeof RepairPlanState)[keyof typeof RepairPlanState];
+
+export const RepairCandidateState = {
+  Idle: 'idle',
+  Building: 'building',
+  /** Built AND accepted by validation. The only state that may be applied. */
+  Ready: 'ready',
+  Failed: 'failed',
+  Cancelled: 'cancelled',
+} as const;
+
+export type RepairCandidateState = (typeof RepairCandidateState)[keyof typeof RepairCandidateState];
+
+export const RepairCommitState = {
+  Idle: 'idle',
+  Applying: 'applying',
+  Undoing: 'undoing',
+} as const;
+
+export type RepairCommitState = (typeof RepairCommitState)[keyof typeof RepairCommitState];
+
+/**
+ * Which geometry the viewport is showing while a candidate exists.
+ *
+ * A VIEW SETTING AND NOTHING MORE. `After` never makes the candidate
+ * authoritative — the model the worker holds is unchanged until commit — and the
+ * interface says so on screen whenever this is `After`.
+ */
+export const RepairPreviewMode = {
+  Before: 'before',
+  After: 'after',
+} as const;
+
+export type RepairPreviewMode = (typeof RepairPreviewMode)[keyof typeof RepairPreviewMode];
+
+export interface RepairFailure {
+  readonly message: string;
+  readonly code: string;
+  /** Whether returning to the selection and trying again could plausibly help. */
+  readonly retryable: boolean;
+}
+
+declare const repairTokenBrand: unique symbol;
+
+/**
+ * Identifies one repair attempt — plan or candidate.
+ *
+ * Same reason imports and analyses have tokens: two attempts can be in flight
+ * when a user changes their selection mid-plan, and results can arrive in either
+ * order. Without an identity per attempt, a superseded plan would overwrite a
+ * newer one and the checkboxes would stop matching the plan beside them.
+ */
+export type RepairToken = number & { readonly [repairTokenBrand]: true };
+
+/**
+ * A validated candidate, as the workspace holds it.
+ *
+ * WHAT IS DELIBERATELY ABSENT: the candidate's `CanonicalMesh`. It stays
+ * worker-resident exactly as the authoritative model's does. `render` is a
+ * display-only snapshot, and `candidate` is a handle the UI can name but cannot
+ * export — `RepairCandidateHandle` is a distinct type from `ModelHandle`, so the
+ * compiler refuses to let a candidate reach an operation that takes a model.
+ */
+export interface RepairPreview {
+  readonly candidate: RepairCandidateHandle;
+  readonly source: ModelHandle;
+  readonly planHash: string;
+  readonly validation: RepairValidation;
+  readonly counts: RepairChangeCounts;
+  readonly samples: RepairChangeSamples;
+  readonly render: RenderSnapshot | undefined;
+  readonly bounds: MeshBounds | undefined;
+  readonly inverseBytes: number;
+}
+
+/** A repair that has actually been applied, and what it takes to reverse it. */
+export interface AppliedRepair {
+  readonly recordId: string;
+  /** The revision the repair produced. */
+  readonly handle: ModelHandle;
+  readonly parentRevision: number;
+  readonly appliedOperations: readonly RepairOperation[];
+  readonly counts: RepairChangeCounts;
+  readonly undoable: boolean;
+}
+
+/**
+ * Which change overlays the viewport should draw over a preview.
+ *
+ * SEPARATE FROM `OverlayVisibility`, which describes diagnostics of the loaded
+ * model. These describe a proposal, they are bounded by the engine's sample cap
+ * rather than by mesh size, and they default ON: a user who asked to preview a
+ * repair asked to see what it changes. Diagnostics default off for the opposite
+ * reason — fifty thousand boundary edges would bury the model.
+ */
+export interface ChangeOverlayVisibility {
+  readonly removedDuplicates: boolean;
+  readonly removedRepeatedPosition: boolean;
+  readonly removedZeroArea: boolean;
+  readonly flippedFaces: boolean;
+}
+
+export type ChangeOverlayId = keyof ChangeOverlayVisibility;
+
+const CHANGE_OVERLAYS_SHOWN: ChangeOverlayVisibility = {
+  removedDuplicates: true,
+  removedRepeatedPosition: true,
+  removedZeroArea: true,
+  flippedFaces: true,
+};
+
+export interface RepairSnapshot {
+  /** The model the plan and candidate belong to. Checked on every write. */
+  readonly handle: ModelHandle | undefined;
+  readonly planState: RepairPlanState;
+  readonly plan: ConservativeRepairPlan | undefined;
+  readonly planError: RepairFailure | undefined;
+  /** Operations the user has selected. Never wider than what the plan allows. */
+  readonly selection: readonly RepairOperation[];
+  readonly candidateState: RepairCandidateState;
+  readonly candidate: RepairPreview | undefined;
+  readonly candidateError: RepairFailure | undefined;
+  /** 0..1, meaningful while planning, building, applying or undoing. */
+  readonly fraction: number;
+  readonly phase: string | undefined;
+  readonly previewMode: RepairPreviewMode;
+  readonly changeOverlays: ChangeOverlayVisibility;
+  readonly commitState: RepairCommitState;
+  readonly commitError: RepairFailure | undefined;
+  /** The most recent applied repair for the loaded model, if any. */
+  readonly lastApplied: AppliedRepair | undefined;
+}
+
+/**
+ * The default operation selection.
+ *
+ * ALL FOUR, because all four are conservative by construction: each is decidable
+ * exactly from the stored coordinates, each refuses itself when it cannot be
+ * safe, and none of them can run without appearing in the plan the user sees
+ * first. Selecting them by default is not "repair everything" — the plan still
+ * refuses whatever it must, and nothing runs until Preview is pressed.
+ * See docs/repair/REPAIR_POLICY.md.
+ */
+export const DEFAULT_REPAIR_SELECTION: readonly RepairOperation[] = Object.freeze([
+  'remove-duplicate-faces',
+  'remove-repeated-position-faces',
+  'remove-zero-area-faces',
+  'unify-winding',
+]);
+
+const EMPTY_REPAIR: RepairSnapshot = {
+  handle: undefined,
+  planState: RepairPlanState.Unavailable,
+  plan: undefined,
+  planError: undefined,
+  selection: DEFAULT_REPAIR_SELECTION,
+  candidateState: RepairCandidateState.Idle,
+  candidate: undefined,
+  candidateError: undefined,
+  fraction: 0,
+  phase: undefined,
+  previewMode: RepairPreviewMode.Before,
+  changeOverlays: CHANGE_OVERLAYS_SHOWN,
+  commitState: RepairCommitState.Idle,
+  commitError: undefined,
+  lastApplied: undefined,
+};
+
 export interface WorkspaceState {
   /** `undefined` means no workflow is open. No workflow can be opened yet. */
   readonly selectedWorkflow: WorkflowId | undefined;
@@ -209,6 +399,8 @@ export interface WorkspaceState {
   readonly exportProgress: ExportProgressState;
   /** Topology diagnostics for `model`, or the unavailable state when empty. */
   readonly analysis: AnalysisSnapshot;
+  /** Conservative repair for `model`, or the unavailable state when empty. */
+  readonly repair: RepairSnapshot;
   readonly overlays: OverlayVisibility;
   readonly status: readonly StatusEntry[];
   readonly runtime: RuntimeState;
@@ -241,6 +433,7 @@ const INITIAL_STATE: WorkspaceState = {
   importProgress: { state: ImportState.Idle, fraction: 0 },
   exportProgress: { state: ExportState.Idle, fraction: 0 },
   analysis: EMPTY_ANALYSIS,
+  repair: EMPTY_REPAIR,
   overlays: OVERLAYS_HIDDEN,
   status: [],
   runtime: { selfTest: SelfTestState.Idle, progress: 0 },
@@ -259,6 +452,8 @@ export class WorkspaceStore {
   private currentExportToken: ExportToken | undefined;
   private nextAnalysisToken = 1;
   private currentAnalysisToken: AnalysisToken | undefined;
+  private nextRepairToken = 1;
+  private currentRepairToken: RepairToken | undefined;
 
   public getSnapshot = (): WorkspaceState => this.state;
 
@@ -352,6 +547,11 @@ export class WorkspaceStore {
     // replaced cannot install itself against the replacement, and the report
     // itself goes rather than lingering beside different geometry.
     this.currentAnalysisToken = undefined;
+    // And it invalidates the previous model's repair entirely: a plan, a
+    // candidate, a preview and an undo record all name geometry the user has
+    // just replaced. The candidate's worker-side release is the caller's
+    // responsibility — see `useConservativeRepair`.
+    this.currentRepairToken = undefined;
 
     this.update({
       model: { ...model, revision },
@@ -361,9 +561,503 @@ export class WorkspaceStore {
         state: AnalysisState.Idle,
         handle: model.handle,
       },
+      repair: { ...EMPTY_REPAIR, handle: model.handle },
       // A successful import means a live worker, so any previous loss notice is
       // stale and must go.
       geometrySessionLost: undefined,
+    });
+    return true;
+  }
+
+  /* ------------------------------------------- conservative repair -- */
+
+  /**
+   * Claims the repair slot for `handle` and returns the token for this attempt.
+   *
+   * One token stream covers planning AND candidate creation, because they are
+   * one user-visible operation with two phases. A candidate built for a plan the
+   * user has since changed must not install itself, and a single monotonic token
+   * answers that without any reference to timing.
+   */
+  public beginRepairPlan(handle: ModelHandle, selection: readonly RepairOperation[]): RepairToken {
+    const token = this.nextRepairToken as RepairToken;
+    this.nextRepairToken += 1;
+    this.currentRepairToken = token;
+
+    const repair = this.state.repair;
+    this.update({
+      repair: {
+        ...repair,
+        handle,
+        planState: RepairPlanState.Planning,
+        planError: undefined,
+        selection,
+        fraction: 0,
+        phase: undefined,
+        // A new plan invalidates any candidate built from the previous one. The
+        // handle is kept in `candidate` until the caller releases it, so this
+        // clears the state rather than the worker's memory.
+        candidateState: RepairCandidateState.Idle,
+        candidate: undefined,
+        candidateError: undefined,
+        previewMode: RepairPreviewMode.Before,
+      },
+    });
+    return token;
+  }
+
+  public isCurrentRepair(token: RepairToken): boolean {
+    return this.currentRepairToken === token;
+  }
+
+  public reportRepairProgress(token: RepairToken, fraction: number, phase: string): void {
+    if (!this.isCurrentRepair(token)) return;
+    const repair = this.state.repair;
+    // Coalesced at the source, exactly as analysis progress is: a worker phase
+    // can emit many updates per second and re-rendering for a fraction that
+    // rounds to the same displayed percent is work nobody sees.
+    if (
+      repair.phase === phase &&
+      Math.round(repair.fraction * 100) === Math.round(fraction * 100)
+    ) {
+      return;
+    }
+    this.update({ repair: { ...repair, fraction, phase } });
+  }
+
+  /**
+   * Installs a plan, but only for the model that is actually loaded.
+   *
+   * TWO GATES, as everywhere else in this store. The token rejects a superseded
+   * attempt; the handle comparison rejects a plan whose model is no longer
+   * current even if the token somehow survived.
+   */
+  public commitRepairPlan(
+    token: RepairToken,
+    handle: ModelHandle,
+    plan: ConservativeRepairPlan,
+  ): boolean {
+    if (!this.isCurrentRepair(token)) return false;
+    if (!sameHandle(this.state.model?.handle, handle)) return false;
+
+    this.update({
+      repair: {
+        ...this.state.repair,
+        handle,
+        planState: RepairPlanState.Ready,
+        plan,
+        planError: undefined,
+        fraction: 1,
+        phase: undefined,
+      },
+    });
+    return true;
+  }
+
+  public failRepairPlan(token: RepairToken, error: RepairFailure): boolean {
+    if (!this.isCurrentRepair(token)) return false;
+    this.currentRepairToken = undefined;
+    this.update({
+      repair: {
+        ...this.state.repair,
+        planState: RepairPlanState.Failed,
+        planError: error,
+        fraction: 0,
+        phase: undefined,
+      },
+    });
+    return true;
+  }
+
+  /**
+   * Records that no plan can be produced yet.
+   *
+   * Distinct from a failure: there is nothing wrong, the prerequisite simply is
+   * not there. Repair needs a topology report for the CURRENT revision, and
+   * while analysis is running, cancelled or failed there is nothing honest to
+   * plan from.
+   */
+  public setRepairUnavailable(handle: ModelHandle | undefined): void {
+    this.currentRepairToken = undefined;
+    this.update({
+      repair: {
+        ...EMPTY_REPAIR,
+        handle,
+        selection: this.state.repair.selection,
+        lastApplied: this.state.repair.lastApplied,
+      },
+    });
+  }
+
+  /**
+   * Changes which operations the user wants attempted.
+   *
+   * The plan is marked stale rather than edited: which operations are applicable
+   * depends on which others run first — duplicates are removed before winding is
+   * solved — so a selection change requires the engine to decide again. Editing
+   * the existing plan in place would show the user a plan that does not match
+   * what a repair would do.
+   */
+  public setRepairSelection(selection: readonly RepairOperation[]): void {
+    const repair = this.state.repair;
+    this.currentRepairToken = undefined;
+    this.update({
+      repair: {
+        ...repair,
+        selection: [...selection],
+        // THE PLAN IS KEPT ON SCREEN while the new one computes, for the same
+        // reason a re-run of analysis keeps the previous report: blanking the
+        // decision list on every checkbox click makes the panel lose its place,
+        // and it takes the focused control out of the document underneath a
+        // keyboard user. `planState` says it is being recomputed, and the
+        // Preview button is withheld until the new plan lands — so nothing can
+        // be built from decisions that no longer match the selection.
+        planState: RepairPlanState.Planning,
+        planError: undefined,
+        candidateState: RepairCandidateState.Idle,
+        candidate: undefined,
+        candidateError: undefined,
+        previewMode: RepairPreviewMode.Before,
+        fraction: 0,
+        phase: undefined,
+      },
+    });
+  }
+
+  /**
+   * Claims a fresh token for building a candidate, keeping the plan on screen.
+   *
+   * Separate from `beginRepairPlan` because previewing does NOT re-plan: the
+   * user is asking for the plan they can already see to be built. Reusing the
+   * planning entry point would blank the decision list and then restore it,
+   * which reads as the panel losing its place.
+   *
+   * Returns `undefined` when there is no plan to build, so a stray click cannot
+   * start a candidate for nothing.
+   */
+  public beginRepairPreview(): RepairToken | undefined {
+    const repair = this.state.repair;
+    if (repair.planState !== RepairPlanState.Ready || repair.plan === undefined) return undefined;
+    if (repair.plan.noOp) return undefined;
+
+    const token = this.nextRepairToken as RepairToken;
+    this.nextRepairToken += 1;
+    this.currentRepairToken = token;
+    return token;
+  }
+
+  public beginRepairCandidate(token: RepairToken): boolean {
+    if (!this.isCurrentRepair(token)) return false;
+    this.update({
+      repair: {
+        ...this.state.repair,
+        candidateState: RepairCandidateState.Building,
+        candidate: undefined,
+        candidateError: undefined,
+        previewMode: RepairPreviewMode.Before,
+        fraction: 0,
+        phase: undefined,
+      },
+    });
+    return true;
+  }
+
+  /**
+   * Installs a validated candidate.
+   *
+   * Only an ACCEPTED candidate reaches here — the service refuses anything else —
+   * and the handle is still re-checked, because a candidate for a model that has
+   * been replaced describes geometry the user is no longer looking at.
+   *
+   * The preview opens on AFTER: the user pressed Preview to see the proposal,
+   * and the label above the viewport says it is not applied.
+   */
+  public commitRepairCandidate(token: RepairToken, preview: RepairPreview): boolean {
+    if (!this.isCurrentRepair(token)) return false;
+    if (!sameHandle(this.state.model?.handle, preview.source)) return false;
+
+    this.update({
+      repair: {
+        ...this.state.repair,
+        candidateState: RepairCandidateState.Ready,
+        candidate: preview,
+        candidateError: undefined,
+        previewMode:
+          preview.render === undefined ? RepairPreviewMode.Before : RepairPreviewMode.After,
+        changeOverlays: CHANGE_OVERLAYS_SHOWN,
+        fraction: 1,
+        phase: undefined,
+      },
+    });
+    return true;
+  }
+
+  public failRepairCandidate(token: RepairToken, error: RepairFailure): boolean {
+    if (!this.isCurrentRepair(token)) return false;
+    this.update({
+      repair: {
+        ...this.state.repair,
+        candidateState: RepairCandidateState.Failed,
+        candidate: undefined,
+        candidateError: error,
+        previewMode: RepairPreviewMode.Before,
+        fraction: 0,
+        phase: undefined,
+      },
+    });
+    return true;
+  }
+
+  public cancelRepairCandidate(token: RepairToken): boolean {
+    if (!this.isCurrentRepair(token)) return false;
+    this.update({
+      repair: {
+        ...this.state.repair,
+        candidateState: RepairCandidateState.Cancelled,
+        candidate: undefined,
+        candidateError: undefined,
+        previewMode: RepairPreviewMode.Before,
+        fraction: 0,
+        phase: undefined,
+      },
+    });
+    return true;
+  }
+
+  /**
+   * Drops the candidate from the interface and returns what was dropped.
+   *
+   * The handle comes back so the caller can release the worker's copy. The store
+   * cannot do that itself — it holds no client and dispatches nothing — and
+   * forgetting a candidate without releasing it would leave a mesh the size of
+   * the model resident for the rest of the session.
+   */
+  public clearRepairCandidate(): RepairCandidateHandle | undefined {
+    const repair = this.state.repair;
+    const dropped = repair.candidate?.candidate;
+    if (repair.candidate === undefined && repair.candidateState === RepairCandidateState.Idle) {
+      return undefined;
+    }
+    this.update({
+      repair: {
+        ...repair,
+        candidateState: RepairCandidateState.Idle,
+        candidate: undefined,
+        candidateError: undefined,
+        previewMode: RepairPreviewMode.Before,
+        fraction: 0,
+        phase: undefined,
+      },
+    });
+    return dropped;
+  }
+
+  public setRepairPreviewMode(mode: RepairPreviewMode): void {
+    const repair = this.state.repair;
+    if (repair.previewMode === mode) return;
+    // Showing the proposed result requires a proposed result to show.
+    if (mode === RepairPreviewMode.After && repair.candidate?.render === undefined) return;
+    this.update({ repair: { ...repair, previewMode: mode } });
+  }
+
+  public setChangeOverlayVisible(overlay: ChangeOverlayId, visible: boolean): void {
+    const repair = this.state.repair;
+    if (repair.changeOverlays[overlay] === visible) return;
+    this.update({
+      repair: { ...repair, changeOverlays: { ...repair.changeOverlays, [overlay]: visible } },
+    });
+  }
+
+  /**
+   * Claims the commit slot.
+   *
+   * Returns false when a commit or an undo is already running, which is the
+   * guard that makes a double-click harmless: the second click finds the slot
+   * taken and dispatches nothing. The worker refuses a second commit too — this
+   * is the first of two independent defences, not the only one.
+   */
+  public beginRepairCommit(): boolean {
+    const repair = this.state.repair;
+    if (repair.commitState !== RepairCommitState.Idle) return false;
+    if (repair.candidateState !== RepairCandidateState.Ready || repair.candidate === undefined) {
+      return false;
+    }
+    this.update({
+      repair: {
+        ...repair,
+        commitState: RepairCommitState.Applying,
+        commitError: undefined,
+        fraction: 0,
+        phase: undefined,
+      },
+    });
+    return true;
+  }
+
+  /**
+   * Progress for a commit or an undo.
+   *
+   * Not tokened, because `commitState` already admits exactly one at a time —
+   * there is no second attempt to tell it apart from. An update that arrives
+   * when neither is running belongs to an operation that has already finished
+   * and is dropped.
+   */
+  public reportRepairCommitProgress(fraction: number, phase: string): void {
+    const repair = this.state.repair;
+    if (repair.commitState === RepairCommitState.Idle) return;
+    if (
+      repair.phase === phase &&
+      Math.round(repair.fraction * 100) === Math.round(fraction * 100)
+    ) {
+      return;
+    }
+    this.update({ repair: { ...repair, fraction, phase } });
+  }
+
+  public failRepairCommit(error: RepairFailure): void {
+    this.update({
+      repair: {
+        ...this.state.repair,
+        commitState: RepairCommitState.Idle,
+        commitError: error,
+        fraction: 0,
+        phase: undefined,
+      },
+    });
+  }
+
+  /**
+   * Installs a committed repair as the loaded model.
+   *
+   * THE MODEL IS REPLACED, not annotated. What the viewport draws, what export
+   * resolves, and what Mesh Health describes all follow from `model`, so a
+   * commit that updated anything less than this would leave one of them
+   * describing the previous revision. The source file facts are carried forward:
+   * the user's file did not change, its geometry did.
+   *
+   * Analysis is reset to `Idle` for the NEW handle, which is what makes
+   * diagnostics re-run automatically against the repaired geometry.
+   */
+  public applyRepairResult(result: {
+    readonly handle: ModelHandle;
+    readonly parentRevision: number;
+    readonly recordId: string;
+    readonly appliedOperations: readonly RepairOperation[];
+    readonly counts: RepairChangeCounts;
+    readonly undoable: boolean;
+    readonly render: RenderSnapshot;
+    readonly bounds: MeshBounds | undefined;
+    readonly triangleCount: number;
+    readonly vertexCount: number;
+    readonly residentBytes: number;
+  }): boolean {
+    const model = this.state.model;
+    if (model === undefined) return false;
+    if (model.handle.modelId !== result.handle.modelId) return false;
+
+    const revision = this.nextModelRevision;
+    this.nextModelRevision += 1;
+    this.currentAnalysisToken = undefined;
+    this.currentRepairToken = undefined;
+
+    this.update({
+      model: {
+        ...model,
+        handle: result.handle,
+        render: result.render,
+        bounds: result.bounds,
+        triangleCount: result.triangleCount,
+        vertexCount: result.vertexCount,
+        residentBytes: result.residentBytes,
+        revision,
+      },
+      analysis: { ...EMPTY_ANALYSIS, state: AnalysisState.Idle, handle: result.handle },
+      overlays: OVERLAYS_HIDDEN,
+      repair: {
+        ...EMPTY_REPAIR,
+        handle: result.handle,
+        selection: this.state.repair.selection,
+        lastApplied: {
+          recordId: result.recordId,
+          handle: result.handle,
+          parentRevision: result.parentRevision,
+          appliedOperations: result.appliedOperations,
+          counts: result.counts,
+          undoable: result.undoable,
+        },
+      },
+    });
+    return true;
+  }
+
+  /** Claims the undo slot. False when a commit or undo is already running. */
+  public beginRepairUndo(): boolean {
+    const repair = this.state.repair;
+    if (repair.commitState !== RepairCommitState.Idle) return false;
+    if (repair.lastApplied?.undoable !== true) return false;
+    this.update({
+      repair: {
+        ...repair,
+        commitState: RepairCommitState.Undoing,
+        commitError: undefined,
+        fraction: 0,
+        phase: undefined,
+      },
+    });
+    return true;
+  }
+
+  public failRepairUndo(error: RepairFailure): void {
+    this.update({
+      repair: {
+        ...this.state.repair,
+        commitState: RepairCommitState.Idle,
+        commitError: error,
+        fraction: 0,
+        phase: undefined,
+      },
+    });
+  }
+
+  /**
+   * Installs restored geometry as the loaded model.
+   *
+   * A NEW REVISION, not a rewind. The undo produced fresh authoritative geometry
+   * in the worker at a higher revision number, and the interface follows it —
+   * see ADR 0011. `lastApplied` is cleared because the repair it described has
+   * been reversed and can no longer be reversed again.
+   */
+  public applyUndoResult(result: {
+    readonly handle: ModelHandle;
+    readonly render: RenderSnapshot;
+    readonly bounds: MeshBounds | undefined;
+    readonly triangleCount: number;
+    readonly vertexCount: number;
+    readonly residentBytes: number;
+  }): boolean {
+    const model = this.state.model;
+    if (model === undefined) return false;
+    if (model.handle.modelId !== result.handle.modelId) return false;
+
+    const revision = this.nextModelRevision;
+    this.nextModelRevision += 1;
+    this.currentAnalysisToken = undefined;
+    this.currentRepairToken = undefined;
+
+    this.update({
+      model: {
+        ...model,
+        handle: result.handle,
+        render: result.render,
+        bounds: result.bounds,
+        triangleCount: result.triangleCount,
+        vertexCount: result.vertexCount,
+        residentBytes: result.residentBytes,
+        revision,
+      },
+      analysis: { ...EMPTY_ANALYSIS, state: AnalysisState.Idle, handle: result.handle },
+      overlays: OVERLAYS_HIDDEN,
+      repair: { ...EMPTY_REPAIR, handle: result.handle, selection: this.state.repair.selection },
     });
     return true;
   }
@@ -545,6 +1239,7 @@ export class WorkspaceStore {
     this.currentImportToken = undefined;
     this.currentExportToken = undefined;
     this.currentAnalysisToken = undefined;
+    this.currentRepairToken = undefined;
     this.update({
       model: undefined,
       geometrySessionLost: reason,
@@ -554,6 +1249,12 @@ export class WorkspaceStore {
       // screen would describe a model the user cannot export, overlay, or act
       // on — the same reason the model itself is cleared.
       analysis: EMPTY_ANALYSIS,
+      // And so did the repair. A candidate, a preview and an undo record all
+      // named worker-resident geometry that died with the worker; leaving an
+      // Apply button pointing at a dead candidate would be worse than showing
+      // nothing, because pressing it could only fail.
+      repair: EMPTY_REPAIR,
+      overlays: OVERLAYS_HIDDEN,
     });
   }
 
