@@ -38,6 +38,16 @@ export const AppErrorCode = {
    * "CAD Fixer has a bug" is not.
    */
   ModelUnavailable: 'MODEL_UNAVAILABLE',
+  /**
+   * A valid request made at a moment when it cannot be honoured.
+   *
+   * Distinct from `ModelUnavailable`, which means the geometry is gone, and
+   * from `Internal`, which means CAD Fixer is broken. This is for lifecycle
+   * refusals — applying a repair that was already applied, or discarded, or
+   * that failed validation. The interface must say "that has already been
+   * applied", not "something went wrong".
+   */
+  InvalidState: 'INVALID_STATE',
   /** A defect in CAD Fixer itself. */
   Internal: 'INTERNAL_ERROR',
 } as const;
@@ -164,6 +174,10 @@ export function operationCancelled(message = 'Operation cancelled.'): AppError {
 
 export function modelUnavailable(message: string, details?: ErrorDetails): AppError {
   return new AppError(AppErrorCode.ModelUnavailable, message, details ? { details } : {});
+}
+
+export function invalidState(message: string, details?: ErrorDetails): AppError {
+  return new AppError(AppErrorCode.InvalidState, message, details ? { details } : {});
 }
 
 export function internalError(message: string, options?: AppErrorOptions): AppError {

@@ -234,3 +234,21 @@ Therefore:
 5. **Every commit produces a new revision**, retaining what is needed to revert.
 6. **No operation may claim printability.** Until self-intersection and wall
    thickness exist, no repair changes that answer.
+
+---
+
+## Implementation status — Stage 3B-1A
+
+| Confidence class     | Status                                                                                |
+| -------------------- | ------------------------------------------------------------------------------------- |
+| Deterministic        | **IMPLEMENTED** — duplicate removal, degenerate removal, relative winding unification |
+| Parameter-dependent  | not implemented; no epsilon exists in the production repair API                       |
+| Reconstructive       | not implemented                                                                       |
+| Destructive fallback | not implemented                                                                       |
+
+The deterministic class is implemented as a _transaction_, not a mutation: plan,
+candidate, independent validation, guarded commit, inverse patch. No user-facing
+Repair workflow exists yet — Stage 3B-1B builds that on these contracts.
+
+**General mesh repair is NOT complete**, and nothing in the interface may
+suggest it is.

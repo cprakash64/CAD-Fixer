@@ -7,6 +7,7 @@ export {
   isAppError,
   isSerializedAppError,
   malformedFile,
+  invalidState,
   modelUnavailable,
   operationCancelled,
   resourceLimitExceeded,

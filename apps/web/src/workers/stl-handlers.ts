@@ -19,6 +19,7 @@ import {
   type ImportBudget,
 } from '@cadfixer/file-formats';
 import { analyseTopology, estimateTopologyWorkspaceBytes } from '@cadfixer/mesh-topology';
+import { RepairCandidateStore } from '@cadfixer/geometry-runtime';
 import {
   checkImportPeak,
   estimateImportPeak,
@@ -55,6 +56,15 @@ registerBuiltInFormats();
  * tests, which is also the only way to assert residency behaviour without a
  * browser.
  */
+/**
+ * Repair candidates live beside the authoritative models, in the same worker.
+ *
+ * Separate store, separate handle type: a candidate can never be resolved by an
+ * operation that takes a `ModelHandle`, so export and analysis cannot reach
+ * proposed geometry by accident.
+ */
+export const repairCandidates = new RepairCandidateStore();
+
 export const residentModels = new ResidentModelStore();
 
 /**
@@ -155,7 +165,7 @@ function summarise(mesh: CanonicalMesh): MeshValidationSummary {
  * Indices are not sent at all — STL soup indices are 0,1,2,3,… and the GPU
  * assumes exactly that for a non-indexed draw.
  */
-function buildRenderSnapshot(mesh: CanonicalMesh): RenderSnapshot {
+export function buildRenderSnapshot(mesh: CanonicalMesh): RenderSnapshot {
   return {
     positions: mesh.positions.slice(),
     normals: computeVertexNormals(mesh),

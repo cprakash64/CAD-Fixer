@@ -5,7 +5,15 @@ import type { MeshBounds } from '@cadfixer/mesh-core';
 // module boundary, and an unchecked one would let the worker and its consumer
 // drift apart silently.
 import type { TopologyDetail, TopologyReport } from '@cadfixer/mesh-topology';
+import type {
+  ConservativeRepairPlan,
+  RepairChangeCounts,
+  RepairChangeSamples,
+  RepairOperation,
+  RepairValidation,
+} from '@cadfixer/mesh-repair';
 import type { ModelHandle } from './resident-models';
+import type { RepairCandidateHandle } from './repair-candidates';
 
 /**
  * Wire protocol between the main thread and geometry workers.
@@ -59,6 +67,116 @@ export interface OperationMap {
     payload: ModelAnalyzePayload;
     result: ModelAnalyzeResult;
   };
+  'repair/plan': {
+    payload: RepairPlanPayload;
+    result: RepairPlanOperationResult;
+  };
+  'repair/create-candidate': {
+    payload: RepairCandidatePayload;
+    result: RepairCandidateResult;
+  };
+  'repair/commit': {
+    payload: RepairCommitPayload;
+    result: RepairCommitResult;
+  };
+  'repair/discard': {
+    payload: RepairDiscardPayload;
+    result: RepairDiscardResult;
+  };
+}
+
+/* ------------------------------------------------------------------ repair -- */
+
+/**
+ * CONSERVATIVE REPAIR OVER THE WIRE.
+ *
+ * Deliberately four operations rather than one. Planning must be observable
+ * without allocating a candidate, and applying must be a separate, explicitly
+ * confirmed act — a single `repair/apply` would make preview impossible and
+ * would make an accidental double-send destructive.
+ *
+ * `model/analyze` is NOT overloaded with any of this. Analysis is read-only and
+ * must stay that way; a repair verb hidden inside it would make every analysis
+ * a potential mutation.
+ *
+ * NO GEOMETRY CROSSES for any of these. The main thread sends handles,
+ * revisions and operation names; it receives plans, reports, counts and bounded
+ * samples. Candidate geometry stays worker-resident exactly as authoritative
+ * geometry does.
+ */
+export interface RepairPlanPayload {
+  readonly handle: ModelHandle;
+  /** What the caller wants attempted. The plan never widens this. */
+  readonly requested: readonly RepairOperation[];
+  /** Refuse before allocating if the estimated peak exceeds this. */
+  readonly memoryBudgetBytes?: number;
+}
+
+export interface RepairPlanOperationResult {
+  readonly handle: ModelHandle;
+  readonly plan: ConservativeRepairPlan;
+}
+
+export interface RepairCandidatePayload {
+  readonly handle: ModelHandle;
+  readonly requested: readonly RepairOperation[];
+  /**
+   * The plan the caller previewed.
+   *
+   * Checked against a freshly computed plan: if the model or the request has
+   * changed, the candidate is refused rather than silently built from a
+   * different plan than the one that was shown.
+   */
+  readonly planHash: string;
+  readonly memoryBudgetBytes?: number;
+  readonly sampleLimit?: number;
+}
+
+/**
+ * Everything Stage 3B-1B needs to build a preview, and nothing more.
+ *
+ * The candidate render snapshot is deliberately NOT included by default: it
+ * doubles the transfer for a preview the caller may not display. It is
+ * requested separately when the UI actually needs to draw the result.
+ */
+export interface RepairCandidateResult {
+  readonly candidate: RepairCandidateHandle | undefined;
+  readonly source: ModelHandle;
+  readonly plan: ConservativeRepairPlan;
+  readonly validation: RepairValidation;
+  readonly counts: RepairChangeCounts;
+  readonly samples: RepairChangeSamples;
+  /** Bytes the inverse patch occupies, for history budgeting. */
+  readonly inverseBytes: number;
+  readonly candidateBounds: MeshBounds | undefined;
+  readonly render: RenderSnapshot | undefined;
+}
+
+export interface RepairCommitPayload {
+  readonly candidate: RepairCandidateHandle;
+  /** The revision the caller believes is authoritative. Re-checked. */
+  readonly expectedSource: ModelHandle;
+  /** Identity of the validation the caller accepted. */
+  readonly planHash: string;
+}
+
+export interface RepairCommitResult {
+  /** The NEW revision. Same lineage, parent recorded below. */
+  readonly handle: ModelHandle;
+  readonly parentRevision: number;
+  readonly repairRecordId: string;
+  readonly appliedOperations: readonly RepairOperation[];
+  readonly render: RenderSnapshot;
+  readonly residentBytes: number;
+}
+
+export interface RepairDiscardPayload {
+  readonly candidate: RepairCandidateHandle;
+}
+
+export interface RepairDiscardResult {
+  /** False when there was nothing left to release. Not an error. */
+  readonly released: boolean;
 }
 
 /* -------------------------------------------------------------- stl import -- */

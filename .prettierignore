@@ -28,3 +28,4 @@ experiments/repair-kernels/*/artifacts
 # file under docs/, including the Markdown in this same directory, is
 # hand-maintained and stays formatted.
 docs/repair/bakeoff/*.json
+docs/repair/repair-performance.json

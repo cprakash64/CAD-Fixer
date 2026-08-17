@@ -227,3 +227,72 @@ Conservative, assisted and reconstructive remain distinct actions with distinct
 UI. Nothing may collapse them into one irreversible "fix model" button — the
 R19/R21 result is the standing proof that a single global parameter cannot be
 correct for every model.
+
+---
+
+## Stage 3B-1A — the conservative repair engine is IMPLEMENTED
+
+**Kernel-free.** No Manifold, Geogram, PMP or WASM artifact enters the
+application. These are CAD Fixer's own exact-topology operations, and the
+production bundle scan confirms it.
+
+### Implemented
+
+| Operation                        | Semantics                                                   |
+| -------------------------------- | ----------------------------------------------------------- |
+| `remove-duplicate-faces`         | extra SAME-orientation copies; lowest source index retained |
+| `remove-repeated-position-faces` | fewer than three distinct topological vertices              |
+| `remove-zero-area-faces`         | three distinct but exactly collinear vertices               |
+| `unify-winding`                  | RELATIVE orientation only; seed face keeps its winding      |
+
+### Explicitly NOT implemented
+
+Reversed-duplicate removal, tolerance welding, crack healing, boundary/hole
+filling, non-manifold reconstruction, self-intersection repair, boolean
+reconstruction, global inside/outside flipping, remeshing, simplification.
+**There is no epsilon anywhere in this API.**
+
+### The flow
+
+```
+M0 (authoritative, never written)
+  -> repair/plan              decisions + memory estimate, no allocation
+  -> repair/create-candidate  masks -> candidate -> INDEPENDENT validation
+  -> preview                  plan, validation, counts, bounded samples
+  -> repair/commit            guarded swap -> M1 (new revision, parent recorded)
+  -> repair/discard           releases the candidate; M0 untouched
+```
+
+`model/analyze` is untouched and stays read-only. A repair verb hidden inside it
+would make every diagnosis a potential mutation.
+
+### Validation decides, not the algorithm
+
+The candidate is re-analysed from scratch by Stage 2 and compared against the
+source. Forbidden regressions are absolute — no trade against speed or against a
+defect that did get fixed.
+
+Two invariants are **predicted rather than forbidden**, because the obvious rule
+is wrong:
+
+- **Boundary edges.** Two coincident triangles pair each other's edges and look
+  closed; deleting the redundant copy correctly reveals three boundary edges.
+- **Surface area.** Stage 2 sums every face, so a duplicate contributes twice and
+  removing it legitimately reduces the total — Stage 3A-1's R03 criterion said
+  as much.
+
+The prediction comes from the SOURCE analysis plus the removal mask; the actual
+comes from independently re-analysing the rebuilt candidate. A compaction bug or
+corrupted index makes the two disagree, which is what the comparison is for.
+
+**Degenerate removal is held to the stricter rule** and is refused outright if it
+would open a boundary or create a non-manifold edge. It must be topologically
+inert; duplicate removal need not be.
+
+### Self-intersection and printability
+
+Every validation carries `selfIntersectionStatus: 'not-checked'`. There is no
+`printable` flag and repair acceptance is not printability acceptance.
+
+See `docs/adr/0010-repair-transactions-and-revisions.md` for the transaction,
+revision and seed-rule decisions.

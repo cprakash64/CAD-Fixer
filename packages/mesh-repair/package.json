@@ -1,10 +1,10 @@
 {
-  "name": "@cadfixer/geometry-runtime",
+  "name": "@cadfixer/mesh-repair",
   "version": "0.0.0",
   "private": true,
   "type": "module",
   "sideEffects": false,
-  "description": "Transport-agnostic worker protocol, coordinator, and worker-side host runtime for off-main-thread geometry work.",
+  "description": "Conservative deterministic mesh repair. Exact-topology operations only: no tolerance, no reconstruction, no geometry kernel. Produces validated candidates; never mutates authoritative geometry.",
   "exports": {
     ".": "./src/index.ts"
   },
@@ -13,7 +13,6 @@
   },
   "dependencies": {
     "@cadfixer/mesh-core": "*",
-    "@cadfixer/mesh-repair": "*",
     "@cadfixer/mesh-topology": "*",
     "@cadfixer/shared": "*"
   }
