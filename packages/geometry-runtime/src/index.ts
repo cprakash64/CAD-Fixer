@@ -76,3 +76,11 @@ export type { SelfTestHandlerOptions } from './self-test';
 export { createLinkedEndpoints } from './linked-endpoints';
 
 export { toTransferables } from './transferables';
+
+export { CandidateState, RepairCandidateStore } from './repair-candidates';
+export type {
+  CandidateStats,
+  CommitRequest,
+  RepairCandidateHandle,
+  RepairCandidateId,
+} from './repair-candidates';

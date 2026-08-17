@@ -106,6 +106,47 @@ export class ResidentModelStore {
     return this.models.get(handle.modelId)?.revision === handle.revision;
   }
 
+  /**
+   * Replaces a model's geometry, producing a NEW revision.
+   *
+   * THE TRANSACTIONAL STEP. Repair validates a candidate and then calls this
+   * with the revision it started from. If the model has moved on in the
+   * meantime the swap is refused, so a repair computed against revision 3 can
+   * never land on revision 4's geometry.
+   *
+   * Atomic by construction: the map entry is replaced in one assignment. There
+   * is no window in which half-repaired geometry is authoritative, because the
+   * candidate was built separately and only the reference moves.
+   */
+  public replace(expected: ModelHandle, mesh: CanonicalMesh): ModelHandle | AppError {
+    const entry = this.models.get(expected.modelId);
+    if (entry === undefined) {
+      return modelUnavailable('That model is no longer available.', {
+        modelId: expected.modelId,
+        requestedRevision: expected.revision,
+      });
+    }
+    if (entry.revision !== expected.revision) {
+      return modelUnavailable('That operation refers to an out-of-date version of the model.', {
+        modelId: expected.modelId,
+        requestedRevision: expected.revision,
+        currentRevision: entry.revision,
+      });
+    }
+    const revision = entry.revision + 1;
+    this.models.set(expected.modelId, {
+      mesh,
+      revision,
+      byteLength: meshByteLength(mesh),
+    });
+    return { modelId: expected.modelId, revision };
+  }
+
+  /** Current revision of a model, or `undefined` when it is not resident. */
+  public revisionOf(modelId: ModelId): number | undefined {
+    return this.models.get(modelId)?.revision;
+  }
+
   /** Releases a model. Returns whether anything was actually released. */
   public release(modelId: ModelId): boolean {
     return this.models.delete(modelId);

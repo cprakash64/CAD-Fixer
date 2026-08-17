@@ -13,8 +13,8 @@ matter more than moving fast.
 Five workflows are planned: **Repair, Convert, Split, Texture, Hollow**. Target
 formats: **STL, OBJ, 3MF**.
 
-**Current stage: Stage 2 complete — resident geometry runtime and topology
-diagnostics.**
+**Current stage: Stage 3B-1A complete — conservative deterministic repair
+engine, transactional commit, undo-ready revision semantics. No repair UI yet.**
 Implemented: structural STL encoding detection, hand-written binary and ASCII
 STL parsers with resource budgets, worker-based parsing with progress and
 working cancellation, a real Three.js viewport with camera controls, model
@@ -22,10 +22,11 @@ statistics, binary/ASCII STL export that round-trips through our own parser,
 worker-resident authoritative geometry addressed by handle+revision, and
 read-only topology diagnostics with a Mesh Health panel and viewport overlays.
 
-NOT implemented, and not to be implemented unless a task explicitly asks: mesh
-repair, tolerance welding, hole filling, booleans, remeshing, OBJ or 3MF codecs,
-format conversion, splitting, connectors, texturing, hollowing, drainage holes,
-self-intersection detection, and wall-thickness analysis.
+NOT implemented, and not to be implemented unless a task explicitly asks:
+tolerance welding, hole filling, booleans, remeshing, OBJ or 3MF codecs, format
+conversion, splitting, connectors, texturing, hollowing, drainage holes,
+self-intersection detection, wall-thickness analysis, and any user-facing repair
+workflow.
 
 **Topology diagnoses; it never repairs.** Connectivity is recovered from exact
 stored coordinates with no tolerance, and analysis leaves the canonical buffers
@@ -102,6 +103,7 @@ packages/shared/            typed errors, units, ids, cancellation
 packages/mesh-core/         canonical mesh + structural validation
 packages/file-formats/      format descriptors, screening, budgets, STL codec
 packages/mesh-topology/     read-only topology analysis (no mutation, no welding)
+packages/mesh-repair/       conservative deterministic repair (kernel-free)
 packages/geometry-runtime/  worker protocol, coordinator, worker host
 docs/                       architecture, dependencies, privacy, deployment
 docs/adr/                   architecture decision records
@@ -140,6 +142,30 @@ npm run check:node     # runtime version guard; also runs before test/build/veri
 Before declaring work complete, run `npm run verify`. Run `npm run test:e2e` as
 well when you have touched the shell, the worker, or the build.
 
+## Repair invariants (Stage 3B-1A)
+
+- **NO GEOMETRY KERNEL IN PRODUCTION.** Manifold, Geogram and PMP are research
+  artifacts under `experiments/`. Nothing in `apps/**` or `packages/**` may
+  import them, and the bundle scan checks it.
+- **No tolerance in the conservative repair API.** No epsilon, weld distance,
+  merge tolerance or proximity threshold. Stage 3A proved no global tolerance
+  can be correct — the value that heals R19's crack destroys R21's intentional
+  gap. Tolerance belongs to a later assisted stage, explicit and user-chosen.
+- **Reversed duplicates are never removed.** They may encode a zero-thickness
+  feature. Reported, never deleted.
+- **Boundary loops are never filled.** A loop is not a hole; open tubes, vases
+  and shells are valid user intent.
+- **Winding unification is RELATIVE.** The lowest-indexed surviving face in each
+  component keeps its orientation. Never choose a global sign from signed
+  volume, world axes, the bounding box or a stored STL normal — see ADR 0010.
+- **The authoritative mesh is never written.** Repair produces a candidate;
+  `repair/commit` swaps a reference after every guard passes. A candidate handle
+  is a distinct type from `ModelHandle` so it cannot be exported by mistake.
+- **The algorithm never decides its own success.** The candidate is re-analysed
+  by Stage 2 and judged against the source.
+- **`selfIntersectionStatus` is always `not-checked`**, and there is no
+  `printable` flag. Repair acceptance is not printability acceptance.
+
 ## Things that will trip you up
 
 - **TypeScript is pinned to `~6.0.3` on purpose.** TS 7 exists but
@@ -175,6 +201,16 @@ well when you have touched the shell, the worker, or the build.
   declaration and the registry in agreement.
 - **`ByteScanner.isAtEnd()` is a method, not a getter, because it mutates.**
   Getters that skip whitespace confuse both readers and TypeScript's narrowing.
+- **Boundary edges and surface area are PREDICTED, not forbidden, after
+  duplicate removal.** Two coincident triangles pair each other's edges and look
+  closed, and Stage 2 sums every face — so removing the redundant copy correctly
+  reveals boundary edges and correctly reduces the summed area. "Must not
+  increase" rejects a correct repair. Degenerate removal IS held to the strict
+  rule and is refused if it would open a boundary.
+- **Winding is solved on the POST-REMOVAL topology.** Solving on the source and
+  adjusting for pending removals made repair non-idempotent: a duplicate's
+  non-manifold vertices blocked a repair the same pipeline had already made
+  safe. Removals are materialised first, then connectivity is rebuilt.
 - **The worker owns authoritative geometry.** The main thread holds a
   `ModelHandle` plus a render snapshot, never a `CanonicalMesh`. Operations name
   a model by handle + revision; a stale revision must fail rather than apply to

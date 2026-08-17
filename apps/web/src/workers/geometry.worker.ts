@@ -10,6 +10,12 @@ import {
   modelImportHandler,
   modelReleaseHandler,
 } from './stl-handlers';
+import {
+  repairCommitHandler,
+  repairCreateCandidateHandler,
+  repairDiscardHandler,
+  repairPlanHandler,
+} from './repair-handlers';
 
 /**
  * The geometry worker entry point.
@@ -47,6 +53,13 @@ host.register('model/import', modelImportHandler);
 host.register('model/export', modelExportHandler);
 host.register('model/release', modelReleaseHandler);
 host.register('model/analyze', modelAnalyzeHandler);
+
+// Conservative repair. Four operations so preview and apply stay separate acts;
+// see apps/web/src/workers/repair-handlers.ts. No geometry kernel is involved.
+host.register('repair/plan', repairPlanHandler);
+host.register('repair/create-candidate', repairCreateCandidateHandler);
+host.register('repair/commit', repairCommitHandler);
+host.register('repair/discard', repairDiscardHandler);
 
 host.register(
   'runtime/self-test',
