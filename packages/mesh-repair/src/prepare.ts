@@ -1,4 +1,6 @@
 import type { CanonicalMesh } from '@cadfixer/mesh-core';
+import { uncancellable, type CancellationToken } from '@cadfixer/shared';
+import { CANCEL_POLL_MASK, RepairCancelled } from './cancellation';
 import type { TopologyReport } from '@cadfixer/mesh-topology';
 import { RepairOperation } from './contract';
 import { isDegenerateRemovalSafe } from './predict';
@@ -67,8 +69,9 @@ export function prepareConservativeRepair(
   report: TopologyReport,
   requested: readonly RepairOperation[],
   existingView?: RepairView,
+  cancellation: CancellationToken = uncancellable,
 ): PreparedRepair {
-  const sourceView = existingView ?? buildRepairView(mesh);
+  const sourceView = existingView ?? buildRepairView(mesh, { cancellation });
   const faceCount = sourceView.faceCount;
   const wants = (operation: RepairOperation): boolean => requested.includes(operation);
 
@@ -78,7 +81,7 @@ export function prepareConservativeRepair(
 
   let duplicates: DuplicateSelection | null = null;
   if (wants(RepairOperation.RemoveDuplicateFaces) && report.sameOrientationDuplicateCount > 0) {
-    duplicates = selectDuplicateFaces(sourceView);
+    duplicates = selectDuplicateFaces(sourceView, cancellation);
     if (!duplicates.spansMeshGroups) {
       // Duplicate removal is exempt from the strict degeneracy gate: its
       // boundary and area effects are expected and are checked by prediction.
@@ -107,7 +110,7 @@ export function prepareConservativeRepair(
   };
 
   if (wants(RepairOperation.RemoveRepeatedPositionFaces) && report.repeatedPositionFaceCount > 0) {
-    const selection = selectRepeatedPositionFaces(sourceView);
+    const selection = selectRepeatedPositionFaces(sourceView, cancellation);
     addDegenerate(
       RepairOperation.RemoveRepeatedPositionFaces,
       selection.removeCount,
@@ -115,13 +118,14 @@ export function prepareConservativeRepair(
     );
   }
   if (wants(RepairOperation.RemoveZeroAreaFaces) && report.zeroAreaFaceCount > 0) {
-    const selection = selectZeroAreaFaces(sourceView);
+    const selection = selectZeroAreaFaces(sourceView, cancellation);
     addDegenerate(RepairOperation.RemoveZeroAreaFaces, selection.removeCount, selection.removeMask);
   }
 
   for (const stage of stages) {
     if (!stage.safe) continue;
     for (let face = 0; face < faceCount; face += 1) {
+      if ((face & CANCEL_POLL_MASK) === 0 && cancellation.isCancelled) throw new RepairCancelled();
       if (stage.mask[face] === 1 && removalMask[face] !== 1) {
         removalMask[face] = 1;
         removalCount += 1;
@@ -134,7 +138,11 @@ export function prepareConservativeRepair(
   let intermediate: CanonicalMesh | undefined;
   let intermediateToSource: Uint32Array | undefined;
   if (removalCount > 0) {
-    const rebuilt = rebuildCandidate(mesh, faceCount, removalMask, undefined);
+    const rebuilt = rebuildCandidate(mesh, faceCount, removalMask, undefined, {
+      onBatch: () => {
+        if (cancellation.isCancelled) throw new RepairCancelled();
+      },
+    });
     intermediate = rebuilt.mesh;
     intermediateToSource = rebuilt.candidateToSourceFace;
   }
@@ -144,12 +152,16 @@ export function prepareConservativeRepair(
   let flipCount = 0;
 
   if (wants(RepairOperation.UnifyWinding)) {
-    const windingView = intermediate === undefined ? sourceView : buildRepairView(intermediate);
-    winding = solveWinding(windingView);
+    const windingView =
+      intermediate === undefined ? sourceView : buildRepairView(intermediate, { cancellation });
+    winding = solveWinding(windingView, undefined, cancellation);
 
     if (winding.outcome === WindingOutcome.Solved) {
       sourceFlipMask = new Uint8Array(faceCount);
       for (let face = 0; face < windingView.faceCount; face += 1) {
+        if ((face & CANCEL_POLL_MASK) === 0 && cancellation.isCancelled) {
+          throw new RepairCancelled();
+        }
         if (winding.flipMask[face] !== 1) continue;
         const sourceFace =
           intermediateToSource === undefined ? face : (intermediateToSource[face] ?? face);

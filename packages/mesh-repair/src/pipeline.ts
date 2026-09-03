@@ -17,6 +17,7 @@ import {
   type RepairChangeSamples,
   type RepairValidation,
 } from './contract';
+import { RepairCancelled } from './cancellation';
 import { buildInversePatch, type RepairInversePatch } from './inverse';
 import { WindingOutcome } from './operations';
 import { predictAfterRemoval } from './predict';
@@ -66,7 +67,7 @@ export interface RepairExecutionResult {
 export function executeConservativeRepair(input: RepairExecutionInput): RepairExecutionResult {
   const { source, plan, sourceReport, cancellation } = input;
   const sampleLimit = input.sampleLimit ?? DEFAULT_CHANGE_SAMPLE_LIMIT;
-  const view = input.view ?? buildRepairView(source);
+  const view = input.view ?? buildRepairView(source, { cancellation });
   const faceCount = view.faceCount;
 
   const applicable = (operation: RepairOperation): boolean =>
@@ -91,7 +92,8 @@ export function executeConservativeRepair(input: RepairExecutionInput): RepairEx
   /* ------------------------------- removals and winding, computed once -- */
 
   const prepared =
-    input.prepared ?? prepareConservativeRepair(source, sourceReport, plan.requested, view);
+    input.prepared ??
+    prepareConservativeRepair(source, sourceReport, plan.requested, view, cancellation);
 
   const cumulative = new Uint8Array(faceCount);
   const perOperation = new Map<RepairOperation, Uint8Array>();
@@ -193,13 +195,14 @@ export function executeConservativeRepair(input: RepairExecutionInput): RepairEx
   };
 }
 
-/** Thrown when cancellation is observed. Converted by the caller. */
-export class RepairCancelled extends Error {
-  public constructor() {
-    super('Repair was cancelled.');
-    this.name = 'RepairCancelled';
-  }
-}
+/*
+ * `RepairCancelled` now lives in `./cancellation` and is re-exported here.
+ *
+ * IT MUST BE ONE CLASS. The worker handler converts it with `instanceof`, and
+ * two identically-shaped classes would make that check silently false for
+ * anything thrown by the selection loops — cancellation would surface as an
+ * internal failure instead of a cancellation.
+ */
 
 /**
  * Components whose every face was removed.
@@ -638,3 +641,5 @@ function buildSamples(
     sampleLimit,
   };
 }
+
+export { RepairCancelled } from './cancellation';

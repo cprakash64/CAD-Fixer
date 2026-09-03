@@ -1,4 +1,5 @@
 import { triangleCount } from '@cadfixer/mesh-core';
+import type { CancellationToken } from '@cadfixer/shared';
 import type { CanonicalMesh } from '@cadfixer/mesh-core';
 import { estimateTopologyWorkspaceBytes } from '@cadfixer/mesh-topology';
 import type { TopologyReport } from '@cadfixer/mesh-topology';
@@ -39,6 +40,8 @@ export interface RepairPlanInput {
   readonly requested: readonly RepairOperation[];
   /** Reject before allocating if the estimated peak exceeds this. */
   readonly memoryBudgetBytes?: number;
+  /** Polled inside planning's own loops. Planning builds connectivity too. */
+  readonly cancellation?: CancellationToken;
 }
 
 export interface RepairPlanResult {
@@ -51,7 +54,13 @@ export interface RepairPlanResult {
 
 export function planConservativeRepair(input: RepairPlanInput): RepairPlanResult {
   const { mesh, report, requested } = input;
-  const prepared = prepareConservativeRepair(mesh, report, requested);
+  const prepared = prepareConservativeRepair(
+    mesh,
+    report,
+    requested,
+    undefined,
+    input.cancellation,
+  );
   const view = prepared.sourceView;
   const faceCount = triangleCount(mesh);
   const stageFor = (operation: RepairOperation): (typeof prepared.stages)[number] | undefined =>

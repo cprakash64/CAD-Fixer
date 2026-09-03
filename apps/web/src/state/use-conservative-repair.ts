@@ -81,6 +81,14 @@ export function useConservativeRepair(): ConservativeRepairControls {
 
   const sessionRef = useRef<RepairSession<unknown> | undefined>(undefined);
   /**
+   * The token of the operation currently in flight.
+   *
+   * Held so Cancel can move the store into `Cancelling` for the RIGHT attempt: a
+   * cancel that arrived for a superseded operation must not transition the panel
+   * for the one that replaced it.
+   */
+  const activeTokenRef = useRef<RepairToken | undefined>(undefined);
+  /**
    * The candidate this hook is responsible for releasing.
    *
    * Held in a ref rather than read from the store at cleanup time: an effect
@@ -247,6 +255,7 @@ export function useConservativeRepair(): ConservativeRepairControls {
     const token = store.beginRepairPreview();
     if (token === undefined) return;
     if (!store.beginRepairCandidate(token)) return;
+    activeTokenRef.current = token;
 
     const session = createRepairCandidate({
       handle: model.handle,
@@ -311,8 +320,12 @@ export function useConservativeRepair(): ConservativeRepairControls {
       },
       (cause: unknown) => {
         sessionRef.current = undefined;
+        activeTokenRef.current = undefined;
         const error = toAppError(cause);
         if (error.code === AppErrorCode.OperationCancelled) {
+          // THE ACKNOWLEDGEMENT. The worker unwound and rejected, so the work has
+          // genuinely stopped and nothing was published. Only now may the panel
+          // say `Cancelled`.
           if (!store.cancelRepairCandidate(token)) return;
           store.pushStatus(
             StatusSeverity.Info,
@@ -327,9 +340,20 @@ export function useConservativeRepair(): ConservativeRepairControls {
     );
   }, [client, memoryCeiling.bytes, model, releaseCandidate, repair.plan, repair.selection, store]);
 
+  /**
+   * Signals cancellation and moves the panel into its transitional state.
+   *
+   * ORDER MATTERS AND IS INHERITED. `session.cancel()` performs the
+   * `Atomics.store` before it posts anything, so the worker can observe the flag
+   * from inside its current batch. The UI only claims `Cancelled` once the
+   * worker acknowledges by rejecting the operation — until then it says
+   * `Cancelling…`, because the work demonstrably has not stopped yet.
+   */
   const cancelPreview = useCallback((): void => {
     sessionRef.current?.cancel();
-  }, []);
+    const token = activeTokenRef.current;
+    if (token !== undefined) store.beginRepairCancellation(token);
+  }, [store]);
 
   const discardPreview = useCallback((): void => {
     sessionRef.current?.cancel();

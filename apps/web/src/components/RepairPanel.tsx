@@ -99,7 +99,10 @@ export function RepairPanel(): ReactNode {
   const candidate = repair.candidate;
   const previewReady =
     repair.candidateState === RepairCandidateState.Ready && candidate !== undefined;
-  const isBuilding = repair.candidateState === RepairCandidateState.Building;
+  const isCancelling = repair.candidateState === RepairCandidateState.Cancelling;
+  // The progress block stays up through cancellation: the worker is still
+  // unwinding, and hiding it would suggest the work had already stopped.
+  const isBuilding = repair.candidateState === RepairCandidateState.Building || isCancelling;
   const isCommitting = repair.commitState !== RepairCommitState.Idle;
   const percent = Math.round(repair.fraction * 100);
 
@@ -229,10 +232,19 @@ export function RepairPanel(): ReactNode {
             type="button"
             className="import__cancel"
             onClick={controls.cancelPreview}
+            // Disabled once cancellation is signalled: the flag is already set,
+            // and a second press cannot make the worker unwind sooner.
+            disabled={isCancelling}
             data-testid="cancel-repair"
           >
-            Cancel repair
+            {isCancelling ? 'Cancelling…' : 'Cancel repair'}
           </button>
+          {isCancelling ? (
+            <p className="panel__note" role="status" data-testid="repair-cancelling">
+              Cancelling… CAD Fixer has told the repair to stop and is waiting for it to confirm.
+              Nothing has been changed.
+            </p>
+          ) : null}
         </div>
       ) : null}
 

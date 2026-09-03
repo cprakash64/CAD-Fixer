@@ -1,4 +1,6 @@
 import { triangleCount } from '@cadfixer/mesh-core';
+import { uncancellable, type CancellationToken } from '@cadfixer/shared';
+import { CANCEL_POLL_MASK, RepairCancelled } from './cancellation';
 import type { CanonicalMesh } from '@cadfixer/mesh-core';
 import {
   analyseComponents,
@@ -51,25 +53,43 @@ export interface RepairView {
 export interface ViewProgress {
   /** Called with a 0..1 fraction between stages, for cancellation polling. */
   onStage?: (fraction: number) => void;
+  /**
+   * Polled between stages and inside this module's own loop.
+   *
+   * HONEST SCOPE. The Stage 2 primitives this function calls —
+   * `recoverVertexIdentity`, `buildDirectedEdges`, `groupEdges`, `analyseEdges`,
+   * `analyseVertexManifoldness`, `analyseComponents` — do not themselves poll,
+   * so cancellation latency here is bounded by the LONGEST SINGLE PRIMITIVE, not
+   * by the batch interval. That is a real limit and is documented in
+   * docs/repair/REPAIR_ARCHITECTURE.md rather than papered over.
+   */
+  cancellation?: CancellationToken;
 }
 
 export function buildRepairView(mesh: CanonicalMesh, progress: ViewProgress = {}): RepairView {
+  const cancellation = progress.cancellation ?? uncancellable;
+  const stage = (fraction: number): void => {
+    if (cancellation.isCancelled) throw new RepairCancelled();
+    progress.onStage?.(fraction);
+  };
+
   const faceCount = triangleCount(mesh);
   const identity = recoverVertexIdentity(mesh);
-  progress.onStage?.(0.2);
+  stage(0.2);
 
   const faceVertices = new Uint32Array(faceCount * 3);
   for (let i = 0; i < faceCount * 3; i += 1) {
+    if ((i & CANCEL_POLL_MASK) === 0 && cancellation.isCancelled) throw new RepairCancelled();
     faceVertices[i] = identity.cornerToVertex[mesh.indices[i] ?? 0] ?? 0;
   }
-  progress.onStage?.(0.35);
+  stage(0.35);
 
   const edges = buildDirectedEdges(faceVertices, faceCount);
   const edgeGroups = groupEdges(edges);
-  progress.onStage?.(0.6);
+  stage(0.6);
 
   const edgeAnalysis = analyseEdges(edges, edgeGroups);
-  progress.onStage?.(0.75);
+  stage(0.75);
 
   const incidence = buildVertexIncidence(faceVertices, faceCount, identity.vertexCount);
   const vertexManifold = analyseVertexManifoldness(
@@ -79,10 +99,10 @@ export function buildRepairView(mesh: CanonicalMesh, progress: ViewProgress = {}
     incidence,
     identity.vertexCount,
   );
-  progress.onStage?.(0.9);
+  stage(0.9);
 
   const components = analyseComponents(edges, edgeGroups, faceCount);
-  progress.onStage?.(1);
+  stage(1);
 
   return {
     mesh,

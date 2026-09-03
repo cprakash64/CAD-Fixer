@@ -50,6 +50,7 @@ function controllableClient(): {
       return {
         id: createOperationId(),
         promise,
+        interruptible: false,
         cancel: (): void => {
           cancels += 1;
         },
@@ -204,6 +205,7 @@ describe('export cancellation', () => {
           id: createOperationId(),
           promise: Promise.reject(operationCancelled()),
           cancel: () => undefined,
+          interruptible: false,
         };
       },
     };
@@ -245,6 +247,7 @@ describe('successful export', () => {
           settle = resolve;
         }),
         cancel: () => undefined,
+        interruptible: false,
       }),
     };
     const session = startExport(client);

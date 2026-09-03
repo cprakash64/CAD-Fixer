@@ -1,4 +1,6 @@
 import { EdgeClass } from '@cadfixer/mesh-topology';
+import { uncancellable, type CancellationToken } from '@cadfixer/shared';
+import { CANCEL_POLL_MASK, RepairCancelled } from './cancellation';
 import {
   facesOnNonManifoldEdges,
   facesOnNonManifoldVertices,
@@ -62,7 +64,10 @@ function canonicalRotation(a: number, b: number, c: number): [number, number, nu
  * it as both would let one defect inflate two operations. This matches
  * `analyseDuplicates`, so the plan's targeted count and the removal agree.
  */
-export function selectDuplicateFaces(view: RepairView): DuplicateSelection {
+export function selectDuplicateFaces(
+  view: RepairView,
+  cancellation: CancellationToken = uncancellable,
+): DuplicateSelection {
   const { faceCount } = view;
   const keyA = new Uint32Array(faceCount);
   const keyB = new Uint32Array(faceCount);
@@ -71,6 +76,7 @@ export function selectDuplicateFaces(view: RepairView): DuplicateSelection {
   const order = new Uint32Array(faceCount);
 
   for (let face = 0; face < faceCount; face += 1) {
+    if ((face & CANCEL_POLL_MASK) === 0 && cancellation.isCancelled) throw new RepairCancelled();
     order[face] = face;
     if (hasRepeatedPosition(view, face)) continue;
     const base = face * 3;
@@ -178,10 +184,14 @@ export interface DegenerateSelection {
 }
 
 /** Faces with fewer than three distinct topological vertices. */
-export function selectRepeatedPositionFaces(view: RepairView): DegenerateSelection {
+export function selectRepeatedPositionFaces(
+  view: RepairView,
+  cancellation: CancellationToken = uncancellable,
+): DegenerateSelection {
   const removeMask = new Uint8Array(view.faceCount);
   let removeCount = 0;
   for (let face = 0; face < view.faceCount; face += 1) {
+    if ((face & CANCEL_POLL_MASK) === 0 && cancellation.isCancelled) throw new RepairCancelled();
     if (hasRepeatedPosition(view, face)) {
       removeMask[face] = 1;
       removeCount += 1;
@@ -191,10 +201,14 @@ export function selectRepeatedPositionFaces(view: RepairView): DegenerateSelecti
 }
 
 /** Faces with three distinct vertices that are exactly collinear. */
-export function selectZeroAreaFaces(view: RepairView): DegenerateSelection {
+export function selectZeroAreaFaces(
+  view: RepairView,
+  cancellation: CancellationToken = uncancellable,
+): DegenerateSelection {
   const removeMask = new Uint8Array(view.faceCount);
   let removeCount = 0;
   for (let face = 0; face < view.faceCount; face += 1) {
+    if ((face & CANCEL_POLL_MASK) === 0 && cancellation.isCancelled) throw new RepairCancelled();
     if (isExactlyZeroArea(view, face)) {
       removeMask[face] = 1;
       removeCount += 1;
@@ -246,7 +260,11 @@ export interface WindingSolution {
  * NO GEOMETRIC HEURISTIC IS USED ANYWHERE in this function. It reads
  * connectivity only.
  */
-export function solveWinding(view: RepairView, removed?: Uint8Array): WindingSolution {
+export function solveWinding(
+  view: RepairView,
+  removed?: Uint8Array,
+  cancellation: CancellationToken = uncancellable,
+): WindingSolution {
   const alive = (face: number): boolean => removed?.[face] !== 1;
 
   // Preconditions are evaluated over SURVIVING faces only: a non-manifold edge
@@ -255,6 +273,7 @@ export function solveWinding(view: RepairView, removed?: Uint8Array): WindingSol
   const nonManifoldEdgeFaces = facesOnNonManifoldEdges(view);
   const nonManifoldVertexFaces = facesOnNonManifoldVertices(view);
   for (let face = 0; face < view.faceCount; face += 1) {
+    if ((face & CANCEL_POLL_MASK) === 0 && cancellation.isCancelled) throw new RepairCancelled();
     if (!alive(face)) continue;
     if (nonManifoldEdgeFaces[face] === 1 && edgeStillNonManifold(view, face, removed)) {
       return {
@@ -281,6 +300,7 @@ export function solveWinding(view: RepairView, removed?: Uint8Array): WindingSol
 
   const { groupStart, order, uniqueEdgeCount } = view.edgeGroups;
   for (let edge = 0; edge < uniqueEdgeCount; edge += 1) {
+    if ((edge & CANCEL_POLL_MASK) === 0 && cancellation.isCancelled) throw new RepairCancelled();
     const start = groupStart[edge] ?? 0;
     const end = groupStart[edge + 1] ?? start;
     const live: number[] = [];
@@ -314,7 +334,15 @@ export function solveWinding(view: RepairView, removed?: Uint8Array): WindingSol
 
   // Ascending face order: the first face reached in each component is its
   // lowest surviving index, which is exactly the seed rule.
+  /*
+   * POLLED ON BOTH LEVELS. Seeding alone would not be enough: a single connected
+   * component can be the entire mesh, so one seed can walk every face without
+   * the outer loop advancing once. The inner counter is what bounds latency on
+   * the traversal that actually dominates this phase.
+   */
+  let visitedFaces = 0;
   for (let seed = 0; seed < view.faceCount; seed += 1) {
+    if ((seed & CANCEL_POLL_MASK) === 0 && cancellation.isCancelled) throw new RepairCancelled();
     if (!alive(seed) || visited[seed] === 1) continue;
     visited[seed] = 1;
     flipMask[seed] = 0;
@@ -324,6 +352,10 @@ export function solveWinding(view: RepairView, removed?: Uint8Array): WindingSol
     while (head < queue.length) {
       const face = queue[head] ?? 0;
       head += 1;
+      visitedFaces += 1;
+      if ((visitedFaces & CANCEL_POLL_MASK) === 0 && cancellation.isCancelled) {
+        throw new RepairCancelled();
+      }
       const neighbours = neighbourFace[face] ?? [];
       const parities = neighbourParity[face] ?? [];
       for (const [index, other] of neighbours.entries()) {

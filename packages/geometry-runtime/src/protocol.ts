@@ -418,6 +418,30 @@ export interface RequestMessage {
   readonly id: OperationId;
   readonly operation: OperationName;
   readonly payload: unknown;
+  /**
+   * A four-byte shared control word carrying this operation's cancel flag.
+   *
+   * ON THE ENVELOPE, NOT IN A PAYLOAD, because cancellation is a property of an
+   * OPERATION rather than of any particular operation's arguments. Putting it
+   * here means the worker host can build an interruptible
+   * `OperationContext.cancellation` for every handler uniformly, and no handler
+   * has to remember to adopt it.
+   *
+   * WHY IT EXISTS AT ALL: the `cancel` message below cannot interrupt a
+   * synchronous handler, because a worker does not read its message queue while
+   * one is running. A polled flag that cannot change is not cancellation. This
+   * word is written with `Atomics.store` on the main thread and read with
+   * `Atomics.load` inside the worker's own loops, so it crosses threads without
+   * the event loop's involvement.
+   *
+   * SHARED, NOT TRANSFERRED. A `SharedArrayBuffer` must never appear in a
+   * transfer list — it is shared by structured clone, and transferring it would
+   * detach the sender's view of the very flag it needs to set.
+   *
+   * Optional so the protocol still describes environments without cross-origin
+   * isolation, and so existing operations that never adopted it keep working.
+   */
+  readonly cancellation?: SharedArrayBuffer;
 }
 
 export interface CancelMessage {

@@ -1,5 +1,7 @@
 import {
+  adoptSharedCancellation,
   CancellationSource,
+  combineCancellation,
   internalError,
   operationCancelled,
   toAppError,
@@ -106,10 +108,15 @@ export class GeometryWorkerHost {
 
     // Deliberately not awaited: `run` converts every failure into an error
     // message, so there is no rejection to leak. `void` documents that.
-    void this.run(message.id, message.operation, message.payload);
+    void this.run(message.id, message.operation, message.payload, message.cancellation);
   }
 
-  private async run(id: OperationId, operation: OperationName, payload: unknown): Promise<void> {
+  private async run(
+    id: OperationId,
+    operation: OperationName,
+    payload: unknown,
+    cancellationBuffer: SharedArrayBuffer | undefined,
+  ): Promise<void> {
     if (this.running.has(id)) {
       this.postError(id, internalError('Duplicate operation id received by worker.'));
       return;
@@ -129,10 +136,29 @@ export class GeometryWorkerHost {
     const source = new CancellationSource();
     this.running.set(id, source);
 
+    /*
+     * BOTH HALVES, COMBINED.
+     *
+     * The shared word is what a synchronous loop can actually observe: the main
+     * thread writes it with `Atomics.store` and it is visible here immediately,
+     * without this worker returning to its event loop. The message-based source
+     * is kept alongside it because it still arrives, it still drives the
+     * lifecycle bookkeeping, and it is what an environment without cross-origin
+     * isolation is left with.
+     *
+     * Handlers see one `CancellationToken` and do not care which half fired,
+     * which is why every polling site written before this stage became genuinely
+     * interruptible without being touched.
+     */
+    const cancellation: CancellationToken =
+      cancellationBuffer === undefined
+        ? source.token
+        : combineCancellation(adoptSharedCancellation(cancellationBuffer), source.token);
+
     const context: OperationContext = {
-      cancellation: source.token,
+      cancellation,
       reportProgress: (fraction, note) => {
-        if (source.token.isCancelled) return;
+        if (cancellation.isCancelled) return;
         this.endpoint.postMessage(
           {
             channel: PROTOCOL_CHANNEL,
@@ -145,7 +171,7 @@ export class GeometryWorkerHost {
         );
       },
       throwIfCancelled: () => {
-        if (source.token.isCancelled) throw operationCancelled();
+        if (cancellation.isCancelled) throw operationCancelled();
       },
     };
 
@@ -153,7 +179,7 @@ export class GeometryWorkerHost {
       const outcome = await handler(payload, context);
       // A handler can return normally after cancellation was requested. The
       // cancellation is authoritative, so the result is discarded.
-      if (source.token.isCancelled) {
+      if (cancellation.isCancelled) {
         this.postError(id, operationCancelled());
         return;
       }
