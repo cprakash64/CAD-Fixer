@@ -18,6 +18,7 @@ import {
   meshByteLength,
   requestRepairPeak,
   type ModelHandle,
+  type OperationContext,
   type OperationHandler,
   type RenderSnapshot,
 } from '@cadfixer/geometry-runtime';
@@ -100,20 +101,82 @@ function reportFor(
   mesh: CanonicalMesh,
   handle: ModelHandle,
   cancellation: CancellationToken,
+  onProgress?: (fraction: number) => void,
 ): TopologyReport {
   const cached = topologyReports.get(handle);
   if (cached !== undefined) return cached;
 
+  /*
+   * PROGRESS IS FORWARDED, because on a large model this analysis is most of
+   * the wait. Without it the repair panel sat at 0% for the majority of a
+   * repair and then jumped to a finished preview, which reads as a frozen
+   * application and hides the phase a user is most likely to want to cancel.
+   */
   const report = analyseTopology(mesh, {
     modelId: handle.modelId,
     modelRevision: handle.revision,
     cancellation,
+    ...(onProgress === undefined
+      ? {}
+      : {
+          onProgress: ({ fraction }: { fraction: number }): void => {
+            onProgress(fraction);
+          },
+        }),
   }).report;
   topologyReports.set(handle, report);
   return report;
 }
 
-export const repairPlanHandler: OperationHandler<'repair/plan'> = async (payload, context) => {
+/**
+ * Refuses a repair that cannot be interrupted.
+ *
+ * FAIL CLOSED, DEFENCE IN DEPTH. The application already withholds the repair
+ * controls when the document is not cross-origin isolated, so in a correct
+ * deployment this never fires. It exists for the case the application boundary
+ * cannot cover: a request that reaches the worker WITHOUT a shared control word,
+ * whether through a forged message, a future caller that forgets to opt in, or a
+ * regression that drops the flag.
+ *
+ * WHY REFUSING BEATS RUNNING. Conservative repair's contract is that a running
+ * repair can be stopped. Message-only cancellation cannot stop a synchronous
+ * pass, so proceeding would present a Cancel control that silently does nothing
+ * on exactly the large models where it matters most. A refusal with a reason is
+ * honest; a Cancel button that lies is not.
+ *
+ * `INVALID_STATE` rather than `INTERNAL_ERROR`: the request is well-formed and
+ * CAD Fixer is not broken — it simply cannot be honoured in this context.
+ */
+function requireInterruptible(context: OperationContext): void {
+  if (context.interruptible) return;
+  throw invalidState(
+    'Conservative repair needs an interruptible cancellation signal, which this context cannot provide. CAD Fixer must be served cross-origin isolated (COOP and COEP) so SharedArrayBuffer is available.',
+  );
+}
+
+/**
+ * Converts the engine's cancellation class into the protocol's cancellation
+ * error, WHEREVER in a handler it was thrown.
+ *
+ * WHY THIS IS A WHOLE-HANDLER CONCERN AND NOT A SINGLE CALL'S. `RepairCancelled`
+ * is thrown by any engine loop that polls, and since Stage 3B-1C that includes
+ * the PREPARATION performed inside `planConservativeRepair`, not only the
+ * pipeline inside `executeConservativeRepair`. A conversion wrapped around just
+ * the pipeline let a cancel observed during preparation escape as an
+ * unrecognised class, which `toAppError` then reported as an internal failure —
+ * so cancelling a repair surfaced as an ERROR in the panel rather than as a
+ * cancellation. A refusal is not an error, and neither is a cancellation.
+ *
+ * Placed at the handler boundary so every present and future engine call is
+ * covered by construction rather than by remembering to wrap it.
+ */
+function rethrowAsProtocolError(cause: unknown): never {
+  if (cause instanceof RepairCancelled) throw operationCancelled('Repair was cancelled.');
+  throw cause;
+}
+
+const runRepairPlan: OperationHandler<'repair/plan'> = async (payload, context) => {
+  requireInterruptible(context);
   const resolved = residentModels.resolve(payload.handle);
   if (!isMesh(resolved)) throw resolved;
 
@@ -122,7 +185,9 @@ export const repairPlanHandler: OperationHandler<'repair/plan'> = async (payload
   if (refusal) throw refusal;
 
   context.reportProgress(0, 'planning repair');
-  const report = reportFor(resolved, payload.handle, context.cancellation);
+  const report = reportFor(resolved, payload.handle, context.cancellation, (fraction) => {
+    context.reportProgress(fraction * 0.9, 'analysing');
+  });
 
   // Yield once so a cancel queued during the analysis is observed rather than
   // being overtaken by the result. Planning allocates no candidate, so this is
@@ -161,16 +226,22 @@ export const repairPlanHandler: OperationHandler<'repair/plan'> = async (payload
  * never learns it existed. So "cancelled" means exactly what it says — no
  * preview, nothing committable, nothing resident, and the model untouched.
  *
- * WHAT IT DOES NOT MEAN. The pipeline pass already under way runs to completion
- * before the cancel is seen; the work is discarded, not interrupted mid-array.
- * This is the same contract topology analysis has had since Stage 2, and it is
- * stated rather than implied because the difference is observable on a very
- * large model.
+ * WHAT CHANGED IN STAGE 3B-1C. The pass is no longer merely discarded once it
+ * finishes: the engine's substantial loops poll a SHARED cancellation word, so a
+ * cancel is observed from inside the work itself and the pass unwinds partway
+ * through. `processed < total` is asserted by test rather than assumed. The
+ * yields below still matter — they are what guarantee no candidate is ever
+ * registered — but they are no longer the only place a cancel can be seen.
+ *
+ * WHAT IT STILL DOES NOT MEAN. Cancellation remains COOPERATIVE. A section with
+ * no poll runs to its end, so latency is bounded by the longest unpolled span
+ * rather than being instantaneous.
  */
-export const repairCreateCandidateHandler: OperationHandler<'repair/create-candidate'> = async (
+const runRepairCreateCandidate: OperationHandler<'repair/create-candidate'> = async (
   payload,
   context,
 ) => {
+  requireInterruptible(context);
   const resolved = residentModels.resolve(payload.handle);
   if (!isMesh(resolved)) throw resolved;
 
@@ -184,7 +255,9 @@ export const repairCreateCandidateHandler: OperationHandler<'repair/create-candi
   if (refusal) throw refusal;
 
   context.reportProgress(0, 'analysing');
-  const report = reportFor(resolved, payload.handle, context.cancellation);
+  const report = reportFor(resolved, payload.handle, context.cancellation, (fraction) => {
+    context.reportProgress(fraction * 0.2, 'analysing');
+  });
 
   // The first cancellation window: analysis is the longest phase before any
   // candidate memory is touched, so a cancel arriving during it is honoured
@@ -216,29 +289,23 @@ export const repairCreateCandidateHandler: OperationHandler<'repair/create-candi
     });
   }
 
-  let outcome;
-  try {
-    outcome = executeConservativeRepair({
-      source: resolved,
-      plan,
-      sourceReport: report,
-      cancellation: context.cancellation,
-      modelId: payload.handle.modelId,
-      revision: payload.handle.revision,
-      view,
-      prepared,
-      ...(payload.sampleLimit === undefined ? {} : { sampleLimit: payload.sampleLimit }),
-      onProgress: (fraction, note) => {
-        context.reportProgress(fraction, note);
-      },
-    });
-  } catch (cause) {
-    // Cancellation is converted to the protocol's own error rather than
-    // escaping as an unrecognised class. M0 is untouched either way: the
-    // pipeline only ever wrote to a candidate.
-    if (cause instanceof RepairCancelled) throw operationCancelled('Repair was cancelled.');
-    throw cause;
-  }
+  // Cancellation thrown from here — or from the preparation above — is converted
+  // at the handler boundary by `rethrowAsProtocolError`. M0 is untouched either
+  // way: the pipeline only ever wrote to a candidate.
+  const outcome = executeConservativeRepair({
+    source: resolved,
+    plan,
+    sourceReport: report,
+    cancellation: context.cancellation,
+    modelId: payload.handle.modelId,
+    revision: payload.handle.revision,
+    view,
+    prepared,
+    ...(payload.sampleLimit === undefined ? {} : { sampleLimit: payload.sampleLimit }),
+    onProgress: (fraction, note) => {
+      context.reportProgress(fraction, note);
+    },
+  });
 
   /*
    * THE SECOND CANCELLATION WINDOW, and the load-bearing one. It sits BEFORE the
@@ -281,6 +348,32 @@ export const repairCreateCandidateHandler: OperationHandler<'repair/create-candi
     },
     ...(render === undefined ? {} : { transfer: [render.positions.buffer, render.normals.buffer] }),
   };
+};
+
+/*
+ * THE EXPORTED HANDLERS. Each wraps its implementation so that a cancellation
+ * observed anywhere inside — preparation, the pipeline, or the candidate's
+ * revalidation — reaches the protocol as OPERATION_CANCELLED rather than as an
+ * internal error.
+ */
+
+export const repairPlanHandler: OperationHandler<'repair/plan'> = async (payload, context) => {
+  try {
+    return await runRepairPlan(payload, context);
+  } catch (cause) {
+    return rethrowAsProtocolError(cause);
+  }
+};
+
+export const repairCreateCandidateHandler: OperationHandler<'repair/create-candidate'> = async (
+  payload,
+  context,
+) => {
+  try {
+    return await runRepairCreateCandidate(payload, context);
+  } catch (cause) {
+    return rethrowAsProtocolError(cause);
+  }
 };
 
 export const repairCommitHandler: OperationHandler<'repair/commit'> = (payload, context) => {

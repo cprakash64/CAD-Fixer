@@ -93,6 +93,29 @@ export const REPAIR_EXCLUSIONS: readonly string[] = Object.freeze([
  */
 export const REPAIR_QUALIFIER = 'Self-intersections and wall thickness have not yet been checked.';
 
+/**
+ * Shown INSTEAD of the repair workflow when the browsing context cannot provide
+ * an interruptible cancellation signal.
+ *
+ * WHY THE WORKFLOW DISAPPEARS RATHER THAN DEGRADING. Conservative repair's
+ * contract includes stopping a repair that is already running. Without
+ * cross-origin isolation there is no `SharedArrayBuffer`, so the only
+ * cancellation left is a message the worker cannot read until its synchronous
+ * pass has finished — a Cancel control that does nothing on precisely the large
+ * models where a user reaches for it. Offering it would be the dishonest
+ * interface this product forbids.
+ *
+ * It names the deployment fault because that is what it is: CAD Fixer's own
+ * deployment requirements mandate COOP and COEP
+ * (docs/DEPLOYMENT_REQUIREMENTS.md), so a context without them is misconfigured
+ * rather than merely old. Import, analysis and export are unaffected and say so,
+ * because losing repair should not read as losing the application.
+ */
+export const REPAIR_ISOLATION_HEADLINE = 'Conservative repair is unavailable in this context';
+
+export const REPAIR_ISOLATION_DETAIL =
+  'Repair needs a cancellation signal it can act on while the work is running, which requires a cross-origin isolated page (COOP and COEP). This page is not cross-origin isolated, so CAD Fixer will not offer a repair it could not stop. Import, Mesh Health analysis and export are unaffected.';
+
 /* ------------------------------------------------------------- operations -- */
 
 export interface RepairOperationCopy {

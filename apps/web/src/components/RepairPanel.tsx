@@ -7,6 +7,7 @@ import type {
   RepairOperationDecision,
   RepairValidation,
 } from '@cadfixer/geometry-runtime';
+import { isInterruptibleRepairSupported } from '../runtime/cancellation-support';
 import { useWorkspaceState, useWorkspaceStore } from '../state/store-context';
 import { useConservativeRepair } from '../state/use-conservative-repair';
 import { useTopologyAnalysis } from '../state/use-topology-analysis';
@@ -16,6 +17,8 @@ import {
   REPAIR_APPLIED_DETAIL,
   REPAIR_APPLIED_HEADLINE,
   REPAIR_EXCLUSIONS,
+  REPAIR_ISOLATION_DETAIL,
+  REPAIR_ISOLATION_HEADLINE,
   REPAIR_OPERATION_COPY,
   REPAIR_OPERATION_ORDER,
   REPAIR_QUALIFIER,
@@ -80,6 +83,33 @@ export function RepairPanel(): ReactNode {
     if (selectedWorkflow !== WorkflowId.Repair) return;
     headingRef.current?.focus();
   }, [selectedWorkflow]);
+
+  /*
+   * FAIL CLOSED, AT THE TOP.
+   *
+   * Checked before the model, before the analysis and before any control is
+   * built, because the question is not "can this model be repaired" but "can a
+   * repair be stopped in this context at all". Rendering the workflow and then
+   * disabling its Cancel button would leave a Preview control whose work could
+   * not be interrupted, which is the exact situation this gate exists to
+   * prevent. The worker refuses the same request independently.
+   */
+  if (!isInterruptibleRepairSupported()) {
+    return (
+      <section className="panel" aria-labelledby="repair-title">
+        <h2 className="panel__title" id="repair-title" tabIndex={-1} ref={headingRef}>
+          {REPAIR_WORKFLOW_TITLE}
+        </h2>
+        <div className="repair__blocked" role="alert" data-testid="repair-isolation-unavailable">
+          <p className="repair__error-message">{REPAIR_ISOLATION_HEADLINE}</p>
+          <p className="panel__note" data-testid="repair-isolation-detail">
+            {REPAIR_ISOLATION_DETAIL}
+          </p>
+        </div>
+        <Exclusions />
+      </section>
+    );
+  }
 
   if (model === undefined) {
     return (

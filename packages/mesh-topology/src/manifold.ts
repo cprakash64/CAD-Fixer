@@ -140,10 +140,32 @@ export function buildVertexIncidence(
   faceVertices: Uint32Array,
   faceCount: number,
   vertexCount: number,
+  onBatch?: (processed: number) => void,
 ): VertexIncidence {
+  // Three O(N) passes, each polled on the same batch cadence as every other
+  // topology primitive. Before Stage 3B-1C this function took no callback at
+  // all, which made it a multi-pass blind spot in the middle of an otherwise
+  // interruptible analysis: on a large model the whole of CSR construction ran
+  // with no opportunity to observe a cancel.
+  const EDGES_PER_BATCH = 65_536;
   const start = new Uint32Array(vertexCount + 1);
 
+  /*
+   * Progress is reported as a MONOTONIC count across all three passes, not as
+   * each pass's own index. Reporting a per-pass index would send the fraction
+   * back to zero twice, and `analyseTopology` publishes progress that is
+   * required to be monotonic — a reset there is a contract violation, not a
+   * cosmetic glitch.
+   */
+  const totalWork = faceCount * 2 + vertexCount;
+  let done = 0;
+  const tick = (): void => {
+    if (done % EDGES_PER_BATCH === 0) onBatch?.(done);
+  };
+
   for (let f = 0; f < faceCount; f += 1) {
+    tick();
+    done += 1;
     const base = f * 3;
     for (let corner = 0; corner < 3; corner += 1) {
       const slot = (faceVertices[base + corner] ?? 0) + 1;
@@ -151,6 +173,8 @@ export function buildVertexIncidence(
     }
   }
   for (let v = 0; v < vertexCount; v += 1) {
+    tick();
+    done += 1;
     start[v + 1] = (start[v + 1] ?? 0) + (start[v] ?? 0);
   }
 
@@ -158,6 +182,8 @@ export function buildVertexIncidence(
   const faces = new Uint32Array(faceCount * 3);
 
   for (let f = 0; f < faceCount; f += 1) {
+    tick();
+    done += 1;
     const base = f * 3;
     for (let corner = 0; corner < 3; corner += 1) {
       const vertex = faceVertices[base + corner] ?? 0;
@@ -167,6 +193,7 @@ export function buildVertexIncidence(
     }
   }
 
+  onBatch?.(totalWork);
   return { start, faces };
 }
 

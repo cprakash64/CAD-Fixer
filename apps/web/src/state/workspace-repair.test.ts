@@ -644,3 +644,84 @@ describe('a commit whose result cannot be installed', () => {
     expect(store.getSnapshot().repair.commitState).toBe(RepairCommitState.Idle);
   });
 });
+
+/* ----------------------------------------------------------------- CC12 -- */
+
+describe('CC12: Cancel is not Discard', () => {
+  /*
+   * TWO VERBS THAT LOOK ALIKE AND ARE NOT.
+   *
+   * CANCEL stops work that is still running. DISCARD releases a candidate that
+   * has already been accepted and is on screen. They are reached from different
+   * controls, at different times, and the store must not let one do the other's
+   * job — because a cancellation arriving late (the user pressed Cancel, the
+   * worker finished first, the candidate was published) would otherwise delete a
+   * preview the user is looking at and never asked to lose.
+   *
+   * The guard is the token. `cancelRepairCandidate` writes only when its token
+   * is still the current repair, so a signal belonging to a finished attempt
+   * cannot reach the candidate that replaced it.
+   */
+  function storeWithAcceptedCandidate(): {
+    store: WorkspaceStore;
+    source: ModelHandle;
+    staleToken: ReturnType<WorkspaceStore['beginRepairPlan']>;
+  } {
+    const store = new WorkspaceStore();
+    const importToken = store.beginImport('part.stl');
+    store.commitImport(importToken, loadedModel());
+    const source = handle(1);
+
+    // A first attempt that is cancelled, so its token is genuinely stale.
+    const firstPlan = store.beginRepairPlan(source, DEFAULT_REPAIR_SELECTION);
+    store.commitRepairPlan(firstPlan, source, planFor(source));
+    const staleToken = store.beginRepairPreview();
+    if (staleToken === undefined) throw new Error('preview token was refused');
+    store.beginRepairCandidate(staleToken);
+    store.cancelRepairCandidate(staleToken);
+
+    // A second attempt that succeeds and publishes an ACCEPTED candidate.
+    const planToken = store.beginRepairPlan(source, DEFAULT_REPAIR_SELECTION);
+    store.commitRepairPlan(planToken, source, planFor(source));
+    const liveToken = store.beginRepairPreview();
+    if (liveToken === undefined) throw new Error('preview token was refused');
+    store.beginRepairCandidate(liveToken);
+    store.commitRepairCandidate(liveToken, previewFor(source));
+
+    return { store, source, staleToken };
+  }
+
+  it('leaves an accepted candidate untouched when a stale cancellation arrives', () => {
+    const { store, staleToken } = storeWithAcceptedCandidate();
+    expect(store.getSnapshot().repair.candidateState).toBe(RepairCandidateState.Ready);
+    const candidateBefore = store.getSnapshot().repair.candidate;
+    expect(candidateBefore).toBeDefined();
+
+    // The old attempt's signal fires late. It must be refused.
+    const wrote = store.cancelRepairCandidate(staleToken);
+
+    expect(wrote).toBe(false);
+    expect(store.getSnapshot().repair.candidateState).toBe(RepairCandidateState.Ready);
+    expect(store.getSnapshot().repair.candidate).toBe(candidateBefore);
+  });
+
+  it('refuses a stale cancellation even in the transitional Cancelling state', () => {
+    const { store, staleToken } = storeWithAcceptedCandidate();
+
+    expect(store.beginRepairCancellation(staleToken)).toBe(false);
+    expect(store.getSnapshot().repair.candidateState).toBe(RepairCandidateState.Ready);
+  });
+
+  it('DISCARD, by contrast, does release the accepted candidate', () => {
+    const { store } = storeWithAcceptedCandidate();
+    expect(store.getSnapshot().repair.candidate).toBeDefined();
+
+    const released = store.clearRepairCandidate();
+
+    // Discard is explicit, needs no token, and hands back the handle so the
+    // caller can release the worker-resident geometry.
+    expect(released).toBeDefined();
+    expect(store.getSnapshot().repair.candidate).toBeUndefined();
+    expect(store.getSnapshot().repair.candidateState).not.toBe(RepairCandidateState.Ready);
+  });
+});

@@ -90,6 +90,16 @@ export const DEFAULT_SAMPLE_LIMIT = 50_000;
 const DEFAULT_COMPONENT_SUMMARY_LIMIT = 1_000;
 
 /**
+ * Faces handled between cancellation checks in this module's own loops.
+ *
+ * The same 65,536 the primitives use, and the same reasoning: frequent enough
+ * that cancellation latency stays well under a frame at the analyser's measured
+ * throughput, rare enough that the check never shows up against the work it
+ * guards.
+ */
+const CORNERS_PER_ANALYSIS_BATCH = 65_536;
+
+/**
  * Bytes the analysis will have live AT ONE TIME for a mesh of this size.
  *
  * This is a peak model, not a sum of stage totals — see `memory.ts`. Each stage
@@ -198,8 +208,14 @@ export function analyseTopology(
   });
 
   // Face → topological vertices. Derived; canonical indices are untouched.
+  //
+  // Polled on the same cadence as the primitives. It is a plain O(N) remap and
+  // reads like a formality, but on a large model it is tens of millions of
+  // iterations sitting between two interruptible phases — long enough to be
+  // felt, and previously invisible to a cancel.
   const faceVertices = new Uint32Array(faceCount * 3);
   for (let f = 0; f < faceCount; f += 1) {
+    if (f % CORNERS_PER_ANALYSIS_BATCH === 0) throwIfCancelled(cancellation);
     const base3 = f * 3;
     for (let corner = 0; corner < 3; corner += 1) {
       const sourceCorner = mesh.indices[base3 + corner] ?? 0;
@@ -228,7 +244,10 @@ export function analyseTopology(
 
   /* ---- 4. vertex fans ---- */
   const fanPhase = beginPhase();
-  const incidence = buildVertexIncidence(faceVertices, faceCount, identity.vertexCount);
+  const incidenceWork = faceCount * 2 + identity.vertexCount;
+  const incidence = buildVertexIncidence(faceVertices, faceCount, identity.vertexCount, (done) => {
+    fanPhase.report(incidenceWork === 0 ? 0 : (done / incidenceWork) * 0.5);
+  });
   const vertexAnalysis = analyseVertexManifoldness(
     edges,
     groups,
@@ -236,7 +255,9 @@ export function analyseTopology(
     incidence,
     identity.vertexCount,
     (done) => {
-      fanPhase.report(groups.uniqueEdgeCount === 0 ? 1 : done / groups.uniqueEdgeCount);
+      fanPhase.report(
+        groups.uniqueEdgeCount === 0 ? 1 : 0.5 + (done / groups.uniqueEdgeCount) * 0.5,
+      );
     },
   );
 

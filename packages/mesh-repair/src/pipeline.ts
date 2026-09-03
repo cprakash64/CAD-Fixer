@@ -17,7 +17,7 @@ import {
   type RepairChangeSamples,
   type RepairValidation,
 } from './contract';
-import { RepairCancelled } from './cancellation';
+import { CANCEL_POLL_MASK, RepairCancelled } from './cancellation';
 import { buildInversePatch, type RepairInversePatch } from './inverse';
 import { WindingOutcome } from './operations';
 import { predictAfterRemoval } from './predict';
@@ -106,7 +106,11 @@ export function executeConservativeRepair(input: RepairExecutionInput): RepairEx
     }
     if (!applicable(stage.operation)) continue;
     perOperation.set(stage.operation, stage.mask);
+    // The removal mask union. One pass per applicable stage, so on a large model
+    // with several stages this is several times the face count — polled rather
+    // than trusted to be quick.
     for (let face = 0; face < faceCount; face += 1) {
+      if ((face & CANCEL_POLL_MASK) === 0) throwIfCancelled();
       if (stage.mask[face] === 1) cumulative[face] = 1;
     }
   }
@@ -137,13 +141,31 @@ export function executeConservativeRepair(input: RepairExecutionInput): RepairEx
 
   throwIfCancelled();
   const structural = validateMeshStructure(rebuilt.mesh);
+
+  /*
+   * ANNOUNCED BEFORE IT RUNS, not after it finishes.
+   *
+   * Re-analysing the candidate is the single longest span in a repair, and it
+   * used to be reported only once it was already over — so the interface spent
+   * that whole span claiming it was still "building candidate". A progress label
+   * that describes the previous phase is a small dishonesty with a practical
+   * cost: it is also the phase a user is most likely to cancel during, and
+   * neither they nor a test could tell they were in it.
+   */
+  input.onProgress?.(0.75, 'validating candidate');
   const after = analyseTopology(rebuilt.mesh, {
     modelId: input.modelId,
     modelRevision: input.revision,
     cancellation,
     sampleLimit: 4096,
+    // Forwarded so the longest span of a repair advances a progress bar instead
+    // of appearing to hang, and so a cancel during it is attributable to THIS
+    // phase rather than to the pipeline in general.
+    onProgress: ({ fraction }) => {
+      input.onProgress?.(0.75 + fraction * 0.2, 'validating candidate');
+    },
   }).report;
-  input.onProgress?.(0.95, 'validating candidate');
+  input.onProgress?.(0.95, 'judging candidate');
 
   const validation = validate(
     plan,

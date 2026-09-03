@@ -28,6 +28,18 @@ import {
 
 export interface OperationContext {
   readonly cancellation: CancellationToken;
+  /**
+   * Whether `cancellation` is backed by a SHARED control word, and therefore
+   * whether it can be observed from inside synchronous work.
+   *
+   * FALSE MEANS MESSAGE-ONLY, which for a long synchronous handler means no
+   * usable cancellation at all: the flag cannot change until the handler
+   * returns. Handlers whose contract PROMISES interruptibility must refuse
+   * rather than run — see the repair handlers. Exposed as a fact about the
+   * operation rather than inferred by a handler poking at the token, because a
+   * combined token looks identical either way.
+   */
+  readonly interruptible: boolean;
   /** Reports progress. `fraction` is clamped to 0..1. */
   reportProgress(fraction: number, note?: string): void;
   /** Throws `OPERATION_CANCELLED` if cancellation has been requested. */
@@ -157,6 +169,7 @@ export class GeometryWorkerHost {
 
     const context: OperationContext = {
       cancellation,
+      interruptible: cancellationBuffer !== undefined,
       reportProgress: (fraction, note) => {
         if (cancellation.isCancelled) return;
         this.endpoint.postMessage(
