@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { expect, test, type Page } from '@playwright/test';
 
 /**
@@ -165,4 +166,70 @@ test('no network request carries geometry', async ({ page }) => {
   await ready(page);
   await page.evaluate(() => window.si.runDirect(window.si.grid(16)));
   expect(offOrigin).toEqual([]);
+});
+
+/* ------------------------------------------------ Stage 3C-1A-R1 additions -- */
+
+test('R17 — the Stage 3A self-intersecting shell is detected in the browser', async ({ page }) => {
+  /*
+   * THE FIXTURE THAT DECIDES QUALIFICATION. R17 is a closed, manifold,
+   * consistently wound single shell that passes through itself — the Stage 3A
+   * corpus's own demonstration that topology cannot establish printability. A
+   * self-intersection diagnostic that misses it is not a diagnostic.
+   *
+   * The fixture is read here in Node and handed to the page, rather than
+   * fetched by the harness: the repo-wide network ban applies to research code
+   * too, and the harness deliberately contains no network call.
+   */
+  const generated = JSON.parse(
+    readFileSync(new URL('./generated-fixtures.json', import.meta.url), 'utf8'),
+  ) as { fixtures: { id: string; positions: number[]; triangles: number[] }[] };
+
+  await ready(page);
+
+  for (const id of ['R16', 'R17', 'R18']) {
+    const fixture = generated.fixtures.find((f) => f.id === id);
+    expect(fixture, `${id} must have been regenerated`).toBeDefined();
+    if (fixture === undefined) continue;
+
+    const report = await page.evaluate(
+      (f) => window.si.runDirect({ positions: f.positions, triangles: f.triangles }),
+      fixture,
+    );
+    expect(report.statusName, `${id} status`).toBe('CHECKED');
+    // Every one of these three carries a declared geometric defect.
+    expect(Number(report.intersectingPairCount), `${id} must report a defect`).toBeGreaterThan(0);
+  }
+});
+
+test('the work cap aborts promptly instead of walking discarded pairs', async ({ page }) => {
+  await ready(page);
+
+  // Every triangle spans the domain, so every AABB overlaps every other and the
+  // candidate set is ~n^2/2. With a 2,000-pair cap, an abortable traversal must
+  // stop almost immediately; Geogram's void callback could not.
+  const report = await page.evaluate(() =>
+    window.si.runDirect(
+      ((): { positions: number[]; triangles: number[] } => {
+        const positions: number[] = [];
+        positions.push(0, 0, 0);
+        const n = 4000;
+        for (let i = 0; i < n; i += 1) {
+          const a = (i * 2 * Math.PI) / n;
+          positions.push(Math.cos(a) * 100, Math.sin(a) * 100, 0);
+          positions.push(Math.cos(a) * 100, Math.sin(a) * 100, 1);
+        }
+        const triangles: number[] = [];
+        for (let i = 0; i < n; i += 1) triangles.push(0, 1 + i * 2, 2 + i * 2);
+        return { positions, triangles };
+      })(),
+      { maxTestedPairs: 2000 },
+    ),
+  );
+
+  expect(report.statusName).toBe('RESOURCE_LIMIT');
+  // Stopped within a pair or two of the cap, not after ~8,000,000 more.
+  expect(Number(report.candidatePairCount)).toBeLessThan(2100);
+  // An aborted search never claims a clean bill of health.
+  expect(Number(report.testedPairCount)).toBeLessThanOrEqual(2000);
 });

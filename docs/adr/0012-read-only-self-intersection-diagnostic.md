@@ -1,10 +1,14 @@
 # 0012 — Read-only self-intersection diagnostic architecture
 
-Status: **Accepted for Stage 3C-1B integration, with one named performance
-constraint.** Stage 3C-1A research. Nothing in this ADR is implemented in
-production yet.
+Status: **Accepted for Stage 3C-1B integration.** Stage 3C-1A research, revised
+by Stage 3C-1A-R1. Nothing in this ADR is implemented in production yet.
 
-Date: 2026-09-03
+Date: 2026-09-03 (Stage 3C-1A), revised 2026-09-03 (Stage 3C-1A-R1)
+
+> **Reading this document.** The Stage 3C-1A sections below are the original
+> evidence and are preserved unchanged, including measurements that R1 later
+> improved on. Sections marked **R1** record what the follow-up stage
+> established. Where the two disagree, R1 governs and says so explicitly.
 
 ## Context
 
@@ -236,3 +240,239 @@ applies unchanged.
    path memorises pairs internally. Sequential WASM never selects it — but a
    future threaded build would, and that would reintroduce unbounded pair
    accumulation.
+
+---
+
+# Stage 3C-1A-R1 — closing the qualification blockers
+
+Stage 3C-1A closed as PARTIALLY QUALIFIED with six open items. This section
+records what changed. The Stage 3C-1A measurements above are preserved as
+historical evidence; where R1 supersedes them it is stated.
+
+## R1 — SI23–SI25, and a correction
+
+**The Stage 3C-1A report was wrong to call these unreachable.** R16, R17 and
+R18 are built by `@cadfixer/repair-evaluation`, a tracked research package, and
+are reproducible at any time. They were regenerated rather than substituted:
+
+```bash
+npx vitest run --config vitest.bench.config.ts \
+  scripts/self-intersection-fixtures.bench-suite.ts
+```
+
+The corpus emits a triangle SOUP; the diagnostic reasons about TOPOLOGICAL
+vertices, so the export applies Stage 2's exact identity recovery — the same
+function the product uses, introducing no second merging rule. Provenance and
+per-fixture SHA-256 are recorded in
+`experiments/self-intersection/generated-fixtures.json`.
+
+| Fixture                         | Declared defect          | Result                                                |
+| ------------------------------- | ------------------------ | ----------------------------------------------------- |
+| R16 interpenetrating shells     | inter-shell intersection | CHECKED, **18** intersecting pairs, 12 affected faces |
+| **R17 self-intersecting shell** | self-intersection        | CHECKED, **8** intersecting pairs, 8 affected faces   |
+| R18 coplanar overlap            | coplanar overlap         | CHECKED, **1** coplanar overlap                       |
+
+**R17 is detected.** Its contacts classify as 4 edge-touch plus 4
+adjacent-overlap-beyond-shared rather than interior crossings, and that is
+geometrically correct: the bow-tie cross-section's two diagonals meet at a
+point, so the swept walls meet along a _segment_, not over an area. Native, WASM
+and Chromium agree.
+
+## R1 — `TriangleIsects` capacity 20: resolved
+
+Source facts, all from the pinned revision:
+
+- `capacity_ = 20`, a fixed stack buffer; `push_back` is
+  `geo_assert(size_ < capacity_)` (`triangle_intersection.h:151,185`).
+- `geo_assert` has **no NDEBUG guard** (`assert.h:149`) — it is live in Release.
+- `geo_assertion_failed` **throws `std::runtime_error`** under `ASSERT_THROW`
+  and only calls `abort()` under `ASSERT_ABORT` (`assert.cpp:109-113`). Stage
+  3C-1A described this as a process abort; it is a **catchable exception**, and
+  the mode is now set explicitly rather than inherited.
+
+Fuzz over small integer coordinates — the range that manufactures the exact
+coincidences an overflow needs — with duplicates guarded and degenerates
+skipped:
+
+| Input regime                                                   | Pairs tested  | Max symbolic result | Overflows |
+| -------------------------------------------------------------- | ------------- | ------------------- | --------- |
+| **With exact identity recovery** (what production always does) | **1,175,792** | 6 / 20              | **0**     |
+| Without merging (an input CAD Fixer cannot be handed)          | 237,889       | 6 / 20              | 2,481     |
+
+The overflow is reachable **only** when geometrically coincident vertices carry
+distinct ids — exactly what Stage 2's identity recovery eliminates before the
+diagnostic runs. The first offending case is a triangle pair whose third
+vertices are the same point under two ids.
+
+Defence in depth regardless: the narrowphase call is wrapped, an overflow is
+counted as `narrowphaseRefusals`, and the verdict is forced to `PARTIAL`.
+Verified in **both native and WASM**: the module survives, reports `PARTIAL`,
+and never claims a clean result. WASM therefore links `-fexceptions`.
+
+## R1 — the performance funnel
+
+Measured per candidate, 1M-face conforming surface:
+
+| Stage                             | Count         | Share   |
+| --------------------------------- | ------------- | ------- |
+| AABB candidates                   | 8,893,624     | 100%    |
+| duplicates (settled by topology)  | 0             | —       |
+| degenerate (skipped)              | 0             | —       |
+| shared edge                       | 1,571,080     | 18%     |
+| **shared vertex**                 | **4,707,453** | **53%** |
+| topologically disjoint            | 2,615,091     | 29%     |
+| reached `triangles_intersections` | 8,893,624     | 100%    |
+
+The cost is the narrowphase, and there is almost nothing else in the funnel to
+remove: on a conforming surface essentially every candidate is a legitimate
+neighbour that must still be proven legitimate.
+
+## R1 — prefilters: both proven correct, both REJECTED on measurement
+
+**Non-coplanar shared edge.** If A=(u,v,w) and B=(u,v,x) share exactly edge uv
+and their planes are distinct, then A∩B = [u,v] exactly. (Distinct planes meet
+in one line; both contain u,v, so that line is line(u,v); a convex triangle
+meets a line through two of its vertices in exactly that segment.) Sound, and
+checkable with a single `orient_3d`. **Removed ~6% of narrowphase calls on a
+corrugated surface and none on a planar one — where every shared-edge pair is
+coplanar and must be analysed anyway. Measured slower than the path it replaced.**
+
+**Half-space argument ignoring shared vertices.** If the non-shared vertices of
+B lie strictly on one side of A's plane, then B meets A's plane only at the
+shared vertices, so A∩B is exactly the shared primitive. Sound. **Removed 35% of
+narrowphase calls at 1M faces but bought only ~5% of wall clock**, because an
+exact `orient_3d` costs a large fraction of the call it avoids. It also moved
+pairs out of `legitimateShared`; the differential harness caught 26 fixtures
+disagreeing with the oracle on that field.
+
+The plain all-three-vertices separation test fires **zero** times on real
+meshes: the shared vertex lies ON the other plane, and the AABB broadphase has
+already discarded everything far enough apart for it to succeed.
+
+Both remain in the source, unreachable by default, as the evidence behind their
+rejection. **The useful conclusion is that this cost is not prefilterable** — it
+lives inside the exact narrowphase, and the production answer is a bounded,
+explicitly-invoked diagnostic rather than a faster one.
+
+## R1 — abortable broadphase: adopted
+
+Stage 3C-1A left CPU work genuinely unbounded: Geogram's callback returns
+`void`, so after the work cap fires the traversal keeps enumerating pairs into a
+callback that discards them.
+
+Measured, pathological fixture where every AABB overlaps:
+
+| Faces | Worst-case pairs | Broadphase    | Candidates | Callbacks after cap | Wasted     |
+| ----- | ---------------- | ------------- | ---------- | ------------------- | ---------- |
+| 400   | 79,800           | Geogram       | 79,800     | 77,799              | 1.5 ms     |
+| 400   | 79,800           | **abortable** | **2,001**  | **0**               | **0.0 ms** |
+| 2,000 | 1,999,000        | Geogram       | 1,999,000  | 1,996,999           | 5.3 ms     |
+| 2,000 | 1,999,000        | **abortable** | **2,001**  | **0**               | **0.0 ms** |
+| 6,000 | 17,997,000       | Geogram       | 17,997,000 | 17,994,999          | 52.0 ms    |
+| 6,000 | 17,997,000       | **abortable** | **2,001**  | **0**               | **0.0 ms** |
+
+The waste grows as O(N²). `experiments/self-intersection/si_bvh.h` is a
+read-only median-split AABB tree whose traversal callback returns `bool` and
+unwinds immediately. Float64 conservative boxes, **inclusive** overlap so exact
+contacts survive, deterministic ordering.
+
+Validated, never as its own oracle: candidate counts match a brute-force
+all-pairs test AND Geogram's own tree on all 26 fixtures, and every
+classification field plus the sample list is identical. Runtime is equal to
+Geogram's within noise from 20k to 1M faces. **It is therefore the default.**
+
+Adopting it exposed a latent reproducibility bug: samples were "first N in
+traversal order", which made a user-visible field depend on which tree produced
+it. Samples are now the **N lexicographically smallest (f1,f2) pairs**, so any
+correct broadphase yields the same list.
+
+## R1 — measured performance by FACE COUNT
+
+Keyed on faces, not file bytes: the same geometry has different byte counts as
+STL, OBJ or 3MF. Median of 3 runs, corrugated conforming surface, native.
+
+| Faces   | Candidates | ~MiB (STL) | Median     | Range     |
+| ------- | ---------- | ---------- | ---------- | --------- |
+| 20,000  | 167,608    | 1.0        | **0.70 s** | 0.69–0.73 |
+| 49,928  | 420,604    | 2.4        | **1.79 s** | 1.73–1.80 |
+| 100,352 | 847,624    | 4.8        | **3.55 s** | 3.54–3.64 |
+| 199,712 | 1,689,976  | 9.5        | **7.50 s** | 7.01–7.57 |
+| 500,000 | 4,238,008  | 23.8       | **17.5 s** | 17.3–20.3 |
+| 999,698 | 8,480,473  | 47.7       | **34.8 s** | 34.6–35.3 |
+
+Linear in candidate pairs at ~4.1 µs/pair on this surface. WASM ≈ 25% slower.
+
+## R1 — invocation policy, derived from the table above
+
+| Band             | Faces            | Evidence                                                                                                  |
+| ---------------- | ---------------- | --------------------------------------------------------------------------------------------------------- |
+| `AUTO_ELIGIBLE`  | ≤ 25,000         | ≈0.9 s at the boundary. Short enough to run automatically after import or repair.                         |
+| `EXPLICIT_CHECK` | 25,001 – 250,000 | ≈0.9 s to ≈9.4 s. Long enough that it must be user-invoked, with progress and a working Cancel.           |
+| `SIZE_LIMIT`     | > 250,000        | 500k is 17.5 s and 1M is 34.8 s on a clean mesh, and far worse on an adversarial one. Not started in MVP. |
+
+**Production face ceiling: 250,000 faces.** Enforced as a **preflight** gate,
+not a runtime one — at 1M faces the BVH allocated +271.8 MiB _before_ the pair
+cap could fire, so an above-ceiling model must be refused before allocation.
+
+These are conservative reference-device numbers from one machine and will move
+with hardware. No hardware-independent guarantee is claimed.
+
+## R1 — status model
+
+```
+CHECKED              every face examined, no cap fired
+PARTIAL              degenerate faces skipped, or a pair the narrowphase refused
+RESOURCE_LIMIT       started, but a deterministic work/memory cap stopped it
+CANCELLED            the diagnostic worker was terminated
+INTERNAL_FAILURE     the kernel failed
+NOT_RUN_SIZE_POLICY  never started: the model exceeds the face ceiling
+```
+
+`NOT_RUN_SIZE_POLICY` and `RESOURCE_LIMIT` are different facts and must read
+differently: one means "we did not look", the other "we looked and ran out".
+A host watchdog, if 3C-1B adds one, contributes `TIME_LIMIT` — a **secondary
+backstop only**, never a replacement for the deterministic caps. **None of these
+may ever render as "no intersections found".**
+
+## R1 — memory
+
+| Faces                   | Canonical (F32) | Disposable copy (F64) | WASM heap            |
+| ----------------------- | --------------- | --------------------- | -------------------- |
+| 20,000                  | 0.3 MiB         | 0.5 MiB               | 64.0 MiB (no growth) |
+| 100,352                 | 1.7 MiB         | 2.3 MiB               | 64.0 MiB (no growth) |
+| 199,712                 | 3.4 MiB         | 4.6 MiB               | 81.8 MiB             |
+| 250,632 (ceiling)       | 4.3 MiB         | 5.8 MiB               | **98.1 MiB**         |
+| 999,698 (above ceiling) | 17.2 MiB        | 22.9 MiB              | 369.9 MiB            |
+
+## R1 — artifact
+
+|              | Stage 3C-1A | R1          | Change          |
+| ------------ | ----------- | ----------- | --------------- |
+| `.wasm`      | 1,213,107 B | 1,267,695 B | +54,588 (+4.5%) |
+| JS glue      | 72,029 B    | 77,861 B    | +5,832 (+8.1%)  |
+| Initial heap | 64 MiB      | 64 MiB      | —               |
+
+The increase is `-fexceptions`, which is what makes the capacity guard work.
+Justified: without it a buffer overflow kills the worker instead of degrading to
+`PARTIAL`.
+
+## R1 — what remains true, and what is still not known
+
+Unchanged: no tolerance, no welding, no snapping, read-only, duplicates separate
+from intersection counts, degenerates force `PARTIAL`, exact non-adjacent
+contacts reported, disposable worker cancelled by `terminate()` (T_full 1731 ms
+→ 122 ms, ratio 0.070), MessageChannel worker-to-worker transfer with the page
+never holding coordinates, and **no printability claim of any kind**.
+
+Remaining limitations:
+
+1. **Above 250,000 faces the diagnostic does not run in MVP.** Truthful, and a
+   real product limit.
+2. **~4–6 µs per candidate pair is irreducible** without changing semantics.
+   Both sound prefilters were measured and rejected.
+3. **Float32 storage bounds what is detectable** — information lost at import
+   cannot be recovered here.
+4. **The parallel Geogram broadphase remains unaudited.** Sequential WASM never
+   selects it; the abortable tree makes it moot for the chosen path.
+5. **Capacity 20 is not proven sufficient by construction** — only measured over
+   1.18M production-realistic pairs, and guarded if it ever fails.
