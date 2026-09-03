@@ -18,9 +18,13 @@ import { modelExportHandler, modelImportHandler, residentModels } from './stl-ha
  * repository passing.
  */
 
-function context(cancellation: CancellationToken = uncancellable): OperationContext {
+function context(
+  cancellation: CancellationToken = uncancellable,
+  interruptible = true,
+): OperationContext {
   return {
     cancellation,
+    interruptible,
     reportProgress: (): void => undefined,
     throwIfCancelled: (): void => {
       if (cancellation.isCancelled) throw operationCancelled();

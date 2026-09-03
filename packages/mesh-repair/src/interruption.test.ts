@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { createIndexArray, createPositionArray, IDENTITY_MATRIX4 } from '@cadfixer/mesh-core';
+import {
+  createIndexArray,
+  createPositionArray,
+  triangleCount,
+  IDENTITY_MATRIX4,
+} from '@cadfixer/mesh-core';
 import type { CanonicalMesh } from '@cadfixer/mesh-core';
 import {
   SharedCancellationSource,
@@ -20,6 +25,7 @@ import { planConservativeRepair } from './plan';
 import { executeConservativeRepair } from './pipeline';
 import { RepairOperation } from './contract';
 import { buildRepairView } from './view';
+import { rebuildCandidate } from './rebuild';
 
 /**
  * GENUINE INTERRUPTION, proven at the engine level.
@@ -337,5 +343,155 @@ describe('CC14: a cancelled repair leaves the source mesh byte-identical', () =>
     expect(
       new Uint8Array(mesh.indices.buffer, mesh.indices.byteOffset, mesh.indices.byteLength),
     ).toEqual(indicesBefore);
+  });
+});
+
+/* ----------------------------------------------------------------- CC01 -- */
+
+describe('CC01: cancellation observed before any work begins', () => {
+  /*
+   * The degenerate case, and the one most easily broken by an "optimisation"
+   * that hoists the first poll out of a loop. An already-cancelled token must
+   * stop the pass at its very first check, before a single face is examined.
+   */
+  it('stops a selection pass at its first poll', () => {
+    const mesh = duplicateHeavyMesh(CANCEL_POLL_INTERVAL * 4);
+    const view = buildRepairView(mesh);
+    const cancelled: CancellationToken = { isCancelled: true, onCancelled: () => () => undefined };
+
+    expect(() => selectDuplicateFaces(view, cancelled)).toThrow(RepairCancelled);
+  });
+
+  it('stops the whole pipeline before it produces anything', () => {
+    const mesh = duplicateHeavyMesh(2_048);
+    const report = analyseTopology(mesh, {
+      modelId: 'm',
+      modelRevision: 1,
+      cancellation: uncancellable,
+    }).report;
+    const view = buildRepairView(mesh);
+    const { plan, prepared } = planConservativeRepair({
+      mesh,
+      report,
+      modelId: 'm',
+      sourceRevision: 1,
+      requested: [RepairOperation.RemoveDuplicateFaces],
+      cancellation: uncancellable,
+    });
+    const cancelled: CancellationToken = { isCancelled: true, onCancelled: () => () => undefined };
+
+    expect(() =>
+      executeConservativeRepair({
+        source: mesh,
+        plan,
+        sourceReport: report,
+        cancellation: cancelled,
+        modelId: 'm',
+        revision: 1,
+        view,
+        prepared,
+      }),
+    ).toThrow(RepairCancelled);
+  });
+});
+
+/* ----------------------------------------------------------------- CC06 -- */
+
+describe('CC06: cancellation is observed inside the face copy and flip', () => {
+  /*
+   * DEDICATED, not inherited from a pipeline test. Compaction is the phase that
+   * actually writes the candidate's vertices: it copies nine floats and three
+   * indices per surviving face and rewrites the winding of every flipped one. A
+   * pipeline-level test proves the pipeline stopped somewhere; this proves the
+   * copy itself stops, which is the only phase whose cost scales with the
+   * candidate rather than with the source.
+   */
+  it('stops the compaction pass rather than copying every surviving face', () => {
+    const faces = CANCEL_POLL_INTERVAL * 4;
+    const mesh = duplicateHeavyMesh(faces);
+    // Remove nothing and flip nothing: the copy is then the whole of the work,
+    // so an early exit can only be the copy loop exiting early.
+    const removeMask = new Uint8Array(faces);
+    const flipMask = new Uint8Array(faces);
+    for (let f = 0; f < faces; f += 1) flipMask[f] = 1;
+
+    let batches = 0;
+    let processed = 0;
+    expect(() =>
+      rebuildCandidate(mesh, faces, removeMask, flipMask, {
+        onBatch: (done: number): void => {
+          batches += 1;
+          processed = done;
+          // Cancel once the copy is demonstrably under way, never on the first
+          // batch — otherwise this would be CC01 wearing a different name.
+          if (batches >= 2) throw new RepairCancelled();
+        },
+      }),
+    ).toThrow(RepairCancelled);
+
+    // THE PROOF OF EARLY EXIT: the copy stopped partway through the faces.
+    expect(processed).toBeLessThan(faces);
+    expect(batches).toBeGreaterThan(1);
+  });
+
+  it('copies every face when nothing cancels it', () => {
+    const faces = 1_024;
+    const mesh = duplicateHeavyMesh(faces);
+    const rebuilt = rebuildCandidate(mesh, faces, new Uint8Array(faces), undefined, {});
+    expect(triangleCount(rebuilt.mesh)).toBe(faces);
+  });
+});
+
+/* ----------------------------------------------------------------- CC07 -- */
+
+describe('CC07: cancellation is observed inside candidate topology validation', () => {
+  /*
+   * THE PHASE THAT MADE THIS STAGE NECESSARY. A candidate is re-analysed by
+   * Stage 2 before it may be accepted, and that analysis is the longest single
+   * span of work in a repair. If it polls only at its phase boundaries then a
+   * cancel during validation waits for a whole phase — seconds on a large model
+   * — which is precisely the "cancellation that cannot cancel" this stage
+   * removes.
+   *
+   * Asserted through the ABSTRACT token. `mesh-topology` knows nothing about
+   * SharedArrayBuffer and must not: it is handed a `CancellationToken` and that
+   * is the whole of its contract.
+   */
+  it('stops the analysis partway through rather than completing it', () => {
+    const mesh = duplicateHeavyMesh(CANCEL_POLL_INTERVAL * 4);
+    const token = countingToken(3);
+
+    let lastFraction = 0;
+    expect(() =>
+      analyseTopology(mesh, {
+        modelId: 'm',
+        modelRevision: 1,
+        cancellation: token,
+        onProgress: ({ fraction }) => {
+          lastFraction = fraction;
+        },
+      }),
+    ).toThrow();
+
+    // processed < total, expressed as the analyser's own published progress:
+    // it never reached completion.
+    expect(lastFraction).toBeLessThan(1);
+    // And it polled from INSIDE the work, not merely at a couple of boundaries.
+    expect(token.reads).toBeGreaterThan(3);
+  });
+
+  it('completes and reports a full analysis when nothing cancels it', () => {
+    const mesh = duplicateHeavyMesh(2_048);
+    let lastFraction = 0;
+    const { report } = analyseTopology(mesh, {
+      modelId: 'm',
+      modelRevision: 1,
+      cancellation: uncancellable,
+      onProgress: ({ fraction }) => {
+        lastFraction = fraction;
+      },
+    });
+    expect(lastFraction).toBe(1);
+    expect(report.sourceFaceCount).toBe(2_048);
   });
 });

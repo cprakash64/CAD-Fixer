@@ -65,8 +65,16 @@ export function analyseDegeneracy(
 
   const FACES_PER_BATCH = 65_536;
 
+  /*
+   * TWO PASSES, ONE MONOTONIC SCALE. This function walks the faces twice — once
+   * to build keys, once to scan the sorted runs — but `analyseTopology` maps its
+   * callback onto a single half-phase measured in faces. Reporting each pass's
+   * own index would send the published fraction backwards at the hand-over,
+   * which breaks the analyser's monotonic-progress contract. Both passes are
+   * therefore reported on a shared 0..faceCount scale, each contributing half.
+   */
   for (let f = 0; f < faceCount; f += 1) {
-    if (f % FACES_PER_BATCH === 0) onBatch?.(f);
+    if (f % FACES_PER_BATCH === 0) onBatch?.(f / 2);
 
     const base = f * 3;
     const a = faceVertices[base] ?? 0;
@@ -160,7 +168,10 @@ export function analyseDuplicates(
   const order = new Uint32Array(faceCount);
   const usable = new Uint8Array(faceCount);
 
+  const FACES_PER_BATCH = 65_536;
+
   for (let f = 0; f < faceCount; f += 1) {
+    if (f % FACES_PER_BATCH === 0) onBatch?.(f);
     const base = f * 3;
     const a = faceVertices[base] ?? 0;
     const b = faceVertices[base + 1] ?? 0;
@@ -180,10 +191,21 @@ export function analyseDuplicates(
     keyC[f] = hi;
   }
 
-  onBatch?.(faceCount);
+  onBatch?.(faceCount / 2);
 
-  // Sort face indices by (keyA, keyB, keyC). A typed-array-backed sort of
-  // indices; the comparator reads the key arrays rather than boxed records.
+  /*
+   * THE ONE NON-INTERRUPTIBLE STEP IN TOPOLOGY ANALYSIS.
+   *
+   * `Array.prototype.sort` runs to completion inside the engine, so no poll can
+   * be placed inside it and a cancel requested while it is running is observed
+   * only once it returns. It is retained deliberately rather than replaced: it
+   * is a single O(N log N) pass whose measured cost is recorded in the Stage
+   * 3B-1C report, and rewriting a correct sort to shave cancellation latency
+   * would be a large change justified by no evidence.
+   *
+   * A typed-array-backed sort of INDICES; the comparator reads the key arrays
+   * rather than boxed records.
+   */
   const sorted = Array.from(order).sort((left, right) => {
     const a = (keyA[left] ?? 0) - (keyA[right] ?? 0);
     if (a !== 0) return a;
@@ -199,6 +221,10 @@ export function analyseDuplicates(
 
   let index = 0;
   while (index < faceCount) {
+    // Polled on the scan cursor. The run-detection loop below is bounded by the
+    // size of one duplicate run, so the cursor is the honest measure of
+    // progress through the pass.
+    if (index % FACES_PER_BATCH === 0) onBatch?.((faceCount + index) / 2);
     const first = sorted[index] ?? 0;
     if (usable[first] !== 1) {
       index += 1;

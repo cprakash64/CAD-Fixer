@@ -1,12 +1,16 @@
 import { cleanup, render, screen, within } from '@testing-library/react';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { ModelHandle, RenderSnapshot, TopologyReport } from '@cadfixer/geometry-runtime';
 import { RepairPanel } from './RepairPanel';
 import { GeometryClientProvider } from '../runtime/client-context';
 import { GeometryClient } from '../runtime/geometry-client';
 import { WorkspaceProvider } from '../state/store-context';
 import { WorkspaceStore } from '../state/workspace-store';
-import { REPAIR_EXCLUSIONS, REPAIR_QUALIFIER } from '../state/repair-presentation';
+import {
+  REPAIR_EXCLUSIONS,
+  REPAIR_ISOLATION_HEADLINE,
+  REPAIR_QUALIFIER,
+} from '../state/repair-presentation';
 import type { LoadedModel } from '../state/model';
 
 /**
@@ -22,6 +26,29 @@ import type { LoadedModel } from '../state/model';
  * The worker is stubbed in `vitest.setup.ts` and never replies, so nothing here
  * can accidentally be reading a real result.
  */
+
+/**
+ * Declares the cross-origin isolation the repair workflow REQUIRES.
+ *
+ * jsdom is never isolated and does not define `crossOriginIsolated` at all, so
+ * without this every panel test would exercise the fail-closed path instead of
+ * the workflow. Set per file rather than globally in `vitest.setup.ts`, because
+ * `App.test.tsx` asserts the diagnostic that reports the REAL value of this
+ * property and a global override would make that assertion meaningless.
+ *
+ * The gate itself is asserted in both directions below.
+ */
+function setIsolated(value: boolean): void {
+  Object.defineProperty(globalThis, 'crossOriginIsolated', {
+    configurable: true,
+    writable: true,
+    value,
+  });
+}
+
+beforeEach(() => {
+  setIsolated(true);
+});
 
 function renderPanel(configure: (store: WorkspaceStore) => void = () => undefined): WorkspaceStore {
   const store = new WorkspaceStore();
@@ -241,5 +268,44 @@ describe('after a repair has been applied', () => {
 
     expect(screen.getByTestId('undo-repair')).toBeDisabled();
     expect(screen.getByTestId('repair-undo-unavailable')).toBeInTheDocument();
+  });
+});
+
+describe('when the context cannot interrupt a repair', () => {
+  /*
+   * FAIL CLOSED. Conservative repair promises that a running repair can be
+   * stopped. Without cross-origin isolation there is no SharedArrayBuffer, so
+   * the only cancellation left is a message a synchronous pass cannot read —
+   * which would make Cancel a control that silently does nothing on exactly the
+   * large models where a user reaches for it.
+   */
+  it('withholds the workflow and names the deployment fault', () => {
+    setIsolated(false);
+    renderPanel(loadModel);
+
+    expect(screen.getByTestId('repair-isolation-unavailable')).toHaveTextContent(
+      REPAIR_ISOLATION_HEADLINE,
+    );
+    expect(screen.getByTestId('repair-isolation-detail')).toHaveTextContent(
+      /cross-origin isolated/i,
+    );
+  });
+
+  it('offers no control that would start or cancel a repair', () => {
+    setIsolated(false);
+    renderPanel(loadModel);
+
+    // The point of the gate: not a disabled Cancel, but no repair surface at all.
+    expect(screen.queryByTestId('preview-repair')).toBeNull();
+    expect(screen.queryByTestId('cancel-repair')).toBeNull();
+    expect(screen.queryByTestId('apply-repair')).toBeNull();
+    expect(screen.queryByTestId('repair-operations')).toBeNull();
+  });
+
+  it('still renders the workflow when the context IS isolated', () => {
+    setIsolated(true);
+    renderPanel(loadModel);
+
+    expect(screen.queryByTestId('repair-isolation-unavailable')).toBeNull();
   });
 });

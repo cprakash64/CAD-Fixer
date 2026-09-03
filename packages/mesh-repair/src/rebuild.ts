@@ -53,9 +53,13 @@ export function rebuildCandidate(
 ): RebuiltCandidate {
   const batchSize = progress.batchSize ?? DEFAULT_BATCH;
 
+  // The counting pass. It allocates nothing and looks trivial, but it is a full
+  // sweep of the model before the copy below has written a byte — long enough on
+  // a large mesh to be worth interrupting.
   let survivorCount = 0;
   let removedCount = 0;
   for (let face = 0; face < faceCount; face += 1) {
+    if (face % batchSize === 0) progress.onBatch?.(0);
     if (removeMask?.[face] === 1) removedCount += 1;
     else survivorCount += 1;
   }
@@ -97,7 +101,7 @@ export function rebuildCandidate(
   }
   progress.onBatch?.(faceCount);
 
-  const groups = rebuildGroups(mesh.groups, removeMask, faceCount);
+  const groups = rebuildGroups(mesh.groups, removeMask, faceCount, batchSize, progress.onBatch);
 
   return {
     mesh: {
@@ -128,6 +132,8 @@ function rebuildGroups(
   groups: readonly MeshGroup[] | undefined,
   removeMask: Uint8Array | undefined,
   faceCount: number,
+  batchSize: number,
+  onBatch: ((processed: number) => void) | undefined,
 ): MeshGroup[] | undefined {
   if (groups === undefined) return undefined;
   if (removeMask === undefined) return [...groups];
@@ -136,6 +142,7 @@ function rebuildGroups(
   // lookup rather than a rescan.
   const survivorsBefore = new Uint32Array(faceCount + 1);
   for (let face = 0; face < faceCount; face += 1) {
+    if (face % batchSize === 0) onBatch?.(faceCount);
     survivorsBefore[face + 1] = (survivorsBefore[face] ?? 0) + (removeMask[face] === 1 ? 0 : 1);
   }
 
