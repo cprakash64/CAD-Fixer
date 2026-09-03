@@ -56,7 +56,20 @@ int main(int argc, char** argv) {
   GEO::Logger::instance()->set_quiet(true);
 
   cadfixer::SiLimits limits;
+  cadfixer::SiOptions options;
   for (int i = 1; i < argc; ++i) {
+    if (std::strcmp(argv[i], "--fast") == 0) {
+      options.fast_shared_edge = true;
+      options.plane_prefilter = true;
+    } else if (std::strcmp(argv[i], "--fast-shared-edge") == 0) {
+      options.fast_shared_edge = true;
+    } else if (std::strcmp(argv[i], "--plane-prefilter") == 0) {
+      options.plane_prefilter = true;
+    } else if (std::strcmp(argv[i], "--abortable") == 0) {
+      options.abortable_broadphase = true;
+    } else if (std::strcmp(argv[i], "--geogram-broadphase") == 0) {
+      options.abortable_broadphase = false;
+    }
     if (std::strncmp(argv[i], "--max-tested=", 13) == 0) {
       limits.max_tested_pairs = std::strtoull(argv[i] + 13, nullptr, 10);
     } else if (std::strncmp(argv[i], "--max-candidates=", 17) == 0) {
@@ -73,6 +86,19 @@ int main(int argc, char** argv) {
 
   const uint64_t pos_hash_before = hash_bytes(pos.data(), pos.size() * sizeof(double));
   const uint64_t tri_hash_before = hash_bytes(tris.data(), tris.size() * sizeof(uint32_t));
+
+  /*
+   * LITERAL BYTES, KEPT. A hash proves difference, not identity: two distinct
+   * buffers can collide, and a 64-bit FNV is not a proof of equality. Stage
+   * 3C-1A reported "byte-for-byte" on hashes alone, which overstated what was
+   * actually shown. These copies allow a real memcmp afterwards.
+   */
+  const std::vector<double> pos_copy = pos;
+  const std::vector<uint32_t> tri_copy = tris;
+  const size_t pos_bytes_before = pos.size() * sizeof(double);
+  const size_t tri_bytes_before = tris.size() * sizeof(uint32_t);
+  const size_t vertex_count_before = vertex_count;
+  const size_t face_count_before = face_count;
 
   // THE DISPOSABLE WORKING COPY. Geogram gets its own mesh built from the
   // caller's values; the caller's buffers are never handed to the kernel.
@@ -97,7 +123,7 @@ int main(int argc, char** argv) {
   cadfixer::SiReport report;
   int failed = 0;
   try {
-    cadfixer::run_self_intersection(mesh, pos, tris, limits, report);
+    cadfixer::run_self_intersection(mesh, pos, tris, limits, report, options);
   } catch (const std::exception& e) {
     failed = 1;
     report.status = cadfixer::SI_STATUS_INTERNAL_FAILURE;
@@ -110,6 +136,32 @@ int main(int argc, char** argv) {
 
   const uint64_t pos_hash_after = hash_bytes(pos.data(), pos.size() * sizeof(double));
   const uint64_t tri_hash_after = hash_bytes(tris.data(), tris.size() * sizeof(uint32_t));
+
+  // Byte length, then every byte, then the counts derived from them.
+  const bool pos_len_same = (pos.size() * sizeof(double)) == pos_bytes_before;
+  const bool tri_len_same = (tris.size() * sizeof(uint32_t)) == tri_bytes_before;
+  const bool pos_bytes_same =
+      pos_len_same &&
+      std::memcmp(pos.data(), pos_copy.data(), pos_bytes_before) == 0;
+  const bool tri_bytes_same =
+      tri_len_same &&
+      std::memcmp(tris.data(), tri_copy.data(), tri_bytes_before) == 0;
+  const bool counts_same =
+      vertex_count == vertex_count_before && face_count == face_count_before;
+
+  // The number of differing bytes, so the report can state zero rather than
+  // merely assert equality.
+  size_t differing = 0;
+  if (pos_len_same) {
+    const uint8_t* a = reinterpret_cast<const uint8_t*>(pos.data());
+    const uint8_t* b = reinterpret_cast<const uint8_t*>(pos_copy.data());
+    for (size_t i = 0; i < pos_bytes_before; ++i) if (a[i] != b[i]) ++differing;
+  }
+  if (tri_len_same) {
+    const uint8_t* a = reinterpret_cast<const uint8_t*>(tris.data());
+    const uint8_t* b = reinterpret_cast<const uint8_t*>(tri_copy.data());
+    for (size_t i = 0; i < tri_bytes_before; ++i) if (a[i] != b[i]) ++differing;
+  }
 
   std::ostringstream samples;
   samples << "[";
@@ -129,6 +181,12 @@ int main(int argc, char** argv) {
       "\"skippedPairCount\":%llu,\"samplePairCount\":%llu,"
       "\"samplesTruncated\":%s,\"samples\":%s,"
       "\"degeneracyMs\":%.3f,\"aabbMs\":%.3f,\"scanMs\":%.3f,"
+      "\"funnelDuplicate\":%llu,\"funnelDegenerate\":%llu,\"funnelSharedEdge\":%llu,"
+      "\"funnelSharedVertex\":%llu,\"funnelDisjoint\":%llu,\"funnelPlaneSeparated\":%llu,"
+      "\"funnelNarrowphase\":%llu,\"callbacksAfterCap\":%llu,\"wastedAfterCapMs\":%.3f,"
+      "\"abortableBroadphase\":%s,\"narrowphaseRefusals\":%llu,"
+      "\"bytesDiffering\":%zu,\"lengthsUnchanged\":%s,"
+      "\"bytesIdentical\":%s,\"countsUnchanged\":%s,"
       "\"positionsUnchanged\":%s,\"indicesUnchanged\":%s,\"failed\":%d}\n",
       report.status,
       (unsigned long long)report.candidate_pair_count,
@@ -148,6 +206,21 @@ int main(int argc, char** argv) {
       report.samples_truncated ? "true" : "false",
       samples.str().c_str(),
       report.degeneracy_ms, report.aabb_ms, report.scan_ms,
+      (unsigned long long)report.funnel_duplicate,
+      (unsigned long long)report.funnel_degenerate,
+      (unsigned long long)report.funnel_shared_edge,
+      (unsigned long long)report.funnel_shared_vertex,
+      (unsigned long long)report.funnel_disjoint,
+      (unsigned long long)report.funnel_plane_separated,
+      (unsigned long long)report.funnel_narrowphase,
+      (unsigned long long)report.callbacks_after_cap,
+      report.wasted_after_cap_ms,
+      report.used_abortable_broadphase ? "true" : "false",
+      (unsigned long long)report.narrowphase_refusals,
+      differing,
+      (pos_len_same && tri_len_same) ? "true" : "false",
+      (pos_bytes_same && tri_bytes_same) ? "true" : "false",
+      counts_same ? "true" : "false",
       (pos_hash_before == pos_hash_after) ? "true" : "false",
       (tri_hash_before == tri_hash_after) ? "true" : "false",
       failed);

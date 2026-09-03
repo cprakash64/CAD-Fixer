@@ -28,9 +28,11 @@ say(`wasm heap at init: ${MiB(M.HEAPU32.buffer.byteLength)} MiB`);
 say('\nlabel     faces    verts   canon32  copy64  wasmHeap  scan_ms  status');
 
 for (const [label, side, cap] of [
-  ['~1 MiB', 102, 40000000],
-  ['~10 MiB', 323, 40000000],
-  ['~50 MiB', 724, 300000],
+  ['20k', 100, 40000000],
+  ['100k', 224, 40000000],
+  ['200k', 316, 40000000],
+  ['250k-ceiling', 354, 40000000],
+  ['1M-above-ceiling', 707, 2000],
 ]) {
   const g = grid(side);
   const faces = g.triangles.length / 3;

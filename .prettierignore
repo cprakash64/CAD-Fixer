@@ -32,3 +32,11 @@ docs/repair/repair-performance.json
 
 # Stage 3C-1A: generated Emscripten glue and the WASM artifact.
 experiments/self-intersection/artifacts
+
+# Stage 3C-1A-R1: the regenerated Stage 3A fixtures. Written solely by
+# scripts/self-intersection-fixtures.bench-suite.ts, on the same reasoning as the
+# bakeoff JSON above — a formatter rewriting a generator's output would dirty the
+# tree on every regeneration for reasons unrelated to the experiment. Its
+# provenance is self-describing: source path, generation command and a SHA-256
+# per fixture.
+experiments/self-intersection/generated-fixtures.json

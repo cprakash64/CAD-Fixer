@@ -40,13 +40,17 @@
 #include <algorithm>
 #include <vector>
 #include <chrono>
+#include <array>
 
 #include <geogram/basic/common.h>
 #include <geogram/basic/geometry.h>
 #include <geogram/mesh/mesh.h>
 #include <geogram/mesh/mesh_AABB.h>
 #include <geogram/mesh/triangle_intersection.h>
+#include <geogram/basic/assert.h>
 #include <geogram/numerics/predicates.h>
+
+#include "si_bvh.h"
 
 namespace cadfixer {
 
@@ -68,6 +72,58 @@ enum SiStatus {
   SI_STATUS_PARTIAL = 1,
   SI_STATUS_RESOURCE_LIMIT = 2,
   SI_STATUS_INTERNAL_FAILURE = 3
+};
+
+/**
+ * Research switches for the Stage 3C-1A-R1 prefilters.
+ *
+ * OFF BY DEFAULT so the Stage 3C-1A classifier remains reachable unchanged as
+ * the differential ORACLE. An optimisation that cannot be compared against the
+ * thing it replaced is not an optimisation, it is a rewrite.
+ */
+struct SiOptions {
+  /*
+   * BOTH PREFILTERS ARE OFF BY DEFAULT BECAUSE BOTH WERE MEASURED AND REJECTED.
+   * They are retained, unreachable in the default path, as the evidence behind
+   * that rejection rather than as a feature.
+   *
+   * `fast_shared_edge` is mathematically sound (see the proof on
+   * `provably_legitimate_shared_edge`) but removed only ~6% of narrowphase
+   * calls on a corrugated surface and NONE on a planar one, where every
+   * shared-edge pair is coplanar and must be analysed anyway. It measured
+   * SLOWER than the path it replaced.
+   *
+   * `plane_prefilter` is also sound, and removed 35% of narrowphase calls at a
+   * million faces — yet bought only ~5% of wall clock, because an exact
+   * `orient_3d` costs a large fraction of the `triangles_intersections` call it
+   * avoids. It also moves pairs out of `legitimateShared`, which the
+   * differential harness caught: 26 fixtures disagreed with the oracle on that
+   * field. A prefilter that changes a reported number is not an optimisation.
+   *
+   * The conclusion is the useful part: this cost is NOT prefilterable. It lives
+   * inside the exact narrowphase, and the production answer is a bounded,
+   * explicitly-invoked diagnostic rather than a faster one.
+   */
+  bool fast_shared_edge = false;
+  bool plane_prefilter = false;
+
+  /**
+   * Use CAD Fixer's own ABORTABLE broadphase instead of Geogram's AABB.
+   *
+   * ON BY DEFAULT AS OF STAGE 3C-1A-R1, on measured grounds.
+   *
+   * The candidate SET is identical to Geogram's — validated against a
+   * brute-force oracle and against Geogram itself on 26 fixtures, samples
+   * included — and the runtime is equal within noise at every size from 20k to
+   * 1M faces. What differs is only what happens AFTER the work cap fires:
+   * Geogram's callback returns void, so its traversal keeps enumerating pairs
+   * into a callback that now discards them. Measured at 6,000 pathological
+   * faces that was 17,994,999 wasted callbacks; it grows as O(N^2). This tree
+   * stops within one pair.
+   *
+   * Set false to run the original Geogram broadphase for comparison.
+   */
+  bool abortable_broadphase = true;
 };
 
 struct SiLimits {
@@ -96,6 +152,36 @@ struct SiReport {
 
   uint32_t skipped_degenerate_face_count = 0;
   uint64_t skipped_pair_count = 0;
+
+  /*
+   * THE FUNNEL. Stage 3C-1A measured 8.9M candidates costing ~54 s and could
+   * not say why. These counters attribute every candidate to the stage that
+   * disposed of it, which is the difference between optimising and guessing.
+   */
+  uint64_t funnel_duplicate = 0;        // settled by exact topology alone
+  uint64_t funnel_degenerate = 0;       // outside the narrowphase precondition
+  uint64_t funnel_shared_edge = 0;      // topologically adjacent across an edge
+  uint64_t funnel_shared_vertex = 0;    // topologically adjacent at a vertex
+  uint64_t funnel_disjoint = 0;         // no shared topology
+  uint64_t funnel_plane_separated = 0;  // proven apart by an exact predicate
+  uint64_t funnel_narrowphase = 0;      // actually reached triangles_intersections
+
+  /** Broadphase callbacks that arrived AFTER the work cap had already fired. */
+  /**
+   * Pairs the narrowphase REFUSED to classify by throwing.
+   *
+   * `GEO::TriangleIsects` is a fixed 20-element buffer and its push_back is an
+   * unconditional `geo_assert`. Stage 3C-1A believed only duplicate triangles
+   * could overflow it; a 1.2M-case fuzz over small integer coordinates proved
+   * otherwise — ordinary nondegenerate coplanar pairs can too. Each such pair is
+   * counted and forces PARTIAL, because a pair that could not be examined must
+   * never be reported as a pair with no defect.
+   */
+  uint64_t narrowphase_refusals = 0;
+  uint64_t callbacks_after_cap = 0;
+  /** Milliseconds spent in the broadphase after the cap fired. */
+  double wasted_after_cap_ms = 0;
+  bool used_abortable_broadphase = false;
 
   // Normalised (f1 < f2) sample pairs, flattened as f1,f2,category.
   std::vector<uint32_t> samples;
@@ -152,6 +238,162 @@ inline int shared_vertex_count(const uint32_t* t1, const uint32_t* t2) {
     }
   }
   return shared;
+}
+
+/**
+ * EXACT PLANE SEPARATION. Returns true only when the triangles PROVABLY cannot
+ * meet.
+ *
+ * THE CLAIM. If all three vertices of `t2` lie strictly on one side of the
+ * supporting plane of `t1`, then `t2` lies strictly within one open half-space
+ * of that plane. `t1` lies entirely within the plane. A set strictly inside an
+ * open half-space is disjoint from the plane bounding it, so the triangles
+ * cannot share a point. The test is symmetric and is tried both ways.
+ *
+ * ONE-SIDED BY CONSTRUCTION. It answers only "definitely disjoint" or "do not
+ * know"; the second answer always falls through to the full narrowphase. It can
+ * therefore never produce a false negative — the failure mode this stage cares
+ * about — no matter how adversarial the input.
+ *
+ * NO EPSILON. `orient_3d` is an exact sign predicate. `ZERO` means the vertex
+ * is ON the plane, which is precisely the uncertain case, and it is never
+ * treated as separation.
+ */
+inline bool provably_plane_separated(
+    const std::vector<double>& pos, const uint32_t* t1, const uint32_t* t2
+) {
+  auto separated = [&](const uint32_t* plane, const uint32_t* other) {
+    const double* a = &pos[3 * plane[0]];
+    const double* b = &pos[3 * plane[1]];
+    const double* c = &pos[3 * plane[2]];
+    const GEO::Sign s0 = GEO::PCK::orient_3d(a, b, c, &pos[3 * other[0]]);
+    if (s0 == GEO::ZERO) return false;
+    const GEO::Sign s1 = GEO::PCK::orient_3d(a, b, c, &pos[3 * other[1]]);
+    if (s1 != s0) return false;
+    const GEO::Sign s2 = GEO::PCK::orient_3d(a, b, c, &pos[3 * other[2]]);
+    return s2 == s0;
+  };
+  return separated(t1, t2) || separated(t2, t1);
+}
+
+/**
+ * LEGITIMATE SHARED VERTEX, proven by a half-space argument that IGNORES the
+ * shared vertex.
+ *
+ * WHY THE PLAIN SEPARATION TEST CANNOT WORK HERE, measured rather than guessed:
+ * on a conforming surface 53% of all AABB candidates are pairs sharing exactly
+ * one topological vertex. That vertex is a vertex of BOTH triangles, so it lies
+ * exactly ON the other's supporting plane and `orient_3d` returns ZERO for it —
+ * which makes a "all three vertices strictly one side" test fail every single
+ * time. The Stage 3C-1A-R1 funnel measured exactly that: the prefilter fired
+ * zero times on a million-face surface.
+ *
+ * THE PROOF, restricted to the vertices that are NOT shared. Let A = (u,a,b) and
+ * B = (u,c,d) share exactly the topological vertex u. Suppose c and d lie
+ * strictly on the SAME side of the supporting plane P of A.
+ *
+ *   1. B is the convex hull of {u, c, d}. u ∈ P; c and d are strictly inside one
+ *      open half-space H of P.
+ *   2. Any point of B is a convex combination λ_u·u + λ_c·c + λ_d·d. If
+ *      λ_c + λ_d > 0 the point is strictly inside H, because a convex
+ *      combination of points in the closed half-space with positive weight on a
+ *      strictly interior point is strictly interior.
+ *   3. So the only point of B lying in P is the one with λ_c = λ_d = 0, namely u.
+ *      Hence B ∩ P = {u}.
+ *   4. A ⊆ P, therefore A ∩ B ⊆ B ∩ P = {u}. Since u belongs to both, A ∩ B is
+ *      exactly {u} — the legitimate shared vertex, and nothing more.
+ *
+ * One-sided as required: a ZERO sign, or two opposite signs, means "do not
+ * know" and falls through to the full narrowphase. The symmetric test is tried
+ * as well, since either triangle's plane may be the separating one.
+ */
+inline bool provably_legitimate_shared_vertex(
+    const std::vector<double>& pos, const uint32_t* t1, const uint32_t* t2
+) {
+  auto only_touches_at_shared = [&](const uint32_t* plane, const uint32_t* other) {
+    const double* a = &pos[3 * plane[0]];
+    const double* b = &pos[3 * plane[1]];
+    const double* c = &pos[3 * plane[2]];
+    GEO::Sign seen = GEO::ZERO;
+    for (int j = 0; j < 3; ++j) {
+      const uint32_t v = other[j];
+      // Skip the vertices this face genuinely shares with the plane's face:
+      // they are ON the plane by construction and carry no information.
+      bool is_shared = false;
+      for (int i = 0; i < 3; ++i) {
+        if (plane[i] == v) { is_shared = true; break; }
+      }
+      if (is_shared) continue;
+      const GEO::Sign s = GEO::PCK::orient_3d(a, b, c, &pos[3 * v]);
+      if (s == GEO::ZERO) return false;
+      if (seen == GEO::ZERO) seen = s;
+      else if (s != seen) return false;
+    }
+    return seen != GEO::ZERO;
+  };
+  return only_touches_at_shared(t1, t2) || only_touches_at_shared(t2, t1);
+}
+
+/**
+ * The third vertex of `tri` that is not one of `a` or `b`.
+ * Returns UINT32_MAX when the face does not have exactly one such vertex.
+ */
+inline uint32_t opposite_vertex(const uint32_t* tri, uint32_t a, uint32_t b) {
+  uint32_t found = UINT32_MAX;
+  int count = 0;
+  for (int i = 0; i < 3; ++i) {
+    const uint32_t v = tri[i];
+    if (v != a && v != b) { found = v; ++count; }
+  }
+  return count == 1 ? found : UINT32_MAX;
+}
+
+/**
+ * LEGITIMATE NON-COPLANAR SHARED EDGE. Returns true only when the pair is
+ * PROVABLY nothing more than the topological edge it is entitled to share.
+ *
+ * THE PROOF. Let A = (u,v,w) and B = (u,v,x) share exactly the topological edge
+ * e = uv, both nondegenerate, and suppose their supporting planes are DISTINCT.
+ *
+ *   1. Two distinct planes meet in at most a line. Both planes contain u and v,
+ *      so that line is exactly line(u,v).
+ *   2. A ∩ B lies in both planes, hence A ∩ B ⊆ line(u,v).
+ *   3. A is convex with vertices u, v, w, and w ∉ line(u,v) because A is
+ *      nondegenerate. A convex hull meets a line through two of its vertices in
+ *      exactly the segment between them, so A ∩ line(u,v) = [u,v]. The same
+ *      argument gives B ∩ line(u,v) = [u,v].
+ *   4. Therefore A ∩ B = [u,v] — exactly the shared edge, and nothing beyond it.
+ *
+ * So a NON-COPLANAR shared-edge pair cannot overlap beyond its edge, and needs
+ * no generic intersection test.
+ *
+ * THE HYPOTHESIS THAT MATTERS. Distinctness of the planes is checked exactly,
+ * with a single `orient_3d(u, v, w, x)`. When it returns ZERO the planes
+ * coincide, step 1 collapses, and the pair falls through to the full analysis —
+ * which is exactly the SI14 configuration, where coplanar neighbours DO fold
+ * back and overlap in area.
+ */
+inline bool provably_legitimate_shared_edge(
+    const std::vector<double>& pos, const uint32_t* t1, const uint32_t* t2
+) {
+  // Identify the two shared vertices.
+  uint32_t shared[3];
+  int n = 0;
+  for (int i = 0; i < 3; ++i) {
+    for (int j = 0; j < 3; ++j) {
+      if (t1[i] == t2[j]) { if (n < 3) shared[n] = t1[i]; ++n; break; }
+    }
+  }
+  if (n != 2) return false;
+
+  const uint32_t u = shared[0];
+  const uint32_t v = shared[1];
+  const uint32_t w = opposite_vertex(t1, u, v);
+  const uint32_t x = opposite_vertex(t2, u, v);
+  if (w == UINT32_MAX || x == UINT32_MAX) return false;
+
+  // Distinct supporting planes ⇒ the proof above applies.
+  return GEO::PCK::orient_3d(&pos[3 * u], &pos[3 * v], &pos[3 * w], &pos[3 * x]) != GEO::ZERO;
 }
 
 /** True when every vertex of both triangles lies in one common plane. */
@@ -275,7 +517,8 @@ inline void run_self_intersection(
     const std::vector<double>& pos,
     const std::vector<uint32_t>& tris,
     const SiLimits& limits,
-    SiReport& out
+    SiReport& out,
+    const SiOptions& options = SiOptions()
 ) {
   const uint32_t face_count = static_cast<uint32_t>(tris.size() / 3);
 
@@ -288,6 +531,10 @@ inline void run_self_intersection(
   };
 
   auto t_deg = Clock::now();
+  // Throw rather than abort, explicitly. The default happens to be THROW, but a
+  // diagnostic that survives malformed input only by accident is not a design.
+  GEO::set_assert_mode(GEO::ASSERT_THROW);
+
   std::vector<uint8_t> degenerate(face_count, 0);
   for (uint32_t f = 0; f < face_count; ++f) {
     if (is_degenerate_face(pos, &tris[3 * f])) {
@@ -302,35 +549,88 @@ inline void run_self_intersection(
   // READ-ONLY BROADPHASE. The const constructor selects AABB_INDIRECT, which
   // stores its ordering in a side vector instead of permuting the mesh.
   auto t_aabb = Clock::now();
+  SiBvh bvh;
+  if (options.abortable_broadphase) {
+    bvh.build(pos, tris);
+  }
+  // Geogram's tree is built either way when it is the selected broadphase.
   GEO::MeshFacetsAABB aabb(mesh);
   out.aabb_ms = ms_since(t_aabb);
+  out.used_abortable_broadphase = options.abortable_broadphase;
 
   auto t_scan = Clock::now();
   bool limit_hit = false;
+  Clock::time_point cap_reached_at;
+
+  /*
+   * SAMPLES ARE A PROPERTY OF THE MESH, NOT OF THE TREE.
+   *
+   * Stage 3C-1A kept the first N pairs in TRAVERSAL order, which quietly made
+   * the reported samples depend on which broadphase produced them: swapping
+   * Geogram's AABB for the abortable tree changed the sample list for R16 and
+   * R17 while every aggregate count stayed identical. A user-visible field that
+   * moves when an internal data structure is replaced is not reproducible.
+   *
+   * The bounded set is therefore the N lexicographically smallest (f1, f2)
+   * pairs, kept in a bounded max-heap and sorted at the end. Any correct
+   * broadphase — in any order, on any machine — now yields the same samples,
+   * and the cap still bounds memory rather than the counts.
+   */
+  std::vector<std::array<uint32_t, 3>> heap;
+  heap.reserve(limits.max_samples);
+  const auto worse = [](const std::array<uint32_t, 3>& a,
+                        const std::array<uint32_t, 3>& b) {
+    return a[0] != b[0] ? a[0] < b[0] : a[1] < b[1];
+  };
+  auto record_sample = [&](uint32_t f1, uint32_t f2, uint32_t category) {
+    const std::array<uint32_t, 3> entry{f1, f2, category};
+    if (heap.size() < limits.max_samples) {
+      heap.push_back(entry);
+      std::push_heap(heap.begin(), heap.end(), worse);
+      return;
+    }
+    out.samples_truncated = true;
+    if (worse(entry, heap.front())) {
+      std::pop_heap(heap.begin(), heap.end(), worse);
+      heap.back() = entry;
+      std::push_heap(heap.begin(), heap.end(), worse);
+    }
+  };
 
   // STREAMING. `compute_facet_bbox_intersections` invokes this callback per
   // overlapping pair on the serial path; it does NOT hand back an accumulated
   // vector of every pair. That is what keeps memory bounded on a mesh whose
   // boxes all overlap. See mesh_AABB.h:525.
-  aabb.compute_facet_bbox_intersections(
-      [&](GEO::index_t a, GEO::index_t b) {
-        if (a == b) return;
+  /*
+   * ONE CLASSIFIER, TWO BROADPHASES. The body below is identical whichever tree
+   * produced the pair, so a candidate-set difference cannot hide behind a
+   * behavioural difference. It returns false to request a STOP; Geogram's
+   * callback signature discards that answer, which is the whole defect.
+   */
+  auto handle_pair = [&](uint32_t a, uint32_t b) -> bool {
+        if (a == b) return true;
         const uint32_t f1 = static_cast<uint32_t>(std::min(a, b));
         const uint32_t f2 = static_cast<uint32_t>(std::max(a, b));
 
         ++out.candidate_pair_count;
-        if (limit_hit) return;
+        if (limit_hit) {
+          // Only reachable on the NON-abortable path: Geogram keeps calling.
+          ++out.callbacks_after_cap;
+          return false;
+        }
         if (out.candidate_pair_count > limits.max_candidate_pairs ||
             out.tested_pair_count >= limits.max_tested_pairs) {
           limit_hit = true;
-          return;
+          cap_reached_at = Clock::now();
+          return false;
         }
 
         // A pair containing a face the narrowphase cannot accept is not tested,
         // and is counted as skipped so the report can say so.
         if (degenerate[f1] || degenerate[f2]) {
           ++out.skipped_pair_count;
-          return;
+          ++out.funnel_degenerate;
+          return true;
         }
 
         const uint32_t* t1 = &tris[3 * f1];
@@ -350,20 +650,51 @@ inline void run_self_intersection(
          * has nothing to add. Returning before the call is therefore both the
          * correct classification and the thing that keeps the kernel alive.
          */
-        if (shared_vertex_count(t1, t2) == 3) {
+        const int shared_now = shared_vertex_count(t1, t2);
+        if (shared_now == 3) {
           ++out.tested_pair_count;
+          ++out.funnel_duplicate;
           ++out.duplicate_topology_defect;
-          if (out.sample_pair_count < limits.max_samples) {
-            out.samples.push_back(f1);
-            out.samples.push_back(f2);
-            out.samples.push_back(static_cast<uint32_t>(SI_DUPLICATE_TOPOLOGY_DEFECT));
-            ++out.sample_pair_count;
-          } else {
-            out.samples_truncated = true;
-          }
-          return;
+          record_sample(f1, f2, static_cast<uint32_t>(SI_DUPLICATE_TOPOLOGY_DEFECT));
+          return true;
         }
 
+        if (shared_now == 2) ++out.funnel_shared_edge;
+        else if (shared_now == 1) ++out.funnel_shared_vertex;
+        else ++out.funnel_disjoint;
+
+        /*
+         * PREFILTER 1 — non-coplanar shared edge. Proven above to be exactly
+         * the shared edge and nothing more, so it is classified without the
+         * generic routine. Coplanar neighbours are deliberately excluded and
+         * still take the full path.
+         */
+        if (options.fast_shared_edge && shared_now == 2 &&
+            provably_legitimate_shared_edge(pos, t1, t2)) {
+          ++out.tested_pair_count;
+          ++out.legitimate_shared;
+          return true;
+        }
+
+        /*
+         * PREFILTER 2 — exact half-space arguments.
+         *
+         * Applied to SHARED-VERTEX pairs, which the funnel showed to be the
+         * single largest category on any conforming surface (53% at a million
+         * faces). For topologically disjoint pairs the plain separation test is
+         * deliberately NOT run: the funnel measured it firing zero times, since
+         * the AABB broadphase has already discarded everything far enough apart
+         * for it to succeed, and an prefilter that never fires is pure cost.
+         */
+        if (options.plane_prefilter && shared_now == 1 &&
+            provably_legitimate_shared_vertex(pos, t1, t2)) {
+          ++out.tested_pair_count;
+          ++out.legitimate_shared;
+          ++out.funnel_plane_separated;
+          return true;
+        }
+
+        ++out.funnel_narrowphase;
         const GEO::vec3 p0(pos[3*t1[0]], pos[3*t1[0]+1], pos[3*t1[0]+2]);
         const GEO::vec3 p1(pos[3*t1[1]], pos[3*t1[1]+1], pos[3*t1[1]+2]);
         const GEO::vec3 p2(pos[3*t1[2]], pos[3*t1[2]+1], pos[3*t1[2]+2]);
@@ -372,14 +703,29 @@ inline void run_self_intersection(
         const GEO::vec3 q2(pos[3*t2[2]], pos[3*t2[2]+1], pos[3*t2[2]+2]);
 
         GEO::TriangleIsects isects;
-        // The INDEXED overload. Passing global vertex indices is what lets
-        // Geogram reason symbolically about vertices the two faces genuinely
-        // share, instead of rediscovering coincidence from coordinates.
-        const bool non_degenerate = GEO::triangles_intersections(
-            p0, p1, p2, q0, q1, q2,
-            t1[0], t1[1], t1[2], t2[0], t2[1], t2[2],
-            isects
-        );
+        bool non_degenerate = false;
+        /*
+         * THE CAPACITY GUARD. `geo_assertion_failed` THROWS under
+         * ASSERT_THROW (assert.cpp:109), which is set explicitly below rather
+         * than assumed — the other modes call abort() and would take the whole
+         * worker down. Catching here turns a fixed-buffer overflow into ONE
+         * unclassified pair plus a PARTIAL verdict, instead of a dead module and
+         * a lost diagnosis.
+         */
+        try {
+          // The INDEXED overload. Passing global vertex indices is what lets
+          // Geogram reason symbolically about vertices the two faces genuinely
+          // share, instead of rediscovering coincidence from coordinates.
+          non_degenerate = GEO::triangles_intersections(
+              p0, p1, p2, q0, q1, q2,
+              t1[0], t1[1], t1[2], t2[0], t2[1], t2[2],
+              isects
+          );
+        } catch (...) {
+          ++out.narrowphase_refusals;
+          ++out.tested_pair_count;
+          return true;
+        }
         ++out.tested_pair_count;
 
         const int category = classify_pair(pos, t1, t2, isects, non_degenerate);
@@ -391,8 +737,8 @@ inline void run_self_intersection(
           case SI_NON_ADJACENT_EDGE_TOUCH: ++out.non_adjacent_edge_touch; break;
           case SI_ADJACENT_OVERLAP_BEYOND_SHARED: ++out.adjacent_overlap_beyond_shared; break;
           case SI_DUPLICATE_TOPOLOGY_DEFECT: ++out.duplicate_topology_defect; break;
-          case SI_LEGITIMATE_SHARED: ++out.legitimate_shared; return;
-          default: return;  // SI_NONE
+          case SI_LEGITIMATE_SHARED: ++out.legitimate_shared; return true;
+          default: return true;  // SI_NONE
         }
 
         // Duplicates are a Stage 2 defect reported here for completeness; they
@@ -403,21 +749,42 @@ inline void run_self_intersection(
           affected[f2] = 1;
         }
 
-        // BOUNDED SAMPLES, first-N in deterministic traversal order. The cap
-        // bounds MEMORY only: the aggregate counts above keep rising after it,
-        // so "truncated samples" never becomes "fewer intersections".
-        if (out.sample_pair_count < limits.max_samples) {
-          out.samples.push_back(f1);
-          out.samples.push_back(f2);
-          out.samples.push_back(static_cast<uint32_t>(category));
-          ++out.sample_pair_count;
-        } else {
-          out.samples_truncated = true;
-        }
-      }
-  );
+        record_sample(f1, f2, static_cast<uint32_t>(category));
+        return true;
+  };
+
+  if (options.abortable_broadphase) {
+    // The stop request is HONOURED: the traversal unwinds at the next node.
+    bvh.for_each_overlapping_pair(
+        [&](uint32_t a, uint32_t b) { return handle_pair(a, b); });
+  } else {
+    // Geogram's callback returns void, so the stop request is DISCARDED and the
+    // tree walk continues to completion. `callbacks_after_cap` measures exactly
+    // how much work that wastes.
+    aabb.compute_facet_bbox_intersections(
+        [&](GEO::index_t a, GEO::index_t b) {
+          (void)handle_pair(static_cast<uint32_t>(a), static_cast<uint32_t>(b));
+        });
+  }
+
+  std::sort(heap.begin(), heap.end(),
+            [](const std::array<uint32_t, 3>& a, const std::array<uint32_t, 3>& b) {
+              return a[0] != b[0] ? a[0] < b[0] : a[1] < b[1];
+            });
+  out.sample_pair_count = heap.size();
+  out.samples.clear();
+  out.samples.reserve(heap.size() * 3);
+  for (const auto& e : heap) {
+    out.samples.push_back(e[0]);
+    out.samples.push_back(e[1]);
+    out.samples.push_back(e[2]);
+  }
 
   out.scan_ms = ms_since(t_scan);
+  if (limit_hit) {
+    out.wasted_after_cap_ms =
+        std::chrono::duration<double, std::milli>(Clock::now() - cap_reached_at).count();
+  }
 
   for (uint32_t f = 0; f < face_count; ++f) {
     if (affected[f]) ++out.affected_face_count;
@@ -427,7 +794,8 @@ inline void run_self_intersection(
   // be reported as a completed one that happened to find nothing.
   if (limit_hit) {
     out.status = SI_STATUS_RESOURCE_LIMIT;
-  } else if (out.skipped_degenerate_face_count > 0 || out.skipped_pair_count > 0) {
+  } else if (out.skipped_degenerate_face_count > 0 || out.skipped_pair_count > 0 ||
+             out.narrowphase_refusals > 0) {
     out.status = SI_STATUS_PARTIAL;
   } else {
     out.status = SI_STATUS_CHECKED;
