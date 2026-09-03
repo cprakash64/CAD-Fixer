@@ -59,6 +59,10 @@ export default tseslint.config(
       // `compiler_depend.ts` which are Makefile fragments, not TypeScript, and
       // the parser chokes on them.
       'experiments/repair-kernels/*/build-native/**',
+      // Stage 3C-1A: the Emscripten glue emitted beside the self-intersection
+      // WASM artifact is machine-generated, single-line and not authored here.
+      // The harness, corpus and bindings in that directory ARE linted.
+      'experiments/self-intersection/artifacts/**',
       'experiments/browser-harness/.cases/**',
       'experiments/repair-kernels/*/artifacts/**',
     ],
@@ -134,7 +138,13 @@ export default tseslint.config(
 
   // Node-hosted tooling and end-to-end specs.
   {
-    files: ['*.config.ts', 'e2e/**/*.ts', 'e2e-browser/**/*.ts', 'eslint.config.js'],
+    files: [
+      '*.config.ts',
+      'e2e/**/*.ts',
+      'e2e-browser/**/*.ts',
+      'experiments/**/*.spec.ts',
+      'eslint.config.js',
+    ],
     languageOptions: {
       globals: globals.node,
     },
@@ -184,6 +194,23 @@ export default tseslint.config(
   // the candidate glue performs its own same-origin `.wasm` fetch.
   {
     files: ['experiments/browser-harness/**/*.js'],
+    languageOptions: {
+      globals: { ...globals.browser, ...globals.worker },
+    },
+    rules: {
+      '@typescript-eslint/explicit-function-return-type': 'off',
+    },
+  },
+
+  // The Stage 3C-1A self-intersection browser harness.
+  //
+  // Same reasoning as the Stage 3A-3B harness above: a page plus two module
+  // Workers, served as raw bytes rather than bundled, so they need browser and
+  // worker globals. `no-restricted-globals` stays ON — the network ban applies
+  // to research code too, and the only fetch anywhere near this harness is the
+  // Emscripten glue loading its own same-origin `.wasm`.
+  {
+    files: ['experiments/self-intersection/harness/**/*.mjs'],
     languageOptions: {
       globals: { ...globals.browser, ...globals.worker },
     },

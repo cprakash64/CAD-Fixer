@@ -14,6 +14,8 @@
     "playwright.browser-harness.config.ts",
     "e2e/**/*.ts",
     "e2e-browser/**/*.ts",
+    "experiments/**/*.spec.ts",
+    "experiments/**/*.config.ts",
     "scripts/**/*.ts"
   ]
 }
