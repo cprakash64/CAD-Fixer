@@ -1,0 +1,17 @@
+{
+  "name": "@cadfixer/mesh-self-intersection",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "sideEffects": false,
+  "description": "Read-only self-intersection diagnostic contract: size policy, deterministic resource caps, the frozen classification taxonomy, and the truthful status model. Contains no geometry kernel; the kernel runs in the disposable diagnostic worker.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@cadfixer/shared": "*"
+  }
+}

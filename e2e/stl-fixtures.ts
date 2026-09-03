@@ -468,3 +468,77 @@ export function repairHeavyStl(side: number): GeneratedStl {
 
   return { bytes: binaryStlFrom(triangles), triangles: triangles.length };
 }
+
+/* --------------------------------------- self-intersection fixtures -- */
+
+/**
+ * SELF-INTERSECTION FIXTURES.
+ *
+ * Hand-authored on exact integer coordinates so the expected answer is decidable
+ * by inspection rather than by asking the diagnostic what it thinks. These are
+ * the production-path counterparts of the Stage 3C research corpus; the full
+ * adversarial corpus stays in `experiments/self-intersection`.
+ */
+
+/** Two triangles whose interiors genuinely cross. Expected: one proper crossing. */
+export function crossingTrianglesStl(): Buffer {
+  return binaryStlFrom([
+    [
+      [0, 0, 0],
+      [4, 0, 0],
+      [0, 4, 0],
+    ],
+    [
+      [1, 1, -2],
+      [3, 1, 2],
+      [1, 3, 2],
+    ],
+  ]);
+}
+
+/**
+ * The Stage 3A R17 shell: a bow-tie prism that passes through itself.
+ *
+ * Closed, manifold, consistently wound — and self-intersecting. The corpus's own
+ * demonstration that topology alone cannot establish printability, and the
+ * fixture that decided Stage 3C qualification.
+ */
+export function selfIntersectingShellStl(): Buffer {
+  const z0 = 0;
+  const z1 = 1;
+  const p: Point[] = [
+    [0, 0, z0],
+    [1, 1, z0],
+    [1, 0, z0],
+    [0, 1, z0],
+  ];
+  const q: Point[] = p.map((v) => [v[0], v[1], z1] as Point);
+  const triangles: (readonly [Point, Point, Point])[] = [];
+  for (let i = 0; i < 4; i += 1) {
+    const j = (i + 1) % 4;
+    const a = p[i] ?? [0, 0, 0];
+    const b = p[j] ?? [0, 0, 0];
+    const c = q[j] ?? [0, 0, 0];
+    const d = q[i] ?? [0, 0, 0];
+    triangles.push([a, b, c], [a, c, d]);
+  }
+  const [p0, p1, p2, p3] = p as [Point, Point, Point, Point];
+  const [q0, q1, q2, q3] = q as [Point, Point, Point, Point];
+  triangles.push([p0, p2, p1], [p0, p3, p2], [q0, q1, q2], [q0, q2, q3]);
+  return binaryStlFrom(triangles);
+}
+
+/** A clean conforming grid of `side * side * 2` triangles, no defects. */
+export function cleanGridStl(side: number): GeneratedStl {
+  const triangles: (readonly [Point, Point, Point])[] = [];
+  for (let row = 0; row < side; row += 1) {
+    for (let col = 0; col < side; col += 1) {
+      const p00: Point = [col, row, 0];
+      const p10: Point = [col + 1, row, 0];
+      const p01: Point = [col, row + 1, 0];
+      const p11: Point = [col + 1, row + 1, 0];
+      triangles.push([p00, p10, p01], [p10, p11, p01]);
+    }
+  }
+  return { bytes: binaryStlFrom(triangles), triangles: triangles.length };
+}

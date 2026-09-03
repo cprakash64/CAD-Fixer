@@ -1,0 +1,19 @@
+{
+  "name": "@cadfixer/self-intersection-kernel",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "sideEffects": false,
+  "description": "The compiled read-only self-intersection kernel: Geogram v1.10.0 (c8529bb) narrowphase plus CAD Fixer's abortable broadphase, as WebAssembly. Imported ONLY by the disposable diagnostic worker.",
+  "//artifacts": "artifacts/ holds the built .wasm and its Emscripten glue. They are committed because they are what ships; build.sh reproduces them from the pinned Geogram at the audited SHA and refuses to emit anything if the licence gate fails.",
+  "exports": {
+    ".": {
+      "types": "./types/index.d.ts",
+      "default": "./artifacts/self-intersection.js"
+    }
+  },
+  "types": "./types/index.d.ts",
+  "scripts": {
+    "build:kernel": "bash build.sh"
+  }
+}

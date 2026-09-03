@@ -15,6 +15,7 @@ import {
   summariseTopology,
 } from '../state/topology-presentation';
 import { AnalysisState, type OverlayId } from '../state/workspace-store';
+import { SelfIntersectionSection } from './SelfIntersectionSection';
 
 /**
  * Engineering diagnostics for the loaded model.
@@ -210,6 +211,9 @@ function TopologySections({
       <p className="panel__note" data-testid="topology-qualifier">
         {summary.qualifier}
       </p>
+
+      {/* --- Self-intersection: its own diagnostic, with its own honesty --- */}
+      <SelfIntersectionSection />
 
       {/* --- B2: topology summary ---------------------------------------- */}
       <h3 className="panel__subtitle">Topology</h3>

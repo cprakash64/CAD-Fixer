@@ -63,6 +63,10 @@ export default tseslint.config(
       // WASM artifact is machine-generated, single-line and not authored here.
       // The harness, corpus and bindings in that directory ARE linted.
       'experiments/self-intersection/artifacts/**',
+      // Stage 3C-1B: the PRODUCTION kernel's Emscripten glue. Machine-generated,
+      // single-line, and not authored here. The binding that produces it and the
+      // worker that consumes it ARE linted.
+      'packages/self-intersection-kernel/artifacts/**',
       'experiments/browser-harness/.cases/**',
       'experiments/repair-kernels/*/artifacts/**',
     ],

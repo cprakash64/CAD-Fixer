@@ -31,20 +31,56 @@ That is the entire runtime dependency list. Notably absent:
 - **No UI component library.** The shell is plain semantic HTML and CSS.
 - **No router.** The application is a single workspace view.
 - **No HTTP client.** By design — CAD Fixer makes no network requests.
-- **No geometry kernel.** Manifold, Geogram, lib3mf, OpenVDB, CGAL, and
-  OpenCascade are all deliberately absent. They are evaluated separately, with
-  licensing as a first-class criterion — see below.
+- **Exactly ONE geometry kernel, and only inside one worker.** As of Stage
+  3C-1B, Geogram v1.10.0 ships — compiled to WebAssembly and imported by the
+  disposable self-intersection diagnostic worker, and by nothing else. Manifold,
+  lib3mf, OpenVDB, CGAL and OpenCascade remain deliberately absent. See
+  "Geogram, as shipped" below; the rest are evaluated separately, with licensing
+  as a first-class criterion.
 - **No third-party STL parser.** The STL codec in `packages/file-formats` is our
   own. Parsing is the trusted boundary for hostile input; we do not delegate it,
   and specifically do not use Three.js's `STLLoader`, which is a rendering
   convenience rather than a validating parser.
 
+## Geogram, as shipped
+
+**This section describes code that is distributed to users**, unlike the
+research artifacts under `experiments/`.
+
+|                |                                                                      |
+| -------------- | -------------------------------------------------------------------- |
+| Version        | v1.10.0                                                              |
+| Commit         | `c8529bb00838186938ab31d96008a59b6a892dee`                           |
+| Toolchain      | emsdk 4.0.16                                                         |
+| Where          | `packages/self-intersection-kernel/artifacts/self-intersection.wasm` |
+| Reachable from | `apps/web/src/workers/self-intersection.worker.ts`, and nothing else |
+| Licence        | **BSD-3-Clause** (core)                                              |
+
+**Why this is licence-clean.** Geogram's distribution bundles TetGen (AGPL-3.0)
+and Triangle (non-free), neither of which may enter a proprietary product.
+`GEOGRAM_WITH_TETGEN=OFF` and `GEOGRAM_WITH_TRIANGLE=OFF` exclude both at
+configure time, and `packages/self-intersection-kernel/build.sh` runs the
+build-input audit **and** scans the emitted artifact, refusing to produce one if
+either check fails. The shipped `.wasm` contains zero `tetgenmesh`, `tetgenio`
+or `triangulateio` symbols.
+
+**Attribution obligation.** BSD-3-Clause requires the copyright notice and
+licence text to accompany binary distributions. Geogram's notice travels with
+the pinned source under `experiments/repair-kernels/geogram/upstream/`; a
+user-facing acknowledgement must accompany any public deployment of the built
+application. **This is an open obligation for whoever first deploys publicly —
+it is not discharged by this file.**
+
+zlib is also linked (Geogram satisfies `<zlib.h>` from its own bundled copy) and
+carries the permissive zlib licence's attribution requirement.
+
 ## Geometry kernel licensing
 
-No geometry kernel is installed, and none may be added without an explicit
-decision. This section records what the licences actually say, because an
-earlier draft of this document flattened them into "GPL/AGPL, therefore
-unusable", which is not accurate for either CGAL or OCCT.
+**Geogram is the only kernel that ships** (see above). No OTHER geometry kernel
+is installed, and none may be added without an explicit decision. This section
+records what the licences actually say, because an earlier draft of this
+document flattened them into "GPL/AGPL, therefore unusable", which is not
+accurate for either CGAL or OCCT.
 
 **This is an engineering summary of upstream licence text, not legal advice.**
 Anything adopted needs review by someone qualified, against our actual

@@ -12,6 +12,13 @@ import type {
   TopologyReport,
 } from '@cadfixer/geometry-runtime';
 import type { WorkflowId } from './workflows';
+import {
+  SelfIntersectionBand,
+  SelfIntersectionPhase,
+  bandForFaceCount,
+  type SelfIntersectionReport,
+  type SelfIntersectionStatus,
+} from '@cadfixer/mesh-self-intersection';
 import type { LoadedModel } from './model';
 
 /**
@@ -167,6 +174,54 @@ export interface AnalysisSnapshot {
   readonly error: AnalysisFailure | undefined;
   readonly durationMs: number | undefined;
 }
+
+/* ------------------------------------------------ self-intersection slice -- */
+
+declare const selfIntersectionTokenBrand: unique symbol;
+export type SelfIntersectionToken = number & {
+  readonly [selfIntersectionTokenBrand]: true;
+};
+
+/**
+ * The self-intersection slice.
+ *
+ * PHASE AND STATUS ARE SEPARATE FIELDS, and that separation is the point. A
+ * `SelfIntersectionStatus` describes how a check ENDED; a phase describes
+ * whether one is running at all. Folding "never asked" or "in progress" into
+ * the status enum is precisely how an interface ends up implying a verdict it
+ * does not have — five of the six statuses carry a zero intersection count.
+ *
+ * The band is stored rather than recomputed at render time so the panel and the
+ * scheduler cannot disagree about which policy applies to the current model.
+ */
+export interface SelfIntersectionSnapshot {
+  readonly phase: SelfIntersectionPhase;
+  readonly band: SelfIntersectionBand;
+  /** The model this state describes. `undefined` when nothing is loaded. */
+  readonly handle: ModelHandle | undefined;
+  /** Faces examined so far, reported by the worker. Scalar only. */
+  readonly faceCount: number | undefined;
+  /**
+   * The last terminal report for `handle`.
+   *
+   * Cleared the moment the model changes: a "None found" belonging to the
+   * previous revision must never sit beside new geometry.
+   */
+  readonly report: SelfIntersectionReport | undefined;
+  readonly error: string | undefined;
+  /** True once an automatic check has been scheduled for this exact handle. */
+  readonly autoScheduled: boolean;
+}
+
+const EMPTY_SELF_INTERSECTION: SelfIntersectionSnapshot = {
+  phase: SelfIntersectionPhase.Idle,
+  band: SelfIntersectionBand.AutoEligible,
+  handle: undefined,
+  faceCount: undefined,
+  report: undefined,
+  error: undefined,
+  autoScheduled: false,
+};
 
 const EMPTY_ANALYSIS: AnalysisSnapshot = {
   state: AnalysisState.Unavailable,
@@ -410,6 +465,7 @@ export interface WorkspaceState {
   readonly exportProgress: ExportProgressState;
   /** Topology diagnostics for `model`, or the unavailable state when empty. */
   readonly analysis: AnalysisSnapshot;
+  readonly selfIntersection: SelfIntersectionSnapshot;
   /** Conservative repair for `model`, or the unavailable state when empty. */
   readonly repair: RepairSnapshot;
   readonly overlays: OverlayVisibility;
@@ -444,6 +500,7 @@ const INITIAL_STATE: WorkspaceState = {
   importProgress: { state: ImportState.Idle, fraction: 0 },
   exportProgress: { state: ExportState.Idle, fraction: 0 },
   analysis: EMPTY_ANALYSIS,
+  selfIntersection: EMPTY_SELF_INTERSECTION,
   repair: EMPTY_REPAIR,
   overlays: OVERLAYS_HIDDEN,
   status: [],
@@ -563,6 +620,9 @@ export class WorkspaceStore {
     // just replaced. The candidate's worker-side release is the caller's
     // responsibility — see `useConservativeRepair`.
     this.currentRepairToken = undefined;
+    // And any in-flight self-intersection check: its answer describes the model
+    // being replaced, so it must not land on the replacement.
+    this.currentSelfIntersectionToken = undefined;
 
     this.update({
       model: { ...model, revision },
@@ -573,6 +633,16 @@ export class WorkspaceStore {
         handle: model.handle,
       },
       repair: { ...EMPTY_REPAIR, handle: model.handle },
+      /*
+       * The new model's size decides its own policy. A small model becomes
+       * eligible for an automatic check; a large one is refused before anything
+       * is allocated. Nothing is carried over from the previous model.
+       */
+      selfIntersection: {
+        ...EMPTY_SELF_INTERSECTION,
+        handle: model.handle,
+        band: bandForFaceCount(model.triangleCount),
+      },
       // A successful import means a live worker, so any previous loss notice is
       // stale and must go.
       geometrySessionLost: undefined,
@@ -615,6 +685,173 @@ export class WorkspaceStore {
       },
     });
     return token;
+  }
+
+  /* ------------------------------------------ self-intersection slice -- */
+
+  private nextSelfIntersectionToken = 1;
+  private currentSelfIntersectionToken: SelfIntersectionToken | undefined;
+
+  public isCurrentSelfIntersection(token: SelfIntersectionToken): boolean {
+    return this.currentSelfIntersectionToken === token;
+  }
+
+  /**
+   * Re-derives the slice for a newly authoritative model.
+   *
+   * CALLED ON EVERY REVISION CHANGE — import, replacement, repair apply, undo.
+   * The previous report is DROPPED rather than carried forward: it describes
+   * geometry that no longer exists, and leaving a "None found" on screen beside
+   * a model it was never computed for is the single most damaging thing this
+   * slice could do.
+   */
+  public resetSelfIntersectionFor(handle: ModelHandle | undefined, faceCount: number): void {
+    this.currentSelfIntersectionToken = undefined;
+    this.update({
+      selfIntersection: {
+        ...EMPTY_SELF_INTERSECTION,
+        handle,
+        band:
+          handle === undefined ? SelfIntersectionBand.AutoEligible : bandForFaceCount(faceCount),
+      },
+    });
+  }
+
+  /**
+   * Claims the slice for a new check. Returns `undefined` when the model's size
+   * band forbids running one at all.
+   */
+  public beginSelfIntersection(
+    handle: ModelHandle,
+    auto: boolean,
+  ): SelfIntersectionToken | undefined {
+    const current = this.state.selfIntersection;
+    if (!sameHandle(current.handle, handle)) return undefined;
+    if (current.band === SelfIntersectionBand.SizeLimit) return undefined;
+    if (auto && current.autoScheduled) return undefined;
+
+    const token = this.nextSelfIntersectionToken as SelfIntersectionToken;
+    this.nextSelfIntersectionToken += 1;
+    this.currentSelfIntersectionToken = token;
+    this.update({
+      selfIntersection: {
+        ...current,
+        phase: SelfIntersectionPhase.Scheduled,
+        report: undefined,
+        error: undefined,
+        faceCount: undefined,
+        autoScheduled: current.autoScheduled || auto,
+      },
+    });
+    return token;
+  }
+
+  public reportSelfIntersectionStarted(token: SelfIntersectionToken, faceCount: number): void {
+    if (!this.isCurrentSelfIntersection(token)) return;
+    this.update({
+      selfIntersection: {
+        ...this.state.selfIntersection,
+        phase: SelfIntersectionPhase.Running,
+        faceCount,
+      },
+    });
+  }
+
+  public beginSelfIntersectionCancellation(token: SelfIntersectionToken): boolean {
+    if (!this.isCurrentSelfIntersection(token)) return false;
+    if (
+      this.state.selfIntersection.phase !== SelfIntersectionPhase.Running &&
+      this.state.selfIntersection.phase !== SelfIntersectionPhase.Scheduled
+    ) {
+      return false;
+    }
+    this.update({
+      selfIntersection: {
+        ...this.state.selfIntersection,
+        phase: SelfIntersectionPhase.Cancelling,
+      },
+    });
+    return true;
+  }
+
+  /**
+   * Publishes a terminal report.
+   *
+   * GUARDED TWICE, by token AND by handle. A diagnostic that was in flight when
+   * the model changed must not land on the replacement: its answer describes
+   * different geometry, and by the time it arrives nothing else distinguishes
+   * the two.
+   */
+  public completeSelfIntersection(
+    token: SelfIntersectionToken,
+    report: SelfIntersectionReport,
+  ): boolean {
+    if (!this.isCurrentSelfIntersection(token)) return false;
+    const current = this.state.selfIntersection;
+    if (current.handle === undefined) return false;
+    if (
+      current.handle.modelId !== report.modelId ||
+      current.handle.revision !== report.modelRevision
+    ) {
+      return false;
+    }
+    this.currentSelfIntersectionToken = undefined;
+    this.update({
+      selfIntersection: {
+        ...current,
+        phase: SelfIntersectionPhase.Complete,
+        report,
+        error: undefined,
+      },
+    });
+    return true;
+  }
+
+  /** Publishes a terminal status that carries no report — cancellation, failure. */
+  public failSelfIntersection(
+    token: SelfIntersectionToken,
+    status: SelfIntersectionStatus,
+    message: string,
+  ): boolean {
+    if (!this.isCurrentSelfIntersection(token)) return false;
+    const current = this.state.selfIntersection;
+    if (current.handle === undefined) return false;
+    this.currentSelfIntersectionToken = undefined;
+    this.update({
+      selfIntersection: {
+        ...current,
+        phase: SelfIntersectionPhase.Complete,
+        report: {
+          schemaVersion: 1,
+          status,
+          modelId: current.handle.modelId,
+          modelRevision: current.handle.revision,
+          faceCount: current.faceCount ?? 0,
+          intersectingPairCount: 0,
+          affectedFaceCount: 0,
+          categories: {
+            properCrossing: 0,
+            coplanarOverlap: 0,
+            nonAdjacentPointTouch: 0,
+            nonAdjacentEdgeTouch: 0,
+            adjacentOverlapBeyondShared: 0,
+            duplicateTopologyDefect: 0,
+            legitimateShared: 0,
+          },
+          skippedDegenerateFaceCount: 0,
+          skippedPairCount: 0,
+          unclassifiedPairCount: 0,
+          candidatePairCount: 0,
+          testedPairCount: 0,
+          samples: new Uint32Array(0),
+          samplePairCount: 0,
+          samplesTruncated: false,
+          engine: { name: 'geogram', version: 'v1.10.0', commit: 'c8529bb' },
+        },
+        error: message,
+      },
+    });
+    return true;
   }
 
   public isCurrentRepair(token: RepairToken): boolean {
@@ -999,6 +1236,20 @@ export class WorkspaceStore {
         revision,
       },
       analysis: { ...EMPTY_ANALYSIS, state: AnalysisState.Idle, handle: result.handle },
+      /*
+       * A NEW REVISION GETS A NEW VERDICT, OR NONE AT ALL.
+       *
+       * The previous report described geometry that no longer exists. Carrying
+       * it forward — even for the instant before a fresh check starts — would
+       * put "None found" beside a model nothing has examined. The band is
+       * re-derived too, because a repair can move a model across a policy
+       * boundary.
+       */
+      selfIntersection: {
+        ...EMPTY_SELF_INTERSECTION,
+        handle: result.handle,
+        band: bandForFaceCount(result.triangleCount),
+      },
       overlays: OVERLAYS_HIDDEN,
       repair: {
         ...EMPTY_REPAIR,
@@ -1083,6 +1334,20 @@ export class WorkspaceStore {
         revision,
       },
       analysis: { ...EMPTY_ANALYSIS, state: AnalysisState.Idle, handle: result.handle },
+      /*
+       * A NEW REVISION GETS A NEW VERDICT, OR NONE AT ALL.
+       *
+       * The previous report described geometry that no longer exists. Carrying
+       * it forward — even for the instant before a fresh check starts — would
+       * put "None found" beside a model nothing has examined. The band is
+       * re-derived too, because a repair can move a model across a policy
+       * boundary.
+       */
+      selfIntersection: {
+        ...EMPTY_SELF_INTERSECTION,
+        handle: result.handle,
+        band: bandForFaceCount(result.triangleCount),
+      },
       overlays: OVERLAYS_HIDDEN,
       repair: { ...EMPTY_REPAIR, handle: result.handle, selection: this.state.repair.selection },
     });
@@ -1276,6 +1541,7 @@ export class WorkspaceStore {
       // screen would describe a model the user cannot export, overlay, or act
       // on — the same reason the model itself is cleared.
       analysis: EMPTY_ANALYSIS,
+      selfIntersection: EMPTY_SELF_INTERSECTION,
       // And so did the repair. A candidate, a preview and an undo record all
       // named worker-resident geometry that died with the worker; leaving an
       // Apply button pointing at a dead candidate would be worse than showing

@@ -17,6 +17,7 @@ import {
   type RepairOperation,
   type RepairPlanOperationResult,
   type RepairUndoResult,
+  type SendForDiagnosticResult,
   type StlExportResult,
 } from '@cadfixer/geometry-runtime';
 import { modelUnavailable } from '@cadfixer/shared';
@@ -212,6 +213,35 @@ export class GeometryClient {
       sampleLimit === undefined ? { handle } : { handle, sampleLimit },
       { onProgress },
     );
+  }
+
+  /**
+   * Asks the authoritative worker to push a DISPOSABLE geometry copy to a
+   * diagnostic worker through `port`.
+   *
+   * The port is transferred; the geometry is not returned. That asymmetry is
+   * the architecture: coordinates travel worker-to-worker, and the page learns
+   * only how many faces were sent (ADR 0008). A `Promise` rather than an
+   * `OperationHandle` because there is nothing here worth cancelling — the
+   * expensive part happens in the diagnostic worker, which is cancelled by
+   * being terminated.
+   */
+  public async sendForDiagnostic(request: {
+    handle: ModelHandle;
+    operationId: string;
+    port: MessagePort;
+    limits: { maxCandidatePairs: number; maxTestedPairs: number; maxSamples: number };
+  }): Promise<SendForDiagnosticResult> {
+    return this.coordinator.dispatch(
+      'model/send-for-diagnostic',
+      {
+        handle: request.handle,
+        operationId: request.operationId,
+        port: request.port,
+        limits: request.limits,
+      },
+      { transfer: [request.port] },
+    ).promise;
   }
 
   /**
