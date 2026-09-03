@@ -148,9 +148,13 @@ well when you have touched the shell, the worker, or the build.
 
 ## Repair invariants (Stage 3B-1)
 
-- **NO GEOMETRY KERNEL IN PRODUCTION.** Manifold, Geogram and PMP are research
-  artifacts under `experiments/`. Nothing in `apps/**` or `packages/**` may
-  import them, and the bundle scan checks it.
+- **ONE GEOMETRY KERNEL IN PRODUCTION, CONFINED TO ONE WORKER.** As of Stage
+  3C-1B, Geogram v1.10.0 ships as the WebAssembly kernel behind the read-only
+  self-intersection diagnostic, imported by
+  `apps/web/src/workers/self-intersection.worker.ts` and by nothing else. The
+  boundary scan asserts exactly that. Manifold and PMP remain research artifacts
+  under `experiments/`; nothing in `apps/**` or `packages/**` may import them.
+  Repair itself is still kernel-free.
 - **No tolerance in the conservative repair API.** No epsilon, weld distance,
   merge tolerance or proximity threshold. Stage 3A proved no global tolerance
   can be correct — the value that heals R19's crack destroys R21's intentional

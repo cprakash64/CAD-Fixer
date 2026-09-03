@@ -14,15 +14,32 @@ import type { TransferHandle } from './protocol';
  * the DOM and WebWorker lib definitions, so the same helper serves the main
  * thread and the worker.
  */
-export function toTransferables(handles: readonly TransferHandle[]): ArrayBuffer[] {
-  const transferables: ArrayBuffer[] = [];
+export function toTransferables(handles: readonly TransferHandle[]): TransferHandle[] {
+  const transferables: TransferHandle[] = [];
   for (const handle of handles) {
-    if (!(handle instanceof ArrayBuffer)) {
-      throw internalError(
-        'Only ArrayBuffer values may be transferred through the geometry protocol.',
-      );
+    if (handle instanceof ArrayBuffer) {
+      transferables.push(handle);
+      continue;
     }
-    transferables.push(handle);
+    /*
+     * PORTS ARE THE OTHER LEGITIMATE TRANSFERABLE, and the only one added since
+     * Stage 0. The self-intersection diagnostic hands one end of a
+     * MessageChannel to the authoritative worker so geometry can travel
+     * worker-to-worker without passing through the page; a port that was cloned
+     * instead of moved would simply not be connected to anything.
+     *
+     * Recognised structurally rather than by `instanceof MessagePort`, because
+     * this module compiles without the DOM lib. `SharedArrayBuffer` still falls
+     * through to the rejection below: it has no `close`, and transferring one
+     * throws at runtime.
+     */
+    if ('postMessage' in handle && 'close' in handle) {
+      transferables.push(handle);
+      continue;
+    }
+    throw internalError(
+      'Only ArrayBuffer values and message ports may be transferred through the geometry protocol.',
+    );
   }
   return transferables;
 }

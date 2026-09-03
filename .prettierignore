@@ -40,3 +40,7 @@ experiments/self-intersection/artifacts
 # provenance is self-describing: source path, generation command and a SHA-256
 # per fixture.
 experiments/self-intersection/generated-fixtures.json
+
+# Stage 3C-1B: the production kernel's Emscripten glue and WebAssembly. Written
+# by packages/self-intersection-kernel/build.sh, not by hand.
+packages/self-intersection-kernel/artifacts

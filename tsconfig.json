@@ -16,6 +16,7 @@
     "e2e-browser/**/*.ts",
     "experiments/**/*.spec.ts",
     "experiments/**/*.config.ts",
+    "packages/self-intersection-kernel/types/**/*.d.ts",
     "scripts/**/*.ts"
   ]
 }

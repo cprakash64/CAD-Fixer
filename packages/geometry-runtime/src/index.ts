@@ -15,6 +15,8 @@ export type {
   MeshValidationSummary,
   ModelAnalyzePayload,
   ModelAnalyzeResult,
+  SendForDiagnosticPayload,
+  SendForDiagnosticResult,
   ModelExportPayload,
   ModelImportResult,
   ModelReleasePayload,

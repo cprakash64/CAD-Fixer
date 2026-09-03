@@ -10,6 +10,7 @@ import {
   modelImportHandler,
   modelReleaseHandler,
 } from './stl-handlers';
+import { modelSendForDiagnosticHandler } from './self-intersection-handlers';
 import {
   repairCommitHandler,
   repairCreateCandidateHandler,
@@ -54,6 +55,7 @@ host.register('model/import', modelImportHandler);
 host.register('model/export', modelExportHandler);
 host.register('model/release', modelReleaseHandler);
 host.register('model/analyze', modelAnalyzeHandler);
+host.register('model/send-for-diagnostic', modelSendForDiagnosticHandler);
 
 // Conservative repair. Five operations so planning, preview, apply and undo
 // stay separate acts; see apps/web/src/workers/repair-handlers.ts. No geometry

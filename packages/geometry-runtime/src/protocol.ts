@@ -36,7 +36,29 @@ export const PROTOCOL_CHANNEL = 'cadfixer.geometry.v1';
  * `SharedArrayBuffer` is deliberately NOT transferable and must never be placed
  * in a transfer list — it is shared, not moved.
  */
-export type TransferHandle = ArrayBufferLike;
+/**
+ * A `MessagePort`, described structurally.
+ *
+ * `geometry-runtime` compiles WITHOUT the DOM lib on purpose — it must be
+ * unit-testable outside a browser, and naming `MessagePort` directly would drag
+ * the whole DOM in. The two members below are all the protocol needs, and a
+ * real port satisfies them structurally in both the DOM and WebWorker
+ * definitions.
+ */
+export interface ProtocolPort {
+  postMessage(message: unknown, transfer?: unknown[]): void;
+  close(): void;
+}
+
+/**
+ * Values that may legally be MOVED through `postMessage`.
+ *
+ * Buffers and ports, and nothing else. A `SharedArrayBuffer` is structurally an
+ * `ArrayBufferLike` but must never appear in a transfer list — it is shared
+ * between realms rather than moved, and transferring one throws at runtime.
+ * `toTransferables` rejects it explicitly.
+ */
+export type TransferHandle = ArrayBufferLike | ProtocolPort;
 
 /**
  * Operations the geometry runtime can perform, as a compile-time map from
@@ -66,6 +88,19 @@ export interface OperationMap {
   'model/analyze': {
     payload: ModelAnalyzePayload;
     result: ModelAnalyzeResult;
+  };
+  /**
+   * Hands the diagnostic worker a DISPOSABLE COPY of a model's geometry over a
+   * MessageChannel port.
+   *
+   * The result is deliberately tiny: this operation exists to move geometry
+   * WORKER-TO-WORKER, so the only thing that comes back to the page is
+   * confirmation that the copy was sent. Returning the geometry would defeat
+   * the entire point (ADR 0008).
+   */
+  'model/send-for-diagnostic': {
+    payload: SendForDiagnosticPayload;
+    result: SendForDiagnosticResult;
   };
   'repair/plan': {
     payload: RepairPlanPayload;
@@ -386,6 +421,31 @@ export interface StlExportResult {
   readonly encoding: string;
   /** Non-fatal findings, e.g. grouping that the chosen encoding cannot carry. */
   readonly warnings: readonly Diagnostic[];
+}
+
+/**
+ * Asks the authoritative worker to copy a model's geometry to a diagnostic
+ * worker through `port`.
+ *
+ * `port` is transferred. The GEOMETRY is not: the authoritative worker builds a
+ * fresh Float64 copy and transfers that, so its own canonical buffers are never
+ * detached and survive whatever happens to the diagnostic worker.
+ */
+export interface SendForDiagnosticPayload {
+  readonly handle: ModelHandle;
+  readonly operationId: string;
+  readonly port: ProtocolPort;
+  readonly limits: {
+    readonly maxCandidatePairs: number;
+    readonly maxTestedPairs: number;
+    readonly maxSamples: number;
+  };
+}
+
+export interface SendForDiagnosticResult {
+  /** Faces in the copy that was sent. Scalar only. */
+  readonly faceCount: number;
+  readonly vertexCount: number;
 }
 
 export type OperationName = keyof OperationMap;

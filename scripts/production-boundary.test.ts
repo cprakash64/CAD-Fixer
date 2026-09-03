@@ -141,7 +141,65 @@ describe('the geometry engines stay in the worker', () => {
   });
 });
 
-describe('no geometry kernel reaches production', () => {
+describe('the self-intersection kernel is confined to its own worker', () => {
+  /*
+   * WHAT CHANGED IN STAGE 3C-1B, and why this section had to be rewritten.
+   *
+   * Geogram now SHIPS. It is compiled into the WebAssembly kernel that backs the
+   * read-only self-intersection diagnostic, and pretending otherwise would make
+   * this file assert a fiction. What still holds — and what these tests now
+   * check — is the boundary: the kernel is reachable ONLY from the disposable
+   * diagnostic worker, so a user who never runs a check never downloads it and
+   * the main-thread bundle never contains it.
+   *
+   * The kernel is NOT in RESEARCH_KERNELS. Those are the packages qualified and
+   * deliberately not shipped; this one was qualified and deliberately IS.
+   */
+  const KERNEL_PACKAGE = '@cadfixer/self-intersection-kernel';
+  const DIAGNOSTIC_WORKER = join('apps', 'web', 'src', 'workers', 'self-intersection.worker.ts');
+
+  it('is imported by exactly one file, the diagnostic worker', () => {
+    const files = [
+      ...sourceFilesUnder(join(REPO_ROOT, 'apps')),
+      ...sourceFilesUnder(join(REPO_ROOT, 'packages')),
+    ];
+    const importers = files
+      .filter((file) =>
+        new RegExp(`from\\s+['"]${KERNEL_PACKAGE}`).test(readFileSync(file, 'utf8')),
+      )
+      .map((file) => relative(REPO_ROOT, file));
+
+    expect(importers, 'the WASM kernel must be reachable from the diagnostic worker only').toEqual([
+      DIAGNOSTIC_WORKER,
+    ]);
+  });
+
+  it('is never imported by main-thread code', () => {
+    const offenders = mainThreadFiles()
+      .filter((file) => readFileSync(file, 'utf8').includes(KERNEL_PACKAGE))
+      .map((file) => relative(REPO_ROOT, file));
+
+    expect(
+      offenders,
+      'importing the kernel from the main thread would pull ~1.2 MB of WebAssembly into the ' +
+        'application bundle for every user, including those who never run the check',
+    ).toEqual([]);
+  });
+
+  it('keeps the diagnostic CONTRACT free of the kernel', () => {
+    // The contract package carries policy, caps and taxonomy so the application
+    // can reason about the diagnostic without loading a geometry kernel to do it.
+    const contract = sourceFilesUnder(join(REPO_ROOT, 'packages', 'mesh-self-intersection'));
+    for (const file of contract) {
+      expect(
+        readFileSync(file, 'utf8').includes(KERNEL_PACKAGE),
+        `${relative(REPO_ROOT, file)} must not reach for the kernel`,
+      ).toBe(false);
+    }
+  });
+});
+
+describe('no UNSHIPPED geometry kernel reaches production', () => {
   it('is not imported anywhere in the application or its packages', () => {
     const files = [
       ...sourceFilesUnder(join(REPO_ROOT, 'apps')),
