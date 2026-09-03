@@ -29,3 +29,6 @@ experiments/repair-kernels/*/artifacts
 # hand-maintained and stays formatted.
 docs/repair/bakeoff/*.json
 docs/repair/repair-performance.json
+
+# Stage 3C-1A: generated Emscripten glue and the WASM artifact.
+experiments/self-intersection/artifacts

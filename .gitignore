@@ -37,3 +37,8 @@ experiments/browser-harness/.cases/
 experiments/repair-kernels/*/artifacts/*.wasm
 experiments/repair-kernels/*/artifacts/*.js
 experiments/repair-kernels/geogram/artifacts/geogram-reference
+
+# Stage 3C-1A self-intersection research artifacts. Reproducible from the pinned
+# sources by the commands in experiments/self-intersection/README.md, and large.
+# What IS committed is the harness, the corpus and the results.
+experiments/self-intersection/artifacts/
