@@ -19,7 +19,18 @@ export type { AppErrorOptions, ErrorDetails, ErrorDetailValue, SerializedAppErro
 export { diagnostic } from './diagnostics';
 export type { Diagnostic } from './diagnostics';
 
-export { CancellationSource, throwIfCancelled, uncancellable } from './cancellation';
+export {
+  adoptSharedCancellation,
+  CANCEL_SIGNAL_INDEX,
+  CancellationSource,
+  CancelState,
+  combineCancellation,
+  isSharedCancellationSupported,
+  SHARED_CANCELLATION_BYTES,
+  SharedCancellationSource,
+  throwIfCancelled,
+  uncancellable,
+} from './cancellation';
 export type { CancellationToken } from './cancellation';
 
 export { createOperationId, resetOperationIdSequenceForTesting } from './ids';

@@ -221,9 +221,20 @@ export type RepairPlanState = (typeof RepairPlanState)[keyof typeof RepairPlanSt
 export const RepairCandidateState = {
   Idle: 'idle',
   Building: 'building',
+  /**
+   * Cancel has been signalled; the worker has not yet acknowledged unwinding.
+   *
+   * A REAL STATE, not a cosmetic one. The shared flag is set immediately, but
+   * the worker is still inside a batch and still owns partially-built scratch
+   * memory. Showing "Cancelled" at this point would claim the work had stopped
+   * while it demonstrably had not, and would invite a retry that races the
+   * operation still unwinding. See Stage 3B-1C.
+   */
+  Cancelling: 'cancelling',
   /** Built AND accepted by validation. The only state that may be applied. */
   Ready: 'ready',
   Failed: 'failed',
+  /** The worker acknowledged: nothing was published, nothing is resident. */
   Cancelled: 'cancelled',
 } as const;
 
@@ -804,6 +815,22 @@ export class WorkspaceStore {
         fraction: 0,
         phase: undefined,
       },
+    });
+    return true;
+  }
+
+  /**
+   * Records that cancellation has been SIGNALLED but not yet acknowledged.
+   *
+   * Returns false when there is nothing running to cancel, so a stray click
+   * cannot put the panel into a transitional state it can never leave.
+   */
+  public beginRepairCancellation(token: RepairToken): boolean {
+    if (!this.isCurrentRepair(token)) return false;
+    const repair = this.state.repair;
+    if (repair.candidateState !== RepairCandidateState.Building) return false;
+    this.update({
+      repair: { ...repair, candidateState: RepairCandidateState.Cancelling },
     });
     return true;
   }

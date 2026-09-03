@@ -235,7 +235,10 @@ export class GeometryClient {
       memoryBudgetBytes === undefined
         ? { handle, requested }
         : { handle, requested, memoryBudgetBytes },
-      { onProgress },
+      // Planning builds connectivity and can be seconds on a large model, so it
+      // gets a signal that can interrupt it rather than one that waits for the
+      // event loop.
+      { onProgress, interruptible: true },
     );
   }
 
@@ -265,7 +268,10 @@ export class GeometryClient {
           : { memoryBudgetBytes: options.memoryBudgetBytes }),
         ...(options.sampleLimit === undefined ? {} : { sampleLimit: options.sampleLimit }),
       },
-      { onProgress },
+      // THE OPERATION THIS STAGE EXISTS FOR. The repair pipeline is one long
+      // synchronous pass; without a shared signal its Cancel could only discard
+      // a finished result, never stop the work.
+      { onProgress, interruptible: true },
     );
   }
 

@@ -136,6 +136,7 @@ export const repairPlanHandler: OperationHandler<'repair/plan'> = async (payload
     modelId: payload.handle.modelId,
     sourceRevision: payload.handle.revision,
     requested: payload.requested,
+    cancellation: context.cancellation,
     ...(payload.memoryBudgetBytes === undefined
       ? {}
       : { memoryBudgetBytes: payload.memoryBudgetBytes }),
@@ -197,6 +198,7 @@ export const repairCreateCandidateHandler: OperationHandler<'repair/create-candi
     modelId: payload.handle.modelId,
     sourceRevision: payload.handle.revision,
     requested: payload.requested,
+    cancellation: context.cancellation,
     ...(payload.memoryBudgetBytes === undefined
       ? {}
       : { memoryBudgetBytes: payload.memoryBudgetBytes }),

@@ -35,7 +35,13 @@ export type {
 export { estimateRepairMemory, planConservativeRepair } from './plan';
 export type { RepairPlanInput, RepairPlanResult } from './plan';
 
-export { executeConservativeRepair, RepairCancelled } from './pipeline';
+export { executeConservativeRepair } from './pipeline';
+export {
+  CANCEL_POLL_INTERVAL,
+  CANCEL_POLL_MASK,
+  RepairCancelled,
+  pollCancellation,
+} from './cancellation';
 export type { RepairExecutionInput, RepairExecutionResult } from './pipeline';
 
 export { buildInversePatch, fullCopyBytes, restoreFromInverse } from './inverse';

@@ -3,7 +3,9 @@ import {
   createOperationId,
   deserializeAppError,
   internalError,
+  isSharedCancellationSupported,
   operationCancelled,
+  SharedCancellationSource,
   type AppError,
   type ErrorDetails,
   type OperationId,
@@ -37,17 +39,39 @@ export interface DispatchOptions {
    * dispatch returns; the caller must not read them afterwards.
    */
   readonly transfer?: readonly TransferHandle[];
+  /**
+   * Whether this operation needs a signal that can interrupt SYNCHRONOUS work.
+   *
+   * Opt-in rather than automatic. Most operations are built from awaited phases
+   * and are interrupted perfectly well by the `cancel` message; allocating a
+   * `SharedArrayBuffer` for them would be cost without benefit. Repair is the
+   * case that needs it, because its pipeline is one long synchronous pass.
+   */
+  readonly interruptible?: boolean;
 }
 
 export interface OperationHandle<T> {
   readonly id: OperationId;
   readonly promise: Promise<T>;
   /**
-   * Requests cancellation. Cancellation is cooperative, so the operation ends
-   * only when the worker's handler next polls. The promise rejects with an
-   * `OPERATION_CANCELLED` error.
+   * Requests cancellation.
+   *
+   * For an `interruptible` operation the shared flag is set FIRST, before any
+   * message is posted, so the worker can observe it from inside a synchronous
+   * loop. For every operation the `cancel` message still follows, because it is
+   * what carries the lifecycle bookkeeping and what a handler between awaits
+   * responds to.
+   *
+   * Still cooperative: the operation ends when the worker's handler next polls.
+   * What `interruptible` changes is that the poll can now see a change. The
+   * promise rejects with an `OPERATION_CANCELLED` error.
    */
   cancel(): void;
+  /**
+   * True when this operation carries a shared signal that can interrupt
+   * synchronous work. False means cancellation waits for the event loop.
+   */
+  readonly interruptible: boolean;
 }
 
 /** Reports protocol anomalies that have no operation to reject. */
@@ -71,6 +95,14 @@ interface PendingOperation {
 
 export class GeometryCoordinator {
   private readonly pending = new Map<OperationId, PendingOperation>();
+  /**
+   * Live cancellation signals, one per interruptible operation.
+   *
+   * Released the moment an operation reaches a terminal message. Retaining them
+   * would keep a `SharedArrayBuffer` alive per operation for the session — small
+   * individually, unbounded collectively.
+   */
+  private readonly signals = new Map<OperationId, SharedCancellationSource>();
   private readonly endpoint: MessageEndpoint;
   private readonly unsubscribe: () => void;
   private readonly onDiagnostic: DiagnosticSink;
@@ -86,6 +118,17 @@ export class GeometryCoordinator {
 
   public get pendingCount(): number {
     return this.pending.size;
+  }
+
+  /**
+   * Cancellation signals currently held, one per live interruptible operation.
+   *
+   * A diagnostic in the same spirit as `pendingCount`: four bytes each is
+   * nothing until a long session keeps every one, and a leak here is invisible
+   * without a way to observe it.
+   */
+  public get liveCancellationSignals(): number {
+    return this.signals.size;
   }
 
   public dispatch<K extends OperationName>(
@@ -119,15 +162,37 @@ export class GeometryCoordinator {
       });
     }
 
+    /*
+     * The shared cancel flag is created BEFORE the request is posted, so the
+     * worker receives it in the same message that starts the work. Creating it
+     * afterwards would leave a window in which the operation is running and
+     * uncancellable.
+     */
+    const signal =
+      options.interruptible === true && isSharedCancellationSupported()
+        ? new SharedCancellationSource()
+        : undefined;
+    if (signal !== undefined) this.signals.set(id, signal);
+
     this.pending.set(id, settle);
     this.endpoint.postMessage(
-      { channel: PROTOCOL_CHANNEL, kind: 'request', id, operation, payload },
+      {
+        channel: PROTOCOL_CHANNEL,
+        kind: 'request',
+        id,
+        operation,
+        payload,
+        // SHARED, never transferred: a SharedArrayBuffer in a transfer list
+        // would detach the sender's view of the flag it has to set.
+        ...(signal === undefined ? {} : { cancellation: signal.buffer }),
+      },
       options.transfer ?? [],
     );
 
     return {
       id,
       promise,
+      interruptible: signal !== undefined,
       cancel: (): void => {
         this.requestCancel(id);
       },
@@ -146,6 +211,7 @@ export class GeometryCoordinator {
   public failAllPending(error: AppError): void {
     const abandoned = [...this.pending.values()];
     this.pending.clear();
+    this.signals.clear();
     for (const operation of abandoned) operation.reject(error);
   }
 
@@ -162,6 +228,11 @@ export class GeometryCoordinator {
 
     const abandoned = [...this.pending.values()];
     this.pending.clear();
+    // Every in-flight worker loop is told to stop before the endpoint closes, so
+    // a torn-down runtime does not leave a worker burning a core on a result
+    // nothing will ever receive.
+    for (const signal of this.signals.values()) signal.cancel();
+    this.signals.clear();
     for (const operation of abandoned) {
       operation.reject(
         operationCancelled('Geometry runtime shut down before the operation completed.'),
@@ -171,8 +242,16 @@ export class GeometryCoordinator {
     this.endpoint.close?.();
   }
 
+  /**
+   * THE ATOMIC STORE HAPPENS FIRST. Deliberately, and the order is the whole
+   * correctness argument: `postMessage` cannot reach a worker that is inside a
+   * synchronous loop, so posting first and storing second would make the flag's
+   * visibility depend on the very mechanism it exists to bypass. The store is
+   * unconditional and cheap; the message follows for bookkeeping.
+   */
   private requestCancel(id: OperationId): void {
     if (!this.pending.has(id) || this.disposed) return;
+    this.signals.get(id)?.cancel();
     // The pending entry is intentionally kept: the worker still owes a terminal
     // message, and removing it here would make that message unroutable.
     this.endpoint.postMessage({ channel: PROTOCOL_CHANNEL, kind: 'cancel', id }, []);
@@ -204,10 +283,12 @@ export class GeometryCoordinator {
         return;
       case 'result':
         this.pending.delete(message.id);
+        this.signals.delete(message.id);
         pending.resolve(message.value);
         return;
       case 'error':
         this.pending.delete(message.id);
+        this.signals.delete(message.id);
         pending.reject(deserializeAppError(message.error));
         return;
       default:

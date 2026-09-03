@@ -67,7 +67,16 @@ export interface AnalysisOutcome {
 
 export interface AnalysisSession {
   readonly promise: Promise<AnalysisOutcome>;
-  /** Cooperative. The engine polls between batches. */
+  /**
+   * Requests cancellation.
+   *
+   * ANALYSIS IS NOT DISPATCHED AS INTERRUPTIBLE, so this is the message path:
+   * the flag changes when the worker next returns to its event loop, which for
+   * a synchronous analysis pass means when that pass finishes. The result is
+   * then discarded rather than installed. Accurate as of Stage 3B-1C, which made
+   * repair — not analysis — genuinely interruptible; see
+   * docs/repair/REPAIR_ARCHITECTURE.md for why the two differ.
+   */
   cancel(): void;
 }
 

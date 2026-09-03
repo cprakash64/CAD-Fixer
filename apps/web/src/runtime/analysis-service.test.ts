@@ -51,6 +51,7 @@ function controllableClient(): Controllable {
         cancel(): void {
           cancelCount += 1;
         },
+        interruptible: false,
       };
     },
   };

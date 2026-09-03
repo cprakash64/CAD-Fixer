@@ -102,7 +102,18 @@ export interface RepairCapableClient {
 
 export interface RepairSession<T> {
   readonly promise: Promise<T>;
-  /** Cooperative. The engine polls between batches. */
+  /**
+   * Requests cancellation.
+   *
+   * INTERRUPTS RUNNING WORK, as of Stage 3B-1C. Repair operations dispatch with
+   * a shared control word, so `cancel()` performs an `Atomics.store` that the
+   * worker observes from inside its own synchronous loops — it does not wait for
+   * a message to be dequeued. The engine polls that word at a bounded batch
+   * interval, so the work stops within one batch rather than at the end of the
+   * phase it happens to be in.
+   *
+   * What it still is NOT: pre-emption. A loop between polls finishes its batch.
+   */
   cancel(): void;
 }
 
