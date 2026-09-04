@@ -202,11 +202,17 @@ export function readZipDirectory(
         { declared: uncompressedSize, limit: limits.maxEntryBytes },
       );
     }
+    /*
+     * THE SAME RULE AS THE RUNTIME BUDGET, checked against the DECLARATION so
+     * an honest oversized archive is refused before anything is inflated. It is
+     * not a substitute for the runtime accounting: a directory that lies about
+     * its uncompressed sizes passes here and is stopped by `InflationBudget`.
+     */
     declaredTotal += uncompressedSize;
     if (declaredTotal > limits.maxTotalUncompressedBytes) {
       throw importTooLarge(
-        ImportRefusal.ZipArchiveTooLarge,
-        'This archive expands to more data than CAD Fixer will extract.',
+        ImportRefusal.ZipTotalTooLarge,
+        'This archive expands to more data in total than CAD Fixer will extract.',
         { declared: declaredTotal, limit: limits.maxTotalUncompressedBytes },
       );
     }
@@ -254,10 +260,42 @@ function decodeAscii(bytes: Uint8Array, from: number, length: number): string {
   return out;
 }
 
+/**
+ * The uncompressed bytes ONE archive is allowed to produce, in total.
+ *
+ * WHY THIS IS NOT A PER-ENTRY LIMIT. Per-entry and ratio caps bound each entry
+ * on its own, and an archive can satisfy both while still expanding to far more
+ * than a session may hold: three entries of two hundred megabytes each are
+ * individually fine and collectively six hundred. The directory's declared
+ * sizes are checked for the same total up front, but a declaration is a claim
+ * by whoever wrote the archive — this is the accounting that does not depend on
+ * the file telling the truth.
+ *
+ * MUTABLE ON PURPOSE. The budget is spent across several calls to
+ * `readZipEntry`, and it must be readable after a refusal has unwound them.
+ */
+export interface InflationBudget {
+  readonly maxTotalBytes: number;
+  /** Produced so far, across every entry inflated under this budget. */
+  totalProducedBytes: number;
+}
+
+/** One budget per archive, per import. Never shared between imports. */
+export function createInflationBudget(limits: ZipLimits = DEFAULT_ZIP_LIMITS): InflationBudget {
+  return { maxTotalBytes: limits.maxTotalUncompressedBytes, totalProducedBytes: 0 };
+}
+
 export interface ZipReadOptions {
   readonly limits?: ZipLimits;
   /** Supplied by the host; see `FormatReadContext.inflateRaw`. */
   readonly inflateRaw: (compressed: Uint8Array) => AsyncIterable<Uint8Array>;
+  /**
+   * The archive-wide byte budget. REQUIRED, so it cannot be forgotten.
+   *
+   * An optional budget is a budget that is not enforced the first time someone
+   * adds a second `readZipEntry` call and does not notice the parameter.
+   */
+  readonly budget: InflationBudget;
   /** Polled between inflated chunks so a large entry can be abandoned. */
   readonly throwIfCancelled?: () => void;
 }
@@ -290,6 +328,15 @@ export async function readZipEntry(
   }
   const compressed = bytes.subarray(start, start + entry.compressedSize);
 
+  const budget = options.budget;
+  const refuseTotal = (prospective: number): never => {
+    throw importTooLarge(
+      ImportRefusal.ZipTotalTooLarge,
+      'This archive expands to more data in total than CAD Fixer will extract.',
+      { produced: prospective, limit: budget.maxTotalBytes, entry: entry.name.slice(0, 128) },
+    );
+  };
+
   if (entry.method === 0) {
     if (compressed.byteLength > limits.maxEntryBytes) {
       throw importTooLarge(
@@ -297,27 +344,53 @@ export async function readZipEntry(
         'This archive contains a file larger than CAD Fixer will extract.',
       );
     }
+    // A STORED ENTRY STILL SPENDS THE BUDGET. Its bytes are output the same way
+    // an inflated entry's are; that they needed no work to produce is not a
+    // reason to let them past the ceiling uncounted.
+    const prospectiveTotal = budget.totalProducedBytes + compressed.byteLength;
+    if (prospectiveTotal > budget.maxTotalBytes) refuseTotal(prospectiveTotal);
+    budget.totalProducedBytes = prospectiveTotal;
     return compressed;
   }
 
   const chunks: Uint8Array[] = [];
   let produced = 0;
   for await (const chunk of options.inflateRaw(compressed)) {
-    produced += chunk.byteLength;
-    if (produced > limits.maxEntryBytes) {
+    /*
+     * EVERY CHECK IS ON THE PROSPECTIVE TOTAL, BEFORE THE CHUNK IS RETAINED.
+     *
+     * Accounting first and checking afterwards keeps the offending chunk alive
+     * in `chunks` for as long as it takes to throw, and — worse — makes the
+     * peak one chunk larger than the limit says it is. Refusing before the
+     * push means the budget is the actual bound on what this holds.
+     *
+     * Throwing here also abandons the stream: leaving the `for await` calls the
+     * async iterator's `return()`, whose `finally` cancels the underlying
+     * reader, so the remaining chunks are never produced at all.
+     */
+    const prospectiveEntry = produced + chunk.byteLength;
+    if (prospectiveEntry > limits.maxEntryBytes) {
       throw importTooLarge(
         ImportRefusal.ZipEntryTooLarge,
         'This archive expands to more data than CAD Fixer will extract.',
         { limit: limits.maxEntryBytes },
       );
     }
-    if (entry.compressedSize > 0 && produced / entry.compressedSize > limits.maxCompressionRatio) {
+    const prospectiveTotal = budget.totalProducedBytes + chunk.byteLength;
+    if (prospectiveTotal > budget.maxTotalBytes) refuseTotal(prospectiveTotal);
+    if (
+      entry.compressedSize > 0 &&
+      prospectiveEntry / entry.compressedSize > limits.maxCompressionRatio
+    ) {
       throw importTooLarge(
         ImportRefusal.ZipRatioExceeded,
         'This archive is compressed far beyond what CAD Fixer will expand.',
         { limit: limits.maxCompressionRatio },
       );
     }
+
+    produced = prospectiveEntry;
+    budget.totalProducedBytes = prospectiveTotal;
     chunks.push(chunk);
     options.throwIfCancelled?.();
   }

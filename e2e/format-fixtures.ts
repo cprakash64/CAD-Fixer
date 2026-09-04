@@ -158,6 +158,14 @@ export interface ZipFixtureEntry {
   /** Bit 0 set marks the entry encrypted. */
   readonly flags?: number;
   readonly declaredUncompressedSize?: number;
+  /**
+   * Overrides the compressed size in the directory only.
+   *
+   * A fixture that declares a large uncompressed size needs a matching
+   * compressed size, or the ratio cap refuses it before the total does — and
+   * then the test proves the wrong rule.
+   */
+  readonly declaredCompressedSize?: number;
 }
 
 const CRC_TABLE = ((): Uint32Array => {
@@ -189,6 +197,7 @@ export function buildZip(entries: readonly ZipFixtureEntry[]): Buffer {
     const method = entry.method ?? 8;
     const payload = method === 8 ? deflateRawSync(raw) : raw;
     const declaredUncompressed = entry.declaredUncompressedSize ?? raw.length;
+    const declaredCompressed = entry.declaredCompressedSize ?? payload.length;
     const flags = entry.flags ?? 0;
 
     const local = Buffer.alloc(30 + nameBytes.length + payload.length);
@@ -211,7 +220,7 @@ export function buildZip(entries: readonly ZipFixtureEntry[]): Buffer {
     central.writeUInt16LE(flags, 8);
     central.writeUInt16LE(method, 10);
     central.writeUInt32LE(crc32(raw), 16);
-    central.writeUInt32LE(payload.length, 20);
+    central.writeUInt32LE(declaredCompressed, 20);
     central.writeUInt32LE(declaredUncompressed, 24);
     central.writeUInt16LE(nameBytes.length, 28);
     central.writeUInt32LE(offset, 42);
@@ -372,6 +381,38 @@ export function threeMfWithTexture(): Buffer {
         '<texture2d id="9" path="https://evil.test/skin.png" contenttype="image/png"/>' +
         `<object id="1" type="model" name="Textured">${tetrahedronMesh()}</object>`,
     }),
+  );
+}
+
+/**
+ * More build items than a `GeometryDocument` may hold.
+ *
+ * ONE OBJECT, `count` placements. The archive is a few kilobytes: the point is
+ * that a tiny file can describe a document nothing can hold, which is why the
+ * expander has to stop while it walks rather than after it finishes.
+ */
+export function threeMfPlacements(count: number): Buffer {
+  return threeMfSharedPlacements(count);
+}
+
+/**
+ * An archive whose entries TOGETHER exceed the total uncompressed budget.
+ *
+ * Each entry declares 200 MiB against a 256 MiB per-entry cap, and a 100:1
+ * ratio against a 200:1 cap — every per-entry ceiling satisfied, and 600 MiB
+ * in total against 512 MiB. Declared rather than real, because producing half
+ * a gigabyte to prove a half-gigabyte ceiling would allocate exactly what the
+ * ceiling exists to prevent.
+ */
+export function zipOverTotalBudget(): Buffer {
+  return buildZip(
+    ['a', 'b', 'c'].map((name) => ({
+      name: `3D/${name}.model`,
+      content: 'x',
+      method: 8,
+      declaredUncompressedSize: 200 * 1024 * 1024,
+      declaredCompressedSize: 2 * 1024 * 1024,
+    })),
   );
 }
 

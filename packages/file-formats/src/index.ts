@@ -37,13 +37,14 @@ export { readObj } from './obj/obj-reader';
 export { objReader } from './obj/codec';
 
 export {
+  createInflationBudget,
   DEFAULT_ZIP_LIMITS,
   describeUnsafePath,
   looksLikeZip,
   readZipDirectory,
   readZipEntry,
 } from './threemf/zip';
-export type { ZipEntry, ZipLimits } from './threemf/zip';
+export type { InflationBudget, ZipEntry, ZipLimits } from './threemf/zip';
 export {
   DEFAULT_XML_LIMITS,
   decodeXmlText,

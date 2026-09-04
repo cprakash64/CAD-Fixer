@@ -171,3 +171,106 @@ assert the payload appears as a text node and that no element was created.
 - Export still writes one STL of one part and says so before the click.
 - Nothing leaves the machine. No MTL fetch, no schema fetch, no texture fetch,
   no relationship resolution, no telemetry of any kind.
+
+---
+
+# R1 — closing the resource-bound gaps (2026-09-04)
+
+Stage 4A-2B1 shipped two resource guarantees weaker than the architecture they
+implement. Both are closed here. Nothing else about the import contract changes.
+
+## The reader's part ceiling was not the document's
+
+`DEFAULT_3MF_LIMITS.maxParts` was 65,536 and `DocumentLimits.maxParts` is 4,096,
+so a component graph could be expanded to sixty-five thousand parts and refused
+by `assertGeometryDocument` afterwards. The refusal was correct and every part
+built to reach it was wasted — and the reason the user was given named the
+document's rule rather than the one that had actually stopped them.
+
+There is now ONE authority. `DEFAULT_3MF_LIMITS.maxParts` reads
+`DEFAULT_DOCUMENT_LIMITS.maxParts` from `mesh-core`, and a test asserts they are
+equal so they cannot drift apart again. `file-formats` already depended on
+`mesh-core`, so no new edge was needed.
+
+The check also moved to BEFORE the append. Building part 4,097 and then throwing
+allocates it, names it, composes its transform and attaches its mesh, and the
+throw unwinds all of it. More importantly the walk stops there, so the remainder
+of a combinatorial subtree is never visited: a sixteen-deep graph with four
+children per level describes 4.3 billion leaf placements, and the expander now
+touches 4,097 of them.
+
+Depth (16), cycle detection and missing-reference detection stay independent of
+the part budget and are each still reported as themselves.
+
+## Other document-wide ceilings an expansion can reach
+
+A document counts triangles and vertices PER PART, so repeated placements of one
+shared mesh multiply them: five thousand triangles placed four thousand times is
+the twenty-million ceiling exactly, and the next placement crosses it while the
+part count is still well inside 4,096. Both totals are now carried through the
+walk — each is O(1) per part — and refused before the crossing part is built,
+with `ThreeMfTooManyTriangles` and `ThreeMfTooManyVertices` naming which ceiling
+was reached.
+
+`maxTotalGeometryBytes` is deliberately LEFT to the document gate. It is charged
+per DISTINCT mesh, so placements do not multiply it and the per-object caps
+already bound each mesh; there is no expansion that can reach it early.
+
+OBJ got the same treatment where the correspondence is exact. Every face belongs
+to exactly one part, so the file's face count IS the document's triangle count,
+and `DEFAULT_OBJ_LIMITS.maxFaces` is now the document's ceiling rather than a
+larger one. The plan count is checked against the part ceiling before a single
+mesh is built. OBJ's vertex cap stays the FILE'S pool, because parts each get
+their own copy of the vertices they use — the pool does not bound the document's
+total, and that total is checked at the gate.
+
+## A long name made a valid model unimportable
+
+The OBJ reader truncated names at 1,024 and the 3MF reader did not truncate them
+at all, while `DocumentLimits.maxNameLength` is 512. A 600-character object name
+therefore survived both readers and was refused by the document gate — the whole
+model unopenable because of a display string, which is the exact opposite of what
+"truncate rather than refuse" exists to achieve. Both readers now truncate to the
+document's caps, for names and for material references.
+
+## ZIP accounting was per entry, never per archive
+
+`readZipEntry` enforced a per-entry ceiling and a compression ratio, and
+`readZipDirectory` checked the DECLARED total. Nothing counted what was actually
+produced across entries, so three entries that each satisfy every per-entry rule
+could together expand past what a session may hold — and a directory that lied
+about its uncompressed sizes passed the only total check there was.
+
+`InflationBudget` is now created once per import and passed to every entry.
+Every chunk is checked against the PROSPECTIVE total before it is retained:
+accounting first and checking afterwards keeps the offending chunk alive and
+makes the real peak one chunk larger than the limit claims. Stored entries are
+charged too — that their bytes needed no work to produce is not a reason to let
+them past uncounted.
+
+The budget is `ZipReadOptions.budget` and it is REQUIRED, not optional. An
+optional budget is one that is not enforced the first time someone adds a second
+`readZipEntry` call and does not notice the parameter.
+
+Refusing inside the `for await` abandons the stream: leaving the loop calls the
+async iterator's `return()`, whose `finally` cancels the underlying reader, so
+the remaining chunks are never produced.
+
+`ZipTotalTooLarge` names this rule at both moments — on the declaration and on
+the running count. It replaces `ZipArchiveTooLarge` for the declared total, which
+was a different rule wearing the same code: that one is about the size of the
+file on disk.
+
+## What R1 does not change
+
+Format identification, STL compatibility, triangle-only OBJ, `o`→part, `g`→group,
+`mtllib` never opened, OBJ's unknown unit, 3MF's millimetre default and its six
+explicit units, Float64 placements, component support, depth 16, cycle detection,
+structural mesh sharing, the fail-closed XML policy, the absence of any network
+call, document transactionality, import cancellation, and the error taxonomy —
+all unchanged, and all re-verified.
+
+One wording fix: a face corner that gives a texture and a normal but no position
+(`f /1/1`) is now `ObjMissingPositionIndex` rather than `ObjZeroIndex`. `Number('')`
+is 0, so the old refusal described a file that said something the user's file did
+not say.

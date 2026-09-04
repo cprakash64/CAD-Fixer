@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { AppErrorCode, isAppError, CancellationSource } from '@cadfixer/shared';
-import { distinctMeshes, triangleCount, vertexCount } from '@cadfixer/mesh-core';
+import {
+  assertGeometryDocument,
+  DEFAULT_DOCUMENT_LIMITS,
+  distinctMeshes,
+  triangleCount,
+  vertexCount,
+} from '@cadfixer/mesh-core';
 import type { FormatReadContext } from '../context';
 import type { DocumentReadResult } from '../document-reader';
 import { testReadContext } from '../test-context';
@@ -345,6 +351,28 @@ describe('OBJ-P09/P10/P11: invalid indices and numbers', () => {
     );
   });
 
+  it('names a MISSING position index as its own mistake, not as index zero', async () => {
+    /*
+     * `f /1/1` gives a texture and a normal and no position. `Number('')` is 0,
+     * so this used to be reported as "uses vertex index 0" — a description of a
+     * file that says something the user's file does not say.
+     */
+    await expectRefusal(
+      () => read('v 0 0 0\nv 1 0 0\nv 0 1 0\nvt 0 0\nf /1/1 /1/1 /1/1\n'),
+      AppErrorCode.MalformedFile,
+      ImportRefusal.ObjMissingPositionIndex,
+    );
+  });
+
+  it('still accepts the three legal corner spellings that DO give a position', async () => {
+    // v, v/vt and v//vn all begin with the position index, and the tightened
+    // check must not have made any of them unreadable.
+    for (const face of ['f 1 2 3', 'f 1/1 2/1 3/1', 'f 1//1 2//1 3//1', 'f 1/1/1 2/1/1 3/1/1']) {
+      const result = await read(`v 0 0 0\nv 1 0 0\nv 0 1 0\nvt 0 0\nvn 0 0 1\n${face}\n`);
+      expect(triangleCount(result.document.parts[0]?.mesh as never)).toBe(1);
+    }
+  });
+
   it('refuses an out-of-range positive index rather than clamping it', async () => {
     await expectRefusal(
       () => read('v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 99\n'),
@@ -468,6 +496,31 @@ describe('OBJ-P13/P14: names', () => {
     expect((result.document.parts[0]?.name ?? '').length).toBeLessThanOrEqual(
       DEFAULT_OBJ_LIMITS.maxNameLength,
     );
+  });
+
+  it('truncates to the DOCUMENT’s cap, so a long name does not make a model unopenable', async () => {
+    /*
+     * THE BUG THIS PINS. The reader truncated at 1,024 while
+     * `DocumentLimits.maxNameLength` was 512, so a 600-character object name
+     * passed the reader and was refused by `assertGeometryDocument` — the whole
+     * model unimportable because of a display string, which is the opposite of
+     * what "truncate rather than refuse" is for. Truncating above the ceiling
+     * that will be enforced is not truncating.
+     */
+    expect(DEFAULT_OBJ_LIMITS.maxNameLength).toBe(DEFAULT_DOCUMENT_LIMITS.maxNameLength);
+
+    const result = await read(`o ${'n'.repeat(600)}\n${TRIANGLE}`);
+    expect(result.document.parts[0]?.name).toHaveLength(DEFAULT_DOCUMENT_LIMITS.maxNameLength);
+    expect(() => {
+      assertGeometryDocument(result.document, 'OBJ import');
+    }).not.toThrow();
+  });
+
+  it('caps faces at the DOCUMENT’s triangle total, which is the same number', () => {
+    // Every face belongs to exactly one part, so the file's face count IS the
+    // document's triangle count. The reader can enforce the real ceiling
+    // instead of building a model the gate will refuse.
+    expect(DEFAULT_OBJ_LIMITS.maxFaces).toBe(DEFAULT_DOCUMENT_LIMITS.maxTotalTriangles);
   });
 
   it('keeps markup in a name as text, never as markup', async () => {

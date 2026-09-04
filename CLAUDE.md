@@ -13,9 +13,9 @@ matter more than moving fast.
 Five workflows are planned: **Repair, Convert, Split, Texture, Hollow**. Target
 formats: **STL, OBJ, 3MF**.
 
-**Current stage: Stage 4A-2B1 complete — production OBJ and 3MF IMPORT, on top
-of the multi-part geometry document foundation and conservative deterministic
-repair.** The engine, the transaction and the user workflow are all
+**Current stage: Stage 4A-2B1 (+R1) complete — production OBJ and 3MF IMPORT with
+bounded import resources, on top of the multi-part geometry document foundation
+and conservative deterministic repair.** The engine, the transaction and the user workflow are all
 production. Implemented: structural STL encoding detection, hand-written binary
 and ASCII STL parsers with resource budgets, worker-based parsing with progress
 and working cancellation, a real Three.js viewport with camera controls, model
@@ -275,11 +275,29 @@ believing it.
   relationship is ever resolved. They are recorded as unsupported features and
   reported by name. Following a path chosen by an untrusted file is a read the
   user did not ask for.
-- **ZIP budgets are enforced DURING inflation, chunk by chunk.** The directory's
-  declared uncompressed size is a claim by the attacker; checking it and then
-  inflating anyway proves nothing. `inflateRaw` yields chunks for exactly this
-  reason — a `Promise<Uint8Array>` would mean the allocation had already
-  happened.
+- **ZIP budgets are enforced DURING inflation, chunk by chunk, and ACROSS
+  ENTRIES.** The directory's declared uncompressed size is a claim by the
+  attacker; checking it and then inflating anyway proves nothing. `inflateRaw`
+  yields chunks for exactly this reason — a `Promise<Uint8Array>` would mean the
+  allocation had already happened. One `InflationBudget` is created per import
+  and passed to every entry, and each chunk is checked against the PROSPECTIVE
+  total BEFORE it is retained; stored entries are charged too. The budget is a
+  REQUIRED field on `ZipReadOptions`, because an optional one is not enforced
+  the first time someone adds a second `readZipEntry` call.
+- **THE READER'S PART CEILING IS THE DOCUMENT'S.** `DEFAULT_3MF_LIMITS.maxParts`
+  reads `DEFAULT_DOCUMENT_LIMITS.maxParts`, and `DEFAULT_OBJ_LIMITS.maxFaces` /
+  `maxNameLength` read the document's ceilings too. A reader limit above the
+  document's means a file is fully expanded and then refused — all of the work
+  and none of the protection. Tests assert they stay equal.
+- **The expansion budget is checked BEFORE the part is appended**, so the walk
+  stops rather than building the part that crosses and unwinding. Triangle and
+  vertex totals are carried through the walk for the same reason: a document
+  counts them PER PART, so repeated placements of one shared mesh multiply them.
+  `maxTotalGeometryBytes` is deliberately left to the document gate — it is
+  charged per DISTINCT mesh, so no expansion can reach it early.
+- **Names are truncated to the DOCUMENT'S cap, not to a larger one.** Truncating
+  at 1,024 while the gate refuses above 512 is not truncating: it made a model
+  with a 600-character object name unimportable for a display string.
 - **XML IS FAIL-CLOSED BEFORE IT IS PARSED.** `describeUnsafeXml` refuses any
   DOCTYPE, ENTITY, SYSTEM or PUBLIC identifier before a single element is read,
   and the scanner is ours — never `DOMParser`. The refusal must not depend on a

@@ -581,3 +581,42 @@ asserted rather than recorded — `e2e/format-import.timing.spec.ts` proves the
 main thread keeps rendering frames throughout a 200,000-triangle OBJ and a
 150,000-triangle 3MF import, and that cancelling one is materially faster than
 letting it finish.
+
+## R1 — after the resource fixes (2026-09-04)
+
+Re-run on the same machine after Stage 4A-2B1-R1's bounded-expansion and
+cumulative-inflation changes. Neither touched a per-face or per-chunk hot loop;
+the additions are one comparison per inflated chunk and two O(1) totals per
+emitted part.
+
+| Input               | B1     | R1 (three runs)       |
+| ------------------- | ------ | --------------------- |
+| OBJ 11.4 MiB        | 192 ms | 203 / 212 / 244 ms    |
+| OBJ 59.4 MiB        | 954 ms | 1005 / 1019 / 1104 ms |
+| 3MF 10.0 MiB of XML | 161 ms | 163 / 168 / 170 ms    |
+| 3MF 51.2 MiB of XML | 750 ms | 839 / 848 / 860 ms    |
+
+The R1 figures are 5–15% higher, consistently across runs. **This is not
+attributed to the changes**, and the honest statement is that it is not
+attributable at all from these numbers: the B1 column is a single run taken on a
+quieter machine, and the code that changed executes a handful of operations
+across a run of hundreds of milliseconds. What can be said from the source is
+that the OBJ character scan and the XML element scan are untouched. Anyone
+re-measuring should take both columns fresh on one quiet machine.
+
+## Refusing an over-large expansion
+
+70,000 build items of one object, distinct transforms so the model XML does not
+compress past the ratio cap. Both runs take the same code path with only the
+part ceiling changed, so the difference is the expansion and nothing else.
+
+| Stop at            | Whole import |
+| ------------------ | ------------ |
+| 4,096 (production) | 76.6 ms      |
+| 65,536 (before R1) | 90.7 ms      |
+
+Most of each number is the shared 4 MB XML scan. The 14 ms between them is the
+whole of the expansion: sixty-one thousand part records not built, and the walk
+that would have built them not taken. Correctness remains the reason the
+ceilings were unified — the reader now refuses on the rule that will actually be
+enforced, and names it — but the saved work is real and measurable.

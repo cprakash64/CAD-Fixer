@@ -1,3 +1,5 @@
+import { DEFAULT_DOCUMENT_LIMITS } from '@cadfixer/mesh-core';
+
 /**
  * OBJ intake ceilings, promoted from the Stage 4A research limits.
  *
@@ -21,11 +23,34 @@ export interface ObjLimits {
    * much text a single scan step can be asked to hold.
    */
   readonly maxLineLength: number;
+  /**
+   * Vertices in the FILE'S shared pool.
+   *
+   * Not the document's total, and deliberately not derived from it: each part
+   * gets its own copy of the vertices it uses, so a pool shared between parts
+   * expands rather than divides. The document's vertex ceiling is therefore
+   * checked at the gate, where the parts actually exist.
+   */
   readonly maxVertices: number;
+  /**
+   * Faces in the file, which is EXACTLY the document's triangle total.
+   *
+   * Every face belongs to exactly one part, so the two numbers are the same
+   * number and the reader can enforce the document's ceiling directly instead
+   * of building a model that the gate will refuse.
+   */
   readonly maxFaces: number;
   readonly maxObjects: number;
   readonly maxGroups: number;
-  /** Names are display metadata from an untrusted file, and are truncated. */
+  /**
+   * Names are display metadata from an untrusted file, and are truncated.
+   *
+   * TO THE DOCUMENT'S CAP, not to a larger one of the reader's own. This was
+   * 1,024 while `DocumentLimits.maxNameLength` was 512, so a 600-character
+   * object name survived the reader and was then refused by the document gate
+   * — the whole model unimportable because of a string. Truncating above the
+   * ceiling that will be enforced is not truncating.
+   */
   readonly maxNameLength: number;
   /**
    * Corners per face. THREE, by policy rather than by convenience.
@@ -41,9 +66,9 @@ export const DEFAULT_OBJ_LIMITS: ObjLimits = Object.freeze({
   maxBytes: 512 * 1024 * 1024,
   maxLineLength: 65_536,
   maxVertices: 40_000_000,
-  maxFaces: 40_000_000,
+  maxFaces: DEFAULT_DOCUMENT_LIMITS.maxTotalTriangles,
   maxObjects: 65_536,
   maxGroups: 65_536,
-  maxNameLength: 1_024,
+  maxNameLength: DEFAULT_DOCUMENT_LIMITS.maxNameLength,
   maxFaceVertices: 3,
 });
