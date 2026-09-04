@@ -1,0 +1,8 @@
+{
+  "//": "The end-to-end harness worker. Same WebWorker lib as the production worker project, because it imports the production handlers directly. Never part of the application build.",
+  "extends": "../../../../tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2023", "WebWorker"]
+  },
+  "include": ["**/*.ts", "../fixtures.ts"]
+}

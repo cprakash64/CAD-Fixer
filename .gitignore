@@ -1,5 +1,9 @@
 node_modules/
 dist/
+# The end-to-end harness's build output. Named differently from `dist/` on
+# purpose — it lives OUTSIDE the application's output directory so a stale
+# harness build can never be served as, or mistaken for, the application.
+dist-e2e-harness/
 coverage/
 playwright-report/
 test-results/

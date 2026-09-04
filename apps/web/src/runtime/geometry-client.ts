@@ -54,6 +54,23 @@ function createWorkerEndpoint(worker: Worker): MessageEndpoint {
 export interface GeometryClientOptions {
   readonly onDiagnostic: DiagnosticSink;
   /**
+   * Which worker script this client drives. Defaults to the geometry worker.
+   *
+   * WHAT THIS IS FOR, and what it deliberately is not. The end-to-end harness
+   * needs to exercise the real application against a document that no production
+   * codec can produce — STL describes one part, and OBJ and 3MF do not exist
+   * yet. The alternatives were both worse: a synthetic-document operation in the
+   * PRODUCTION protocol would be a permanent backdoor into authoritative
+   * geometry, and reimplementing the workspace in a test page would prove
+   * nothing about the code that ships.
+   *
+   * This chooses a SCRIPT, not a document. It cannot inject geometry, it is
+   * reachable only from code already running in the page, there is no query
+   * parameter, global or user-visible control that reaches it, and the
+   * production entry point does not pass it — a boundary test asserts that.
+   */
+  readonly createWorker?: () => Worker;
+  /**
    * Called when the worker dies, taking every resident model with it.
    *
    * The application must treat this as total loss of authoritative geometry:
@@ -81,10 +98,12 @@ export class GeometryClient {
     nextSessionId += 1;
     this.onWorkerLost = options.onWorkerLost;
 
-    this.worker = new Worker(new URL('../workers/geometry.worker.ts', import.meta.url), {
-      type: 'module',
-      name: 'cadfixer-geometry',
-    });
+    this.worker =
+      options.createWorker?.() ??
+      new Worker(new URL('../workers/geometry.worker.ts', import.meta.url), {
+        type: 'module',
+        name: 'cadfixer-geometry',
+      });
 
     this.coordinator = new GeometryCoordinator(createWorkerEndpoint(this.worker), {
       onDiagnostic: options.onDiagnostic,

@@ -237,6 +237,128 @@ Memoising per distinct mesh took it to 4.2 ms.
 
 Run with `npm run bench:document`. Not part of CI.
 
+---
+
+# R1 — browser evidence for the multi-part paths (2026-09-04)
+
+Status: **Closed.** Stage 4A-2A shipped with three acceptance cases and one
+responsiveness requirement proven only at unit level, because no production
+codec can produce a document with more than one part: STL describes one thing,
+and OBJ and 3MF do not exist yet. DF07 (multi-part rendering), DF08
+(transformed placement), DF10 (shared GPU geometry disposal) and §44 (multi-part
+responsiveness) are now measured in Chromium.
+
+## How a synthetic document reaches production code
+
+```
+Playwright  ──►  e2e-harness/index.html          (separate Vite root)
+                      │
+                      ├─ real App, real store, real providers
+                      └─ HarnessBar ──► real useModelImport
+                                             │
+                                        real import service
+                                             │
+                                        harness.worker.ts
+                                        ( = production worker with ONE
+                                          handler swapped: model/import )
+                                             │
+                                        commitImportedDocument  ◄── production
+```
+
+Everything under test is production code. The harness supplies a document and
+nothing else: the document gate, the session budget, the render snapshot, the
+part descriptors and the resident commit all run through
+`commitImportedDocument`, which the STL importer calls too. That function was
+extracted from `modelImportHandler` for exactly this reason — a second
+implementation of "how a document becomes authoritative" would make the harness
+evidence about the harness.
+
+**The payload is a fixture identifier**, the ASCII text `two-independent-parts`.
+Not geometry, not a serialisation format: there is no encoder, no schema and no
+reader for anything else, and the production importer refuses the same bytes as
+a malformed STL. No `.testmesh`, no JSON import, no query-string document
+loader, and no user-facing mechanism of any kind.
+
+## Why the harness cannot ship
+
+| Guarantee                        | How it is enforced                                                                                                                               |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Separate build                   | `vite.harness.config.ts` inverts the root to `e2e-harness/` and emits to `dist-e2e-harness/`. `npm run build` has one input and cannot reach it. |
+| No import edge                   | A boundary test fails if any file under `apps/web/src` so much as mentions `e2e-harness`.                                                        |
+| One application entry            | A boundary test asserts the application's Vite config declares no extra input and no `rollupOptions`.                                            |
+| No injected worker in production | A boundary test asserts `src/main.tsx` never passes `createWorker`, and that only the two worker-factory declarations mention it.                |
+| No injection route               | A boundary test bans `__CADFIXER`-style globals, `window.cadfixer`, and `searchParams` document/fixture switches from application source.        |
+| Nothing in the output            | The built application contains no harness identifier in any `.js`, `.html` or `.css`.                                                            |
+
+`GeometryClientOptions.createWorker` is the one production seam this needed. It
+chooses a SCRIPT, not a document; it cannot inject geometry; and the same seam
+already existed for the diagnostic worker (`SelfIntersectionService`), which is
+why the boundary test's allowed list has two entries rather than one.
+
+## Two defects the browser found that unit tests could not
+
+**Selecting a part re-uploaded the whole document to the GPU.** `ViewportPanel`
+passed `activePartId` into `setModel`, so a click disposed and rebuilt every
+part's geometry — measured at four uploads for a two-part document where two
+were correct, and it would have been two thousand for a thousand placements.
+Selection now goes through `setActivePart`, which moves the overlay frame and
+touches no geometry at all. Nothing at unit level could have seen this: the
+placement arithmetic and the reference counting were both correct, and the
+defect was entirely in which of them the application called.
+
+**A part's world placement was unobservable.** The viewport now publishes each
+part's resolved `matrixWorld` translation on the canvas dataset, beside the
+`modelObjects` count that already existed for leak tests, along with the
+workspace model revision it has drawn and the shared-geometry lifecycle. A
+screenshot cannot distinguish a part drawn in the wrong place from one drawn
+behind another, and cannot distinguish a transposed matrix convention at all.
+
+## What the browser measured
+
+Chromium, single worker, on the harness build.
+
+| Placements | Load (ms) | GPU geometries | Objects |
+| ---------- | --------- | -------------- | ------- |
+| 1          | 240       | 1              | 1       |
+| 10         | 141       | 1              | 10      |
+| 100        | 177       | 1              | 100     |
+| 1,000      | 553       | **1**          | 1,000   |
+
+One upload for a thousand placements, in a real GPU context — the browser-side
+counterpart to the Node benchmark's 1.0 MiB versus 952.5 MiB.
+
+| Measurement                                           | Value  |
+| ----------------------------------------------------- | ------ |
+| Longest main-thread gap, idle                         | 20 ms  |
+| Longest gap loading 2 placements                      | 18 ms  |
+| Longest gap loading 1,000 placements                  | 242 ms |
+| Active-part switch at 1,000 placements                | 444 ms |
+| Interacting with the UI during a 1,000-placement load | 616 ms |
+| Topology on the active part                           | 2 ms   |
+| Self-intersection on the active part                  | 108 ms |
+
+The responsiveness assertion is a RATIO against the same geometry at two
+placements, not an absolute ceiling. Building a thousand scene objects and a
+thousand list rows is proportional work that is not a defect; duplicating
+geometry per part is, and it would show up as hundreds of times the small
+document's cost rather than a dozen.
+
+**Known cost, not yet a product constraint.** The part selector renders one row
+per part with no bound, which is most of the 444 ms switch and much of the
+242 ms gap at a thousand placements — the same test proves zero geometry work
+happens on a switch. No production import can produce such a document today;
+this should be revisited when OBJ and 3MF import land, alongside whatever the
+selector needs to become for real assemblies.
+
+## Repair, in a real browser, on a multi-part document
+
+The production repair workflow was driven by clicking its own controls:
+repairing part A leaves part B byte- and reference-identical (proven by a
+worker-side digest of the authoritative buffers, so no canonical array is
+transferred to the page to check it), Apply consumes exactly one document
+revision, Undo produces a new higher revision and restores A alone, and
+switching parts mid-preview WITHDRAWS Apply rather than repointing it.
+
 ## What this does NOT add
 
 No OBJ parser, no 3MF parser, no writers for either, no ZIP or XML path, no

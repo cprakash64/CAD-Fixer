@@ -45,6 +45,9 @@ export default tseslint.config(
   {
     ignores: [
       '**/dist/**',
+      // The end-to-end harness's own build output. Its SOURCE, under
+      // apps/web/e2e-harness/, IS linted; only the emitted bundle is not.
+      '**/dist-e2e-harness/**',
       '**/node_modules/**',
       'playwright-report/**',
       'test-results/**',

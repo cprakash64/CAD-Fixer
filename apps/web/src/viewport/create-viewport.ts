@@ -87,13 +87,6 @@ export interface ViewportPart {
 export interface ViewportModel {
   /** Ordered as the document orders its parts. Never empty for a loaded model. */
   readonly parts: readonly ViewportPart[];
-  /**
-   * The part that diagnostics, previews and change overlays address.
-   *
-   * Those three all describe ONE mesh, so they are drawn in that part's frame.
-   * `undefined` leaves them unplaceable and therefore undrawn.
-   */
-  readonly activePartId: string | undefined;
   /** Bounding box centre of the whole document, in world coordinates. */
   readonly center: readonly [number, number, number];
   /** Radius of the enclosing sphere about `center`, in world coordinates. */
@@ -158,6 +151,21 @@ export interface ViewportChangeData {
 export interface ViewportHandle {
   /** Replaces the displayed model, disposing whatever was there. */
   setModel(model: ViewportModel | undefined): void;
+  /**
+   * Points the overlay, preview and change-overlay frame at a different part.
+   *
+   * DELIBERATELY NOT `setModel`. Selecting a part changes which mesh the
+   * workflows address; it changes nothing about what is on screen or what the
+   * GPU holds. Routing it through `setModel` disposed and re-uploaded every
+   * part's geometry on a click — measured at four uploads for a two-part
+   * document where two were correct, and it would have been two thousand for a
+   * thousand-placement document.
+   *
+   * The parts themselves are untouched: all of them stay drawn, because a
+   * selector that hid the rest of the model would make a multi-part document
+   * unusable.
+   */
+  setActivePart(partId: string | undefined): void;
   /** Replaces the diagnostic overlays. `undefined` clears them. */
   setOverlays(data: ViewportOverlayData | undefined): void;
   /**
@@ -181,6 +189,10 @@ export interface ViewportHandle {
   readonly previewObjectCount: number;
   /** Repair change overlay objects currently in the scene. For leak tests. */
   readonly changeOverlayObjectCount: number;
+  /** Distinct GPU geometries currently uploaded. For sharing and leak tests. */
+  readonly sharedGeometryCount: number;
+  /** Cumulative uploads and disposals. For double-dispose and leak tests. */
+  readonly geometryLifecycle: { readonly created: number; readonly disposed: number };
   dispose(): void;
 }
 
@@ -317,14 +329,23 @@ export function createViewport(
   });
 
   let currentModel: ViewportModel | undefined;
+  /**
+   * Held beside the model rather than inside it, because it changes far more
+   * often than the model does and on a completely different cadence.
+   */
+  let activePartId: string | undefined;
   let previewMesh: Mesh<BufferGeometry, MeshStandardMaterial> | undefined;
   let currentPreview: ViewportPreview | undefined;
   let disposed = false;
 
   /** The mesh the preview replaces, or `undefined` when no part is active. */
   const activePartMesh = (): Mesh<BufferGeometry, MeshStandardMaterial> | undefined => {
-    const activeId = currentModel?.activePartId;
-    return activeId === undefined ? undefined : partMeshes.get(activeId);
+    return activePartId === undefined ? undefined : partMeshes.get(activePartId);
+  };
+
+  /** The render buffer of the part overlays and change markers index. */
+  const activePartPositions = (): Float32Array | undefined => {
+    return currentModel?.parts.find((part) => part.partId === activePartId)?.positions;
   };
 
   /**
@@ -346,9 +367,53 @@ export function createViewport(
     // anything was added, and this number exists precisely to make GPU-resource
     // leaks observable.
     canvas.dataset.modelObjects = String(partMeshes.size);
+    /*
+     * SHARED GPU GEOMETRY, published for the same reason `modelObjects` is.
+     * `sharedGeometries` is what proves a thousand placements uploaded ONE
+     * buffer; the cumulative pair is what proves the reference count released it
+     * exactly once rather than never or twice. Reading React state would prove
+     * only that a number was stored.
+     */
+    /*
+     * WHICH MODEL IS ON SCREEN RIGHT NOW.
+     *
+     * The workspace's monotonic model revision, echoed by the layer that
+     * actually drew it. Without it there is no way to tell "the new document is
+     * rendered" from "the old document is still rendered and happens to have the
+     * same part count" — and a test that cannot tell those apart will
+     * occasionally measure the wrong scene.
+     */
+    canvas.dataset.modelRevision = String(currentModel?.revision ?? 0);
+    canvas.dataset.sharedGeometries = String(sharedGeometry.size);
+    canvas.dataset.geometriesCreated = String(sharedGeometry.lifecycle.created);
+    canvas.dataset.geometriesDisposed = String(sharedGeometry.lifecycle.disposed);
+    canvas.dataset.partTransforms = describePartPlacements();
     canvas.dataset.previewObjects = String(previewMesh === undefined ? 0 : 1);
     canvas.dataset.overlayObjects = String(overlays.objectCount);
     canvas.dataset.changeOverlayObjects = String(changeOverlays.objectCount);
+  };
+
+  /**
+   * Each part's WORLD placement, as the renderer actually resolved it.
+   *
+   * Published so a browser test can read the matrix Three.js is drawing with
+   * rather than inferring placement from pixels. It reads `matrixWorld`, which
+   * composes the display-centring offset with the part's own transform — so it
+   * catches a transposed convention, a placement applied to the wrong object,
+   * and a transform silently dropped, none of which a screenshot distinguishes
+   * reliably.
+   *
+   * Bounded by part count and made of numbers, never coordinates.
+   */
+  const describePartPlacements = (): string => {
+    const entries: string[] = [];
+    for (const [partId, mesh] of partMeshes) {
+      mesh.updateWorldMatrix(true, false);
+      const t = mesh.matrixWorld.elements;
+      // Column-major storage: the translation is elements 12, 13, 14.
+      entries.push(`${partId}:${t[12].toFixed(4)},${t[13].toFixed(4)},${t[14].toFixed(4)}`);
+    }
+    return entries.join('|');
   };
 
   const render = (): void => {
@@ -475,11 +540,14 @@ export function createViewport(
       partMeshes.set(part.partId, mesh);
     }
 
-    // The active part's frame, for diagnostics, previews and change overlays.
-    const active = model.parts.find((part) => part.partId === model.activePartId);
-    activePartGroup.matrix.copy(
-      active === undefined ? new Matrix4() : partMatrix(active.transform),
-    );
+    /*
+     * NO ACTIVE PART YET. Installing a model says nothing about which part the
+     * workflows target — `setActivePart` does, and the application calls it
+     * immediately afterwards. Keeping selection out of `setModel` is what stops
+     * a click from disposing and re-uploading every part's geometry.
+     */
+    activePartId = undefined;
+    placeActivePartGroup();
 
     // DISPLAY-ONLY centring. The offset lives on the object's transform; the
     // vertex data is untouched.
@@ -491,6 +559,36 @@ export function createViewport(
     canvas.setAttribute('aria-label', 'Loaded 3D model. Drag to orbit, scroll to zoom.');
 
     fitView();
+  };
+
+  /** Moves the overlay/preview frame onto the active part. Touches no geometry. */
+  const placeActivePartGroup = (): void => {
+    const active = currentModel?.parts.find((part) => part.partId === activePartId);
+    activePartGroup.matrix.copy(
+      active === undefined ? new Matrix4() : partMatrix(active.transform),
+    );
+  };
+
+  const setActivePart = (partId: string | undefined): void => {
+    if (activePartId === partId) return;
+    activePartId = partId;
+
+    /*
+     * Overlays, the preview and the change markers all describe the PREVIOUS
+     * part. Clearing them here rather than waiting for the store's next push
+     * means there is no frame in which one part's geometry wears another part's
+     * defect markers — the same reason `setModel` clears them.
+     */
+    disposePreviewMesh();
+    overlays.setSamples(undefined, undefined);
+    changeOverlays.setSamples(undefined);
+
+    // A preview may have hidden the previously active part. Every part is drawn
+    // once no candidate is on screen.
+    for (const mesh of partMeshes.values()) mesh.visible = true;
+
+    placeActivePartGroup();
+    render();
   };
 
   const handleContextLost = (event: Event): void => {
@@ -529,9 +627,7 @@ export function createViewport(
      * to the mesh that was analysed, so resolving them against another part's
      * buffer would place markers at unrelated coordinates.
      */
-    const activePositions = currentModel.parts.find(
-      (part) => part.partId === currentModel?.activePartId,
-    )?.positions;
+    const activePositions = activePartPositions();
     if (activePositions === undefined) {
       overlays.setSamples(undefined, undefined);
       render();
@@ -616,9 +712,7 @@ export function createViewport(
       return;
     }
 
-    const activePositions = currentModel.parts.find(
-      (part) => part.partId === currentModel?.activePartId,
-    )?.positions;
+    const activePositions = activePartPositions();
     if (activePositions === undefined) {
       changeOverlays.setSamples(undefined);
       render();
@@ -642,6 +736,7 @@ export function createViewport(
 
   return {
     setModel,
+    setActivePart,
     setOverlays,
     setPreview,
     setChangeOverlays,
@@ -657,6 +752,12 @@ export function createViewport(
     },
     get changeOverlayObjectCount(): number {
       return changeOverlays.objectCount;
+    },
+    get sharedGeometryCount(): number {
+      return sharedGeometry.size;
+    },
+    get geometryLifecycle(): { readonly created: number; readonly disposed: number } {
+      return sharedGeometry.lifecycle;
     },
     dispose(): void {
       disposed = true;

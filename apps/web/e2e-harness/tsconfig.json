@@ -1,0 +1,11 @@
+{
+  "//": "The end-to-end harness page. Same DOM/JSX settings as the application project, because it renders the real App; kept separate so the application project's include list stays exactly the shipped source. The harness worker has its own project under worker/.",
+  "extends": "../../../tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "jsx": "react-jsx",
+    "types": ["vite/client"]
+  },
+  "include": ["**/*.ts", "**/*.tsx"],
+  "exclude": ["worker/**"]
+}

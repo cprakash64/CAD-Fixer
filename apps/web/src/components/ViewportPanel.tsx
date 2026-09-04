@@ -100,12 +100,27 @@ export function ViewportPanel(): ReactNode {
           radius: descriptor?.bounds?.radius ?? 1,
         };
       }),
-      activePartId,
       center: model.bounds?.center ?? [0, 0, 0],
       radius: model.bounds?.radius ?? 1,
       revision: model.revision,
     });
-  }, [model, activePartId]);
+  }, [model]);
+
+  /**
+   * Points the overlay, preview and change-overlay frame at the active part.
+   *
+   * SEPARATE FROM THE MODEL EFFECT, and that separation is the whole point. A
+   * selection change is not a model change: routing it through `setModel`
+   * disposed and re-uploaded every part's GPU geometry on a click — four
+   * uploads for a two-part document where two were correct, and two thousand
+   * for a thousand-placement one.
+   *
+   * `model` is a dependency because a new document resets the viewport's
+   * selection to none, and this is what installs the new one.
+   */
+  useEffect(() => {
+    viewportRef.current?.setActivePart(activePartId);
+  }, [activePartId, model]);
 
   /**
    * Pushes diagnostic overlays for the model that is actually displayed.

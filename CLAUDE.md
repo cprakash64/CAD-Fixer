@@ -148,6 +148,7 @@ npm run typecheck    # TypeScript, all projects
 npm test             # Vitest unit and component tests
 npm run test:e2e     # Playwright end-to-end (needs `npx playwright install chromium`)
 npm run test:e2e:timing # Timing/responsiveness proofs, SERIAL (see below)
+npm run test:e2e:harness # Multi-part document proofs in Chromium, SERIAL (see below)
 npm run verify       # format:check + lint + typecheck + test + build
 npm run bench:stl      # STL parser benchmark (NOT in CI)
 npm run bench:topology # small topology benchmark (NOT in CI)
@@ -168,6 +169,22 @@ see the same machine load: under four parallel workers the Stage 3B cancellation
 ratio was measured anywhere from 0.640 to 1.17, and a ratio above 1.0 cannot be
 a statement about cancellation at all. Run it whenever you touch cancellation,
 the worker lifecycle, or anything that could move work onto the main thread.
+
+**`npm run test:e2e:harness` is a THIRD suite, and it serves a different page.**
+The shipped application can only import STL, so it can only ever hold one part —
+which is why DF07, DF08, DF10 and multi-part responsiveness had no browser
+evidence when Stage 4A-2A first landed. `playwright.harness.config.ts` serves
+the end-to-end harness build instead: the same application, store, worker
+handlers and viewport, with a synthetic multi-part document put in front of
+them. Run it whenever you touch the document model, the viewport, part
+selection, or anything a multi-part document reaches.
+
+THE HARNESS MUST NEVER SHIP, and five boundary tests enforce that: no import
+edge from `apps/web/src`, one application build input, no `createWorker` in the
+production entry, no injection global or query parameter, and no harness
+identifier in the built output. If a change would be easiest to make by adding a
+route into authoritative geometry from the application, that change is wrong —
+see `docs/adr/0014-multi-part-geometry-document-foundation.md#r1`.
 
 These proofs are also sensitive to WHOLE-MACHINE load, which no test
 configuration can remove. On a busy host the same suite has taken 42 minutes
@@ -218,6 +235,11 @@ believing it.
 - **`assertGeometryDocument` is the second gate**, mirroring
   `assertMeshStructure`. Structural validity is NOT mesh health: a part with
   degenerate triangles is a valid document describing a defective model.
+- **Selecting a part is NOT a model change.** `setActivePart` moves the overlay
+  and preview frame; `setModel` rebuilds the scene. Routing selection through
+  `setModel` disposed and re-uploaded every part's GPU geometry on a click — four
+  uploads for a two-part document where two were correct, two thousand for a
+  thousand placements. The harness suite asserts zero geometry work on a switch.
 - **Local bounds belong to the MESH, not the part.** Compute them once per
   DISTINCT mesh and apply the placement to the box afterwards. Computing per part
   walked one shared buffer a thousand times — 356 ms at 1,000 placements.
