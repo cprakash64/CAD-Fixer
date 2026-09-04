@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AppErrorCode, createOperationId, isAppError, operationCancelled } from '@cadfixer/shared';
 import type {
-  ModelHandle,
-  ModelId,
+  DocumentHandle,
+  DocumentId,
   OperationHandle,
   StlExportResult,
 } from '@cadfixer/geometry-runtime';
@@ -23,7 +23,8 @@ import { exportStlFile, type ExportCapableClient, type ExportProgress } from './
  * point of the resident runtime: nothing larger than this handle crosses the
  * worker boundary.
  */
-const HANDLE: ModelHandle = { modelId: 'model-1' as ModelId, revision: 1 };
+const HANDLE: DocumentHandle = { documentId: 'model-1' as DocumentId, revision: 1 };
+const PART = 'part-1';
 
 /** A client whose operation the test resolves, rejects, or cancels by hand. */
 function controllableClient(): {
@@ -39,7 +40,7 @@ function controllableClient(): {
   let cancels = 0;
 
   const client: ExportCapableClient = {
-    exportModel(_handle, _encoding, onProgress): OperationHandle<StlExportResult> {
+    exportModel(_handle, _partId, _encoding, onProgress): OperationHandle<StlExportResult> {
       emit = (fraction): void => {
         onProgress({ fraction });
       };
@@ -83,6 +84,7 @@ function startExport(
   onProgress?: (progress: ExportProgress) => void,
 ): ReturnType<typeof exportStlFile> {
   return exportStlFile({
+    partId: PART,
     handle: HANDLE,
     sourceFileName: 'bracket.stl',
     encoding: 'binary',
@@ -211,6 +213,7 @@ describe('export cancellation', () => {
     };
 
     await exportStlFile({
+      partId: PART,
       handle: HANDLE,
       sourceFileName: 'bracket.stl',
       encoding: 'binary',
@@ -267,6 +270,7 @@ describe('successful export', () => {
     vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined);
     const harness = controllableClient();
     const session = exportStlFile({
+      partId: PART,
       handle: HANDLE,
       sourceFileName: 'bracket.stl',
       encoding: 'ascii',

@@ -76,6 +76,7 @@ export function useModelImport(): ModelImportControls {
 
           const installed = store.commitImport(token, {
             handle: result.handle,
+            parts: result.parts,
             render: result.render,
             bounds: result.bounds,
             triangleCount: result.triangleCount,
@@ -98,14 +99,14 @@ export function useModelImport(): ModelImportControls {
           // looking at. Its geometry is released instead, so a discarded import
           // does not leave a model resident in the worker forever.
           if (!installed) {
-            client.releaseModel(result.handle.modelId).promise.catch(() => undefined);
+            client.releaseModel(result.handle.documentId).promise.catch(() => undefined);
             return;
           }
 
           // Commit succeeded, so the old model is genuinely superseded and its
           // worker-side memory can go.
           if (replaced !== undefined) {
-            client.releaseModel(replaced.modelId).promise.catch(() => undefined);
+            client.releaseModel(replaced.documentId).promise.catch(() => undefined);
           }
 
           sessionRef.current = undefined;

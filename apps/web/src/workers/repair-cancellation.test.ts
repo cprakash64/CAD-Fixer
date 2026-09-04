@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { createIndexArray, createPositionArray, IDENTITY_MATRIX4 } from '@cadfixer/mesh-core';
+import {
+  createIndexArray,
+  createPositionArray,
+  partId,
+  singlePartDocument,
+} from '@cadfixer/mesh-core';
 import type { CanonicalMesh } from '@cadfixer/mesh-core';
-import type { ModelHandle, OperationContext } from '@cadfixer/geometry-runtime';
+import type { DocumentHandle, OperationContext } from '@cadfixer/geometry-runtime';
 import {
   AppErrorCode,
   isAppError,
@@ -11,7 +16,7 @@ import {
   type CancellationToken,
 } from '@cadfixer/shared';
 import { repairCreateCandidateHandler, repairPlanHandler } from './repair-handlers';
-import { residentModels } from './stl-handlers';
+import { residentDocuments } from './stl-handlers';
 
 /**
  * THE WORKER'S TWO CANCELLATION CONTRACTS.
@@ -59,12 +64,14 @@ function duplicateHeavyMesh(faces: number): CanonicalMesh {
     positions[base + 8] = 0;
   }
   for (let i = 0; i < indices.length; i += 1) indices[i] = i;
-  return { positions, indices, metadata: { transform: IDENTITY_MATRIX4 } };
+  return { positions, indices, metadata: {} };
 }
 
-function residentHandle(faces: number): ModelHandle {
-  return residentModels.commit(duplicateHeavyMesh(faces));
+function residentHandle(faces: number): DocumentHandle {
+  return residentDocuments.commit(singlePartDocument(duplicateHeavyMesh(faces)));
 }
+
+const PART = partId('part-1');
 
 describe('O9 REGRESSION: a cancellation is never reported as an internal error', () => {
   /*
@@ -100,7 +107,7 @@ describe('O9 REGRESSION: a cancellation is never reported as an internal error',
   it('reports OPERATION_CANCELLED from repair/create-candidate, not INTERNAL_ERROR', async () => {
     const handle = residentHandle(4_096);
     const cause = await repairCreateCandidateHandler(
-      { handle, requested: [], planHash: 'unused' },
+      { handle, partId: PART, requested: [], planHash: 'unused' },
       context(cancelledFromTheStart),
     ).catch((error: unknown) => error);
 
@@ -113,7 +120,7 @@ describe('O9 REGRESSION: a cancellation is never reported as an internal error',
   it('reports OPERATION_CANCELLED when the flip lands inside preparation', async () => {
     const handle = residentHandle(65_536 * 2);
     const cause = await repairCreateCandidateHandler(
-      { handle, requested: [], planHash: 'unused' },
+      { handle, partId: PART, requested: [], planHash: 'unused' },
       context(flipAfter(6)),
     ).catch((error: unknown) => error);
 
@@ -125,7 +132,7 @@ describe('O9 REGRESSION: a cancellation is never reported as an internal error',
   it('reports OPERATION_CANCELLED from repair/plan too', async () => {
     const handle = residentHandle(4_096);
     const cause = await repairPlanHandler(
-      { handle, requested: [] },
+      { handle, partId: PART, requested: [] },
       context(cancelledFromTheStart),
     ).catch((error: unknown) => error);
 
@@ -146,7 +153,7 @@ describe('FAIL CLOSED: a repair that cannot be interrupted is refused', () => {
   it('refuses repair/create-candidate without a shared cancellation signal', async () => {
     const handle = residentHandle(256);
     const cause = await repairCreateCandidateHandler(
-      { handle, requested: [], planHash: 'unused' },
+      { handle, partId: PART, requested: [], planHash: 'unused' },
       context(uncancellable, false),
     ).catch((error: unknown) => error);
 
@@ -159,7 +166,7 @@ describe('FAIL CLOSED: a repair that cannot be interrupted is refused', () => {
   it('refuses repair/plan without a shared cancellation signal', async () => {
     const handle = residentHandle(256);
     const cause = await repairPlanHandler(
-      { handle, requested: [] },
+      { handle, partId: PART, requested: [] },
       context(uncancellable, false),
     ).catch((error: unknown) => error);
 
@@ -172,7 +179,7 @@ describe('FAIL CLOSED: a repair that cannot be interrupted is refused', () => {
     const source = new SharedCancellationSource();
     const handle = residentHandle(256);
     const cause = await repairPlanHandler(
-      { handle, requested: [] },
+      { handle, partId: PART, requested: [] },
       context(source.token, true),
     ).catch((error: unknown) => error);
 

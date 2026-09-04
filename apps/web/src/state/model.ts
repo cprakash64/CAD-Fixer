@@ -1,9 +1,10 @@
 import type { MeshBounds } from '@cadfixer/mesh-core';
 import type { Diagnostic } from '@cadfixer/shared';
 import type {
+  DocumentRenderSnapshot,
   MeshValidationSummary,
-  ModelHandle,
-  RenderSnapshot,
+  DocumentHandle,
+  PartDescriptor,
 } from '@cadfixer/geometry-runtime';
 
 /**
@@ -15,17 +16,26 @@ import type {
  * diagnostics, and later repair and booleans — pay to send it back across the
  * boundary, which is exactly what Stage 1 did.
  *
- * What remains is a handle, a render snapshot the GPU needs anyway, and plain
- * numbers computed in the worker. Nothing here requires the main thread to walk
- * a mesh.
+ * What remains is a handle, render snapshots the GPU needs anyway, part
+ * descriptors that are only strings and numbers, and plain counts computed in
+ * the worker. Nothing here requires the main thread to walk a mesh.
  */
 export interface LoadedModel {
-  /** Names the authoritative geometry, which lives in the worker. */
-  readonly handle: ModelHandle;
-  /** Display-only buffers. Derived data, not the user's geometry. */
-  readonly render: RenderSnapshot;
+  /** Names the authoritative DOCUMENT, which lives in the worker. */
+  readonly handle: DocumentHandle;
+  /**
+   * Scalar metadata for each part, in document order.
+   *
+   * Identifiers, names, placements and counts — never geometry. A hundred-part
+   * document costs the page a few kilobytes here.
+   */
+  readonly parts: readonly PartDescriptor[];
+  /** Display-only buffers, one entry per part. Derived data, not the user's geometry. */
+  readonly render: DocumentRenderSnapshot;
   readonly source: ModelSource;
+  /** World-space extent of every part after its placement. */
   readonly bounds: MeshBounds | undefined;
+  /** Summed across every part. */
   readonly triangleCount: number;
   readonly vertexCount: number;
   readonly validation: MeshValidationSummary;

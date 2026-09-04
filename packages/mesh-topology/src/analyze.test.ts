@@ -22,8 +22,9 @@ import * as fixtures from './fixtures';
 
 function analyse(mesh: CanonicalMesh): TopologyResult {
   return analyseTopology(mesh, {
-    modelId: 'model-test',
-    modelRevision: 1,
+    documentId: 'model-test',
+    partId: 'part-1',
+    documentRevision: 1,
     cancellation: uncancellable,
   });
 }
@@ -477,13 +478,14 @@ describe('W — combinatorially closed but self-intersecting', () => {
 describe('report contract', () => {
   it('carries the model identity and the identity mode it used', () => {
     const result = analyseTopology(fixtures.tetrahedron(), {
-      modelId: 'model-42',
-      modelRevision: 7,
+      documentId: 'model-42',
+      partId: 'part-1',
+      documentRevision: 7,
       cancellation: uncancellable,
     });
 
-    expect(result.report.modelId).toBe('model-42');
-    expect(result.report.modelRevision).toBe(7);
+    expect(result.report.documentId).toBe('model-42');
+    expect(result.report.documentRevision).toBe(7);
     expect(result.report.identityMode).toBe('exact-stored-coordinate');
     expect(result.report.schemaVersion).toBe(1);
   });

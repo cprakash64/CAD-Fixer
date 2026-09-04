@@ -1,7 +1,7 @@
 import { performance } from 'node:perf_hooks';
 import { it } from 'vitest';
 import { uncancellable } from '@cadfixer/shared';
-import { createIndexArray, createPositionArray, IDENTITY_MATRIX4 } from '@cadfixer/mesh-core';
+import { createIndexArray, createPositionArray } from '@cadfixer/mesh-core';
 import type { CanonicalMesh } from '@cadfixer/mesh-core';
 import { analyseTopology, estimateTopologyWorkspaceBytes } from '@cadfixer/mesh-topology';
 
@@ -77,7 +77,7 @@ function gridMesh(targetBytes: number): CanonicalMesh {
   return {
     positions,
     indices,
-    metadata: { sourceFormat: 'stl', transform: IDENTITY_MATRIX4 },
+    metadata: { sourceFormat: 'stl' },
   };
 }
 
@@ -113,8 +113,9 @@ it('measures topology analysis across small representative sizes', () => {
 
     const startedAt = performance.now();
     const result = analyseTopology(mesh, {
-      modelId: 'bench',
-      modelRevision: 1,
+      documentId: 'bench',
+      partId: 'part-1',
+      documentRevision: 1,
       cancellation: uncancellable,
       onPhaseStart: (phase) => {
         const now = performance.now();

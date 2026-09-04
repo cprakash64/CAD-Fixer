@@ -2,21 +2,22 @@ import {
   AmbientLight,
   AxesHelper,
   BufferAttribute,
-  BufferGeometry,
   Color,
   DirectionalLight,
   DoubleSide,
   GridHelper,
   Group,
   Mesh,
+  Matrix4,
   MeshStandardMaterial,
   PerspectiveCamera,
   Scene,
-  Sphere,
   Vector3,
   WebGLRenderer,
 } from 'three';
+import type { BufferGeometry } from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { buildPartGeometry, partMatrix, SharedPartGeometry } from './part-geometry';
 import {
   createOverlays,
   type OverlayHandle,
@@ -50,20 +51,52 @@ import {
  * burn battery to redraw identical pixels.
  */
 
-export interface ViewportModel {
+/**
+ * One part of the document, as the viewport draws it.
+ *
+ * THE PLACEMENT IS AN OBJECT TRANSFORM, NEVER BAKED INTO THE BUFFERS. Baking
+ * would give two placements of one component two different position arrays and
+ * destroy the sharing that makes a thousand-placement document affordable — and
+ * it would be a display concern rewriting geometry, which is the thing this
+ * module exists not to do.
+ */
+export interface ViewportPart {
+  readonly partId: string;
+  /** Row-major 3x4, twelve values. See `PartTransform`. */
+  readonly transform: readonly number[];
   /**
    * Render-snapshot positions, three vertices per triangle, drawn NON-INDEXED.
    *
    * These are display buffers owned by the main thread, not the authoritative
    * geometry — that stays in the worker. No index buffer is supplied because
    * STL soup indices are 0,1,2,3,… and a non-indexed draw assumes exactly that.
+   *
+   * Two parts may hold the SAME array. The viewport gives them one
+   * `BufferGeometry` and two object transforms rather than uploading the
+   * geometry twice.
    */
   readonly positions: Float32Array;
   /** Normals derived from geometry in the worker. Display data. */
   readonly normals: Float32Array;
-  /** Bounding box centre in model coordinates. */
+  /** Bounding box centre in PART-LOCAL coordinates. */
   readonly center: readonly [number, number, number];
-  /** Radius of the enclosing sphere about `center`. */
+  /** Radius of the enclosing sphere about `center`, in part-local coordinates. */
+  readonly radius: number;
+}
+
+export interface ViewportModel {
+  /** Ordered as the document orders its parts. Never empty for a loaded model. */
+  readonly parts: readonly ViewportPart[];
+  /**
+   * The part that diagnostics, previews and change overlays address.
+   *
+   * Those three all describe ONE mesh, so they are drawn in that part's frame.
+   * `undefined` leaves them unplaceable and therefore undrawn.
+   */
+  readonly activePartId: string | undefined;
+  /** Bounding box centre of the whole document, in world coordinates. */
+  readonly center: readonly [number, number, number];
+  /** Radius of the enclosing sphere about `center`, in world coordinates. */
   readonly radius: number;
   /** Changes when a different model is loaded. */
   readonly revision: number;
@@ -225,21 +258,74 @@ export function createViewport(
   // way — a sibling group with its own copy of the offset, or coordinates
   // adjusted at build time — would leave two places that have to agree, and they
   // would eventually not.
+  /**
+   * The frame diagnostics, previews and change overlays are drawn in.
+   *
+   * WHY A GROUP AND NOT THE MODEL GROUP. Those three all describe ONE part's
+   * mesh, and a part may be placed anywhere by its transform. Adding them to
+   * `modelGroup` drew them at the document origin, which for any part with a
+   * non-identity placement put the defect markers somewhere the defect is not.
+   * One group carrying the active part's matrix keeps all three in agreement by
+   * construction rather than by three call sites remembering to compose it.
+   */
+  const activePartGroup = new Group();
+  activePartGroup.matrixAutoUpdate = false;
+  modelGroup.add(activePartGroup);
+
   const overlays: OverlayHandle = createOverlays();
-  modelGroup.add(overlays.group);
+  activePartGroup.add(overlays.group);
 
   // Change overlays join the same group for the same reason: the display-only
   // centring offset must apply to the model, its diagnostics and a repair's
   // proposed changes identically, and one transform is the only way to guarantee
   // that without two places having to agree.
   const changeOverlays: ChangeOverlayHandle = createChangeOverlays();
-  modelGroup.add(changeOverlays.group);
+  activePartGroup.add(changeOverlays.group);
 
-  let currentMesh: Mesh<BufferGeometry, MeshStandardMaterial> | undefined;
+  /**
+   * One mesh per part, keyed by part id.
+   *
+   * A map rather than a single reference, because a document has one or many
+   * parts and the preview has to be able to hide exactly one of them.
+   */
+  const partMeshes = new Map<string, Mesh<BufferGeometry, MeshStandardMaterial>>();
+
+  /**
+   * GPU geometry, shared between parts that share a render buffer.
+   *
+   * See `part-geometry.ts` for why sharing is reference counted rather than
+   * simply cached.
+   */
+  const sharedGeometry = new SharedPartGeometry();
+
+  /**
+   * ONE MATERIAL FOR EVERY PART.
+   *
+   * Parts differ in placement and geometry, never in appearance, so a material
+   * per part would allocate and leak N shader programs to draw one look. It is
+   * created once with the viewport and disposed with it.
+   */
+  const surfaceMaterial = new MeshStandardMaterial({
+    color: MODEL_COLOR,
+    metalness: 0.05,
+    roughness: 0.75,
+    // Both faces are drawn. STL winding is frequently inconsistent, and
+    // rendering parts of a model invisible would be a worse answer than
+    // showing the user their whole file.
+    side: DoubleSide,
+    flatShading: false,
+  });
+
   let currentModel: ViewportModel | undefined;
   let previewMesh: Mesh<BufferGeometry, MeshStandardMaterial> | undefined;
   let currentPreview: ViewportPreview | undefined;
   let disposed = false;
+
+  /** The mesh the preview replaces, or `undefined` when no part is active. */
+  const activePartMesh = (): Mesh<BufferGeometry, MeshStandardMaterial> | undefined => {
+    const activeId = currentModel?.activePartId;
+    return activeId === undefined ? undefined : partMeshes.get(activeId);
+  };
 
   /**
    * Publishes what the renderer actually drew onto the canvas element.
@@ -259,7 +345,7 @@ export function createViewport(
     // on `children.length` would silently start counting those the moment
     // anything was added, and this number exists precisely to make GPU-resource
     // leaks observable.
-    canvas.dataset.modelObjects = String(currentMesh === undefined ? 0 : 1);
+    canvas.dataset.modelObjects = String(partMeshes.size);
     canvas.dataset.previewObjects = String(previewMesh === undefined ? 0 : 1);
     canvas.dataset.overlayObjects = String(overlays.objectCount);
     canvas.dataset.changeOverlayObjects = String(changeOverlays.objectCount);
@@ -285,14 +371,22 @@ export function createViewport(
     render();
   };
 
-  const disposeCurrentMesh = (): void => {
-    if (currentMesh === undefined) return;
-    modelGroup.remove(currentMesh);
-    // Both are owned by this module, so both are released here. Without this,
-    // loading twenty models in a session leaks twenty sets of GPU buffers.
-    currentMesh.geometry.dispose();
-    currentMesh.material.dispose();
-    currentMesh = undefined;
+  /**
+   * Removes every part mesh and releases its GPU buffers.
+   *
+   * Without this, loading twenty models in a session leaks twenty sets of GPU
+   * buffers. The material is NOT disposed here: it is shared by every part and
+   * every model, and belongs to the viewport's own lifetime.
+   */
+  const disposePartMeshes = (): void => {
+    for (const mesh of partMeshes.values()) {
+      modelGroup.remove(mesh);
+      const positions = mesh.geometry.getAttribute('position');
+      if (positions instanceof BufferAttribute && positions.array instanceof Float32Array) {
+        sharedGeometry.release(positions.array);
+      }
+    }
+    partMeshes.clear();
   };
 
   /**
@@ -304,57 +398,12 @@ export function createViewport(
    */
   const disposePreviewMesh = (): void => {
     if (previewMesh === undefined) return;
-    modelGroup.remove(previewMesh);
+    activePartGroup.remove(previewMesh);
+    // The geometry is the preview's own — a candidate never shares a buffer
+    // with a part — so it is disposed directly rather than released by count.
     previewMesh.geometry.dispose();
-    previewMesh.material.dispose();
     previewMesh = undefined;
     currentPreview = undefined;
-  };
-
-  /** Builds a surface mesh from a render snapshot's buffers. */
-  const buildSurface = (
-    positions: Float32Array,
-    normals: Float32Array,
-    center: readonly [number, number, number],
-    radius: number,
-  ): Mesh<BufferGeometry, MeshStandardMaterial> => {
-    const geometry = new BufferGeometry();
-    // The render snapshot's buffers are REFERENCED, not copied again: they were
-    // transferred here from the worker and belong to the main thread now.
-    // Three.js uploads them and does not write to them.
-    geometry.setAttribute('position', new BufferAttribute(positions, 3));
-    geometry.setAttribute('normal', new BufferAttribute(normals, 3));
-
-    // ASSIGNED, NOT COMPUTED — do not delete this.
-    //
-    // Three.js computes a bounding sphere lazily during frustum culling
-    // (Frustum.intersectsObject -> `if (geometry.boundingSphere === null)
-    // geometry.computeBoundingSphere()`). That makes two full passes over the
-    // position buffer ON THE UI THREAD, on the first frame after a model
-    // loads — 6.3 million vertices walked twice for a 100 MiB model, which is
-    // exactly the whole-mesh main-thread work this project forbids.
-    //
-    // The worker already measured this sphere, so it is handed over instead. The
-    // radius is in geometry-local coordinates and the centre is the mesh's own
-    // centre, because the display offset lives on `modelGroup.position`, not in
-    // the vertex data.
-    geometry.boundingSphere = new Sphere(
-      new Vector3(center[0], center[1], center[2]),
-      radius > 0 ? radius : 1,
-    );
-
-    const material = new MeshStandardMaterial({
-      color: MODEL_COLOR,
-      metalness: 0.05,
-      roughness: 0.75,
-      // Both faces are drawn. STL winding is frequently inconsistent, and
-      // rendering parts of a model invisible would be a worse answer than
-      // showing the user their whole file.
-      side: DoubleSide,
-      flatShading: false,
-    });
-
-    return new Mesh(geometry, material);
   };
 
   const fitView = (): void => {
@@ -386,7 +435,7 @@ export function createViewport(
   };
 
   const setModel = (model: ViewportModel | undefined): void => {
-    disposeCurrentMesh();
+    disposePartMeshes();
     // A preview describes a repair of the model being replaced. It goes with it:
     // there is no frame in which one model's geometry is drawn beside another
     // model's proposed repair.
@@ -405,12 +454,36 @@ export function createViewport(
       return;
     }
 
-    const mesh = buildSurface(model.positions, model.normals, model.center, model.radius);
+    /*
+     * ONE OBJECT PER PART, sharing geometry where the worker shared it.
+     *
+     * The placement goes on the object's matrix. Nothing here writes to a
+     * position buffer, so two placements of one component draw in two places
+     * from a single upload.
+     */
+    for (const part of model.parts) {
+      const geometry = sharedGeometry.acquire(
+        part.positions,
+        part.normals,
+        part.center,
+        part.radius,
+      );
+      const mesh = new Mesh(geometry, surfaceMaterial);
+      mesh.matrixAutoUpdate = false;
+      mesh.matrix.copy(partMatrix(part.transform));
+      modelGroup.add(mesh);
+      partMeshes.set(part.partId, mesh);
+    }
+
+    // The active part's frame, for diagnostics, previews and change overlays.
+    const active = model.parts.find((part) => part.partId === model.activePartId);
+    activePartGroup.matrix.copy(
+      active === undefined ? new Matrix4() : partMatrix(active.transform),
+    );
+
     // DISPLAY-ONLY centring. The offset lives on the object's transform; the
     // vertex data is untouched.
     modelGroup.position.set(-model.center[0], -model.center[1], -model.center[2]);
-    modelGroup.add(mesh);
-    currentMesh = mesh;
 
     // The reference grid is sized for a print bed and becomes meaningless
     // beside a model of arbitrary scale.
@@ -451,7 +524,21 @@ export function createViewport(
       return;
     }
 
-    overlays.setSamples(data.samples, currentModel.positions);
+    /*
+     * SAMPLES INDEX THE ACTIVE PART. Vertex ids in a topology report are local
+     * to the mesh that was analysed, so resolving them against another part's
+     * buffer would place markers at unrelated coordinates.
+     */
+    const activePositions = currentModel.parts.find(
+      (part) => part.partId === currentModel?.activePartId,
+    )?.positions;
+    if (activePositions === undefined) {
+      overlays.setSamples(undefined, undefined);
+      render();
+      return;
+    }
+
+    overlays.setSamples(data.samples, activePositions);
     overlays.setVisibility(data.visibility);
     render();
   };
@@ -470,15 +557,16 @@ export function createViewport(
    * put the wrong surface on screen, so it verifies rather than trusting.
    */
   const setPreview = (preview: ViewportPreview | undefined): void => {
+    const sourceMesh = activePartMesh();
     if (preview === undefined || currentModel === undefined) {
       disposePreviewMesh();
-      if (currentMesh !== undefined) currentMesh.visible = true;
+      if (sourceMesh !== undefined) sourceMesh.visible = true;
       render();
       return;
     }
-    if (preview.revision !== currentModel.revision) {
+    if (preview.revision !== currentModel.revision || sourceMesh === undefined) {
       disposePreviewMesh();
-      if (currentMesh !== undefined) currentMesh.visible = true;
+      if (sourceMesh !== undefined) sourceMesh.visible = true;
       render();
       return;
     }
@@ -488,15 +576,25 @@ export function createViewport(
     // GPU — that would make a view toggle as expensive as a load.
     if (currentPreview?.generation !== preview.generation) {
       disposePreviewMesh();
-      const mesh = buildSurface(preview.positions, preview.normals, preview.center, preview.radius);
-      modelGroup.add(mesh);
+      const geometry = buildPartGeometry(
+        preview.positions,
+        preview.normals,
+        preview.center,
+        preview.radius,
+      );
+      const mesh = new Mesh(geometry, surfaceMaterial);
+      // Drawn in the ACTIVE PART'S frame: a candidate replaces one part's mesh,
+      // so it stands exactly where that part stands.
+      activePartGroup.add(mesh);
       previewMesh = mesh;
     }
     currentPreview = preview;
 
     const showingAfter = preview.showing === 'after';
     if (previewMesh !== undefined) previewMesh.visible = showingAfter;
-    if (currentMesh !== undefined) currentMesh.visible = !showingAfter;
+    // Only the repaired part is swapped. Every other part stays drawn, because
+    // a repair of one part does not propose anything about the others.
+    sourceMesh.visible = !showingAfter;
     canvas.setAttribute(
       'aria-label',
       showingAfter
@@ -518,9 +616,21 @@ export function createViewport(
       return;
     }
 
+    const activePositions = currentModel.parts.find(
+      (part) => part.partId === currentModel?.activePartId,
+    )?.positions;
+    if (activePositions === undefined) {
+      changeOverlays.setSamples(undefined);
+      render();
+      return;
+    }
+
     changeOverlays.setSamples({
       samples: data.samples,
-      sourcePositions: currentModel.positions,
+      // SOURCE FACE INDICES INDEX THE ACTIVE PART, which is the mesh the repair
+      // was computed from. Indexing the document would be meaningless: face
+      // numbering restarts in every part.
+      sourcePositions: activePositions,
       // Sized from the model itself so a marker is readable at any scale. A
       // fixed length would be invisible on a 3 m part and would swamp a 0.1 mm
       // one.
@@ -537,7 +647,7 @@ export function createViewport(
     setChangeOverlays,
     fitView,
     get renderedObjectCount(): number {
-      return currentMesh === undefined ? 0 : 1;
+      return partMeshes.size;
     },
     get overlayObjectCount(): number {
       return overlays.objectCount;
@@ -554,8 +664,11 @@ export function createViewport(
       canvas.removeEventListener('webglcontextlost', handleContextLost);
       controls.removeEventListener('change', render);
       controls.dispose();
-      disposeCurrentMesh();
+      disposePartMeshes();
       disposePreviewMesh();
+      // Shared by every part and every model that was ever loaded, so it is
+      // released with the viewport rather than with any one mesh.
+      surfaceMaterial.dispose();
       overlays.dispose();
       changeOverlays.dispose();
       grid.geometry.dispose();

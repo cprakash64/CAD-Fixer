@@ -5,7 +5,7 @@ import {
   type SelfIntersectionLimits,
   type SelfIntersectionReport,
 } from '@cadfixer/mesh-self-intersection';
-import type { ModelHandle } from '@cadfixer/geometry-runtime';
+import type { DocumentHandle } from '@cadfixer/geometry-runtime';
 import { toAppError } from '@cadfixer/shared';
 import type { GeometryClient } from './geometry-client';
 import type { DiagnosticWorkerOutbound } from '../workers/self-intersection-protocol';
@@ -30,7 +30,15 @@ import type { DiagnosticWorkerOutbound } from '../workers/self-intersection-prot
  */
 
 export interface SelfIntersectionRunOptions {
-  readonly handle: ModelHandle;
+  readonly handle: DocumentHandle;
+  /**
+   * The part to check.
+   *
+   * Self-intersection is intra-part: it asks whether ONE part's own faces
+   * cross. Two independently valid parts that overlap in world space are not
+   * self-intersecting, and CAD Fixer does not check for that at all.
+   */
+  readonly partId: string;
   readonly limits?: SelfIntersectionLimits;
   /** Bounded scalar progress. Never geometry. */
   readonly onStarted?: (faceCount: number) => void;
@@ -180,6 +188,7 @@ export class SelfIntersectionService {
     void this.client
       .sendForDiagnostic({
         handle: options.handle,
+        partId: options.partId,
         operationId,
         port: channel.port1,
         limits,

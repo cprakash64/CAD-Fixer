@@ -6,9 +6,9 @@ import {
   uncancellable,
   type CancellationToken,
 } from '@cadfixer/shared';
-import { IDENTITY_MATRIX4, type CanonicalMesh } from '@cadfixer/mesh-core';
+import { partId, singlePartDocument, type CanonicalMesh } from '@cadfixer/mesh-core';
 import type { OperationContext } from '@cadfixer/geometry-runtime';
-import { modelExportHandler, modelImportHandler, residentModels } from './stl-handlers';
+import { modelExportHandler, modelImportHandler, residentDocuments } from './stl-handlers';
 
 /**
  * The worker handlers are thin, but they own two things nothing else does: the
@@ -57,6 +57,8 @@ async function rejection(run: () => Promise<unknown>): Promise<AppErrorCode | un
   }
 }
 
+const PART = partId('part-1');
+
 describe('import handler', () => {
   it('parses a valid STL and reports what the worker measured', async () => {
     const outcome = await modelImportHandler({ bytes: binaryStl(3) }, context());
@@ -67,7 +69,8 @@ describe('import handler', () => {
     expect(outcome.value.validation.valid).toBe(true);
     expect(outcome.value.bounds).toBeDefined();
     // Derived in the worker precisely so the main thread never walks the mesh.
-    expect(outcome.value.render.normals).toHaveLength(27);
+    expect(outcome.value.render.parts).toHaveLength(1);
+    expect(outcome.value.render.parts[0]?.normals).toHaveLength(27);
   });
 
   it('transfers the mesh buffers instead of cloning them', async () => {
@@ -75,9 +78,10 @@ describe('import handler', () => {
 
     // Only the RENDER SNAPSHOT is transferred. The authoritative mesh stays
     // resident in the worker, which is the whole point of the resident runtime.
-    expect(outcome.transfer).toContain(outcome.value.render.positions.buffer);
-    expect(outcome.transfer).toContain(outcome.value.render.normals.buffer);
-    expect(residentModels.has(outcome.value.handle)).toBe(true);
+    const only = outcome.value.render.parts[0];
+    expect(outcome.transfer).toContain(only?.positions.buffer);
+    expect(outcome.transfer).toContain(only?.normals.buffer);
+    expect(residentDocuments.has(outcome.value.handle)).toBe(true);
   });
 
   it('rejects a payload that is not a transferable buffer', async () => {
@@ -146,14 +150,18 @@ describe('the structural validation gate', () => {
       // Indices reference vertices that do not exist.
       positions: new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]),
       indices: new Uint32Array([0, 1, 77]),
-      metadata: { sourceFormat: 'stl', transform: IDENTITY_MATRIX4 },
+      metadata: { sourceFormat: 'stl' },
     };
   }
 
   it('refuses to export a structurally invalid mesh', async () => {
     const outcome = await rejection(() =>
       modelExportHandler(
-        { handle: residentModels.commit(invalidMesh()), encoding: 'binary' },
+        {
+          handle: residentDocuments.commit(singlePartDocument(invalidMesh())),
+          partId: PART,
+          encoding: 'binary',
+        },
         context(),
       ),
     );
@@ -165,12 +173,19 @@ describe('the structural validation gate', () => {
     const empty: CanonicalMesh = {
       positions: new Float32Array(0),
       indices: new Uint32Array(0),
-      metadata: { sourceFormat: 'stl', transform: IDENTITY_MATRIX4 },
+      metadata: { sourceFormat: 'stl' },
     };
 
     expect(
       await rejection(() =>
-        modelExportHandler({ handle: residentModels.commit(empty), encoding: 'binary' }, context()),
+        modelExportHandler(
+          {
+            handle: residentDocuments.commit(singlePartDocument(empty)),
+            partId: PART,
+            encoding: 'binary',
+          },
+          context(),
+        ),
       ),
     ).toBe(AppErrorCode.GeometryValidationFailed);
   });
@@ -181,7 +196,11 @@ describe('the structural validation gate', () => {
     let produced: unknown;
     try {
       produced = await modelExportHandler(
-        { handle: residentModels.commit(invalidMesh()), encoding: 'ascii' },
+        {
+          handle: residentDocuments.commit(singlePartDocument(invalidMesh())),
+          partId: PART,
+          encoding: 'ascii',
+        },
         context(),
       );
     } catch {
@@ -196,12 +215,12 @@ describe('export handler', () => {
   const validMesh: CanonicalMesh = {
     positions: new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]),
     indices: new Uint32Array([0, 1, 2]),
-    metadata: { sourceFormat: 'stl', transform: IDENTITY_MATRIX4 },
+    metadata: { sourceFormat: 'stl' },
   };
 
   it.each(['binary', 'ascii'])('writes %s STL and transfers the result', async (encoding) => {
     const outcome = await modelExportHandler(
-      { handle: residentModels.commit(validMesh), encoding },
+      { handle: residentDocuments.commit(singlePartDocument(validMesh)), partId: PART, encoding },
       context(),
     );
 
@@ -213,7 +232,11 @@ describe('export handler', () => {
   it('produces exactly 134 bytes for a one-triangle binary STL', () => {
     // 84-byte prefix plus one 50-byte facet.
     return modelExportHandler(
-      { handle: residentModels.commit(validMesh), encoding: 'binary' },
+      {
+        handle: residentDocuments.commit(singlePartDocument(validMesh)),
+        partId: PART,
+        encoding: 'binary',
+      },
       context(),
     ).then((outcome: { value: { byteLength: number } }) => {
       expect(outcome.value.byteLength).toBe(134);
@@ -222,7 +245,14 @@ describe('export handler', () => {
 
   it('rejects an unknown encoding rather than guessing', async () => {
     const outcome = await rejection(() =>
-      modelExportHandler({ handle: residentModels.commit(validMesh), encoding: 'gltf' }, context()),
+      modelExportHandler(
+        {
+          handle: residentDocuments.commit(singlePartDocument(validMesh)),
+          partId: PART,
+          encoding: 'gltf',
+        },
+        context(),
+      ),
     );
 
     expect(outcome).toBeDefined();
@@ -232,7 +262,11 @@ describe('export handler', () => {
     const before = [...validMesh.positions];
 
     await modelExportHandler(
-      { handle: residentModels.commit(validMesh), encoding: 'binary' },
+      {
+        handle: residentDocuments.commit(singlePartDocument(validMesh)),
+        partId: PART,
+        encoding: 'binary',
+      },
       context(),
     );
 

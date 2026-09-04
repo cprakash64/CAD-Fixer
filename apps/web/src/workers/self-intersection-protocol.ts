@@ -35,8 +35,16 @@ export interface DiagnosticPortMessage {
 export interface DiagnosticGeometryMessage {
   readonly kind: 'geometry';
   readonly operationId: string;
-  readonly modelId: string;
-  readonly modelRevision: number;
+  readonly documentId: string;
+  readonly documentRevision: number;
+  /**
+   * The part this copy came from.
+   *
+   * The diagnostic answers a question about ONE part, and the report is
+   * published against this identity. Without it a report could be shown beside
+   * a different part of the same document at the same revision.
+   */
+  readonly partId: string;
   readonly positions: Float64Array;
   readonly triangles: Uint32Array;
   readonly limits: SelfIntersectionLimits;

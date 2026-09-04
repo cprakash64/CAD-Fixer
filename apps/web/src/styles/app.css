@@ -1009,3 +1009,63 @@ button:disabled {
   pointer-events: none;
   z-index: 2;
 }
+
+/* ------------------------------------------------------------- parts -- */
+
+/*
+ * The multi-part selector. Rendered only when a document has more than one
+ * part, so a single-part STL sidebar is visually unchanged.
+ */
+.parts {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  max-height: 16rem;
+  overflow-y: auto;
+}
+
+.parts__item {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 0.75rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.parts__item:hover {
+  border-color: var(--accent);
+}
+
+.parts__item:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.parts__item--selected {
+  border-color: var(--accent);
+  background: var(--surface-selected, var(--surface-raised));
+}
+
+.parts__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.parts__count {
+  flex: none;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+}

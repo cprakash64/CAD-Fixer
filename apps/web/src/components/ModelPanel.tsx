@@ -12,7 +12,7 @@ import { useModelExport } from '../state/use-model-export';
  * no downloads — that all moved to `runtime/export-service`.
  */
 export function ModelPanel(): ReactNode {
-  const { model } = useWorkspaceState();
+  const { model, activePartId } = useWorkspaceState();
   const { exportModel, cancelExport, isExporting, fraction, encoding } = useModelExport();
 
   if (model === undefined) {
@@ -44,6 +44,9 @@ export function ModelPanel(): ReactNode {
           testId="fact-triangles"
         />
         <Fact label="Vertices" value={model.vertexCount.toLocaleString()} testId="fact-vertices" />
+        {model.parts.length > 1 ? (
+          <Fact label="Parts" value={model.parts.length.toLocaleString()} testId="fact-parts" />
+        ) : null}
         <Fact label="Units" value={describeUnit(model.source)} testId="fact-units" />
         {bounds === undefined ? null : (
           <>
@@ -88,6 +91,17 @@ export function ModelPanel(): ReactNode {
         Re-exports this STL. Converting between formats is not implemented — only STL can be read or
         written. Files are written on this device; nothing is uploaded.
       </p>
+      {model.parts.length > 1 ? (
+        /* STATED BEFORE THE CLICK, not warned about after it. An STL file holds
+           one object, so exporting a multi-part document cannot keep the parts
+           apart — and a button that silently wrote one of three parts would be
+           losing the user's structure without saying so. */
+        <p className="panel__note" data-testid="export-part-note">
+          STL files hold one object. This writes the selected part only; the other{' '}
+          {(model.parts.length - 1).toLocaleString()} will not be included. Multi-part export
+          arrives with format conversion.
+        </p>
+      ) : null}
       <div className="panel__actions">
         <button
           type="button"
@@ -95,7 +109,7 @@ export function ModelPanel(): ReactNode {
           onClick={() => {
             exportModel('binary');
           }}
-          disabled={isExporting}
+          disabled={isExporting || activePartId === undefined}
           data-testid="export-binary"
         >
           Export binary STL
@@ -106,7 +120,7 @@ export function ModelPanel(): ReactNode {
           onClick={() => {
             exportModel('ascii');
           }}
-          disabled={isExporting}
+          disabled={isExporting || activePartId === undefined}
           data-testid="export-ascii"
         >
           Export ASCII STL

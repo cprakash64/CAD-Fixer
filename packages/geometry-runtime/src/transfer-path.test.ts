@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
-import { IDENTITY_MATRIX4, meshTransferables, type CanonicalMesh } from '@cadfixer/mesh-core';
-import type { ModelId } from './resident-models';
+import {
+  IDENTITY_PART_TRANSFORM,
+  meshTransferables,
+  type CanonicalMesh,
+} from '@cadfixer/mesh-core';
+import type { DocumentId } from './resident-documents';
 import { GeometryCoordinator } from './coordinator';
 import type { MessageEndpoint } from './endpoint';
 import { PROTOCOL_CHANNEL, type TransferHandle } from './protocol';
@@ -62,7 +66,7 @@ function sampleMesh(triangles: number): CanonicalMesh {
   return {
     positions: new Float32Array(triangles * 9),
     indices: new Uint32Array(triangles * 3),
-    metadata: { sourceFormat: 'stl', transform: IDENTITY_MATRIX4 },
+    metadata: { sourceFormat: 'stl' },
   };
 }
 
@@ -100,7 +104,8 @@ describe('import dispatch', () => {
     const coordinator = new GeometryCoordinator(endpoint, { onDiagnostic: vi.fn() });
 
     coordinator.dispatch('model/export', {
-      handle: { modelId: 'model-1' as ModelId, revision: 1 },
+      handle: { documentId: 'model-1' as DocumentId, revision: 1 },
+      partId: 'part-1',
       encoding: 'binary',
     });
 
@@ -120,13 +125,24 @@ describe('worker result path', () => {
     host.register('model/import', () =>
       Promise.resolve({
         value: {
-          handle: { modelId: 'model-1' as ModelId, revision: 1 },
+          handle: { documentId: 'model-1' as DocumentId, revision: 1 },
           encoding: 'binary',
           unit: undefined,
           bounds: undefined,
           triangleCount: 4,
           vertexCount: 12,
-          render: { positions: renderPositions, normals: renderNormals, vertexCount: 12 },
+          parts: [],
+          render: {
+            parts: [
+              {
+                partId: 'part-1',
+                transform: IDENTITY_PART_TRANSFORM,
+                positions: renderPositions,
+                normals: renderNormals,
+                vertexCount: 12,
+              },
+            ],
+          },
           warnings: [],
           validation: {
             valid: true,
@@ -181,7 +197,7 @@ describe('meshTransferables', () => {
     const mesh: CanonicalMesh = {
       positions: new Float32Array(shared, 0, 9),
       indices: new Uint32Array(shared, 36, 3),
-      metadata: { sourceFormat: 'stl', transform: IDENTITY_MATRIX4 },
+      metadata: { sourceFormat: 'stl' },
     };
 
     expect(meshTransferables(mesh)).toEqual([shared]);
@@ -254,14 +270,18 @@ describe('export carries no geometry across the boundary', () => {
     const coordinator = new GeometryCoordinator(endpoint, { onDiagnostic: vi.fn() });
 
     coordinator.dispatch('model/export', {
-      handle: { modelId: 'model-7' as ModelId, revision: 3 },
+      handle: { documentId: 'model-7' as DocumentId, revision: 3 },
+      partId: 'part-1',
       encoding: 'binary',
     });
 
     const message = sent[0]?.message as { payload?: unknown } | undefined;
     expect(collectTypedArrays(message?.payload)).toEqual([]);
     expect(message?.payload).toEqual({
-      handle: { modelId: 'model-7', revision: 3 },
+      handle: { documentId: 'model-7', revision: 3 },
+      // The part is an IDENTIFIER, not geometry. Export writes one part, so the
+      // request has to name which — and it still carries no coordinates.
+      partId: 'part-1',
       encoding: 'binary',
     });
   });
@@ -271,7 +291,8 @@ describe('export carries no geometry across the boundary', () => {
     const coordinator = new GeometryCoordinator(endpoint, { onDiagnostic: vi.fn() });
 
     coordinator.dispatch('model/export', {
-      handle: { modelId: 'model-1' as ModelId, revision: 2 },
+      handle: { documentId: 'model-1' as DocumentId, revision: 2 },
+      partId: 'part-1',
       encoding: 'ascii',
     });
 
@@ -286,7 +307,8 @@ describe('export carries no geometry across the boundary', () => {
     const coordinator = new GeometryCoordinator(endpoint, { onDiagnostic: vi.fn() });
 
     coordinator.dispatch('model/export', {
-      handle: { modelId: 'model-1' as ModelId, revision: 1 },
+      handle: { documentId: 'model-1' as DocumentId, revision: 1 },
+      partId: 'part-1',
       encoding: 'binary',
     });
 
@@ -305,32 +327,38 @@ describe('analysis requests are handle-based and revision-safe', () => {
     const coordinator = new GeometryCoordinator(endpoint, { onDiagnostic: vi.fn() });
 
     coordinator.dispatch('model/analyze', {
-      handle: { modelId: 'model-3' as ModelId, revision: 2 },
+      handle: { documentId: 'model-3' as DocumentId, revision: 2 },
+      partId: 'part-1',
     });
 
     const message = sent[0]?.message as { payload?: unknown } | undefined;
-    expect(message?.payload).toEqual({ handle: { modelId: 'model-3', revision: 2 } });
+    expect(message?.payload).toEqual({
+      handle: { documentId: 'model-3', revision: 2 },
+      // Analysis is per part. Still a handle, a revision and an id — no geometry.
+      partId: 'part-1',
+    });
     expect(sent[0]?.transfer).toEqual([]);
   });
 
   it('lets a consumer reject a report belonging to a superseded revision', () => {
     // The result echoes the handle it was computed for. Comparing that against
     // the model currently held is what makes a late report discardable.
-    const current = { modelId: 'model-1', revision: 2 };
-    const lateReport = { handle: { modelId: 'model-1', revision: 1 } };
-    const matchingReport = { handle: { modelId: 'model-1', revision: 2 } };
+    const current = { documentId: 'model-1', revision: 2 };
+    const lateReport = { handle: { documentId: 'model-1', revision: 1 } };
+    const matchingReport = { handle: { documentId: 'model-1', revision: 2 } };
 
-    const applies = (report: { handle: { modelId: string; revision: number } }): boolean =>
-      report.handle.modelId === current.modelId && report.handle.revision === current.revision;
+    const applies = (report: { handle: { documentId: string; revision: number } }): boolean =>
+      report.handle.documentId === current.documentId &&
+      report.handle.revision === current.revision;
 
     expect(applies(lateReport)).toBe(false);
     expect(applies(matchingReport)).toBe(true);
   });
 
   it('lets a consumer reject a report for an entirely different model', () => {
-    const current = { modelId: 'model-2', revision: 1 };
-    const foreign = { handle: { modelId: 'model-1', revision: 1 } };
+    const current = { documentId: 'model-2', revision: 1 };
+    const foreign = { handle: { documentId: 'model-1', revision: 1 } };
 
-    expect(foreign.handle.modelId === current.modelId).toBe(false);
+    expect(foreign.handle.documentId === current.documentId).toBe(false);
   });
 });

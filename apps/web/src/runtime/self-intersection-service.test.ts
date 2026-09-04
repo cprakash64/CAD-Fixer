@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { AppErrorCode, isAppError } from '@cadfixer/shared';
-import type { ModelHandle } from '@cadfixer/geometry-runtime';
+import type { DocumentHandle } from '@cadfixer/geometry-runtime';
 import { SelfIntersectionCancelled, SelfIntersectionService } from './self-intersection-service';
 import type { GeometryClient } from './geometry-client';
 
@@ -15,7 +15,8 @@ import type { GeometryClient } from './geometry-client';
  * `Event` and `MessageEvent` objects through real `EventTarget` machinery.
  */
 
-const handle: ModelHandle = { modelId: 'model-1', revision: 1 } as ModelHandle;
+const handle: DocumentHandle = { documentId: 'model-1', revision: 1 } as DocumentHandle;
+const PART = 'part-1';
 
 /** A Worker stand-in that records termination and can emit real events. */
 class FakeWorker extends EventTarget {
@@ -41,7 +42,7 @@ class FakeWorker extends EventTarget {
         data: {
           kind: 'report',
           operationId,
-          report: { status: 'CHECKED', modelId: 'model-1', modelRevision: 1 },
+          report: { status: 'CHECKED', documentId: 'model-1', documentRevision: 1 },
         },
       }),
     );
@@ -83,7 +84,7 @@ function harness(sendBehaviour: 'resolve' | 'reject' = 'resolve'): Harness {
 describe('a diagnostic worker that fails is reported, released, and retryable', () => {
   it('turns a real worker error event into INTERNAL_FAILURE', async () => {
     const { service, workers } = harness();
-    const session = service.run({ handle });
+    const session = service.run({ handle, partId: PART });
     const worker = workers[0];
     expect(worker).toBeDefined();
     if (worker === undefined) return;
@@ -108,11 +109,11 @@ describe('a diagnostic worker that fails is reported, released, and retryable', 
 
   it('allows a retry on a FRESH worker after a failure', async () => {
     const { service, workers } = harness();
-    const failed = service.run({ handle });
+    const failed = service.run({ handle, partId: PART });
     workers[0]?.failToLoad();
     await failed.promise.catch(() => undefined);
 
-    const retried = service.run({ handle });
+    const retried = service.run({ handle, partId: PART });
     expect(workers).toHaveLength(2);
     expect(workers[1]).not.toBe(workers[0]);
     expect(service.liveWorkerCount).toBe(1);
@@ -124,7 +125,7 @@ describe('a diagnostic worker that fails is reported, released, and retryable', 
 
   it('reports a producer-side refusal without leaving a worker behind', async () => {
     const { service, workers } = harness('reject');
-    const session = service.run({ handle });
+    const session = service.run({ handle, partId: PART });
 
     const cause = await session.promise.catch((error: unknown) => error);
     expect(isAppError(cause)).toBe(true);
@@ -136,7 +137,7 @@ describe('a diagnostic worker that fails is reported, released, and retryable', 
 describe('cancellation is not failure', () => {
   it('rejects with SelfIntersectionCancelled and releases everything', async () => {
     const { service, workers } = harness();
-    const session = service.run({ handle });
+    const session = service.run({ handle, partId: PART });
 
     session.cancel();
 
@@ -149,7 +150,7 @@ describe('cancellation is not failure', () => {
 
   it('is idempotent', async () => {
     const { service } = harness();
-    const session = service.run({ handle });
+    const session = service.run({ handle, partId: PART });
     // Attached before cancelling: the promise rejects synchronously, and an
     // unobserved rejection would surface as an unhandled error rather than as
     // the behaviour under test.
@@ -168,14 +169,14 @@ describe('cancellation is not failure', () => {
 describe('stale results cannot reach a later operation', () => {
   it('discards a message whose operation has been superseded', async () => {
     const { service, workers } = harness();
-    const first = service.run({ handle });
+    const first = service.run({ handle, partId: PART });
     const firstId = first.operationId;
     // Observed immediately: superseding it rejects, and an unobserved rejection
     // would be reported as an unhandled error.
     const firstSettled = first.promise.catch(() => undefined);
 
     // A second run supersedes the first and disposes its worker.
-    const second = service.run({ handle });
+    const second = service.run({ handle, partId: PART });
     expect(workers).toHaveLength(2);
     expect(workers[0]?.terminated).toBeGreaterThan(0);
 
@@ -203,7 +204,7 @@ describe('repeated lifecycle leaves nothing behind', () => {
     const { service, workers } = harness();
 
     for (let cycle = 0; cycle < 8; cycle += 1) {
-      const session = service.run({ handle });
+      const session = service.run({ handle, partId: PART });
       // Alternate completing and cancelling, as a user would.
       if (cycle % 3 === 2) {
         session.cancel();

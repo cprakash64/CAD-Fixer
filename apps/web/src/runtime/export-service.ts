@@ -1,6 +1,6 @@
 import { operationCancelled, type Diagnostic } from '@cadfixer/shared';
 import type {
-  ModelHandle,
+  DocumentHandle,
   OperationHandle,
   ProgressUpdate,
   StlExportResult,
@@ -61,7 +61,8 @@ export interface ExportSession {
  */
 export interface ExportCapableClient {
   exportModel(
-    handle: ModelHandle,
+    handle: DocumentHandle,
+    partId: string,
     encoding: string,
     onProgress: (update: ProgressUpdate) => void,
   ): OperationHandle<StlExportResult>;
@@ -75,7 +76,15 @@ export interface ExportRequest {
    * of an export. What never crosses is the authoritative canonical mesh, which
    * stays worker-resident.
    */
-  readonly handle: ModelHandle;
+  readonly handle: DocumentHandle;
+  /**
+   * The part to write.
+   *
+   * STL holds ONE object. Exporting a multi-part document therefore writes the
+   * named part and returns a warning naming what was left out — see
+   * `ModelExportPayload`. Whole-document export waits for Stage 4A-2B.
+   */
+  readonly partId: string;
   readonly sourceFileName: string;
   readonly encoding: 'binary' | 'ascii';
   readonly client: ExportCapableClient;
@@ -85,7 +94,7 @@ export interface ExportRequest {
 const MIME_TYPE = 'model/stl';
 
 export function exportStlFile(request: ExportRequest): ExportSession {
-  const { handle: modelHandle, sourceFileName, encoding, client } = request;
+  const { handle: modelHandle, partId, sourceFileName, encoding, client } = request;
 
   let cancelled = false;
   let dispatchCancel: (() => void) | undefined;
@@ -98,7 +107,7 @@ export function exportStlFile(request: ExportRequest): ExportSession {
   const run = async (): Promise<ExportOutcome> => {
     request.onProgress?.({ phase: ExportPhase.Writing, fraction: 0 });
 
-    const handle = client.exportModel(modelHandle, encoding, (update) => {
+    const handle = client.exportModel(modelHandle, partId, encoding, (update) => {
       // The worker's 0..1 covers writing, which is nearly all of the work.
       // The remaining sliver is handing the bytes to the browser.
       request.onProgress?.({

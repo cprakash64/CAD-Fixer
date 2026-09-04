@@ -3,6 +3,7 @@ import { AppHeader } from './components/AppHeader';
 import { ImportDropZone } from './components/ImportDropZone';
 import { MeshHealthPanel } from './components/MeshHealthPanel';
 import { ModelPanel } from './components/ModelPanel';
+import { PartSelector } from './components/PartSelector';
 import { RepairPanel } from './components/RepairPanel';
 import { RuntimePanel } from './components/RuntimePanel';
 import { StatusPanel } from './components/StatusPanel';
@@ -23,6 +24,10 @@ export function App(): ReactNode {
       <div className="app__body">
         <aside className="app__sidebar">
           <WorkflowNav />
+          {/* Above the model facts because it decides what those workflows act
+              on. Renders nothing at all for a single-part document, so the STL
+              sidebar is unchanged. */}
+          <PartSelector />
           <ModelPanel />
           <RuntimePanel />
         </aside>

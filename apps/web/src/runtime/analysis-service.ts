@@ -1,7 +1,7 @@
 import { internalError, operationCancelled } from '@cadfixer/shared';
 import type {
   ModelAnalyzeResult,
-  ModelHandle,
+  DocumentHandle,
   OperationHandle,
   ProgressUpdate,
   TopologyDetail,
@@ -59,7 +59,9 @@ export interface AnalysisProgress {
 
 export interface AnalysisOutcome {
   /** The handle the report describes. Echoed by the worker, not assumed. */
-  readonly handle: ModelHandle;
+  readonly handle: DocumentHandle;
+  /** The part the report describes. Echoed by the worker, not assumed. */
+  readonly partId: string;
   readonly report: TopologyReport;
   readonly detail: TopologyDetail;
   readonly durationMs: number;
@@ -89,14 +91,17 @@ export interface AnalysisSession {
  */
 export interface AnalysisCapableClient {
   analyzeModel(
-    handle: ModelHandle,
+    handle: DocumentHandle,
+    partId: string,
     onProgress: (update: ProgressUpdate) => void,
     sampleLimit?: number,
   ): OperationHandle<ModelAnalyzeResult>;
 }
 
 export interface AnalysisRequest {
-  readonly handle: ModelHandle;
+  readonly handle: DocumentHandle;
+  /** The part to analyse. Analysis is per part — see ADR 0013. */
+  readonly partId: string;
   readonly client: AnalysisCapableClient;
   /** Caps retained detail samples per category. */
   readonly sampleLimit?: number;
@@ -104,7 +109,7 @@ export interface AnalysisRequest {
 }
 
 export function analyzeModelTopology(request: AnalysisRequest): AnalysisSession {
-  const { handle: requested, client, sampleLimit } = request;
+  const { handle: requested, partId: requestedPart, client, sampleLimit } = request;
 
   let cancelled = false;
   let dispatchCancel: (() => void) | undefined;
@@ -119,6 +124,7 @@ export function analyzeModelTopology(request: AnalysisRequest): AnalysisSession 
 
     const operation = client.analyzeModel(
       requested,
+      requestedPart,
       (update: ProgressUpdate) => {
         request.onProgress?.({
           phase: describeAnalysisPhase(update.note),
@@ -140,15 +146,15 @@ export function analyzeModelTopology(request: AnalysisRequest): AnalysisSession 
     // complete report, but presenting it would make the cancel button a lie.
     if (isCancelled()) throw operationCancelled();
 
-    // THE HANDLE IS VERIFIED, NOT TRUSTED. The worker echoes the handle it
-    // analysed; if it does not match what was asked for, something upstream
+    // THE HANDLE AND PART ARE VERIFIED, NOT TRUSTED. The worker echoes both; if it does not match what was asked for, something upstream
     // routed a result to the wrong operation and the only safe response is to
     // refuse it. Silently accepting would attach one model's topology to
     // another's geometry — the exact failure the revision system exists to
     // prevent.
     if (
-      result.handle.modelId !== requested.modelId ||
-      result.handle.revision !== requested.revision
+      result.handle.documentId !== requested.documentId ||
+      result.handle.revision !== requested.revision ||
+      result.partId !== requestedPart
     ) {
       throw internalError(
         'A topology report arrived for a different model than the one requested.',
@@ -157,6 +163,7 @@ export function analyzeModelTopology(request: AnalysisRequest): AnalysisSession 
 
     return {
       handle: result.handle,
+      partId: result.partId,
       report: result.report,
       detail: result.detail,
       durationMs: Date.now() - startedAt,

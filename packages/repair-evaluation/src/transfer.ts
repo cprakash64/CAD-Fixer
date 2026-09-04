@@ -1,4 +1,4 @@
-import { createIndexArray, createPositionArray, IDENTITY_MATRIX4 } from '@cadfixer/mesh-core';
+import { createIndexArray, createPositionArray } from '@cadfixer/mesh-core';
 import type { CanonicalMesh } from '@cadfixer/mesh-core';
 import { recoverVertexIdentity } from '@cadfixer/mesh-topology';
 
@@ -67,6 +67,6 @@ export function fromTransfer(
   return {
     positions: out,
     indices,
-    metadata: { sourceFormat: 'stl', transform: IDENTITY_MATRIX4 },
+    metadata: { sourceFormat: 'stl' },
   };
 }

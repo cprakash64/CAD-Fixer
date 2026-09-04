@@ -13,8 +13,8 @@ matter more than moving fast.
 Five workflows are planned: **Repair, Convert, Split, Texture, Hollow**. Target
 formats: **STL, OBJ, 3MF**.
 
-**Current stage: Stage 3B-1 complete — conservative deterministic repair,
-end to end.** The engine, the transaction and the user workflow are all
+**Current stage: Stage 4A-2A complete — the multi-part geometry document
+foundation, on top of conservative deterministic repair.** The engine, the transaction and the user workflow are all
 production. Implemented: structural STL encoding detection, hand-written binary
 and ASCII STL parsers with resource budgets, worker-based parsing with progress
 and working cancellation, a real Three.js viewport with camera controls, model
@@ -25,11 +25,23 @@ topology diagnostics with a Mesh Health panel and viewport overlays, and the
 decision and reason, a validated candidate, a before/after preview that shares
 one camera, bounded change overlays, transactional apply, and one step of undo.
 
+Stage 4A-2A migrated the authoritative unit from **one mesh** to **one
+`GeometryDocument` holding one or more parts**, with one monotonic document
+revision, stable `PartId`s, per-part placements, document-level units, and
+geometry structurally shared between parts. STL still describes one thing, so an
+STL import produces a one-part document and the single-part workflow is
+unchanged. See `docs/adr/0014-multi-part-geometry-document-foundation.md`.
+
 NOT implemented, and not to be implemented unless a task explicitly asks:
 tolerance welding, hole filling, booleans, remeshing, OBJ or 3MF codecs, format
 conversion, splitting, connectors, texturing, hollowing, drainage holes,
-self-intersection detection, wall-thickness analysis, redo, and any repair that
-is not one of the four conservative operations.
+wall-thickness analysis, inter-part overlap detection, redo, multi-step undo,
+transform editing, and any repair that is not one of the four conservative
+operations.
+
+**CAD Fixer reads and writes STL and nothing else.** The document layer exists;
+the OBJ and 3MF codecs that will fill it do not. No interface may suggest
+otherwise.
 
 **Topology diagnoses; it never repairs.** Connectivity is recovered from exact
 stored coordinates with no tolerance, and analysis leaves the canonical buffers
@@ -103,7 +115,7 @@ apps/web/                   React application shell
   src/viewport/             Three.js scene lifecycle
   src/workers/              worker entry point (own tsconfig: WebWorker lib)
 packages/shared/            typed errors, units, ids, cancellation
-packages/mesh-core/         canonical mesh + structural validation
+packages/mesh-core/         canonical mesh + multi-part document + validation
 packages/file-formats/      format descriptors, screening, budgets, STL codec
 packages/mesh-topology/     read-only topology analysis (no mutation, no welding)
 packages/mesh-repair/       conservative deterministic repair (kernel-free)
@@ -140,6 +152,7 @@ npm run verify       # format:check + lint + typecheck + test + build
 npm run bench:stl      # STL parser benchmark (NOT in CI)
 npm run bench:topology # small topology benchmark (NOT in CI)
 npm run bench:pipeline # whole-pipeline benchmark, 1/10/50/100 MiB (NOT in CI)
+npm run bench:document # document-wrapper cost + part-count scaling (NOT in CI)
 npm run bench:repair-browser # repair workflow timings in a real browser (NOT in CI)
 npm run check:node     # runtime version guard; also runs before test/build/verify
 ```
@@ -162,6 +175,53 @@ with spurious timeouts and seconds when quiet. A timing failure on a loaded
 machine is not evidence of a regression — re-run it on a quiet one before
 believing it.
 
+## Document invariants (Stage 4A-2A)
+
+- **ONE MONOTONIC REVISION PER DOCUMENT, never one per part.** It lives in
+  `ResidentDocumentStore`, not as a field on `GeometryDocument` — a field would
+  be a second authority that could disagree. A change to ANY part consumes the
+  document's revision, so a result for part A is invalidated by an edit to part
+  B. That over-invalidation is deliberate and was qualified: an over-invalidated
+  result is recomputed, an under-invalidated one is applied to geometry it was
+  not built from.
+- **THE PART IS PART OF THE IDENTITY.** Two parts of one document carry
+  IDENTICAL handles, so a handle comparison cannot say which mesh a result
+  describes. Every guard that compares handles must compare `partId` too — the
+  topology cache, the report echo, the repair candidate, `expectedPart` at
+  commit, the undo record, the self-intersection report, and every workspace
+  slice.
+- **`expectedPart` is STATED by the caller, never read off the candidate.**
+  Reading it off the candidate compares the candidate with itself and the guard
+  becomes vacuous.
+- **ONE UNIT AUTHORITY: `GeometryDocument.unit`.** A mesh has no unit field.
+  `undefined` means unknown and is NEVER defaulted to millimetres.
+- **ONE TRANSFORM AUTHORITY: `GeometryPart.transform`.** A mesh has no transform
+  field, so a shared mesh cannot be placed two contradictory ways. Twelve Float64
+  values, row-major 3×4. Never baked into Float32 positions.
+- **Geometry is SHARED, not copied.** Two parts may hold the same
+  `CanonicalMesh` object. `withPartMesh` carries untouched parts across by
+  reference, `documentByteLength` counts each mesh once, the render snapshot
+  builds buffers per DISTINCT mesh, and `SharedPartGeometry` reference-counts the
+  GPU geometry so disposal cannot free a buffer another part is drawing from.
+- **`activePartId` is workspace state, not geometry identity.** Changing it must
+  NOT change the document revision. Switching parts clears the per-part
+  diagnostic slices rather than carrying them across.
+- **Automatic work follows the ACTIVE part only.** A hundred-part document must
+  not launch a hundred topology passes or a hundred WASM kernels on import.
+- **Every part-targeted request carries its `partId` explicitly.** The
+  authoritative worker never infers a target from UI selection state.
+- **Self-intersection is INTRA-PART.** Two independently valid parts that overlap
+  in world space are not self-intersecting, and nothing checks whether they do.
+  Never flatten a document for the diagnostic.
+- **STL export writes ONE part and says what it left out.** STL holds one
+  object. The panel states this before the click. Never flatten silently.
+- **`assertGeometryDocument` is the second gate**, mirroring
+  `assertMeshStructure`. Structural validity is NOT mesh health: a part with
+  degenerate triangles is a valid document describing a defective model.
+- **Local bounds belong to the MESH, not the part.** Compute them once per
+  DISTINCT mesh and apply the placement to the box afterwards. Computing per part
+  walked one shared buffer a thousand times — 356 ms at 1,000 placements.
+
 ## Repair invariants (Stage 3B-1)
 
 - **ONE GEOMETRY KERNEL IN PRODUCTION, CONFINED TO ONE WORKER.** As of Stage
@@ -182,8 +242,10 @@ believing it.
 - **Winding unification is RELATIVE.** The lowest-indexed surviving face in each
   component keeps its orientation. Never choose a global sign from signed
   volume, world axes, the bounding box or a stored STL normal — see ADR 0010.
-- **The authoritative mesh is never written.** Repair produces a candidate;
-  `repair/commit` swaps a reference after every guard passes. A candidate handle
+- **The authoritative document is never written.** Repair produces a candidate
+  for ONE part; `repair/commit` builds a successor document with `withPartMesh`
+  and swaps a reference after every guard passes. Every other part is carried
+  across BY REFERENCE and stays byte- and reference-identical. A candidate handle
   is a distinct type from `ModelHandle` so it cannot be exported by mistake.
 - **The algorithm never decides its own success.** The candidate is re-analysed
   by Stage 2 and judged against the source.
@@ -247,7 +309,7 @@ believing it.
   declaration and the registry in agreement.
 - **`ByteScanner.isAtEnd()` is a method, not a getter, because it mutates.**
   Getters that skip whitespace confuse both readers and TypeScript's narrowing.
-- **The topology report is CACHED per (modelId, revision).** Analysis runs
+- **The topology report is CACHED per (documentId, revision, partId).** Analysis runs
   automatically on import, the repair plan is derived from a report, and the
   candidate needs one too — without `TopologyReportCache` the same unchanged mesh
   was analysed three times per repair, and the end-to-end suite started timing
@@ -278,9 +340,20 @@ believing it.
   non-manifold vertices blocked a repair the same pipeline had already made
   safe. Removals are materialised first, then connectivity is rebuilt.
 - **The worker owns authoritative geometry.** The main thread holds a
-  `ModelHandle` plus a render snapshot, never a `CanonicalMesh`. Operations name
-  a model by handle + revision; a stale revision must fail rather than apply to
-  whatever replaced it. See `docs/adr/0008-worker-resident-geometry.md`.
+  `DocumentHandle`, scalar part descriptors and render snapshots — never a
+  `CanonicalMesh` and never a `GeometryDocument`. Operations name a document by
+  handle + revision, and a part by `partId`; a stale revision or an unknown part
+  must fail rather than apply to whatever replaced it. See
+  `docs/adr/0008-worker-resident-geometry.md` and
+  `docs/adr/0014-multi-part-geometry-document-foundation.md`.
+- **`ModelHandle` no longer exists.** It is `DocumentHandle` (`documentId` +
+  `revision`), and the store is `ResidentDocumentStore`. The PROTOCOL operation
+  names did not change — `model/import`, `model/export`, `model/analyze`,
+  `model/release`, `model/send-for-diagnostic` describe what the user does, and
+  that is unchanged. `LoadedModel` in application state keeps its name for the
+  same reason.
+- **`Matrix4Tuple` and `IDENTITY_MATRIX4` were removed**, not deprecated. Use
+  `PartTransform` / `IDENTITY_PART_TRANSFORM`. Two names for one concept is drift.
 - **Allocate canonical arrays through `createPositionArray` / `createIndexArray`.**
   A bare `new Float32Array` at a call site defeats the whole point of the
   `PositionArray` alias, which exists so the open Float32/Float64 decision
@@ -334,7 +407,8 @@ believing it.
 Authentication, accounts, subscriptions, payments, pricing, download gating,
 ads, analytics, databases, backends. Leave clean seams; do not build them.
 
-Also out of scope until a task asks: redo, a multi-step undo history, and any
+Also out of scope until a task asks: redo, a multi-step undo history,
+inter-part overlap detection, an assembly tree editor, transform editing, and any
 repair operation outside the four conservative ones.
 
 Do not install Manifold, Geogram, lib3mf, OpenVDB, CGAL, OpenCascade, or any

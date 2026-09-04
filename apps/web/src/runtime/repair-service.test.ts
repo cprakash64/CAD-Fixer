@@ -3,7 +3,7 @@ import { AppErrorCode, toAppError } from '@cadfixer/shared';
 import {
   DEFAULT_SESSION_MEMORY_BUDGET,
   type ConservativeRepairPlan,
-  type ModelHandle,
+  type DocumentHandle,
   type OperationHandle,
   type RepairCandidateHandle,
   type RepairCandidateResult,
@@ -31,11 +31,14 @@ import {
  * job and is tested where the engine lives.
  */
 
-const HANDLE: ModelHandle = { modelId: 'model-1', revision: 1 } as ModelHandle;
+const HANDLE: DocumentHandle = { documentId: 'model-1', revision: 1 } as DocumentHandle;
+
+const PART = 'part-1';
 
 const CANDIDATE: RepairCandidateHandle = {
   candidateId: 'candidate-1',
-  modelId: 'model-1',
+  documentId: 'model-1',
+  partId: PART,
   sourceRevision: 1,
   generation: 1,
 } as RepairCandidateHandle;
@@ -75,6 +78,7 @@ function candidateResult(overrides: Partial<RepairCandidateResult> = {}): Repair
   return {
     candidate: CANDIDATE,
     source: HANDLE,
+    partId: PART,
     plan: plan(),
     validation: { acceptance: 'ACCEPTED' },
     counts: {},
@@ -174,6 +178,7 @@ describe('planning', () => {
     let seenCeiling: number | undefined;
     const planRepair: RepairCapableClient['planRepair'] = (
       _handle,
+      _partId,
       _requested,
       onProgress,
       memoryBudgetBytes,
@@ -186,12 +191,13 @@ describe('planning', () => {
 
     const session = planConservativeRepair({
       handle: HANDLE,
+      partId: PART,
       client: stubClient({ planRepair }),
       requested: ['remove-duplicate-faces'],
       memoryBudgetBytes: 1234,
       onProgress: (progress) => seen.push(progress),
     });
-    pending.resolve({ handle: HANDLE, plan: plan() });
+    pending.resolve({ handle: HANDLE, partId: PART, plan: plan() });
     await session.promise;
 
     // The ceiling reaches the worker, which is what makes the refusal path
@@ -207,11 +213,13 @@ describe('planning', () => {
     const pending = deferred<RepairPlanOperationResult>();
     const session = planConservativeRepair({
       handle: HANDLE,
+      partId: PART,
       client: stubClient({ planRepair: () => pending.handle }),
       requested: [],
     });
     pending.resolve({
-      handle: { modelId: 'model-2', revision: 1 } as ModelHandle,
+      handle: { documentId: 'model-2', revision: 1 } as DocumentHandle,
+      partId: PART,
       plan: plan(),
     });
 
@@ -222,12 +230,13 @@ describe('planning', () => {
     const pending = deferred<RepairPlanOperationResult>();
     const session = planConservativeRepair({
       handle: HANDLE,
+      partId: PART,
       client: stubClient({ planRepair: () => pending.handle }),
       requested: [],
     });
 
     session.cancel();
-    pending.resolve({ handle: HANDLE, plan: plan() });
+    pending.resolve({ handle: HANDLE, partId: PART, plan: plan() });
 
     await expect(session.promise).rejects.toMatchObject({
       code: AppErrorCode.OperationCancelled,
@@ -240,6 +249,7 @@ describe('creating a candidate', () => {
     const pending = deferred<RepairCandidateResult>();
     const session = createRepairCandidate({
       handle: HANDLE,
+      partId: PART,
       client: stubClient({ createRepairCandidate: () => pending.handle }),
       requested: ['remove-duplicate-faces'],
       planHash: 'hash',
@@ -263,6 +273,7 @@ describe('creating a candidate', () => {
     const client = stubClient({ createRepairCandidate: () => pending.handle });
     const session = createRepairCandidate({
       handle: HANDLE,
+      partId: PART,
       client,
       requested: [],
       planHash: 'hash',
@@ -282,6 +293,7 @@ describe('creating a candidate', () => {
     const client = stubClient({ createRepairCandidate: () => pending.handle });
     const session = createRepairCandidate({
       handle: HANDLE,
+      partId: PART,
       client,
       requested: [],
       planHash: 'hash',
@@ -300,12 +312,13 @@ describe('creating a candidate', () => {
     const pending = deferred<RepairCandidateResult>();
     const session = createRepairCandidate({
       handle: HANDLE,
+      partId: PART,
       client: stubClient({ createRepairCandidate: () => pending.handle }),
       requested: [],
       planHash: 'hash',
     });
     pending.resolve(
-      candidateResult({ source: { modelId: 'model-1', revision: 7 } as ModelHandle }),
+      candidateResult({ source: { documentId: 'model-1', revision: 7 } as DocumentHandle }),
     );
 
     await expect(session.promise).rejects.toMatchObject({ code: AppErrorCode.Internal });
@@ -317,6 +330,7 @@ describe('creating a candidate', () => {
     const pending = deferred<RepairCandidateResult>();
     const session = createRepairCandidate({
       handle: HANDLE,
+      partId: PART,
       client: stubClient({ createRepairCandidate: () => pending.handle }),
       requested: [],
       planHash: 'hash',
@@ -338,7 +352,7 @@ describe('undo', () => {
       recordId: 'record-1',
     });
     pending.resolve({
-      handle: { modelId: 'model-2', revision: 3 } as ModelHandle,
+      handle: { documentId: 'model-2', revision: 3 } as DocumentHandle,
     } as RepairUndoResult);
 
     await expect(session.promise).rejects.toMatchObject({ code: AppErrorCode.Internal });
@@ -352,7 +366,7 @@ describe('undo', () => {
       recordId: 'record-1',
     });
     const result = {
-      handle: { modelId: 'model-1', revision: 3 } as ModelHandle,
+      handle: { documentId: 'model-1', revision: 3 } as DocumentHandle,
       restoredRevision: 1,
     } as RepairUndoResult;
     pending.resolve(result);
@@ -374,9 +388,10 @@ describe('committing', () => {
     const pending = deferred<RepairCommitResult>();
     const seen: unknown[] = [];
     const session = commitRepair({
+      expectedPart: PART,
       client: stubClient({
-        commitRepair: (candidate, expectedSource, planHash) => {
-          seen.push({ candidate, expectedSource, planHash });
+        commitRepair: (candidate, expectedSource, expectedPart, planHash) => {
+          seen.push({ candidate, expectedSource, expectedPart, planHash });
           return pending.handle;
         },
       }),
@@ -384,9 +399,16 @@ describe('committing', () => {
       expectedSource: HANDLE,
       planHash: 'hash',
     });
-    pending.resolve({ handle: { modelId: 'model-1', revision: 2 } } as RepairCommitResult);
+    pending.resolve({
+      handle: { documentId: 'model-1', revision: 2 },
+      partId: PART,
+    } as RepairCommitResult);
     await session.promise;
 
-    expect(seen).toEqual([{ candidate: CANDIDATE, expectedSource: HANDLE, planHash: 'hash' }]);
+    // The PART travels with the candidate and the revision. All four identify
+    // what a commit is allowed to replace.
+    expect(seen).toEqual([
+      { candidate: CANDIDATE, expectedSource: HANDLE, expectedPart: PART, planHash: 'hash' },
+    ]);
   });
 });

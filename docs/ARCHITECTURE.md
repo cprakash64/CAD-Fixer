@@ -139,18 +139,24 @@ The production import path, as implemented for STL:
    gate**: the import succeeds only if `assertMeshStructure` passes.
 8. **Derive display data** — bounds and render normals, computed in the worker
    so the main thread never walks the mesh.
-9. **Commit as resident** — the canonical mesh is committed to the worker's
-   `ResidentModelStore` and STAYS THERE. Only a `ModelHandle` and a render
-   snapshot cross back to the main thread.
+9. **Wrap as a document** — the mesh becomes a one-part `GeometryDocument` at
+   the identity placement, with whatever unit the source stated (for STL: none).
+10. **Validate the document** (`mesh-core/document-validation`) — the second
+    gate: unique part ids, finite placements, a recognised unit, and the
+    document-wide resource ceilings. Meshes are not re-walked; step 7 already
+    cleared them.
+11. **Commit as resident** — the document is committed to the worker's
+    `ResidentDocumentStore` and STAYS THERE. Only a `DocumentHandle`, scalar
+    part descriptors and render snapshots cross back to the main thread.
 
 ### Geometry ownership
 
 **The worker owns authoritative geometry. The main thread owns pixels.**
 
-|             | Holds                                                | Why                                           |
-| ----------- | ---------------------------------------------------- | --------------------------------------------- |
-| Worker      | `CanonicalMesh` — positions + indices                | Every operation that reads geometry runs here |
-| Main thread | `ModelHandle` + render snapshot (positions, normals) | The GPU needs vertex data; nothing else does  |
+|             | Holds                                                                                 | Why                                           |
+| ----------- | ------------------------------------------------------------------------------------- | --------------------------------------------- |
+| Worker      | `GeometryDocument` — parts, each a `CanonicalMesh` plus a placement                   | Every operation that reads geometry runs here |
+| Main thread | `DocumentHandle`, part descriptors (ids, names, transforms, counts), render snapshots | The GPU needs vertex data; nothing else does  |
 
 Stage 1 did the opposite: it transferred the canonical mesh to the main thread,
 so export had to structured-clone roughly 96 MiB back into the worker for a
@@ -161,6 +167,17 @@ paid the same toll. See
 A handle carries an id AND a revision. Operations name the revision they expect,
 so an operation queued against a model that has since been replaced fails loudly
 instead of silently applying to different geometry.
+
+**Since Stage 4A-2A the authoritative unit is a DOCUMENT holding one or more
+parts, with ONE monotonic revision for the whole document.** An STL still
+describes one thing, so an STL import produces a one-part document and every
+existing workflow behaves as it did. What changed is that operations which read
+or write one mesh — analysis, self-intersection, repair, export — now name a
+`partId` explicitly as well as the handle, because two parts of one document
+carry identical handles and a handle alone can no longer say which mesh a result
+is about. Two parts may share one `CanonicalMesh` object; that sharing survives
+commit, undo, the render snapshot and the GPU upload. See
+[ADR 0014](adr/0014-multi-part-geometry-document-foundation.md).
 
 Import is **transactional**: the candidate is parsed, validated and prepared
 before anything is committed, so a parse failure, a validation failure, a budget
@@ -187,9 +204,16 @@ This was a real defect found by an end-to-end test, not a theoretical concern.
 ## 5. Normalized mesh representation
 
 `CanonicalMesh` is an indexed triangle mesh with optional normals, UVs, and
-groups, plus metadata for unit, transform, and source format. Every reader
-produces it and every writer consumes it, so conversion paths grow linearly with
-format count rather than quadratically.
+groups, plus metadata naming the source format. Every reader produces it and
+every writer consumes it, so conversion paths grow linearly with format count
+rather than quadratically.
+
+**A mesh carries neither a unit nor a transform.** Both were removed in Stage
+4A-2A so each has exactly one authority: unit belongs to the DOCUMENT — a file
+states one unit for everything it contains, and two parts cannot honestly
+disagree — and placement belongs to the PART, so a shared mesh cannot be placed
+two contradictory ways at once. `undefined` unit means unknown and is never
+defaulted to millimetres.
 
 It is deliberately not a BREP/CAD kernel representation. See
 [ADR 0004](adr/0004-canonical-mesh-model.md), including the unresolved Float32
@@ -264,7 +288,7 @@ runtime/analysis-service  (framework-free: dispatch, phase translation,
       |
 GeometryClient.analyzeModel
       |
-model/analyze  ->  worker  ->  ResidentModelStore.resolve  ->  mesh-topology
+model/analyze  ->  worker  ->  ResidentDocumentStore.resolvePart  ->  mesh-topology
 ```
 
 **Analysis starts automatically after a successful import**, because topology
@@ -279,14 +303,20 @@ a model, not a precondition for having one.
 Three independent gates, because this is the failure that would look completely
 plausible on screen:
 
-1. **The service** compares the handle the worker echoes against the handle it
-   requested, and refuses a mismatch.
-2. **The store** refuses a report whose token is superseded _or_ whose handle
-   does not match the currently loaded model — either check alone would leave a
-   path open.
-3. **The viewport** compares the revision again before installing overlays, so
-   the layer that would actually draw the wrong lines verifies rather than trusts
-   its callers.
+1. **The service** compares the handle AND THE PART the worker echoes against
+   what it requested, and refuses a mismatch.
+2. **The store** refuses a report whose token is superseded, _or_ whose handle
+   does not match the currently loaded model, _or_ whose part is not the active
+   one — any check alone would leave a path open.
+3. **The viewport** compares the revision and the active part again before
+   installing overlays, so the layer that would actually draw the wrong lines
+   verifies rather than trusts its callers.
+
+The part is not redundant with the handle. Two parts of one document live at the
+same revision, so a report for part A and a report for part B carry **identical
+handles** — only the part distinguishes them, and without it a report that
+finished after the user switched parts would install itself against geometry
+nobody analysed.
 
 Importing a new model clears the previous report and detail outright rather than
 flagging them stale: a report kept "just in case" is a report some later code

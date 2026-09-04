@@ -16,6 +16,7 @@ import {
 } from '../state/topology-presentation';
 import { AnalysisState, type OverlayId } from '../state/workspace-store';
 import { SelfIntersectionSection } from './SelfIntersectionSection';
+import { describeActivePart } from '../state/part-presentation';
 
 /**
  * Engineering diagnostics for the loaded model.
@@ -34,7 +35,7 @@ import { SelfIntersectionSection } from './SelfIntersectionSection';
  * because an absent row leaves the user wondering whether the check ran.
  */
 export function MeshHealthPanel(): ReactNode {
-  const { model, analysis, overlays } = useWorkspaceState();
+  const { model, activePartId, analysis, overlays } = useWorkspaceState();
   const store = useWorkspaceStore();
   const { runAnalysis, cancelAnalysis, isAnalyzing, canRetry } = useTopologyAnalysis();
 
@@ -60,6 +61,22 @@ export function MeshHealthPanel(): ReactNode {
       <h2 className="panel__title" id="mesh-health-title">
         Mesh Health
       </h2>
+
+      {/*
+        THE SCOPE OF EVERY NUMBER BELOW, stated where the numbers are.
+        Analysis is per part, so on a multi-part document these counts describe
+        ONE part. Leaving that implicit would let "0 boundary edges" read as a
+        statement about the whole model, which nothing here checked. Rendered
+        only when there is more than one part, so the single-part panel is
+        unchanged.
+      */}
+      {model.parts.length > 1 ? (
+        <p className="panel__note" data-testid="health-part-scope">
+          These counts describe <strong>{describeActivePart(model.parts, activePartId)}</strong>{' '}
+          only, of {model.parts.length.toLocaleString()} parts. Each part is analysed separately;
+          nothing here reports how the parts relate to one another.
+        </p>
+      ) : null}
 
       {/* --- B1: source and structure ------------------------------------ */}
       <h3 className="panel__subtitle">Source and structure</h3>

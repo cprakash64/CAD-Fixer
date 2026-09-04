@@ -1,4 +1,4 @@
-import { createIndexArray, createPositionArray, IDENTITY_MATRIX4 } from '@cadfixer/mesh-core';
+import { createIndexArray, createPositionArray } from '@cadfixer/mesh-core';
 import type { CanonicalMesh } from '@cadfixer/mesh-core';
 import {
   LicenceClass,
@@ -68,7 +68,7 @@ function cloneMesh(mesh: CanonicalMesh): CanonicalMesh {
   positions.set(mesh.positions);
   const indices = createIndexArray(mesh.indices.length);
   indices.set(mesh.indices);
-  return { positions, indices, metadata: { sourceFormat: 'stl', transform: IDENTITY_MATRIX4 } };
+  return { positions, indices, metadata: { sourceFormat: 'stl' } };
 }
 
 /** Removes triangles by index, rebuilding soup indices. */
@@ -91,7 +91,7 @@ function withoutTriangles(mesh: CanonicalMesh, drop: ReadonlySet<number>): Canon
   const indices = createIndexArray(kept.length * 3);
   for (let i = 0; i < indices.length; i += 1) indices[i] = i;
 
-  return { positions, indices, metadata: { sourceFormat: 'stl', transform: IDENTITY_MATRIX4 } };
+  return { positions, indices, metadata: { sourceFormat: 'stl' } };
 }
 
 /** Returns the mesh untouched. The "does nothing" baseline. */
@@ -326,7 +326,7 @@ export function substitutingCandidate(): RepairKernelCandidate {
 
       return Promise.resolve(
         outcome(
-          { positions, indices, metadata: { sourceFormat: 'stl', transform: IDENTITY_MATRIX4 } },
+          { positions, indices, metadata: { sourceFormat: 'stl' } },
           { reconstructed: true, warnings: ['returned a rebuilt solid'] },
         ),
       );

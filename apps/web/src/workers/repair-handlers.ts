@@ -1,10 +1,14 @@
 import {
+  assertGeometryDocument,
   assertMeshStructure,
   computeBounds,
+  documentTriangleCount,
+  documentVertexCount,
+  meshByteLength,
   triangleCount,
-  vertexCount,
+  withPartMesh,
 } from '@cadfixer/mesh-core';
-import type { CanonicalMesh } from '@cadfixer/mesh-core';
+import type { CanonicalMesh, GeometryDocument, PartId } from '@cadfixer/mesh-core';
 import type { TopologyReport } from '@cadfixer/mesh-topology';
 import { analyseTopology, estimateTopologyWorkspaceBytes } from '@cadfixer/mesh-topology';
 import {
@@ -15,9 +19,11 @@ import {
   RepairCancelled,
 } from '@cadfixer/mesh-repair';
 import {
-  meshByteLength,
+  documentByteLength,
+  isDocument,
+  isPart,
   requestRepairPeak,
-  type ModelHandle,
+  type DocumentHandle,
   type OperationContext,
   type OperationHandler,
   type RenderSnapshot,
@@ -31,9 +37,10 @@ import {
 } from '@cadfixer/shared';
 import {
   buildRenderSnapshot,
+  describeParts,
   repairCandidates,
   repairHistory,
-  residentModels,
+  residentDocuments,
   topologyReports,
   yieldToEventLoop,
 } from './stl-handlers';
@@ -60,8 +67,39 @@ import {
  * application — the bundle scan checks it.
  */
 
-function isMesh(value: CanonicalMesh | { code: string }): value is CanonicalMesh {
-  return !isAppError(value);
+/**
+ * Builds the document that a part-level replacement produces.
+ *
+ * STRUCTURAL SHARING IS THE POINT, and it is why this goes through
+ * `withPartMesh` rather than rebuilding a document literal: every part other
+ * than the repaired one is carried across BY REFERENCE — the same
+ * `GeometryPart`, the same `CanonicalMesh`, the same buffers. Repairing one
+ * part of a hundred-part document allocates one part record and an array of a
+ * hundred references, never a hundred copies of geometry.
+ *
+ * Unit, order, ids and every placement are untouched: a repair changes one
+ * part's triangles and nothing else about the document.
+ */
+function successorDocument(
+  document: GeometryDocument,
+  part: PartId,
+  mesh: CanonicalMesh,
+  operation: string,
+): GeometryDocument {
+  const next = withPartMesh(document, part, mesh);
+  if (next === undefined) {
+    throw invalidState('That part is no longer in this model.', { partId: part, operation });
+  }
+  /*
+   * Rule 11 at the DOCUMENT level. `assertMeshStructure` has already cleared
+   * the replacement mesh; this checks what only the document can be asked —
+   * that ids are still unique, placements still finite, and the result still
+   * inside the resource ceilings. Meshes are not re-walked: every one of them
+   * was validated when it was admitted, and the only new mesh here was
+   * validated moments ago.
+   */
+  assertGeometryDocument(next, operation, { validateMeshes: false });
+  return next;
 }
 
 /**
@@ -99,11 +137,12 @@ function preflight(
  */
 function reportFor(
   mesh: CanonicalMesh,
-  handle: ModelHandle,
+  handle: DocumentHandle,
+  part: PartId,
   cancellation: CancellationToken,
   onProgress?: (fraction: number) => void,
 ): TopologyReport {
-  const cached = topologyReports.get(handle);
+  const cached = topologyReports.get(handle, part);
   if (cached !== undefined) return cached;
 
   /*
@@ -113,8 +152,9 @@ function reportFor(
    * application and hides the phase a user is most likely to want to cancel.
    */
   const report = analyseTopology(mesh, {
-    modelId: handle.modelId,
-    modelRevision: handle.revision,
+    documentId: handle.documentId,
+    documentRevision: handle.revision,
+    partId: part,
     cancellation,
     ...(onProgress === undefined
       ? {}
@@ -124,7 +164,7 @@ function reportFor(
           },
         }),
   }).report;
-  topologyReports.set(handle, report);
+  topologyReports.set(handle, part, report);
   return report;
 }
 
@@ -177,15 +217,16 @@ function rethrowAsProtocolError(cause: unknown): never {
 
 const runRepairPlan: OperationHandler<'repair/plan'> = async (payload, context) => {
   requireInterruptible(context);
-  const resolved = residentModels.resolve(payload.handle);
-  if (!isMesh(resolved)) throw resolved;
+  const part = residentDocuments.resolvePart(payload.handle, payload.partId as PartId);
+  if (!isPart(part)) throw part;
+  const resolved = part.mesh;
 
   const faceCount = triangleCount(resolved);
   const refusal = preflight('repair/plan', resolved, faceCount, payload.memoryBudgetBytes);
   if (refusal) throw refusal;
 
   context.reportProgress(0, 'planning repair');
-  const report = reportFor(resolved, payload.handle, context.cancellation, (fraction) => {
+  const report = reportFor(resolved, payload.handle, part.id, context.cancellation, (fraction) => {
     context.reportProgress(fraction * 0.9, 'analysing');
   });
 
@@ -198,7 +239,8 @@ const runRepairPlan: OperationHandler<'repair/plan'> = async (payload, context) 
   const { plan } = planConservativeRepair({
     mesh: resolved,
     report,
-    modelId: payload.handle.modelId,
+    documentId: payload.handle.documentId,
+    partId: part.id,
     sourceRevision: payload.handle.revision,
     requested: payload.requested,
     cancellation: context.cancellation,
@@ -208,7 +250,7 @@ const runRepairPlan: OperationHandler<'repair/plan'> = async (payload, context) 
   });
   context.reportProgress(1, 'planned');
 
-  return { value: { handle: payload.handle, plan } };
+  return { value: { handle: payload.handle, partId: part.id, plan } };
 };
 
 /**
@@ -242,8 +284,9 @@ const runRepairCreateCandidate: OperationHandler<'repair/create-candidate'> = as
   context,
 ) => {
   requireInterruptible(context);
-  const resolved = residentModels.resolve(payload.handle);
-  if (!isMesh(resolved)) throw resolved;
+  const part = residentDocuments.resolvePart(payload.handle, payload.partId as PartId);
+  if (!isPart(part)) throw part;
+  const resolved = part.mesh;
 
   const faceCount = triangleCount(resolved);
   const refusal = preflight(
@@ -255,7 +298,7 @@ const runRepairCreateCandidate: OperationHandler<'repair/create-candidate'> = as
   if (refusal) throw refusal;
 
   context.reportProgress(0, 'analysing');
-  const report = reportFor(resolved, payload.handle, context.cancellation, (fraction) => {
+  const report = reportFor(resolved, payload.handle, part.id, context.cancellation, (fraction) => {
     context.reportProgress(fraction * 0.2, 'analysing');
   });
 
@@ -268,7 +311,8 @@ const runRepairCreateCandidate: OperationHandler<'repair/create-candidate'> = as
   const { plan, view, prepared } = planConservativeRepair({
     mesh: resolved,
     report,
-    modelId: payload.handle.modelId,
+    documentId: payload.handle.documentId,
+    partId: part.id,
     sourceRevision: payload.handle.revision,
     requested: payload.requested,
     cancellation: context.cancellation,
@@ -297,7 +341,8 @@ const runRepairCreateCandidate: OperationHandler<'repair/create-candidate'> = as
     plan,
     sourceReport: report,
     cancellation: context.cancellation,
-    modelId: payload.handle.modelId,
+    documentId: payload.handle.documentId,
+    partId: part.id,
     revision: payload.handle.revision,
     view,
     prepared,
@@ -324,6 +369,7 @@ const runRepairCreateCandidate: OperationHandler<'repair/create-candidate'> = as
     outcome.candidate !== undefined && outcome.validation.acceptance === RepairAcceptance.Accepted
       ? repairCandidates.create(
           payload.handle,
+          part.id,
           outcome.candidate,
           outcome.validation,
           outcome.inverse,
@@ -337,6 +383,7 @@ const runRepairCreateCandidate: OperationHandler<'repair/create-candidate'> = as
     value: {
       candidate,
       source: payload.handle,
+      partId: part.id,
       plan,
       validation: outcome.validation,
       counts: outcome.counts,
@@ -377,16 +424,22 @@ export const repairCreateCandidateHandler: OperationHandler<'repair/create-candi
 };
 
 export const repairCommitHandler: OperationHandler<'repair/commit'> = (payload, context) => {
-  const currentRevision = residentModels.revisionOf(payload.expectedSource.modelId);
+  const source = residentDocuments.resolve(payload.expectedSource);
+  if (!isDocument(source)) throw source;
+
+  const currentRevision = residentDocuments.revisionOf(payload.expectedSource.documentId);
   const prepared = repairCandidates.prepareCommit(
     {
       candidate: payload.candidate,
       expectedSource: payload.expectedSource,
+      expectedPart: payload.expectedPart as PartId,
       planHash: payload.planHash,
     },
     currentRevision,
   );
   if (isAppError(prepared)) throw prepared;
+
+  const repairedPart = payload.candidate.partId;
 
   // The inverse patch is read BEFORE the candidate is consumed: `markCommitted`
   // releases the candidate's references, and undo needs the patch afterwards.
@@ -398,18 +451,20 @@ export const repairCommitHandler: OperationHandler<'repair/commit'> = (payload, 
    * If it refuses, the candidate stays RESOLVED and retryable — the failure
    * must not consume it, or a transient race would destroy a valid repair.
    */
-  const next = residentModels.replace(payload.expectedSource, prepared);
+  const successor = successorDocument(source, repairedPart, prepared, 'repair/commit');
+  const next = residentDocuments.replace(payload.expectedSource, successor);
   if (isAppError(next)) throw next;
   repairCandidates.markCommitted(payload.candidate);
 
   // Deterministic identity: lineage, parent and plan. NOT a wall clock — two
   // repairs a millisecond apart must still be distinguishable by what they did,
   // not by when they happened.
-  const repairRecordId = `${next.modelId}@${String(payload.expectedSource.revision)}->${String(next.revision)}#${payload.planHash}`;
+  const repairRecordId = `${next.documentId}/${repairedPart}@${String(payload.expectedSource.revision)}->${String(next.revision)}#${payload.planHash}`;
 
   const entry = repairHistory.record({
     recordId: repairRecordId,
     source: payload.expectedSource,
+    part: repairedPart,
     result: next,
     appliedOperations: validation?.applied ?? [],
     planHash: payload.planHash,
@@ -424,11 +479,15 @@ export const repairCommitHandler: OperationHandler<'repair/commit'> = (payload, 
       handle: next,
       parentRevision: payload.expectedSource.revision,
       repairRecordId,
+      partId: repairedPart,
       appliedOperations: validation?.applied ?? [],
       render,
-      residentBytes: meshByteLength(prepared),
-      triangleCount: triangleCount(prepared),
-      vertexCount: vertexCount(prepared),
+      parts: describeParts(successor),
+      residentBytes: documentByteLength(successor),
+      // DOCUMENT totals: the panel reports the model the user now has, not just
+      // the part that changed.
+      triangleCount: documentTriangleCount(successor),
+      vertexCount: documentVertexCount(successor),
       bounds: computeBounds(prepared),
       undoable: entry.undoable,
     },
@@ -454,15 +513,25 @@ export const repairDiscardHandler: OperationHandler<'repair/discard'> = (payload
  * mesh is not success.
  */
 export const repairUndoHandler: OperationHandler<'repair/undo'> = (payload, context) => {
-  const current = residentModels.resolve(payload.handle);
-  if (!isMesh(current)) throw current;
+  const current = residentDocuments.resolve(payload.handle);
+  if (!isDocument(current)) throw current;
 
-  const currentRevision = residentModels.revisionOf(payload.handle.modelId);
+  const currentRevision = residentDocuments.revisionOf(payload.handle.documentId);
   const preparation = repairHistory.prepareUndo(payload.recordId, payload.handle, currentRevision);
   if (isAppError(preparation)) throw preparation;
 
+  /*
+   * UNDO PUTS GEOMETRY BACK WHERE IT CAME FROM. The part is read from the
+   * RECORD, not from anything the caller sent and not from whatever part the UI
+   * happens to have selected — the patch was computed against one specific
+   * part's mesh, and applying it to another would reconstruct nonsense.
+   */
+  const repairedPart = preparation.entry.partId;
+  const currentPart = residentDocuments.resolvePart(payload.handle, repairedPart);
+  if (!isPart(currentPart)) throw currentPart;
+
   context.reportProgress(0.1, 'restoring previous version');
-  const restored = restoreFromInverse(current, preparation.patch);
+  const restored = restoreFromInverse(currentPart.mesh, preparation.patch);
 
   // Rule 11: the output of a geometry operation is validated before it is
   // accepted, no matter how confident the operation is.
@@ -475,7 +544,8 @@ export const repairUndoHandler: OperationHandler<'repair/undo'> = (payload, cont
     });
   }
 
-  const next = residentModels.replace(payload.handle, restored);
+  const successor = successorDocument(current, repairedPart, restored, 'repair/undo');
+  const next = residentDocuments.replace(payload.handle, successor);
   if (isAppError(next)) throw next;
   repairHistory.markUndone(payload.recordId);
 
@@ -488,11 +558,13 @@ export const repairUndoHandler: OperationHandler<'repair/undo'> = (payload, cont
       revertedRevision: payload.handle.revision,
       restoredRevision: preparation.entry.parentRevision,
       recordId: payload.recordId,
+      partId: repairedPart,
       appliedOperations: preparation.entry.appliedOperations,
       render,
-      residentBytes: meshByteLength(restored),
-      triangleCount: triangleCount(restored),
-      vertexCount: vertexCount(restored),
+      parts: describeParts(successor),
+      residentBytes: documentByteLength(successor),
+      triangleCount: documentTriangleCount(successor),
+      vertexCount: documentVertexCount(successor),
       bounds: computeBounds(restored),
     },
     transfer: [render.positions.buffer, render.normals.buffer],

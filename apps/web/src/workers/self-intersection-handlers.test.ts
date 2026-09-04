@@ -1,11 +1,16 @@
 import { describe, expect, it } from 'vitest';
-import { createIndexArray, createPositionArray, IDENTITY_MATRIX4 } from '@cadfixer/mesh-core';
+import {
+  createIndexArray,
+  createPositionArray,
+  partId,
+  singlePartDocument,
+} from '@cadfixer/mesh-core';
 import type { CanonicalMesh } from '@cadfixer/mesh-core';
 import { SELF_INTERSECTION_MAX_FACES, MAX_TESTED_PAIRS } from '@cadfixer/mesh-self-intersection';
-import type { ModelHandle, OperationContext } from '@cadfixer/geometry-runtime';
+import type { DocumentHandle, OperationContext } from '@cadfixer/geometry-runtime';
 import { AppErrorCode, isAppError, operationCancelled, uncancellable } from '@cadfixer/shared';
 import { modelSendForDiagnosticHandler } from './self-intersection-handlers';
-import { residentModels } from './stl-handlers';
+import { residentDocuments } from './stl-handlers';
 
 /**
  * THE PRODUCER SIDE, and the two things it must never get wrong.
@@ -50,7 +55,7 @@ function soup(faces: number): CanonicalMesh {
     positions[base + 8] = 0;
   }
   for (let i = 0; i < indices.length; i += 1) indices[i] = i;
-  return { positions, indices, metadata: { transform: IDENTITY_MATRIX4 } };
+  return { positions, indices, metadata: {} };
 }
 
 /** A port that records what it was given without needing a real MessageChannel. */
@@ -78,10 +83,12 @@ const limits = {
   maxSamples: 10,
 };
 
+const PART = partId('part-1');
+
 describe('the authoritative geometry survives byte for byte', () => {
   it('leaves every position and index byte untouched after sending a copy', async () => {
     const mesh = soup(64);
-    const handle: ModelHandle = residentModels.commit(mesh);
+    const handle: DocumentHandle = residentDocuments.commit(singlePartDocument(mesh));
 
     // The literal bytes, captured before the handler runs.
     const positionsBefore = new Uint8Array(mesh.positions.buffer.slice(0) as ArrayBuffer);
@@ -90,11 +97,16 @@ describe('the authoritative geometry survives byte for byte', () => {
     const indicesLengthBefore = mesh.indices.length;
 
     const { port, sent } = recordingPort();
-    await modelSendForDiagnosticHandler({ handle, operationId: 'op-1', port, limits }, context());
+    await modelSendForDiagnosticHandler(
+      { handle, partId: PART, operationId: 'op-1', port, limits },
+      context(),
+    );
 
-    const resolved = residentModels.resolve(handle);
-    expect(isAppError(resolved)).toBe(false);
-    if (isAppError(resolved)) return;
+    const resolvedDocument = residentDocuments.resolve(handle);
+    expect(isAppError(resolvedDocument)).toBe(false);
+    if (isAppError(resolvedDocument)) return;
+    const resolved = resolvedDocument.parts[0]?.mesh;
+    if (resolved === undefined) throw new Error('expected a part');
 
     // Lengths first: a transferred (detached) buffer reports zero.
     expect(resolved.positions.length).toBe(positionsLengthBefore);
@@ -124,11 +136,11 @@ describe('the authoritative geometry survives byte for byte', () => {
     // Exact identity recovery is the precondition that makes the kernel's
     // fixed-capacity symbolic buffer safe, so the copy must be deduplicated.
     const mesh = soup(64);
-    const handle: ModelHandle = residentModels.commit(mesh);
+    const handle: DocumentHandle = residentDocuments.commit(singlePartDocument(mesh));
     const { port, sent } = recordingPort();
 
     const outcome = await modelSendForDiagnosticHandler(
-      { handle, operationId: 'op-2', port, limits },
+      { handle, partId: PART, operationId: 'op-2', port, limits },
       context(),
     );
 
@@ -150,13 +162,13 @@ describe('the production ceiling is enforced before anything is copied', () => {
     const mesh: CanonicalMesh = {
       positions: createPositionArray(9),
       indices: createIndexArray(faces * 3),
-      metadata: { transform: IDENTITY_MATRIX4 },
+      metadata: {},
     };
-    const handle: ModelHandle = residentModels.commit(mesh);
+    const handle: DocumentHandle = residentDocuments.commit(singlePartDocument(mesh));
     const { port, sent } = recordingPort();
 
     const cause = await modelSendForDiagnosticHandler(
-      { handle, operationId: 'op-3', port, limits },
+      { handle, partId: PART, operationId: 'op-3', port, limits },
       context(),
     ).catch((error: unknown) => error);
 
@@ -172,12 +184,13 @@ describe('the production ceiling is enforced before anything is copied', () => {
 describe('caps may only be narrowed', () => {
   it('clamps a request that asks for more work than the production ceiling', async () => {
     const mesh = soup(4);
-    const handle: ModelHandle = residentModels.commit(mesh);
+    const handle: DocumentHandle = residentDocuments.commit(singlePartDocument(mesh));
     const { port, sent } = recordingPort();
 
     await modelSendForDiagnosticHandler(
       {
         handle,
+        partId: PART,
         operationId: 'op-4',
         port,
         limits: { maxCandidatePairs: 1e12, maxTestedPairs: 1e12, maxSamples: 1e9 },

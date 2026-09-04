@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createIndexArray, createPositionArray, IDENTITY_MATRIX4 } from '@cadfixer/mesh-core';
+import { createIndexArray, createPositionArray } from '@cadfixer/mesh-core';
 import type { CanonicalMesh } from '@cadfixer/mesh-core';
 import {
   bruteForceNearestDistanceSquared,
@@ -221,12 +221,12 @@ describe('symmetric sampled surface distance', () => {
     const a: CanonicalMesh = {
       positions,
       indices: straight,
-      metadata: { sourceFormat: 'stl', transform: IDENTITY_MATRIX4 },
+      metadata: { sourceFormat: 'stl' },
     };
     const b: CanonicalMesh = {
       positions,
       indices: shuffled,
-      metadata: { sourceFormat: 'stl', transform: IDENTITY_MATRIX4 },
+      metadata: { sourceFormat: 'stl' },
     };
 
     const result = symmetricSampledSurfaceDistance(a, b, FAST);

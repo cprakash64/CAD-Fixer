@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { AppErrorCode, toAppError } from '@cadfixer/shared';
 import {
   RepairAcceptance,
-  type ModelHandle,
+  type DocumentHandle,
   type RepairCandidateHandle,
   type RepairOperation,
 } from '@cadfixer/geometry-runtime';
@@ -77,7 +77,7 @@ const CHANGE_SAMPLE_LIMIT = 256;
 export function useConservativeRepair(): ConservativeRepairControls {
   const store = useWorkspaceStore();
   const client = useGeometryClient();
-  const { model, analysis, repair } = useWorkspaceState();
+  const { model, activePartId, analysis, repair } = useWorkspaceState();
 
   const sessionRef = useRef<RepairSession<unknown> | undefined>(undefined);
   /**
@@ -124,14 +124,15 @@ export function useConservativeRepair(): ConservativeRepairControls {
   /* ---------------------------------------------------------------- plan -- */
 
   const startPlan = useCallback(
-    (handle: ModelHandle, selection: readonly RepairOperation[]): void => {
+    (handle: DocumentHandle, partId: string, selection: readonly RepairOperation[]): void => {
       if (client === undefined) return;
 
       sessionRef.current?.cancel();
-      const token: RepairToken = store.beginRepairPlan(handle, selection);
+      const token: RepairToken = store.beginRepairPlan(handle, partId, selection);
 
       const session = planConservativeRepair({
         handle,
+        partId,
         client,
         requested: selection,
         memoryBudgetBytes: memoryCeiling.bytes,
@@ -179,23 +180,37 @@ export function useConservativeRepair(): ConservativeRepairControls {
      * cancelled, failed, or describes a revision the model has moved past. The
      * panel explains each of those states rather than silently showing nothing.
      */
+    if (activePartId === undefined) {
+      plannedForRef.current = undefined;
+      return;
+    }
+
+    /*
+     * The report must describe THE PART being planned for. Two parts share a
+     * revision, so a handle comparison alone would let part A's report drive a
+     * plan for part B — and the plan would then propose removing faces that
+     * only exist in the other mesh.
+     */
     const reportIsCurrent =
       analysis.state === AnalysisState.Ready &&
       analysis.report !== undefined &&
-      analysis.handle?.modelId === model.handle.modelId &&
-      analysis.handle.revision === model.handle.revision;
+      analysis.handle?.documentId === model.handle.documentId &&
+      analysis.handle.revision === model.handle.revision &&
+      analysis.partId === activePartId;
 
     if (!reportIsCurrent) {
       plannedForRef.current = undefined;
       return;
     }
 
-    const key = `${model.handle.modelId}@${String(model.handle.revision)}#${repair.selection.join(',')}`;
+    const key = `${model.handle.documentId}@${String(model.handle.revision)}/${activePartId}#${repair.selection.join(',')}`;
     if (plannedForRef.current === key) return;
     plannedForRef.current = key;
-    startPlan(model.handle, repair.selection);
+    startPlan(model.handle, activePartId, repair.selection);
   }, [
+    activePartId,
     analysis.handle,
+    analysis.partId,
     analysis.report,
     analysis.state,
     client,
@@ -215,14 +230,14 @@ export function useConservativeRepair(): ConservativeRepairControls {
    * different model does.
    */
   useEffect(() => {
-    const modelId = model?.handle.modelId;
+    const documentId = model?.handle.documentId;
     return (): void => {
       const live = liveCandidateRef.current;
       if (live === undefined) return;
-      if (live.handle.modelId === modelId) return;
+      if (live.handle.documentId === documentId) return;
       releaseCandidate();
     };
-  }, [model?.handle.modelId, releaseCandidate]);
+  }, [model?.handle.documentId, releaseCandidate]);
 
   // Unmount: release whatever is still held, whichever model it belongs to.
   useEffect(() => releaseCandidate, [releaseCandidate]);
@@ -244,9 +259,16 @@ export function useConservativeRepair(): ConservativeRepairControls {
   /* ----------------------------------------------------------- candidate -- */
 
   const previewRepair = useCallback((): void => {
-    if (client === undefined || model === undefined) return;
+    if (client === undefined || model === undefined || activePartId === undefined) return;
     const plan = repair.plan;
     if (plan === undefined || plan.noOp) return;
+    /*
+     * THE CANDIDATE IS BUILT FOR THE PART THE PLAN WAS BUILT FOR. If the user
+     * switched parts since planning, the slice was re-bound and there is no plan
+     * to preview — so this cannot silently build a candidate for the new part
+     * from the old part's plan.
+     */
+    if (repair.partId !== activePartId) return;
 
     // A previous preview is released before a new one is built, so at most one
     // candidate is ever resident. The worker enforces this too.
@@ -259,6 +281,7 @@ export function useConservativeRepair(): ConservativeRepairControls {
 
     const session = createRepairCandidate({
       handle: model.handle,
+      partId: activePartId,
       client,
       requested: repair.selection,
       planHash: plan.planHash,
@@ -298,6 +321,7 @@ export function useConservativeRepair(): ConservativeRepairControls {
         const installed = store.commitRepairCandidate(token, {
           candidate: outcome.candidate,
           source: outcome.source,
+          partId: outcome.partId,
           planHash: outcome.plan.planHash,
           validation: outcome.validation,
           counts: outcome.counts,
@@ -338,7 +362,17 @@ export function useConservativeRepair(): ConservativeRepairControls {
         store.pushStatus(StatusSeverity.Error, failure.message);
       },
     );
-  }, [client, memoryCeiling.bytes, model, releaseCandidate, repair.plan, repair.selection, store]);
+  }, [
+    activePartId,
+    client,
+    memoryCeiling.bytes,
+    model,
+    releaseCandidate,
+    repair.partId,
+    repair.plan,
+    repair.selection,
+    store,
+  ]);
 
   /**
    * Signals cancellation and moves the panel into its transitional state.
@@ -377,6 +411,7 @@ export function useConservativeRepair(): ConservativeRepairControls {
       client,
       candidate: preview.candidate,
       expectedSource: preview.source,
+      expectedPart: preview.partId,
       planHash: preview.planHash,
       onProgress: (progress) => {
         store.reportRepairCommitProgress(progress.fraction, progress.phase);
@@ -394,10 +429,12 @@ export function useConservativeRepair(): ConservativeRepairControls {
           handle: result.handle,
           parentRevision: result.parentRevision,
           recordId: result.repairRecordId,
+          partId: result.partId,
           appliedOperations: result.appliedOperations,
           counts: preview.counts,
           undoable: result.undoable,
           render: result.render,
+          parts: result.parts,
           bounds: result.bounds,
           triangleCount: result.triangleCount,
           vertexCount: result.vertexCount,
@@ -455,7 +492,9 @@ export function useConservativeRepair(): ConservativeRepairControls {
       (result) => {
         const restored = store.applyUndoResult({
           handle: result.handle,
+          partId: result.partId,
           render: result.render,
+          parts: result.parts,
           bounds: result.bounds,
           triangleCount: result.triangleCount,
           vertexCount: result.vertexCount,
@@ -513,10 +552,10 @@ export function useConservativeRepair(): ConservativeRepairControls {
   );
 
   const replan = useCallback((): void => {
-    if (model === undefined) return;
+    if (model === undefined || activePartId === undefined) return;
     plannedForRef.current = undefined;
-    startPlan(model.handle, repair.selection);
-  }, [model, repair.selection, startPlan]);
+    startPlan(model.handle, activePartId, repair.selection);
+  }, [activePartId, model, repair.selection, startPlan]);
 
   return {
     previewRepair,

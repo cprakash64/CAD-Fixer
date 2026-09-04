@@ -76,7 +76,7 @@ describe('an interruptible operation carries its own shared signal', () => {
     const recorded = recordingEndpoint();
     const runtime = coordinator(recorded);
 
-    runtime.dispatch('model/release', { modelId: 'model-1' }, { interruptible: true });
+    runtime.dispatch('model/release', { documentId: 'model-1' }, { interruptible: true });
 
     const [request] = requestsIn(recorded.messages);
     expect(request?.cancellation).toBeInstanceOf(SharedArrayBuffer);
@@ -87,12 +87,12 @@ describe('an interruptible operation carries its own shared signal', () => {
     const recorded = recordingEndpoint();
     const runtime = coordinator(recorded);
 
-    runtime.dispatch('model/release', { modelId: 'model-1' });
+    runtime.dispatch('model/release', { documentId: 'model-1' });
 
     const [request] = requestsIn(recorded.messages);
     expect(request?.cancellation).toBeUndefined();
     // And the handle says so, so a caller can tell what kind of Cancel it has.
-    expect(runtime.dispatch('model/release', { modelId: 'model-2' }).interruptible).toBe(false);
+    expect(runtime.dispatch('model/release', { documentId: 'model-2' }).interruptible).toBe(false);
   });
 
   it('reports interruptibility on the handle', () => {
@@ -101,7 +101,7 @@ describe('an interruptible operation carries its own shared signal', () => {
 
     const handle = runtime.dispatch(
       'model/release',
-      { modelId: 'model-1' },
+      { documentId: 'model-1' },
       { interruptible: true },
     );
     expect(handle.interruptible).toBe(true);
@@ -120,7 +120,7 @@ describe('the atomic store happens before the cancel message', () => {
     const runtime = coordinator(recorded);
     const handle = runtime.dispatch(
       'model/release',
-      { modelId: 'model-1' },
+      { documentId: 'model-1' },
       { interruptible: true },
     );
 
@@ -162,8 +162,8 @@ describe('CC09: a stale cancellation cannot reach a later operation', () => {
     const recorded = recordingEndpoint();
     const runtime = coordinator(recorded);
 
-    const first = runtime.dispatch('model/release', { modelId: 'a' }, { interruptible: true });
-    const second = runtime.dispatch('model/release', { modelId: 'b' }, { interruptible: true });
+    const first = runtime.dispatch('model/release', { documentId: 'a' }, { interruptible: true });
+    const second = runtime.dispatch('model/release', { documentId: 'b' }, { interruptible: true });
 
     const [firstRequest, secondRequest] = requestsIn(recorded.messages);
     expect(firstRequest?.cancellation).not.toBe(secondRequest?.cancellation);
@@ -174,8 +174,8 @@ describe('CC09: a stale cancellation cannot reach a later operation', () => {
     const recorded = recordingEndpoint();
     const runtime = coordinator(recorded);
 
-    const stale = runtime.dispatch('model/release', { modelId: 'a' }, { interruptible: true });
-    const live = runtime.dispatch('model/release', { modelId: 'b' }, { interruptible: true });
+    const stale = runtime.dispatch('model/release', { documentId: 'a' }, { interruptible: true });
+    const live = runtime.dispatch('model/release', { documentId: 'b' }, { interruptible: true });
 
     const [staleRequest, liveRequest] = requestsIn(recorded.messages);
     const staleBuffer = staleRequest?.cancellation;
@@ -196,7 +196,7 @@ describe('CC09: a stale cancellation cannot reach a later operation', () => {
   it('is idempotent when the same operation is cancelled twice', () => {
     const recorded = recordingEndpoint();
     const runtime = coordinator(recorded);
-    const handle = runtime.dispatch('model/release', { modelId: 'a' }, { interruptible: true });
+    const handle = runtime.dispatch('model/release', { documentId: 'a' }, { interruptible: true });
     const buffer = requestsIn(recorded.messages)[0]?.cancellation;
     if (buffer === undefined) return;
 
@@ -220,7 +220,7 @@ describe('cancellation signals do not outlive their operation', () => {
   it('releases the signal when the operation resolves', () => {
     const recorded = recordingEndpoint();
     const runtime = coordinator(recorded);
-    const handle = runtime.dispatch('model/release', { modelId: 'a' }, { interruptible: true });
+    const handle = runtime.dispatch('model/release', { documentId: 'a' }, { interruptible: true });
 
     expect(runtime.liveCancellationSignals).toBe(1);
 
@@ -237,7 +237,7 @@ describe('cancellation signals do not outlive their operation', () => {
   it('releases the signal when the operation fails', () => {
     const recorded = recordingEndpoint();
     const runtime = coordinator(recorded);
-    const handle = runtime.dispatch('model/release', { modelId: 'a' }, { interruptible: true });
+    const handle = runtime.dispatch('model/release', { documentId: 'a' }, { interruptible: true });
     handle.promise.catch(() => undefined);
 
     recorded.deliver({
@@ -253,7 +253,7 @@ describe('cancellation signals do not outlive their operation', () => {
   it('cancels and releases every signal when the runtime is disposed', () => {
     const recorded = recordingEndpoint();
     const runtime = coordinator(recorded);
-    const handle = runtime.dispatch('model/release', { modelId: 'a' }, { interruptible: true });
+    const handle = runtime.dispatch('model/release', { documentId: 'a' }, { interruptible: true });
     handle.promise.catch(() => undefined);
     const buffer = requestsIn(recorded.messages)[0]?.cancellation;
 

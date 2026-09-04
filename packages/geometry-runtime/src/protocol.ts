@@ -1,5 +1,5 @@
 import type { Diagnostic, OperationId, SerializedAppError } from '@cadfixer/shared';
-import type { MeshBounds } from '@cadfixer/mesh-core';
+import type { MeshBounds, PartTransform } from '@cadfixer/mesh-core';
 // Type-only, so no topology code is pulled into the main-thread bundle. The
 // analysis contract is described here rather than left as `unknown`: this is a
 // module boundary, and an unchecked one would let the worker and its consumer
@@ -12,7 +12,7 @@ import type {
   RepairOperation,
   RepairValidation,
 } from '@cadfixer/mesh-repair';
-import type { ModelHandle } from './resident-models';
+import type { DocumentHandle } from './resident-documents';
 import type { RepairCandidateHandle } from './repair-candidates';
 
 /**
@@ -144,7 +144,9 @@ export interface OperationMap {
  * geometry does.
  */
 export interface RepairPlanPayload {
-  readonly handle: ModelHandle;
+  readonly handle: DocumentHandle;
+  /** The part to repair. Repair operates on exactly one part's mesh. */
+  readonly partId: string;
   /** What the caller wants attempted. The plan never widens this. */
   readonly requested: readonly RepairOperation[];
   /** Refuse before allocating if the estimated peak exceeds this. */
@@ -152,12 +154,14 @@ export interface RepairPlanPayload {
 }
 
 export interface RepairPlanOperationResult {
-  readonly handle: ModelHandle;
+  readonly handle: DocumentHandle;
+  readonly partId: string;
   readonly plan: ConservativeRepairPlan;
 }
 
 export interface RepairCandidatePayload {
-  readonly handle: ModelHandle;
+  readonly handle: DocumentHandle;
+  readonly partId: string;
   readonly requested: readonly RepairOperation[];
   /**
    * The plan the caller previewed.
@@ -180,7 +184,9 @@ export interface RepairCandidatePayload {
  */
 export interface RepairCandidateResult {
   readonly candidate: RepairCandidateHandle | undefined;
-  readonly source: ModelHandle;
+  readonly source: DocumentHandle;
+  /** The part the candidate replaces. Never inferred at commit. */
+  readonly partId: string;
   readonly plan: ConservativeRepairPlan;
   readonly validation: RepairValidation;
   readonly counts: RepairChangeCounts;
@@ -194,18 +200,38 @@ export interface RepairCandidateResult {
 export interface RepairCommitPayload {
   readonly candidate: RepairCandidateHandle;
   /** The revision the caller believes is authoritative. Re-checked. */
-  readonly expectedSource: ModelHandle;
+  readonly expectedSource: DocumentHandle;
+  /** The part the caller believes it is replacing. Re-checked against the candidate. */
+  readonly expectedPart: string;
   /** Identity of the validation the caller accepted. */
   readonly planHash: string;
 }
 
 export interface RepairCommitResult {
   /** The NEW revision. Same lineage, parent recorded below. */
-  readonly handle: ModelHandle;
+  readonly handle: DocumentHandle;
   readonly parentRevision: number;
   readonly repairRecordId: string;
+  /** The part that changed. Every other part is unchanged and still shared. */
+  readonly partId: string;
   readonly appliedOperations: readonly RepairOperation[];
+  /**
+   * Drawable buffers for the REPAIRED PART ONLY.
+   *
+   * The other parts did not change, so re-sending them would move megabytes to
+   * redraw pixels that are already correct. The viewport swaps one part's
+   * geometry and leaves the rest of the scene alone.
+   */
   readonly render: RenderSnapshot;
+  /**
+   * Part metadata for the WHOLE successor document.
+   *
+   * Sent rather than patched on the main thread because only the worker knows
+   * what actually happened: a repaired part may have stopped sharing its mesh
+   * with another part, and `meshResourceIndex` is not derivable from anything
+   * the page holds. Scalars and strings, so it costs kilobytes.
+   */
+  readonly parts: readonly PartDescriptor[];
   readonly residentBytes: number;
   /**
    * Facts about the committed geometry, so the application can update the model
@@ -244,21 +270,26 @@ export interface RepairDiscardResult {
  */
 export interface RepairUndoPayload {
   /** The revision the caller believes is authoritative: the repaired one. */
-  readonly handle: ModelHandle;
+  readonly handle: DocumentHandle;
   /** Identity of the commit being reversed. */
   readonly recordId: string;
 }
 
 export interface RepairUndoResult {
   /** The NEW revision, holding the restored pre-repair geometry. */
-  readonly handle: ModelHandle;
+  readonly handle: DocumentHandle;
   /** The revision that was authoritative before the undo. */
   readonly revertedRevision: number;
   /** The revision whose geometry has been reproduced. */
   readonly restoredRevision: number;
   readonly recordId: string;
+  /** The part whose geometry was restored. */
+  readonly partId: string;
   readonly appliedOperations: readonly RepairOperation[];
+  /** Drawable buffers for the RESTORED PART ONLY. See `RepairCommitResult.render`. */
   readonly render: RenderSnapshot;
+  /** Part metadata for the whole restored document. See `RepairCommitResult.parts`. */
+  readonly parts: readonly PartDescriptor[];
   readonly residentBytes: number;
   readonly triangleCount: number;
   readonly vertexCount: number;
@@ -309,6 +340,55 @@ export interface RenderSnapshot {
 }
 
 /**
+ * WHAT THE MAIN THREAD IS ALLOWED TO KNOW ABOUT A PART.
+ *
+ * Identifiers, a name, a placement and scalar counts. NOT the mesh, and not the
+ * canonical buffers: those stay worker-resident exactly as they did when a
+ * model was one mesh. Everything here is either a string, a number, or the
+ * twelve numbers of a placement, so a hundred-part document costs the page a
+ * few kilobytes of metadata rather than a hundred meshes.
+ */
+export interface PartDescriptor {
+  /** Stable within the document. Names the part in every part-targeted request. */
+  readonly partId: string;
+  readonly name?: string;
+  readonly transform: PartTransform;
+  readonly triangleCount: number;
+  readonly vertexCount: number;
+  /** In PART-LOCAL coordinates, before the placement above is applied. */
+  readonly bounds: MeshBounds | undefined;
+  /**
+   * Which distinct mesh resource this part uses.
+   *
+   * Parts with EQUAL indices share one authoritative mesh in the worker. This
+   * exists so the page can reason about — and a test can assert — structural
+   * sharing without ever seeing the geometry that is shared.
+   */
+  readonly meshResourceIndex: number;
+}
+
+/**
+ * One part's drawable buffers.
+ *
+ * The placement is carried BESIDE the positions, never baked into them: the
+ * renderer applies it as an object transform, so two parts sharing one mesh
+ * resource can share these buffers too and still stand in different places.
+ */
+export interface PartRenderSnapshot {
+  readonly partId: string;
+  readonly transform: PartTransform;
+  /** Interleaved XYZ, three vertices per triangle, drawn non-indexed. */
+  readonly positions: Float32Array;
+  readonly normals: Float32Array;
+  readonly vertexCount: number;
+}
+
+/** Everything the viewport needs to draw a whole document. */
+export interface DocumentRenderSnapshot {
+  readonly parts: readonly PartRenderSnapshot[];
+}
+
+/**
  * Everything the application needs about an imported model.
  *
  * Statistics are computed IN THE WORKER, during the pass that already has the
@@ -316,8 +396,8 @@ export interface RenderSnapshot {
  * buffer to fill in a details panel.
  */
 export interface ModelImportResult {
-  /** Identifies the geometry that now lives in the worker. */
-  readonly handle: ModelHandle;
+  /** Identifies the DOCUMENT that now lives in the worker. */
+  readonly handle: DocumentHandle;
   /** `binary` or `ascii`, as actually detected — never guessed from the name. */
   readonly encoding: string;
   /**
@@ -328,10 +408,19 @@ export interface ModelImportResult {
    * — and must not be flattened into a default on the way across.
    */
   readonly unit: string | undefined;
+  /**
+   * The document's world-space extent, for framing the camera.
+   *
+   * Unions each part's local box AFTER its placement, so a document whose parts
+   * are spread out frames all of them rather than only the first.
+   */
   readonly bounds: MeshBounds | undefined;
+  /** Summed across every part. */
   readonly triangleCount: number;
   readonly vertexCount: number;
-  readonly render: RenderSnapshot;
+  /** Ordered as the document orders its parts. */
+  readonly parts: readonly PartDescriptor[];
+  readonly render: DocumentRenderSnapshot;
   readonly warnings: readonly Diagnostic[];
   /** Structural validation summary. The import already passed the gate. */
   readonly validation: MeshValidationSummary;
@@ -359,7 +448,18 @@ export interface MeshValidationSummary {
  * than a handle crosses the boundary.
  */
 export interface ModelExportPayload {
-  readonly handle: ModelHandle;
+  readonly handle: DocumentHandle;
+  /**
+   * The part to write.
+   *
+   * STL HAS ONE IMPLICIT PART. It has no way to say "these are three separate
+   * objects", so exporting a multi-part document to STL either flattens it —
+   * losing the structure the document exists to preserve — or writes one part.
+   * This operation writes ONE, names it explicitly, and returns a warning
+   * listing what was left out. Whole-document STL export waits for Stage
+   * 4A-2B's conversion report, which can state the loss properly.
+   */
+  readonly partId: string;
   readonly encoding: string;
 }
 
@@ -389,7 +489,15 @@ export interface ModelExportPayload {
  * than silently producing a report for different geometry.
  */
 export interface ModelAnalyzePayload {
-  readonly handle: ModelHandle;
+  readonly handle: DocumentHandle;
+  /**
+   * The part to analyse.
+   *
+   * PART-TARGETED, NOT DOCUMENT-WIDE. Analysing every part as one mesh would
+   * report shared edges between parts the file declared separate, which is a
+   * claim about the model that nothing checked.
+   */
+  readonly partId: string;
   /** Caps retained detail samples per category. */
   readonly sampleLimit?: number;
 }
@@ -401,14 +509,41 @@ export interface ModelAnalyzePayload {
  * model it has already replaced — the application cannot rely on arrival order.
  */
 export interface ModelAnalyzeResult {
-  readonly handle: ModelHandle;
+  readonly handle: DocumentHandle;
+  /**
+   * Echoed alongside the handle so a consumer can discard a report for a part
+   * it is no longer showing. A late report for part A must never be displayed
+   * as part B's.
+   */
+  readonly partId: string;
   readonly report: TopologyReport;
   readonly detail: TopologyDetail;
 }
 
 export interface ModelReleasePayload {
-  readonly modelId: string;
+  readonly documentId: string;
 }
+
+/**
+ * Operation scope, recorded here so the classification is part of the protocol
+ * rather than of somebody's memory.
+ *
+ *   runtime/self-test           — neither; carries no geometry
+ *   model/import                — DOCUMENT-level: produces a whole document
+ *   model/release               — DOCUMENT-level
+ *   model/export                — PART-targeted
+ *   model/analyze               — PART-targeted
+ *   model/send-for-diagnostic   — PART-targeted
+ *   repair/plan                 — PART-targeted
+ *   repair/create-candidate     — PART-targeted
+ *   repair/commit               — PART-targeted; commits a DOCUMENT revision
+ *   repair/discard              — candidate-scoped (the candidate names its part)
+ *   repair/undo                 — DOCUMENT-level transaction restoring one part
+ *
+ * Every part-targeted request carries its `partId` EXPLICITLY. The authoritative
+ * worker never infers a target from UI selection state: a request is executable
+ * from its payload alone, or it is refused.
+ */
 
 export interface ModelReleaseResult {
   readonly released: boolean;
@@ -432,7 +567,16 @@ export interface StlExportResult {
  * detached and survive whatever happens to the diagnostic worker.
  */
 export interface SendForDiagnosticPayload {
-  readonly handle: ModelHandle;
+  readonly handle: DocumentHandle;
+  /**
+   * The part to copy.
+   *
+   * Self-intersection asks whether ONE part's own faces cross. Two independent
+   * parts that overlap in world space are not self-intersecting, and sending a
+   * flattened document would report exactly that falsehood. Inter-part overlap
+   * is a different question with no implementation — see ADR 0013.
+   */
+  readonly partId: string;
   readonly operationId: string;
   readonly port: ProtocolPort;
   readonly limits: {

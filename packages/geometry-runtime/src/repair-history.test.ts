@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
+import { partId } from '@cadfixer/mesh-core';
 import { isAppError, AppErrorCode } from '@cadfixer/shared';
 import type { RepairInversePatch } from '@cadfixer/mesh-repair';
 import { RepairHistoryStore } from './repair-history';
-import type { ModelHandle, ModelId } from './resident-models';
+import type { DocumentHandle, DocumentId } from './resident-documents';
 
 /**
  * UNDO IS A TRANSACTION, so its guards are tested like a transaction's: every
@@ -14,8 +15,11 @@ import type { ModelHandle, ModelId } from './resident-models';
  * the user's model rather than failing loudly.
  */
 
-function handle(revision: number, modelId = 'model-1'): ModelHandle {
-  return { modelId: modelId as ModelId, revision };
+/** The part every fixture record names. Undo restores geometry to one part. */
+const PART = partId('part-1');
+
+function handle(revision: number, documentId = 'model-1'): DocumentHandle {
+  return { documentId: documentId as DocumentId, revision };
 }
 
 function patch(faceCount = 4, byteLength = 128): RepairInversePatch {
@@ -33,6 +37,7 @@ function patch(faceCount = 4, byteLength = 128): RepairInversePatch {
 function recordOne(store: RepairHistoryStore, from = 1, to = 2, recordId = 'r1'): void {
   store.record({
     recordId,
+    part: PART,
     source: handle(from),
     result: handle(to),
     appliedOperations: ['remove-duplicate-faces'],
@@ -46,7 +51,7 @@ describe('recording a committed repair', () => {
     const store = new RepairHistoryStore();
     recordOne(store);
 
-    const entry = store.undoableFor('model-1' as ModelId);
+    const entry = store.undoableFor('model-1' as DocumentId);
     expect(entry).toBeDefined();
     expect(entry?.parentRevision).toBe(1);
     expect(entry?.resultRevision).toBe(2);
@@ -61,6 +66,7 @@ describe('recording a committed repair', () => {
   it('is not undoable when no inverse patch was produced', () => {
     const store = new RepairHistoryStore();
     store.record({
+      part: PART,
       recordId: 'r1',
       source: handle(1),
       result: handle(2),
@@ -69,7 +75,7 @@ describe('recording a committed repair', () => {
       inverse: undefined,
     });
 
-    expect(store.undoableFor('model-1' as ModelId)).toBeUndefined();
+    expect(store.undoableFor('model-1' as DocumentId)).toBeUndefined();
     expect(store.entryOf('r1')?.undoable).toBe(false);
   });
 
@@ -82,7 +88,7 @@ describe('recording a committed repair', () => {
 
     // The newer repair is the undoable one, and the older patch is gone rather
     // than accumulating for the lifetime of the session.
-    expect(store.undoableFor('model-1' as ModelId)?.recordId).toBe('r2');
+    expect(store.undoableFor('model-1' as DocumentId)?.recordId).toBe('r2');
     expect(store.entryOf('r1')?.undoable).toBe(false);
     expect(store.stats().undoableCount).toBe(1);
     expect(store.stats().retainedBytes).toBe(128);
@@ -92,6 +98,7 @@ describe('recording a committed repair', () => {
     const store = new RepairHistoryStore();
     recordOne(store, 1, 2, 'r1');
     store.record({
+      part: PART,
       recordId: 'other',
       source: handle(1, 'model-2'),
       result: handle(2, 'model-2'),
@@ -100,8 +107,8 @@ describe('recording a committed repair', () => {
       inverse: patch(),
     });
 
-    expect(store.undoableFor('model-1' as ModelId)?.recordId).toBe('r1');
-    expect(store.undoableFor('model-2' as ModelId)?.recordId).toBe('other');
+    expect(store.undoableFor('model-1' as DocumentId)?.recordId).toBe('r1');
+    expect(store.undoableFor('model-2' as DocumentId)?.recordId).toBe('other');
     expect(store.stats().undoableCount).toBe(2);
   });
 });
@@ -181,7 +188,7 @@ describe('the undo guards', () => {
 
     expect(isAppError(store.prepareUndo('r1', handle(2), 2))).toBe(false);
     expect(isAppError(store.prepareUndo('r1', handle(2), 2))).toBe(false);
-    expect(store.undoableFor('model-1' as ModelId)?.undoable).toBe(true);
+    expect(store.undoableFor('model-1' as DocumentId)?.undoable).toBe(true);
   });
 });
 
@@ -190,9 +197,9 @@ describe('release', () => {
     const store = new RepairHistoryStore();
     recordOne(store);
 
-    store.releaseModel('model-1' as ModelId);
+    store.releaseDocument('model-1' as DocumentId);
 
-    expect(store.undoableFor('model-1' as ModelId)).toBeUndefined();
+    expect(store.undoableFor('model-1' as DocumentId)).toBeUndefined();
     expect(store.stats().retainedBytes).toBe(0);
     expect(isAppError(store.prepareUndo('r1', handle(2), 2))).toBe(true);
   });
@@ -213,6 +220,7 @@ describe('release', () => {
     recordOne(store, 1, 2, 'keep-me');
     for (let index = 0; index < 200; index += 1) {
       store.record({
+        part: PART,
         recordId: `noise-${String(index)}`,
         source: handle(1, `model-${String(index + 10)}`),
         result: handle(2, `model-${String(index + 10)}`),
@@ -224,6 +232,6 @@ describe('release', () => {
 
     expect(store.stats().recordCount).toBeLessThanOrEqual(64);
     // The user's one reversible repair survived the cap.
-    expect(store.undoableFor('model-1' as ModelId)?.recordId).toBe('keep-me');
+    expect(store.undoableFor('model-1' as DocumentId)?.recordId).toBe('keep-me');
   });
 });

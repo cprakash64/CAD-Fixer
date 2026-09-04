@@ -52,8 +52,9 @@ describe('non-mutation', () => {
     const indicesBefore = new Uint8Array(mesh.indices.buffer.slice(0));
 
     analyseTopology(mesh, {
-      modelId: 'model-1',
-      modelRevision: 1,
+      documentId: 'model-1',
+      partId: 'part-1',
+      documentRevision: 1,
       cancellation: uncancellable,
     });
 
@@ -66,8 +67,9 @@ describe('non-mutation', () => {
     const before = new Uint8Array(mesh.positions.buffer.slice(0));
 
     analyseTopology(mesh, {
-      modelId: 'model-1',
-      modelRevision: 1,
+      documentId: 'model-1',
+      partId: 'part-1',
+      documentRevision: 1,
       cancellation: uncancellable,
     });
 
@@ -79,8 +81,9 @@ describe('non-mutation', () => {
     const cornersBefore = mesh.positions.length;
 
     const { report } = analyseTopology(mesh, {
-      modelId: 'model-1',
-      modelRevision: 1,
+      documentId: 'model-1',
+      partId: 'part-1',
+      documentRevision: 1,
       cancellation: uncancellable,
     });
 
@@ -95,8 +98,9 @@ describe('non-mutation', () => {
 
     try {
       analyseTopology(mesh, {
-        modelId: 'model-1',
-        modelRevision: 1,
+        documentId: 'model-1',
+        partId: 'part-1',
+        documentRevision: 1,
         cancellation: source.token,
         onPhaseStart: (phase) => {
           if (phase === 'building edges') source.cancel();
@@ -119,8 +123,9 @@ describe('determinism', () => {
   it('produces identical reports across repeated runs', () => {
     const mesh = fixtures.cubeMissingOneFace();
     const options = {
-      modelId: 'model-1',
-      modelRevision: 1,
+      documentId: 'model-1',
+      partId: 'part-1',
+      documentRevision: 1,
       cancellation: uncancellable,
     };
 
@@ -135,8 +140,9 @@ describe('determinism', () => {
   it('produces identical detail samples across repeated runs', () => {
     const mesh = fixtures.cubeMissingOneFace();
     const options = {
-      modelId: 'model-1',
-      modelRevision: 1,
+      documentId: 'model-1',
+      partId: 'part-1',
+      documentRevision: 1,
       cancellation: uncancellable,
     };
 
@@ -151,8 +157,9 @@ describe('determinism', () => {
     const mesh = fixtures.twoTetrahedra();
 
     const report = analyseTopology(mesh, {
-      modelId: 'model-1',
-      modelRevision: 1,
+      documentId: 'model-1',
+      partId: 'part-1',
+      documentRevision: 1,
       cancellation: uncancellable,
     }).report;
 
@@ -165,8 +172,9 @@ describe('progress', () => {
     const seen: TopologyProgress[] = [];
 
     const { report } = analyseTopology(busyMesh(), {
-      modelId: 'model-1',
-      modelRevision: 1,
+      documentId: 'model-1',
+      partId: 'part-1',
+      documentRevision: 1,
       cancellation: uncancellable,
       onProgress: (progress) => seen.push(progress),
     });
@@ -188,8 +196,9 @@ describe('progress', () => {
     const phases = new Set<string>();
 
     analyseTopology(fixtures.tetrahedron(), {
-      modelId: 'model-1',
-      modelRevision: 1,
+      documentId: 'model-1',
+      partId: 'part-1',
+      documentRevision: 1,
       cancellation: uncancellable,
       onProgress: (progress) => phases.add(progress.phase),
     });
@@ -209,8 +218,9 @@ describe('cancellation', () => {
     const source = new CancellationSource();
     try {
       analyseTopology(busyMesh(), {
-        modelId: 'model-1',
-        modelRevision: 1,
+        documentId: 'model-1',
+        partId: 'part-1',
+        documentRevision: 1,
         cancellation: source.token,
         onPhaseStart: (started) => {
           if (started === phase) source.cancel();
@@ -239,8 +249,9 @@ describe('cancellation', () => {
 
     try {
       result = analyseTopology(busyMesh(), {
-        modelId: 'model-1',
-        modelRevision: 1,
+        documentId: 'model-1',
+        partId: 'part-1',
+        documentRevision: 1,
         cancellation: source.token,
         onPhaseStart: (phase) => {
           if (phase === 'finding components') source.cancel();
@@ -260,8 +271,9 @@ describe('cancellation', () => {
 
     try {
       analyseTopology(busyMesh(), {
-        modelId: 'model-1',
-        modelRevision: 1,
+        documentId: 'model-1',
+        partId: 'part-1',
+        documentRevision: 1,
         cancellation: source.token,
         onProgress: (progress) => seen.push(progress.fraction),
         onPhaseStart: (phase) => {
@@ -286,8 +298,9 @@ describe('global versus component-local counts', () => {
    */
   it('partitions faces and edges, but not vertices', () => {
     const { report } = analyseTopology(fixtures.tetrahedraTouchingAtOneVertex(), {
-      modelId: 'model-1',
-      modelRevision: 1,
+      documentId: 'model-1',
+      partId: 'part-1',
+      documentRevision: 1,
       cancellation: uncancellable,
     });
 
@@ -307,13 +320,15 @@ describe('global versus component-local counts', () => {
 
   it('keeps global counts deduplicated when components overlap', () => {
     const shared = analyseTopology(fixtures.tetrahedraTouchingAtOneVertex(), {
-      modelId: 'model-1',
-      modelRevision: 1,
+      documentId: 'model-1',
+      partId: 'part-1',
+      documentRevision: 1,
       cancellation: uncancellable,
     }).report;
     const separate = analyseTopology(fixtures.twoTetrahedra(), {
-      modelId: 'model-1',
-      modelRevision: 1,
+      documentId: 'model-1',
+      partId: 'part-1',
+      documentRevision: 1,
       cancellation: uncancellable,
     }).report;
 
@@ -332,8 +347,9 @@ describe('global versus component-local counts', () => {
     const before = new Uint8Array(mesh.positions.buffer.slice(0));
 
     analyseTopology(mesh, {
-      modelId: 'model-1',
-      modelRevision: 1,
+      documentId: 'model-1',
+      partId: 'part-1',
+      documentRevision: 1,
       cancellation: uncancellable,
     });
 
@@ -350,8 +366,9 @@ describe('bounded detail output', () => {
    */
   it('emits no vertex payload for a mesh with nothing to point at', () => {
     const { detail } = analyseTopology(fixtures.tetrahedron(), {
-      modelId: 'model-1',
-      modelRevision: 1,
+      documentId: 'model-1',
+      partId: 'part-1',
+      documentRevision: 1,
       cancellation: uncancellable,
     });
 
@@ -364,8 +381,9 @@ describe('bounded detail output', () => {
   it('does not grow the payload as a defect-free mesh grows', () => {
     const measure = (mesh: CanonicalMesh): number => {
       const { detail } = analyseTopology(mesh, {
-        modelId: 'model-1',
-        modelRevision: 1,
+        documentId: 'model-1',
+        partId: 'part-1',
+        documentRevision: 1,
         cancellation: uncancellable,
       });
       return detail.sampleVertexIds.byteLength + detail.sampleVertexPositions.byteLength;
@@ -389,8 +407,9 @@ describe('bounded detail output', () => {
     }
 
     const { report } = analyseTopology(mesh, {
-      modelId: 'model-1',
-      modelRevision: 1,
+      documentId: 'model-1',
+      partId: 'part-1',
+      documentRevision: 1,
       cancellation: uncancellable,
       componentSummaryLimit: 4,
     });
@@ -408,8 +427,9 @@ describe('bounded detail output', () => {
 
   it('carries exactly the vertices its samples name, in ascending order', () => {
     const { detail } = analyseTopology(fixtures.cubeMissingOneFace(), {
-      modelId: 'model-1',
-      modelRevision: 1,
+      documentId: 'model-1',
+      partId: 'part-1',
+      documentRevision: 1,
       cancellation: uncancellable,
     });
 

@@ -8,16 +8,33 @@ import {
 } from './workspace-store';
 import { WorkflowId } from './workflows';
 import type { LoadedModel } from './model';
-import type { ModelId } from '@cadfixer/geometry-runtime';
+import { IDENTITY_PART_TRANSFORM } from '@cadfixer/mesh-core';
+import type { DocumentId } from '@cadfixer/geometry-runtime';
 
 /** A minimal stand-in model. The store never inspects geometry, only holds it. */
 function sampleModel(fileName: string): Omit<LoadedModel, 'revision'> {
   return {
-    handle: { modelId: `model-${fileName}` as ModelId, revision: 1 },
+    handle: { documentId: `model-${fileName}` as DocumentId, revision: 1 },
+    parts: [
+      {
+        partId: 'part-1',
+        transform: IDENTITY_PART_TRANSFORM,
+        triangleCount: 1,
+        vertexCount: 3,
+        bounds: undefined,
+        meshResourceIndex: 0,
+      },
+    ],
     render: {
-      positions: new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]),
-      normals: new Float32Array([0, 0, 1, 0, 0, 1, 0, 0, 1]),
-      vertexCount: 3,
+      parts: [
+        {
+          partId: 'part-1',
+          transform: IDENTITY_PART_TRANSFORM,
+          positions: new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]),
+          normals: new Float32Array([0, 0, 1, 0, 0, 1, 0, 0, 1]),
+          vertexCount: 3,
+        },
+      ],
     },
     bounds: {
       min: [0, 0, 0],

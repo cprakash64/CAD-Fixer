@@ -1,5 +1,5 @@
 import { malformedFile, throwIfCancelled, unsupportedFile } from '@cadfixer/shared';
-import { IDENTITY_MATRIX4, type CanonicalMesh } from '@cadfixer/mesh-core';
+import type { CanonicalMesh } from '@cadfixer/mesh-core';
 import { checkInputSize } from '../budget';
 import type { FormatReadContext, MeshReadResult } from '../context';
 import { MeshFormatId } from '../formats';
@@ -46,21 +46,21 @@ export async function readStl(
     ...(raw.groups.length > 0 ? { groups: raw.groups } : {}),
     metadata: {
       sourceFormat: MeshFormatId.Stl,
-      // `unit` is deliberately OMITTED, not set to a value.
-      //
-      // STL has no standardised model-unit field, so the honest statement is
-      // "the source did not say". An absent `unit` is exactly how the canonical
-      // contract represents that. Defaulting to millimetres — which most STL
-      // consumers quietly do — would be inventing information about the user's
-      // model, and the interface would then display a unit the file never
-      // contained. The UI reads the absence and shows "Unspecified by STL".
-      //
-      // No transform is applied on import either: the file's coordinates are
-      // the model's coordinates.
-      transform: IDENTITY_MATRIX4,
     },
   };
 
+  /*
+   * `unit` is deliberately ABSENT from the result, not set to a value.
+   *
+   * STL has no standardised model-unit field, so the honest statement is "the
+   * source did not say". Defaulting to millimetres — which most STL consumers
+   * quietly do — would invent information about the user's model, and the
+   * interface would then display a unit the file never contained. The document
+   * layer carries the absence through and the UI shows "Unspecified by STL".
+   *
+   * No transform is applied on import either: the file's coordinates are the
+   * model's coordinates. Placement belongs to the part that holds this mesh.
+   */
   return { mesh, encoding: detection.encoding, warnings: raw.warnings };
 }
 

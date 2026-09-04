@@ -7,7 +7,7 @@ import {
   type ProgressUpdate,
   type SelfTestResult,
   type ModelAnalyzeResult,
-  type ModelHandle,
+  type DocumentHandle,
   type ModelImportResult,
   type ModelReleaseResult,
   type RepairCandidateHandle,
@@ -188,11 +188,12 @@ export class GeometryClient {
    * two-million-triangle model — because the main thread owned it.
    */
   public exportModel(
-    handle: ModelHandle,
+    handle: DocumentHandle,
+    partId: string,
     encoding: string,
     onProgress: (update: ProgressUpdate) => void,
   ): OperationHandle<StlExportResult> {
-    return this.coordinator.dispatch('model/export', { handle, encoding }, { onProgress });
+    return this.coordinator.dispatch('model/export', { handle, partId, encoding }, { onProgress });
   }
 
   /**
@@ -204,13 +205,14 @@ export class GeometryClient {
    * the defects somewhere.
    */
   public analyzeModel(
-    handle: ModelHandle,
+    handle: DocumentHandle,
+    partId: string,
     onProgress: (update: ProgressUpdate) => void,
     sampleLimit?: number,
   ): OperationHandle<ModelAnalyzeResult> {
     return this.coordinator.dispatch(
       'model/analyze',
-      sampleLimit === undefined ? { handle } : { handle, sampleLimit },
+      sampleLimit === undefined ? { handle, partId } : { handle, partId, sampleLimit },
       { onProgress },
     );
   }
@@ -227,7 +229,8 @@ export class GeometryClient {
    * being terminated.
    */
   public async sendForDiagnostic(request: {
-    handle: ModelHandle;
+    handle: DocumentHandle;
+    partId: string;
     operationId: string;
     port: MessagePort;
     limits: { maxCandidatePairs: number; maxTestedPairs: number; maxSamples: number };
@@ -236,6 +239,7 @@ export class GeometryClient {
       'model/send-for-diagnostic',
       {
         handle: request.handle,
+        partId: request.partId,
         operationId: request.operationId,
         port: request.port,
         limits: request.limits,
@@ -255,7 +259,8 @@ export class GeometryClient {
    * enforces that; a message cannot buy itself more memory.
    */
   public planRepair(
-    handle: ModelHandle,
+    handle: DocumentHandle,
+    partId: string,
     requested: readonly RepairOperation[],
     onProgress: (update: ProgressUpdate) => void,
     memoryBudgetBytes?: number,
@@ -263,8 +268,8 @@ export class GeometryClient {
     return this.coordinator.dispatch(
       'repair/plan',
       memoryBudgetBytes === undefined
-        ? { handle, requested }
-        : { handle, requested, memoryBudgetBytes },
+        ? { handle, partId, requested }
+        : { handle, partId, requested, memoryBudgetBytes },
       // Planning builds connectivity and can be seconds on a large model, so it
       // gets a signal that can interrupt it rather than one that waits for the
       // event loop.
@@ -281,7 +286,8 @@ export class GeometryClient {
    * authoritative model's does.
    */
   public createRepairCandidate(
-    handle: ModelHandle,
+    handle: DocumentHandle,
+    partId: string,
     requested: readonly RepairOperation[],
     planHash: string,
     onProgress: (update: ProgressUpdate) => void,
@@ -291,6 +297,7 @@ export class GeometryClient {
       'repair/create-candidate',
       {
         handle,
+        partId,
         requested,
         planHash,
         ...(options.memoryBudgetBytes === undefined
@@ -308,20 +315,21 @@ export class GeometryClient {
   /**
    * Applies a validated candidate, producing a new revision.
    *
-   * THE TRANSACTION LIVES IN THE WORKER. This method sends three identifiers and
+   * THE TRANSACTION LIVES IN THE WORKER. This method sends four identifiers and
    * nothing else; every guard — revision currency, candidate state, validation
    * acceptance, plan identity, single use — is re-checked there. The UI cannot
    * talk its way past any of them, which is the point.
    */
   public commitRepair(
     candidate: RepairCandidateHandle,
-    expectedSource: ModelHandle,
+    expectedSource: DocumentHandle,
+    expectedPart: string,
     planHash: string,
     onProgress: (update: ProgressUpdate) => void,
   ): OperationHandle<RepairCommitResult> {
     return this.coordinator.dispatch(
       'repair/commit',
-      { candidate, expectedSource, planHash },
+      { candidate, expectedSource, expectedPart, planHash },
       { onProgress },
     );
   }
@@ -341,7 +349,7 @@ export class GeometryClient {
    * swaps it in as a new monotonic revision. See ADR 0011.
    */
   public undoRepair(
-    handle: ModelHandle,
+    handle: DocumentHandle,
     recordId: string,
     onProgress: (update: ProgressUpdate) => void,
   ): OperationHandle<RepairUndoResult> {
@@ -349,8 +357,8 @@ export class GeometryClient {
   }
 
   /** Frees a model the application no longer displays. */
-  public releaseModel(modelId: string): OperationHandle<ModelReleaseResult> {
-    return this.coordinator.dispatch('model/release', { modelId });
+  public releaseModel(documentId: string): OperationHandle<ModelReleaseResult> {
+    return this.coordinator.dispatch('model/release', { documentId });
   }
 
   public dispose(): void {

@@ -1,4 +1,4 @@
-import type { CancellationToken, Diagnostic } from '@cadfixer/shared';
+import type { CancellationToken, Diagnostic, LengthUnit } from '@cadfixer/shared';
 import type { CanonicalMesh } from '@cadfixer/mesh-core';
 import type { ImportBudget } from './budget';
 
@@ -80,6 +80,19 @@ export interface MeshReadResult {
   readonly mesh: CanonicalMesh;
   /** The encoding actually detected, e.g. `binary` or `ascii`. */
   readonly encoding: string;
+  /**
+   * The unit the SOURCE stated, or absent when it stated none.
+   *
+   * ON THE RESULT, NOT ON THE MESH. Physical unit is a property of the document
+   * a file describes, not of one triangle soup inside it: a 3MF file states one
+   * unit for everything it contains, and two parts of one document cannot
+   * honestly disagree about it. Leaving it here means there is exactly one place
+   * the value travels and exactly one place it lands — `GeometryDocument.unit`.
+   *
+   * Absent is meaningful and must never be flattened into a default. STL and OBJ
+   * state no unit.
+   */
+  readonly unit?: LengthUnit;
   /** Non-fatal findings. An empty array means a clean import. */
   readonly warnings: readonly Diagnostic[];
 }

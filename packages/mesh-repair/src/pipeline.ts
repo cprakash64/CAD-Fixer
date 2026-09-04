@@ -45,7 +45,9 @@ export interface RepairExecutionInput {
   readonly plan: ConservativeRepairPlan;
   readonly sourceReport: TopologyReport;
   readonly cancellation: CancellationToken;
-  readonly modelId: string;
+  readonly documentId: string;
+  /** The part being repaired. Carried into the candidate's topology report. */
+  readonly partId: string;
   readonly revision: number;
   /** Reused from planning so connectivity is not rebuilt. */
   readonly view?: RepairView;
@@ -154,8 +156,9 @@ export function executeConservativeRepair(input: RepairExecutionInput): RepairEx
    */
   input.onProgress?.(0.75, 'validating candidate');
   const after = analyseTopology(rebuilt.mesh, {
-    modelId: input.modelId,
-    modelRevision: input.revision,
+    documentId: input.documentId,
+    documentRevision: input.revision,
+    partId: input.partId,
     cancellation,
     sampleLimit: 4096,
     // Forwarded so the longest span of a repair advances a progress bar instead

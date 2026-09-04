@@ -54,8 +54,9 @@ function must<T>(value: T | undefined, what: string): T {
 
 function report(mesh: CanonicalMesh): TopologyReport {
   return analyseTopology(mesh, {
-    modelId: 'test',
-    modelRevision: 1,
+    documentId: 'test',
+    partId: 'part-1',
+    documentRevision: 1,
     cancellation: uncancellable,
   }).report;
 }
@@ -70,7 +71,8 @@ function repair(
   const { plan, view } = planConservativeRepair({
     mesh,
     report: before,
-    modelId: 'test',
+    documentId: 'test',
+    partId: 'part-1',
     sourceRevision: 1,
     requested,
   });
@@ -79,7 +81,8 @@ function repair(
     plan,
     sourceReport: before,
     cancellation: uncancellable,
-    modelId: 'test',
+    documentId: 'test',
+    partId: 'part-1',
     revision: 1,
     view,
   });
@@ -454,7 +457,8 @@ describe('CR18–CR19 cancellation', () => {
     const { plan, view } = planConservativeRepair({
       mesh,
       report: before,
-      modelId: 'test',
+      documentId: 'test',
+      partId: 'part-1',
       sourceRevision: 1,
       requested: ALL_OPERATIONS,
     });
@@ -465,7 +469,8 @@ describe('CR18–CR19 cancellation', () => {
         plan,
         sourceReport: before,
         cancellation: cancellingAfter(2),
-        modelId: 'test',
+        documentId: 'test',
+        partId: 'part-1',
         revision: 1,
         view,
       }),
@@ -484,7 +489,8 @@ describe('CR18–CR19 cancellation', () => {
     const { plan, view } = planConservativeRepair({
       mesh,
       report: before,
-      modelId: 'test',
+      documentId: 'test',
+      partId: 'part-1',
       sourceRevision: 1,
       requested: [RepairOperation.UnifyWinding],
     });
@@ -495,7 +501,8 @@ describe('CR18–CR19 cancellation', () => {
         plan,
         sourceReport: before,
         cancellation: cancellingAfter(0),
-        modelId: 'test',
+        documentId: 'test',
+        partId: 'part-1',
         revision: 1,
         view,
       }),
@@ -636,7 +643,8 @@ describe('CR26 memory estimate against observed buffers', () => {
     const { plan } = planConservativeRepair({
       mesh,
       report: sourceReport,
-      modelId: 'm',
+      documentId: 'm',
+      partId: 'part-1',
       sourceRevision: 1,
       requested: [RepairOperation.RemoveDuplicateFaces],
     });
@@ -659,7 +667,8 @@ describe('CR26 memory estimate against observed buffers', () => {
     const { plan } = planConservativeRepair({
       mesh,
       report: sourceReport,
-      modelId: 'm',
+      documentId: 'm',
+      partId: 'part-1',
       sourceRevision: 1,
       requested: [RepairOperation.RemoveDuplicateFaces],
     });
@@ -679,7 +688,8 @@ describe('CR26 memory estimate against observed buffers', () => {
     const { plan } = planConservativeRepair({
       mesh,
       report: sourceReport,
-      modelId: 'm',
+      documentId: 'm',
+      partId: 'part-1',
       sourceRevision: 1,
       requested: [RepairOperation.RemoveDuplicateFaces],
     });
