@@ -18,6 +18,17 @@ interface FmtApi {
   };
   zipCase(kind: string): Promise<{ accepted: boolean; refusal?: string; entries?: unknown[] }>;
   parseObjText(text: string): { vertexCount: number; faceCount: number; refusals: number };
+  threeMfRoundTrip(faces: number): Promise<{
+    zipBytes: number;
+    partCount: number;
+    unit: string;
+    name: string;
+    faceCount: number;
+    coordinatesExact: boolean;
+    exportMs: number;
+    importMs: number;
+  }>;
+  threeMfHostile(): Promise<{ refused: boolean; refusal?: string }>;
   objBenchmark(faces: number): { bytes: number; faceCount: number; parseMs: number };
 }
 declare global {
@@ -138,4 +149,27 @@ test('OBJ parse scaling and main-thread cost', async ({ page }) => {
     expect(r.faceCount).toBe(faces);
   }
   process.stdout.write(`\n[obj-scaling]\n${rows.join('\n')}\n\n`);
+});
+
+test('3MF round-trips in the browser with bit-exact coordinates', async ({ page }) => {
+  await ready(page);
+
+  const r = await page.evaluate(async () => window.fmt.threeMfRoundTrip(20_000));
+  expect(r.partCount).toBe(1);
+  expect(r.unit).toBe('millimeter');
+  expect(r.name).toBe('browser part');
+  expect(r.faceCount).toBe(20_000);
+  // The whole point: the same Float32 values come back, not close ones.
+  expect(r.coordinatesExact).toBe(true);
+
+  process.stdout.write(
+    `\n[3mf-browser] faces=20000 zip=${String(r.zipBytes)}B export=${r.exportMs.toFixed(0)}ms import=${r.importMs.toFixed(0)}ms\n\n`,
+  );
+});
+
+test('a hostile 3MF is refused in the browser exactly as in Node', async ({ page }) => {
+  await ready(page);
+  const r = await page.evaluate(async () => window.fmt.threeMfHostile());
+  expect(r.refused).toBe(true);
+  expect(r.refusal).toBe('COMPRESSION_RATIO_EXCEEDED');
 });
