@@ -52,6 +52,8 @@ import {
   type DocumentRenderSnapshot,
   type MeshValidationSummary,
   type DocumentId,
+  type HandlerOutcome,
+  type OperationContext,
   type OperationHandler,
   type PartDescriptor,
   type PartRenderSnapshot,
@@ -403,29 +405,77 @@ export const modelImportHandler: OperationHandler<'model/import'> = async (paylo
     ...(parsed.unit === undefined ? {} : { unit: parsed.unit }),
   });
 
+  return commitImportedDocument(
+    {
+      document,
+      operation: 'STL import',
+      encoding: parsed.encoding,
+      inputBytes: bytes.byteLength,
+      warnings: parsed.warnings,
+    },
+    context,
+  );
+};
+
+/** What `commitImportedDocument` needs that it cannot derive from the document. */
+export interface DocumentCommitInput {
+  /** The candidate. Nothing has been committed for it yet. */
+  readonly document: GeometryDocument;
+  /** Names the caller in validation failures, e.g. `STL import`. */
+  readonly operation: string;
+  /** As actually detected. Reported, never guessed. */
+  readonly encoding: string;
+  /**
+   * Size of the source buffer, for the session memory preflight.
+   *
+   * The input, the outgoing document and the candidate are all live at once
+   * during a replacement, which is the moment memory is tightest.
+   */
+  readonly inputBytes: number;
+  readonly warnings: readonly Diagnostic[];
+}
+
+/**
+ * THE IMPORT TRANSACTION, from a candidate document to a committed one.
+ *
+ * EXTRACTED FROM THE STL HANDLER so there is exactly one implementation of the
+ * steps that decide whether a document becomes authoritative: the document
+ * gate, the session budget, the render snapshot, and the commit. A second
+ * producer of documents — the OBJ and 3MF readers of Stage 4A-2B, and the
+ * end-to-end harness that constructs synthetic multi-part documents today —
+ * must not reimplement any of it, because a second copy is a second place the
+ * gate can be forgotten.
+ *
+ * Everything above this point is format-specific: reading bytes, detecting an
+ * encoding, and validating the MESHES. Everything from here down is not.
+ */
+export function commitImportedDocument(
+  input: DocumentCommitInput,
+  context: OperationContext,
+): HandlerOutcome<ModelImportResult> {
+  const { document } = input;
+
   /*
    * THE SECOND GATE. Structural mesh validity is not document validity: unique
    * part ids, a finite placement, a recognised unit and the document-wide
    * resource ceilings are questions only this can answer. Meshes are not
-   * re-walked — `assertMeshStructure` cleared this one moments ago and walking
-   * every coordinate twice on import is exactly the kind of cost a large model
-   * cannot absorb.
+   * re-walked — the caller validated them moments ago and walking every
+   * coordinate twice on import is exactly the kind of cost a large model cannot
+   * absorb.
    */
-  assertGeometryDocument(document, 'STL import', { validateMeshes: false });
+  assertGeometryDocument(document, input.operation, { validateMeshes: false });
 
   context.reportProgress(VALIDATE_SHARE, 'preparing');
 
-  // SESSION BUDGET. The parser's own budget already cleared the candidate's
+  // SESSION BUDGET. A format's own budget already cleared the candidate's
   // arrays in isolation; this asks the different question of whether the
-  // candidate fits ALONGSIDE what is still resident. During a transactional
-  // replacement the outgoing model, the input buffer and the candidate are all
-  // live at once, and that is the moment memory is tightest.
+  // candidate fits ALONGSIDE what is still resident.
   const residentNow = residentDocuments.stats();
   const documentTriangles = documentTriangleCount(document);
   const peak = estimateImportPeak({
     currentResidentBytes: residentNow.totalBytes,
     currentRenderBytes: renderBytesFor(documentTriangles),
-    inputBytes: bytes.byteLength,
+    inputBytes: input.inputBytes,
     candidateTriangles: documentTriangles,
   });
   const overBudget = checkImportPeak(peak);
@@ -437,28 +487,28 @@ export const modelImportHandler: OperationHandler<'model/import'> = async (paylo
   // TRANSACTIONAL. Nothing above this line touched the store, so a parse
   // failure, a validation failure, a budget rejection, or a cancellation leaves
   // any previously resident document exactly as it was.
-  throwIfCancelled(cancellation);
+  throwIfCancelled(context.cancellation);
   const handle = residentDocuments.commit(document);
 
   context.reportProgress(1, 'complete');
 
   const value: ModelImportResult = {
     handle,
-    encoding: parsed.encoding,
+    encoding: input.encoding,
     unit: document.unit,
     bounds,
     triangleCount: documentTriangles,
     vertexCount: documentVertexCount(document),
     parts: describeParts(document),
     render,
-    warnings: parsed.warnings,
+    warnings: input.warnings,
     validation: summariseDocument(document),
     residentBytes: documentByteLength(document),
   };
 
   // Only the render snapshots are transferred. The canonical document stays here.
   return { value, transfer: documentRenderTransferables(render) };
-};
+}
 
 /**
  * Names the parts an STL export will NOT contain.

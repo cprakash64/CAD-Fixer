@@ -127,6 +127,102 @@ describe('the geometry engines stay in the worker', () => {
     expect(offenders, 'a format codec became reachable from the application bundle').toEqual([]);
   });
 
+  it('keeps the end-to-end harness out of the application', () => {
+    /*
+     * THE HARNESS IS NOT A BACKDOOR, and this is what makes that checkable.
+     *
+     * `apps/web/e2e-harness/` builds a synthetic multi-part document so the
+     * browser suite can test what no shipped codec can produce. It is a
+     * separate Vite root with a separate entry, so the application build has no
+     * path to it — but "no path" is a property of an import graph, and an
+     * import graph is exactly the kind of thing that acquires an edge by
+     * accident. One import from `apps/web/src` would put a synthetic-document
+     * importer in front of every user.
+     */
+    const offenders = [...sourceFilesUnder(join(REPO_ROOT, 'apps', 'web', 'src'))]
+      .filter((file) => readFileSync(file, 'utf8').includes('e2e-harness'))
+      .map((file) => relative(REPO_ROOT, file));
+
+    expect(
+      offenders,
+      'application source must not reference the end-to-end harness in any form',
+    ).toEqual([]);
+  });
+
+  it('builds the application from exactly one entry, which is not the harness', () => {
+    // The structural half of the same guarantee. A second `input` in the
+    // application's Vite config would emit the harness into `dist/` for every
+    // deployment, whatever the import graph said.
+    const appConfig = readFileSync(join(REPO_ROOT, 'apps', 'web', 'vite.config.ts'), 'utf8');
+
+    expect(appConfig).not.toContain('e2e-harness');
+    expect(appConfig).not.toContain('rollupOptions');
+    expect(appConfig).not.toContain('rolldownOptions');
+
+    // And the harness config inverts the root, so it cannot emit into the
+    // application's output directory either.
+    const harnessConfig = readFileSync(
+      join(REPO_ROOT, 'apps', 'web', 'vite.harness.config.ts'),
+      'utf8',
+    );
+    expect(harnessConfig).toContain("root: 'e2e-harness'");
+    expect(harnessConfig).toContain("outDir: '../dist-e2e-harness'");
+  });
+
+  it('never injects a worker in the production entry point', () => {
+    /*
+     * `GeometryClientOptions.createWorker` exists so the harness can drive a
+     * worker whose importer builds a synthetic document. It chooses a SCRIPT and
+     * cannot inject geometry — but the production ENTRY POINT must still not
+     * pass one, or the application would be running something other than the
+     * geometry worker.
+     *
+     * The same seam already existed for the diagnostic worker
+     * (`SelfIntersectionService`), which is why the allowed list has two entries
+     * rather than one: both are worker-factory declarations, and neither is a
+     * call site outside its own module.
+     */
+    const entry = readFileSync(join(REPO_ROOT, 'apps', 'web', 'src', 'main.tsx'), 'utf8');
+    expect(entry).not.toContain('createWorker');
+
+    const injectors = mainThreadFiles()
+      .filter((file) => readFileSync(file, 'utf8').includes('createWorker'))
+      .map((file) => relative(REPO_ROOT, file))
+      .sort();
+
+    expect(injectors).toEqual(
+      [
+        join('apps', 'web', 'src', 'runtime', 'geometry-client.ts'),
+        join('apps', 'web', 'src', 'runtime', 'self-intersection-service.ts'),
+      ].sort(),
+    );
+  });
+
+  it('exposes no document-injection global or query parameter in the application', () => {
+    // The shapes a reviewer would look for first: a window global, a URL switch,
+    // or a debug hook that reaches authoritative geometry.
+    const BANNED = [
+      '__CADFIXER',
+      'cadfixerHarness',
+      'window.cadfixer',
+      'globalThis.cadfixer',
+      "searchParams.get('document",
+      "searchParams.get('fixture",
+    ];
+    const offenders: string[] = [];
+
+    for (const file of [...sourceFilesUnder(join(REPO_ROOT, 'apps', 'web', 'src'))].filter(
+      (file) => !/\.test\.(ts|tsx)$/.test(file),
+    )) {
+      const contents = readFileSync(file, 'utf8');
+      for (const banned of BANNED) {
+        if (contents.includes(banned)) offenders.push(`${relative(REPO_ROOT, file)}: ${banned}`);
+      }
+    }
+
+    expect(offenders, 'the application must expose no route to inject a document').toEqual([]);
+  });
+
   it('keeps AUTHORITATIVE geometry types out of main-thread code', () => {
     /*
      * STAGE 4A-2A. The main thread holds a `DocumentHandle`, scalar part

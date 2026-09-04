@@ -1,11 +1,17 @@
 {
-  "//": "Main-thread application code. Worker code is excluded here and typechecked by src/workers/tsconfig.json, because the DOM and WebWorker lib definitions declare conflicting globals.",
+  "//": "Main-thread application code, plus the two Vite configs that build it. Worker code is excluded here and typechecked by src/workers/tsconfig.json, because the DOM and WebWorker lib definitions declare conflicting globals. The end-to-end harness PAGE has its own project under e2e-harness/, so this project's source list stays exactly the shipped application.",
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "lib": ["ES2023", "DOM", "DOM.Iterable"],
     "jsx": "react-jsx",
     "types": ["vite/client"]
   },
-  "include": ["src/**/*.ts", "src/**/*.tsx", "vite.config.ts", "vitest.setup.ts"],
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.tsx",
+    "vite.config.ts",
+    "vite.harness.config.ts",
+    "vitest.setup.ts"
+  ],
   "exclude": ["src/workers/**"]
 }

@@ -137,6 +137,65 @@ describe('shared GPU geometry', () => {
     expect(shared.size).toBe(0);
   });
 
+  it('counts uploads and disposals cumulatively, so a leak is visible', () => {
+    /*
+     * THE LIVE COUNT CANNOT SEE A LEAK. A document loaded and unloaded ten
+     * times leaves `size` at zero whether every buffer was released or none of
+     * them were, so the accounting identity has to be cumulative: creations
+     * minus disposals is exactly what is still held.
+     */
+    const shared = new SharedPartGeometry();
+    const a = buffer([0, 0, 0, 1, 0, 0, 0, 1, 0]);
+    const b = buffer([0, 0, 0, 2, 0, 0, 0, 2, 0]);
+
+    expect(shared.lifecycle).toEqual({ created: 0, disposed: 0 });
+
+    shared.acquire(a, a, [0, 0, 0], 1);
+    shared.acquire(a, a, [0, 0, 0], 1);
+    shared.acquire(b, b, [0, 0, 0], 1);
+    // Two buffers, three references: two uploads.
+    expect(shared.lifecycle).toEqual({ created: 2, disposed: 0 });
+
+    shared.release(a);
+    // A still has a reference, so nothing was disposed.
+    expect(shared.lifecycle).toEqual({ created: 2, disposed: 0 });
+
+    shared.release(a);
+    expect(shared.lifecycle).toEqual({ created: 2, disposed: 1 });
+
+    shared.release(b);
+    expect(shared.lifecycle).toEqual({ created: 2, disposed: 2 });
+    expect(shared.lifecycle.created - shared.lifecycle.disposed).toBe(shared.size);
+  });
+
+  it('never disposes more than it created, however often release is called', () => {
+    // A double dispose would make `disposed` overtake `created`, which is the
+    // signature of a use-after-free waiting to happen.
+    const shared = new SharedPartGeometry();
+    const positions = buffer([0, 0, 0, 1, 0, 0, 0, 1, 0]);
+
+    shared.acquire(positions, positions, [0, 0, 0], 1);
+    shared.release(positions);
+    shared.release(positions);
+    shared.release(positions);
+
+    expect(shared.lifecycle).toEqual({ created: 1, disposed: 1 });
+    expect(shared.size).toBe(0);
+  });
+
+  it('releaseAll counts one disposal per distinct geometry, not per reference', () => {
+    const shared = new SharedPartGeometry();
+    const positions = buffer([0, 0, 0, 1, 0, 0, 0, 1, 0]);
+    for (let index = 0; index < 100; index += 1) {
+      shared.acquire(positions, positions, [0, 0, 0], 1);
+    }
+
+    shared.releaseAll();
+
+    // A hundred placements of one mesh is ONE upload and ONE disposal.
+    expect(shared.lifecycle).toEqual({ created: 1, disposed: 1 });
+  });
+
   it('releaseAll drops everything, whatever the counts were', () => {
     const shared = new SharedPartGeometry();
     const a = buffer([0, 0, 0, 1, 0, 0, 0, 1, 0]);

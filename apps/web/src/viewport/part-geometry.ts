@@ -63,6 +63,8 @@ interface GeometryEntry {
  */
 export class SharedPartGeometry {
   private readonly entries = new Map<Float32Array, GeometryEntry>();
+  private created = 0;
+  private disposed = 0;
 
   public acquire(
     positions: Float32Array,
@@ -77,6 +79,7 @@ export class SharedPartGeometry {
     }
     const geometry = buildPartGeometry(positions, normals, center, radius);
     this.entries.set(positions, { geometry, refCount: 1 });
+    this.created += 1;
     return geometry;
   }
 
@@ -87,12 +90,16 @@ export class SharedPartGeometry {
     entry.refCount -= 1;
     if (entry.refCount > 0) return;
     entry.geometry.dispose();
+    this.disposed += 1;
     this.entries.delete(positions);
   }
 
   /** Releases every entry. Used when the whole document is replaced. */
   public releaseAll(): void {
-    for (const entry of this.entries.values()) entry.geometry.dispose();
+    for (const entry of this.entries.values()) {
+      entry.geometry.dispose();
+      this.disposed += 1;
+    }
     this.entries.clear();
   }
 
@@ -104,6 +111,20 @@ export class SharedPartGeometry {
   /** References outstanding for one buffer, or 0. For leak assertions. */
   public referencesTo(positions: Float32Array): number {
     return this.entries.get(positions)?.refCount ?? 0;
+  }
+
+  /**
+   * Cumulative uploads and disposals, for leak and double-dispose assertions.
+   *
+   * TWO COUNTERS, NOT A LOG. `size` alone cannot distinguish "released once" from
+   * "released twice and re-created", and a document loaded and unloaded ten times
+   * leaves `size` at zero either way — so a leak or a double dispose would be
+   * invisible to any test that only reads the live map. These are monotonic,
+   * read-only from outside, and cost two integers; nothing in the rendering path
+   * branches on them.
+   */
+  public get lifecycle(): { readonly created: number; readonly disposed: number } {
+    return { created: this.created, disposed: this.disposed };
   }
 }
 
