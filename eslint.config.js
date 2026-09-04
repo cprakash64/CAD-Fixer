@@ -213,6 +213,21 @@ export default tseslint.config(
   // worker globals. `no-restricted-globals` stays ON — the network ban applies
   // to research code too, and the only fetch anywhere near this harness is the
   // Emscripten glue loading its own same-origin `.wasm`.
+  // The Stage 4A-1 format research harness. Same reasoning as the harnesses
+  // above: a page and its modules, served as raw bytes rather than bundled, so
+  // they need browser globals. `no-restricted-globals` stays ON — the network
+  // ban applies to research code, and this harness proves zero off-origin
+  // requests rather than making any.
+  {
+    files: ['experiments/format-io/harness/**/*.mjs'],
+    languageOptions: {
+      globals: { ...globals.browser, ...globals.worker },
+    },
+    rules: {
+      '@typescript-eslint/explicit-function-return-type': 'off',
+    },
+  },
+
   {
     files: ['experiments/self-intersection/harness/**/*.mjs'],
     languageOptions: {
