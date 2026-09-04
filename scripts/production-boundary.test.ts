@@ -127,6 +127,39 @@ describe('the geometry engines stay in the worker', () => {
     expect(offenders, 'a format codec became reachable from the application bundle').toEqual([]);
   });
 
+  it('keeps AUTHORITATIVE geometry types out of main-thread code', () => {
+    /*
+     * STAGE 4A-2A. The main thread holds a `DocumentHandle`, scalar part
+     * descriptors and disposable render snapshots. It must never hold — or even
+     * be able to name — the authoritative types, because a component that can
+     * name a `CanonicalMesh` is one refactor away from storing one, and React
+     * state holding a multi-hundred-megabyte document is exactly the ownership
+     * inversion ADR 0008 exists to prevent.
+     *
+     * Names in COMMENTS are fine and deliberate: several files explain what they
+     * are NOT holding. Only imports count.
+     */
+    const AUTHORITATIVE = ['CanonicalMesh', 'GeometryDocument', 'GeometryPart'];
+    const offenders: string[] = [];
+
+    for (const file of mainThreadFiles()) {
+      const contents = readFileSync(file, 'utf8');
+      const importBlocks = contents.match(/import[\s\S]*?from\s+['"][^'"]+['"]/g) ?? [];
+      for (const block of importBlocks) {
+        for (const symbol of AUTHORITATIVE) {
+          if (new RegExp(`\\b${symbol}\\b`).test(block)) {
+            offenders.push(`${relative(REPO_ROOT, file)}: ${symbol}`);
+          }
+        }
+      }
+    }
+
+    expect(
+      offenders,
+      'the main thread must name handles and descriptors, never authoritative geometry',
+    ).toEqual([]);
+  });
+
   it('routes the repair contract through the runtime’s restatement', () => {
     // The positive half of the rule: the UI does name repair decisions, and it
     // gets them from the package that restates them without a runtime edge to

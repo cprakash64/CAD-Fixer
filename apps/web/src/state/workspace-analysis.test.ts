@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
+import { IDENTITY_PART_TRANSFORM } from '@cadfixer/mesh-core';
 import type {
-  ModelHandle,
-  ModelId,
+  DocumentHandle,
+  DocumentId,
   TopologyDetail,
   TopologyReport,
 } from '@cadfixer/geometry-runtime';
@@ -16,16 +17,38 @@ import type { LoadedModel } from './model';
  * failure, worker loss — is downstream of that.
  */
 
-function handleFor(modelId: string, revision: number): ModelHandle {
-  return { modelId: modelId as ModelId, revision };
+function handleFor(documentId: string, revision: number): DocumentHandle {
+  return { documentId: documentId as DocumentId, revision };
 }
 
-function modelFor(handle: ModelHandle): Omit<LoadedModel, 'revision'> {
+const PART = 'part-1';
+
+function modelFor(handle: DocumentHandle): Omit<LoadedModel, 'revision'> {
   return {
     handle,
-    render: { positions: new Float32Array(9), normals: new Float32Array(9), vertexCount: 3 },
+    parts: [
+      {
+        partId: PART,
+        transform: IDENTITY_PART_TRANSFORM,
+        triangleCount: 1,
+        vertexCount: 3,
+        bounds: undefined,
+        meshResourceIndex: 0,
+      },
+    ],
+    render: {
+      parts: [
+        {
+          partId: PART,
+          transform: IDENTITY_PART_TRANSFORM,
+          positions: new Float32Array(9),
+          normals: new Float32Array(9),
+          vertexCount: 3,
+        },
+      ],
+    },
     source: {
-      fileName: `${handle.modelId}.stl`,
+      fileName: `${handle.documentId}.stl`,
       fileBytes: 84,
       formatId: 'stl',
       encoding: 'binary',
@@ -41,11 +64,12 @@ function modelFor(handle: ModelHandle): Omit<LoadedModel, 'revision'> {
   };
 }
 
-function reportFor(handle: ModelHandle): TopologyReport {
+function reportFor(handle: DocumentHandle): TopologyReport {
   return {
     schemaVersion: 1,
-    modelId: handle.modelId,
-    modelRevision: handle.revision,
+    documentId: handle.documentId,
+    documentRevision: handle.revision,
+    partId: PART,
     identityMode: 'exact-stored-coordinate',
     sourceFaceCount: 1,
     sourceCornerCount: 3,
@@ -95,9 +119,9 @@ const EMPTY_DETAIL: TopologyDetail = {
 };
 
 /** Imports a model and returns the handle it was stored under. */
-function loadModel(store: WorkspaceStore, modelId: string, revision: number): ModelHandle {
-  const handle = handleFor(modelId, revision);
-  const token = store.beginImport(`${modelId}.stl`);
+function loadModel(store: WorkspaceStore, documentId: string, revision: number): DocumentHandle {
+  const handle = handleFor(documentId, revision);
+  const token = store.beginImport(`${documentId}.stl`);
   store.commitImport(token, modelFor(handle));
   return handle;
 }
@@ -123,8 +147,10 @@ describe('analysis lifecycle', () => {
     const store = new WorkspaceStore();
     const handle = loadModel(store, 'model-1', 1);
 
-    const token = store.beginAnalysis(handle);
-    expect(store.commitAnalysis(token, handle, reportFor(handle), EMPTY_DETAIL, 12)).toBe(true);
+    const token = store.beginAnalysis(handle, PART);
+    expect(store.commitAnalysis(token, handle, PART, reportFor(handle), EMPTY_DETAIL, 12)).toBe(
+      true,
+    );
 
     const analysis = store.getSnapshot().analysis;
     expect(analysis.state).toBe(AnalysisState.Ready);
@@ -143,12 +169,12 @@ describe('stale report protection', () => {
   it('refuses a report for a model that has since been replaced', () => {
     const store = new WorkspaceStore();
     const first = loadModel(store, 'model-1', 1);
-    const token = store.beginAnalysis(first);
+    const token = store.beginAnalysis(first, PART);
 
     // The user imports a different file before the analysis returns.
     const second = loadModel(store, 'model-2', 1);
 
-    expect(store.commitAnalysis(token, first, reportFor(first), EMPTY_DETAIL, 5)).toBe(false);
+    expect(store.commitAnalysis(token, first, PART, reportFor(first), EMPTY_DETAIL, 5)).toBe(false);
 
     const analysis = store.getSnapshot().analysis;
     expect(analysis.handle).toEqual(second);
@@ -159,12 +185,12 @@ describe('stale report protection', () => {
   it('refuses a report whose handle does not match the loaded model', () => {
     const store = new WorkspaceStore();
     const handle = loadModel(store, 'model-1', 1);
-    const token = store.beginAnalysis(handle);
+    const token = store.beginAnalysis(handle, PART);
 
     // Same model id, different revision: the geometry was replaced in place.
     const wrongRevision = handleFor('model-1', 2);
     expect(
-      store.commitAnalysis(token, wrongRevision, reportFor(wrongRevision), EMPTY_DETAIL, 5),
+      store.commitAnalysis(token, wrongRevision, PART, reportFor(wrongRevision), EMPTY_DETAIL, 5),
     ).toBe(false);
     expect(store.getSnapshot().analysis.report).toBeUndefined();
   });
@@ -173,18 +199,22 @@ describe('stale report protection', () => {
     const store = new WorkspaceStore();
     const handle = loadModel(store, 'model-1', 1);
 
-    const first = store.beginAnalysis(handle);
-    const second = store.beginAnalysis(handle);
+    const first = store.beginAnalysis(handle, PART);
+    const second = store.beginAnalysis(handle, PART);
 
-    expect(store.commitAnalysis(first, handle, reportFor(handle), EMPTY_DETAIL, 1)).toBe(false);
-    expect(store.commitAnalysis(second, handle, reportFor(handle), EMPTY_DETAIL, 1)).toBe(true);
+    expect(store.commitAnalysis(first, handle, PART, reportFor(handle), EMPTY_DETAIL, 1)).toBe(
+      false,
+    );
+    expect(store.commitAnalysis(second, handle, PART, reportFor(handle), EMPTY_DETAIL, 1)).toBe(
+      true,
+    );
   });
 
   it('drops the previous report when a different model is imported', () => {
     const store = new WorkspaceStore();
     const first = loadModel(store, 'model-1', 1);
-    const token = store.beginAnalysis(first);
-    store.commitAnalysis(token, first, reportFor(first), EMPTY_DETAIL, 1);
+    const token = store.beginAnalysis(first, PART);
+    store.commitAnalysis(token, first, PART, reportFor(first), EMPTY_DETAIL, 1);
     expect(store.getSnapshot().analysis.report).toBeDefined();
 
     loadModel(store, 'model-2', 1);
@@ -200,7 +230,7 @@ describe('cancellation', () => {
   it('reports cancelled when there was no earlier report', () => {
     const store = new WorkspaceStore();
     const handle = loadModel(store, 'model-1', 1);
-    const token = store.beginAnalysis(handle);
+    const token = store.beginAnalysis(handle, PART);
 
     expect(store.cancelAnalysis(token)).toBe(true);
 
@@ -215,10 +245,10 @@ describe('cancellation', () => {
     const store = new WorkspaceStore();
     const handle = loadModel(store, 'model-1', 1);
 
-    const first = store.beginAnalysis(handle);
-    store.commitAnalysis(first, handle, reportFor(handle), EMPTY_DETAIL, 3);
+    const first = store.beginAnalysis(handle, PART);
+    store.commitAnalysis(first, handle, PART, reportFor(handle), EMPTY_DETAIL, 3);
 
-    const second = store.beginAnalysis(handle);
+    const second = store.beginAnalysis(handle, PART);
     // The previous answer stays visible while the re-run is in flight.
     expect(store.getSnapshot().analysis.report).toBeDefined();
 
@@ -232,7 +262,7 @@ describe('cancellation', () => {
   it('leaves the model loaded', () => {
     const store = new WorkspaceStore();
     const handle = loadModel(store, 'model-1', 1);
-    const token = store.beginAnalysis(handle);
+    const token = store.beginAnalysis(handle, PART);
 
     store.cancelAnalysis(token);
 
@@ -244,7 +274,7 @@ describe('failure', () => {
   it('does not disturb the loaded model', () => {
     const store = new WorkspaceStore();
     const handle = loadModel(store, 'model-1', 1);
-    const token = store.beginAnalysis(handle);
+    const token = store.beginAnalysis(handle, PART);
 
     store.failAnalysis(token, {
       message: 'Analysis workspace exceeds the session budget.',
@@ -262,8 +292,8 @@ describe('worker loss', () => {
   it('clears the report along with the model', () => {
     const store = new WorkspaceStore();
     const handle = loadModel(store, 'model-1', 1);
-    const token = store.beginAnalysis(handle);
-    store.commitAnalysis(token, handle, reportFor(handle), EMPTY_DETAIL, 1);
+    const token = store.beginAnalysis(handle, PART);
+    store.commitAnalysis(token, handle, PART, reportFor(handle), EMPTY_DETAIL, 1);
 
     store.loseGeometrySession('The geometry worker crashed.');
 
@@ -278,11 +308,13 @@ describe('worker loss', () => {
   it('stops a late report from the dead worker installing anything', () => {
     const store = new WorkspaceStore();
     const handle = loadModel(store, 'model-1', 1);
-    const token = store.beginAnalysis(handle);
+    const token = store.beginAnalysis(handle, PART);
 
     store.loseGeometrySession('The geometry worker crashed.');
 
-    expect(store.commitAnalysis(token, handle, reportFor(handle), EMPTY_DETAIL, 1)).toBe(false);
+    expect(store.commitAnalysis(token, handle, PART, reportFor(handle), EMPTY_DETAIL, 1)).toBe(
+      false,
+    );
     expect(store.getSnapshot().analysis.report).toBeUndefined();
   });
 });

@@ -1,7 +1,8 @@
 import { invalidState, modelUnavailable, type AppError } from '@cadfixer/shared';
-import type { CanonicalMesh } from '@cadfixer/mesh-core';
+import { meshByteLength } from '@cadfixer/mesh-core';
+import type { CanonicalMesh, PartId } from '@cadfixer/mesh-core';
 import type { RepairInversePatch, RepairValidation } from '@cadfixer/mesh-repair';
-import { meshByteLength, type ModelHandle, type ModelId } from './resident-models';
+import type { DocumentHandle, DocumentId } from './resident-documents';
 
 /**
  * WORKER-RESIDENT REPAIR CANDIDATES.
@@ -12,8 +13,8 @@ import { meshByteLength, type ModelHandle, type ModelId } from './resident-model
  * and only if every guard still holds at that moment.
  *
  * WHY A SEPARATE HANDLE TYPE. `RepairCandidateHandle` is deliberately NOT a
- * `ModelHandle`. Export, analysis and every future operation take a
- * `ModelHandle`, so a candidate cannot be passed to them by mistake — the
+ * `DocumentHandle`. Export, analysis and every future operation take a
+ * `DocumentHandle`, so a candidate cannot be passed to them by mistake — the
  * compiler refuses. Making both "an id and a revision" would have been simpler
  * and would have let a candidate be exported as though it were the user's
  * model.
@@ -43,7 +44,17 @@ export type CandidateState = (typeof CandidateState)[keyof typeof CandidateState
 
 export interface RepairCandidateHandle {
   readonly candidateId: RepairCandidateId;
-  readonly modelId: ModelId;
+  readonly documentId: DocumentId;
+  /**
+   * The part this candidate proposes to replace.
+   *
+   * CARRIED ON THE HANDLE, not inferred at commit. A repair is computed from
+   * ONE part's mesh, so the part is half of what makes the candidate
+   * meaningful — a candidate that only said which document it came from could
+   * be applied to any part in it, and the mesh it carries would silently
+   * replace geometry it was never derived from.
+   */
+  readonly partId: PartId;
   /** Revision the candidate was computed FROM. Checked again at commit. */
   readonly sourceRevision: number;
   /** Increments if a candidate is ever recomputed for the same model. */
@@ -67,34 +78,49 @@ export interface CandidateStats {
 export interface CommitRequest {
   readonly candidate: RepairCandidateHandle;
   /** What the caller believes is authoritative. Must still be true. */
-  readonly expectedSource: ModelHandle;
+  readonly expectedSource: DocumentHandle;
+  /**
+   * The part the caller believes it is replacing.
+   *
+   * STATED, NOT DERIVED. Reading the part off the candidate alone would make
+   * the guard vacuous — it would compare the candidate with itself. Requiring
+   * the caller to name the part means a request that targets part B with part
+   * A's candidate is refused rather than quietly honoured as an A repair.
+   */
+  readonly expectedPart: PartId;
   /** Identity of the validation the caller accepted. */
   readonly planHash: string;
 }
 
 export class RepairCandidateStore {
   private readonly candidates = new Map<RepairCandidateId, CandidateEntry>();
-  /** At most one live candidate per model — see `create`. */
-  private readonly activeByModel = new Map<ModelId, RepairCandidateId>();
+  /** At most one live candidate per document — see `create`. */
+  private readonly activeByDocument = new Map<DocumentId, RepairCandidateId>();
   private nextId = 1;
   private nextGeneration = 1;
 
   /**
    * Registers a validated candidate and supersedes any earlier one.
    *
-   * ONE ACTIVE CANDIDATE PER MODEL. The simplest safe policy: a second repair
-   * proposal for the same model deterministically invalidates the first, whose
-   * geometry is released immediately. Allowing several would mean deciding
-   * which one commit meant, and a wrong answer there silently applies the wrong
-   * repair.
+   * ONE ACTIVE CANDIDATE PER DOCUMENT — not per part. A second repair proposal
+   * for the same document deterministically invalidates the first, whose
+   * geometry is released immediately.
+   *
+   * WHY NOT ONE PER PART, now that parts exist. Because the document carries
+   * ONE revision: committing a candidate for part A moves the document to N+1,
+   * which makes every candidate built at N stale, including part B's. Keeping a
+   * second candidate alive would therefore retain a whole mesh that could never
+   * commit. Superseding is the honest behaviour, and it is deterministic — the
+   * candidate that exists is always the most recently built one.
    */
   public create(
-    source: ModelHandle,
+    source: DocumentHandle,
+    part: PartId,
     mesh: CanonicalMesh,
     validation: RepairValidation,
     inverse: RepairInversePatch | undefined,
   ): RepairCandidateHandle {
-    const previous = this.activeByModel.get(source.modelId);
+    const previous = this.activeByDocument.get(source.documentId);
     if (previous !== undefined) this.discardById(previous);
 
     const candidateId = `candidate-${String(this.nextId)}` as RepairCandidateId;
@@ -104,7 +130,8 @@ export class RepairCandidateStore {
 
     const handle: RepairCandidateHandle = {
       candidateId,
-      modelId: source.modelId,
+      documentId: source.documentId,
+      partId: part,
       sourceRevision: source.revision,
       generation,
     };
@@ -116,7 +143,7 @@ export class RepairCandidateStore {
       inverse,
       byteLength: meshByteLength(mesh),
     });
-    this.activeByModel.set(source.modelId, candidateId);
+    this.activeByDocument.set(source.documentId, candidateId);
     return handle;
   }
 
@@ -172,11 +199,20 @@ export class RepairCandidateStore {
       });
     }
 
-    if (entry.handle.modelId !== request.expectedSource.modelId) {
+    if (entry.handle.documentId !== request.expectedSource.documentId) {
       return invalidState('That repair belongs to a different model.', {
         candidateId: request.candidate.candidateId,
-        candidateModelId: entry.handle.modelId,
-        requestedModelId: request.expectedSource.modelId,
+        candidateDocumentId: entry.handle.documentId,
+        requestedDocumentId: request.expectedSource.documentId,
+      });
+    }
+
+    // DF20. A candidate built from part A must not become part B's geometry.
+    if (entry.handle.partId !== request.expectedPart) {
+      return invalidState('That repair belongs to a different part of this model.', {
+        candidateId: request.candidate.candidateId,
+        candidatePartId: entry.handle.partId,
+        requestedPartId: request.expectedPart,
       });
     }
 
@@ -235,7 +271,7 @@ export class RepairCandidateStore {
     // The resident store owns the mesh now; the candidate must not keep a
     // second reference alive.
     entry.mesh = undefined;
-    this.activeByModel.delete(entry.handle.modelId);
+    this.activeByDocument.delete(entry.handle.documentId);
   }
 
   /**
@@ -258,7 +294,7 @@ export class RepairCandidateStore {
     if (released) {
       entry.state = CandidateState.Discarded;
       entry.mesh = undefined;
-      this.activeByModel.delete(entry.handle.modelId);
+      this.activeByDocument.delete(entry.handle.documentId);
     }
     return released;
   }
@@ -277,7 +313,7 @@ export class RepairCandidateStore {
       entry.state = CandidateState.Discarded;
     }
     this.candidates.clear();
-    this.activeByModel.clear();
+    this.activeByDocument.clear();
   }
 
   public stats(): CandidateStats {

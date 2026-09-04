@@ -40,7 +40,7 @@ export interface SelfIntersectionControls {
 export function useSelfIntersection(): SelfIntersectionControls {
   const store = useWorkspaceStore();
   const client = useGeometryClient();
-  const { model, selfIntersection } = useWorkspaceState();
+  const { model, activePartId, selfIntersection } = useWorkspaceState();
 
   const serviceRef = useRef<SelfIntersectionService | undefined>(undefined);
   const sessionRef = useRef<SelfIntersectionSession | undefined>(undefined);
@@ -62,8 +62,8 @@ export function useSelfIntersection(): SelfIntersectionControls {
 
   const start = useCallback(
     (auto: boolean): void => {
-      if (model === undefined) return;
-      const token = store.beginSelfIntersection(model.handle, auto);
+      if (model === undefined || activePartId === undefined) return;
+      const token = store.beginSelfIntersection(model.handle, activePartId, auto);
       if (token === undefined) return;
       tokenRef.current = token;
 
@@ -71,6 +71,7 @@ export function useSelfIntersection(): SelfIntersectionControls {
       if (active === undefined) return;
       const session = active.run({
         handle: model.handle,
+        partId: activePartId,
         onStarted: (faceCount) => {
           store.reportSelfIntersectionStarted(token, faceCount);
         },
@@ -104,7 +105,7 @@ export function useSelfIntersection(): SelfIntersectionControls {
         },
       );
     },
-    [model, service, store],
+    [activePartId, model, service, store],
   );
 
   /**
@@ -114,18 +115,24 @@ export function useSelfIntersection(): SelfIntersectionControls {
    * dependency: React re-runs effects for reasons that have nothing to do with
    * the model, and a diagnostic that restarted on every re-render would burn a
    * worker each time. One authoritative revision schedules at most one
-   * automatic run; an explicit retry after failure is a separate, deliberate
-   * act.
+   * automatic run FOR THE ACTIVE PART; an explicit retry after failure is a
+   * separate, deliberate act.
+   *
+   * THE ACTIVE PART ONLY. A hundred-part document must not launch a hundred
+   * kernels because a file was opened. Switching parts re-binds the slice, and
+   * the new part becomes eligible for its own single automatic run — which is
+   * how a user still gets an answer for what they are actually looking at.
    *
    * Deferred so the model becomes usable first. Import, first render and Mesh
    * Health must not wait for a check that can take a second.
    */
   useEffect(() => {
-    if (model === undefined) return;
+    if (model === undefined || activePartId === undefined) return;
     if (selfIntersection.band !== SelfIntersectionBand.AutoEligible) return;
     if (selfIntersection.autoScheduled) return;
     if (selfIntersection.phase !== SelfIntersectionPhase.Idle) return;
     if (!sameHandle(selfIntersection.handle, model.handle)) return;
+    if (selfIntersection.partId !== activePartId) return;
 
     const scheduled = setTimeout(() => {
       start(true);
@@ -134,21 +141,26 @@ export function useSelfIntersection(): SelfIntersectionControls {
       clearTimeout(scheduled);
     };
   }, [
+    activePartId,
     model,
     selfIntersection.band,
     selfIntersection.autoScheduled,
     selfIntersection.phase,
     selfIntersection.handle,
+    selfIntersection.partId,
     start,
   ]);
 
-  /** A model change disposes any in-flight diagnostic: its answer is now stale. */
+  /**
+   * A model OR PART change disposes any in-flight diagnostic: its answer
+   * describes a mesh the user is no longer looking at.
+   */
   useEffect(() => {
     return (): void => {
       sessionRef.current?.cancel();
       sessionRef.current = undefined;
     };
-  }, [model?.handle.modelId, model?.handle.revision]);
+  }, [model?.handle.documentId, model?.handle.revision, activePartId]);
 
   /** Unmount releases the worker and its channel. */
   useEffect(() => {
@@ -175,7 +187,10 @@ export function useSelfIntersection(): SelfIntersectionControls {
 
   return {
     canCheck:
-      model !== undefined && selfIntersection.band !== SelfIntersectionBand.SizeLimit && !isBusy,
+      model !== undefined &&
+      activePartId !== undefined &&
+      selfIntersection.band !== SelfIntersectionBand.SizeLimit &&
+      !isBusy,
     isBusy,
     runCheck,
     cancelCheck,
@@ -183,9 +198,9 @@ export function useSelfIntersection(): SelfIntersectionControls {
 }
 
 function sameHandle(
-  a: { modelId: string; revision: number } | undefined,
-  b: { modelId: string; revision: number } | undefined,
+  a: { documentId: string; revision: number } | undefined,
+  b: { documentId: string; revision: number } | undefined,
 ): boolean {
   if (a === undefined || b === undefined) return false;
-  return a.modelId === b.modelId && a.revision === b.revision;
+  return a.documentId === b.documentId && a.revision === b.revision;
 }

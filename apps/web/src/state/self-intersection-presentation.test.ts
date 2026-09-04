@@ -28,8 +28,9 @@ function report(overrides: Partial<SelfIntersectionReport> = {}): SelfIntersecti
   return {
     schemaVersion: 1,
     status: SelfIntersectionStatus.Checked,
-    modelId: 'm',
-    modelRevision: 1,
+    documentId: 'm',
+    documentRevision: 1,
+    partId: 'part-1',
     faceCount: 100,
     intersectingPairCount: 0,
     affectedFaceCount: 0,

@@ -10,8 +10,10 @@ export type {
   OperationResult,
   ProgressMessage,
   ProtocolMessage,
+  ProtocolPort,
   RequestMessage,
   ResultMessage,
+  DocumentRenderSnapshot,
   MeshValidationSummary,
   ModelAnalyzePayload,
   ModelAnalyzeResult,
@@ -21,6 +23,8 @@ export type {
   ModelImportResult,
   ModelReleasePayload,
   ModelReleaseResult,
+  PartDescriptor,
+  PartRenderSnapshot,
   RenderSnapshot,
   RepairCandidatePayload,
   RepairCandidateResult,
@@ -103,8 +107,23 @@ export type { MemoryEstimate, SessionMemoryBudget } from './memory-budget';
  */
 export type { MeshBounds } from '@cadfixer/mesh-core';
 
-export { meshByteLength, ResidentModelStore } from './resident-models';
-export type { ModelHandle, ModelId, ResidentModelStats } from './resident-models';
+/**
+ * The canonical document vocabulary, re-exported so the application can name a
+ * part or a placement without importing the mesh package directly.
+ *
+ * TYPE-ONLY. `mesh-core` carries validation and analysis code; a value edge
+ * from here would put it in the main-thread bundle to do nothing. The
+ * application never constructs canonical geometry — the worker does.
+ */
+export type { GeometryDocument, GeometryPart, PartId, PartTransform } from '@cadfixer/mesh-core';
+
+export {
+  documentByteLength,
+  isDocument,
+  isPart,
+  ResidentDocumentStore,
+} from './resident-documents';
+export type { DocumentHandle, DocumentId, ResidentDocumentStats } from './resident-documents';
 
 export type { MessageEndpoint } from './endpoint';
 

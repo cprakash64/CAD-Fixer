@@ -1,10 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import {
-  createIndexArray,
-  createPositionArray,
-  triangleCount,
-  IDENTITY_MATRIX4,
-} from '@cadfixer/mesh-core';
+import { createIndexArray, createPositionArray, triangleCount } from '@cadfixer/mesh-core';
 import type { CanonicalMesh } from '@cadfixer/mesh-core';
 import {
   SharedCancellationSource,
@@ -84,7 +79,7 @@ function duplicateHeavyMesh(faces: number): CanonicalMesh {
     positions[base + 8] = 0;
   }
   for (let i = 0; i < indices.length; i += 1) indices[i] = i;
-  return { positions, indices, metadata: { transform: IDENTITY_MATRIX4 } };
+  return { positions, indices, metadata: {} };
 }
 
 /** Two adjacent triangles per quad, wound inconsistently, so winding has work. */
@@ -115,7 +110,7 @@ function windingHeavyMesh(quads: number): CanonicalMesh {
     }
   }
   for (let i = 0; i < indices.length; i += 1) indices[i] = i;
-  return { positions, indices, metadata: { transform: IDENTITY_MATRIX4 } };
+  return { positions, indices, metadata: {} };
 }
 
 describe('the shared signal is a real cross-thread primitive', () => {
@@ -216,8 +211,9 @@ describe('CC04/CC06: cancellation reaches preparation and compaction', () => {
   it('interrupts prepareConservativeRepair rather than returning a partial plan', () => {
     const mesh = duplicateHeavyMesh(CANCEL_POLL_INTERVAL * 2);
     const report = analyseTopology(mesh, {
-      modelId: 'm',
-      modelRevision: 1,
+      documentId: 'm',
+      partId: 'part-1',
+      documentRevision: 1,
       cancellation: uncancellable,
     }).report;
     const token = countingToken(1);
@@ -238,14 +234,16 @@ describe('CC08: a cancel observed after the work still yields no candidate', () 
   it('throws rather than returning geometry the caller could commit', () => {
     const mesh = duplicateHeavyMesh(4096);
     const report = analyseTopology(mesh, {
-      modelId: 'm',
-      modelRevision: 1,
+      documentId: 'm',
+      partId: 'part-1',
+      documentRevision: 1,
       cancellation: uncancellable,
     }).report;
     const { plan, view, prepared } = planConservativeRepair({
       mesh,
       report,
-      modelId: 'm',
+      documentId: 'm',
+      partId: 'part-1',
       sourceRevision: 1,
       requested: [RepairOperation.RemoveDuplicateFaces],
     });
@@ -263,7 +261,8 @@ describe('CC08: a cancel observed after the work still yields no candidate', () 
         plan,
         sourceReport: report,
         cancellation: alreadyCancelled,
-        modelId: 'm',
+        documentId: 'm',
+        partId: 'part-1',
         revision: 1,
         view,
         prepared,
@@ -276,8 +275,9 @@ describe('CC10/CC11: cancelling twice, then retrying', () => {
   it('is idempotent and leaves the engine able to repair again', () => {
     const mesh = duplicateHeavyMesh(2048);
     const report = analyseTopology(mesh, {
-      modelId: 'm',
-      modelRevision: 1,
+      documentId: 'm',
+      partId: 'part-1',
+      documentRevision: 1,
       cancellation: uncancellable,
     }).report;
 
@@ -320,8 +320,9 @@ describe('CC14: a cancelled repair leaves the source mesh byte-identical', () =>
       new Uint8Array(mesh.indices.buffer, mesh.indices.byteOffset, mesh.indices.byteLength),
     );
     const report = analyseTopology(mesh, {
-      modelId: 'm',
-      modelRevision: 1,
+      documentId: 'm',
+      partId: 'part-1',
+      documentRevision: 1,
       cancellation: uncancellable,
     }).report;
 
@@ -365,15 +366,17 @@ describe('CC01: cancellation observed before any work begins', () => {
   it('stops the whole pipeline before it produces anything', () => {
     const mesh = duplicateHeavyMesh(2_048);
     const report = analyseTopology(mesh, {
-      modelId: 'm',
-      modelRevision: 1,
+      documentId: 'm',
+      partId: 'part-1',
+      documentRevision: 1,
       cancellation: uncancellable,
     }).report;
     const view = buildRepairView(mesh);
     const { plan, prepared } = planConservativeRepair({
       mesh,
       report,
-      modelId: 'm',
+      documentId: 'm',
+      partId: 'part-1',
       sourceRevision: 1,
       requested: [RepairOperation.RemoveDuplicateFaces],
       cancellation: uncancellable,
@@ -386,7 +389,8 @@ describe('CC01: cancellation observed before any work begins', () => {
         plan,
         sourceReport: report,
         cancellation: cancelled,
-        modelId: 'm',
+        documentId: 'm',
+        partId: 'part-1',
         revision: 1,
         view,
         prepared,
@@ -464,8 +468,9 @@ describe('CC07: cancellation is observed inside candidate topology validation', 
     let lastFraction = 0;
     expect(() =>
       analyseTopology(mesh, {
-        modelId: 'm',
-        modelRevision: 1,
+        documentId: 'm',
+        partId: 'part-1',
+        documentRevision: 1,
         cancellation: token,
         onProgress: ({ fraction }) => {
           lastFraction = fraction;
@@ -484,8 +489,9 @@ describe('CC07: cancellation is observed inside candidate topology validation', 
     const mesh = duplicateHeavyMesh(2_048);
     let lastFraction = 0;
     const { report } = analyseTopology(mesh, {
-      modelId: 'm',
-      modelRevision: 1,
+      documentId: 'm',
+      partId: 'part-1',
+      documentRevision: 1,
       cancellation: uncancellable,
       onProgress: ({ fraction }) => {
         lastFraction = fraction;

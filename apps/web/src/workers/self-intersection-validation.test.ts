@@ -14,8 +14,9 @@ import { describeMalformedGeometry } from './self-intersection-validation';
 const wellFormed = {
   kind: 'geometry' as const,
   operationId: 'op-1',
-  modelId: 'model-1',
-  modelRevision: 1,
+  documentId: 'model-1',
+  partId: 'part-1',
+  documentRevision: 1,
   positions: Float64Array.from([0, 0, 0, 1, 0, 0, 0, 1, 0]),
   triangles: Uint32Array.from([0, 1, 2]),
   limits: { maxCandidatePairs: 10, maxTestedPairs: 10, maxSamples: 4 },
@@ -42,8 +43,8 @@ describe('malformed requests are refused with a reason', () => {
     ['null payload', null, /not an object/],
     ['a string instead of a message', 'geometry', /not an object/],
     ['missing operationId', { ...wellFormed, operationId: 42 }, /operationId/],
-    ['missing modelId', { ...wellFormed, modelId: undefined }, /modelId/],
-    ['fractional revision', { ...wellFormed, modelRevision: 1.5 }, /modelRevision/],
+    ['missing documentId', { ...wellFormed, documentId: undefined }, /documentId/],
+    ['fractional revision', { ...wellFormed, documentRevision: 1.5 }, /documentRevision/],
     [
       'wrong typed-array kind for positions',
       { ...wellFormed, positions: Float32Array.from([0, 0, 0, 1, 0, 0, 0, 1, 0]) },

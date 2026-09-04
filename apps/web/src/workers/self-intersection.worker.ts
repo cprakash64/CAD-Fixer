@@ -143,8 +143,9 @@ async function runDiagnostic(message: DiagnosticGeometryMessage): Promise<void> 
         module._cf_si_failed() === 1
           ? SelfIntersectionStatus.InternalFailure
           : (STATUS_BY_CODE[statusCode] ?? SelfIntersectionStatus.InternalFailure),
-      modelId: message.modelId,
-      modelRevision: message.modelRevision,
+      documentId: message.documentId,
+      documentRevision: message.documentRevision,
+      partId: message.partId,
       faceCount,
       intersectingPairCount: module._cf_si_intersecting_pairs(),
       affectedFaceCount: module._cf_si_affected_faces(),

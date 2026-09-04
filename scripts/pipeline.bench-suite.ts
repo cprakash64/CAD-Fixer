@@ -185,8 +185,9 @@ it('measures the whole local pipeline across representative sizes', async () => 
     let lastAt = performance.now();
     const analysisStart = performance.now();
     const result = analyseTopology(mesh, {
-      modelId: 'bench',
-      modelRevision: 1,
+      documentId: 'bench',
+      partId: 'part-1',
+      documentRevision: 1,
       cancellation: uncancellable,
       onPhaseStart: (phase) => {
         const now = performance.now();

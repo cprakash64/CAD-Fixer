@@ -1,9 +1,4 @@
-import {
-  createIndexArray,
-  createPositionArray,
-  IDENTITY_MATRIX4,
-  type CanonicalMesh,
-} from '@cadfixer/mesh-core';
+import { createIndexArray, createPositionArray, type CanonicalMesh } from '@cadfixer/mesh-core';
 
 /**
  * Deterministic synthetic topology fixtures.
@@ -38,7 +33,7 @@ export function soup(triangles: readonly (readonly [Point, Point, Point])[]): Ca
   return {
     positions,
     indices,
-    metadata: { sourceFormat: 'stl', transform: IDENTITY_MATRIX4 },
+    metadata: { sourceFormat: 'stl' },
   };
 }
 
@@ -371,7 +366,7 @@ export function concat(first: CanonicalMesh, second: CanonicalMesh): CanonicalMe
   return {
     positions,
     indices,
-    metadata: { sourceFormat: 'stl', transform: IDENTITY_MATRIX4 },
+    metadata: { sourceFormat: 'stl' },
   };
 }
 

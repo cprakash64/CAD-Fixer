@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { AppErrorCode, isAppError, LengthUnit } from '@cadfixer/shared';
-import { IDENTITY_MATRIX4, type CanonicalMesh } from './mesh';
+import { AppErrorCode, isAppError } from '@cadfixer/shared';
+import type { CanonicalMesh } from './mesh';
 import {
   assertMeshStructure,
   MeshValidationCode,
@@ -13,7 +13,7 @@ function validTriangle(overrides: Partial<CanonicalMesh> = {}): CanonicalMesh {
   return {
     positions: new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]),
     indices: new Uint32Array([0, 1, 2]),
-    metadata: { transform: IDENTITY_MATRIX4, unit: LengthUnit.Millimeter },
+    metadata: {},
     ...overrides,
   };
 }

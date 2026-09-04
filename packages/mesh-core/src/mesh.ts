@@ -1,5 +1,3 @@
-import type { LengthUnit } from '@cadfixer/shared';
-
 /**
  * The canonical in-memory mesh representation.
  *
@@ -55,28 +53,6 @@ export type NormalArray = Float32Array;
 /** Per-vertex UV coordinates, two components per vertex. */
 export type UvArray = Float32Array;
 
-/** A 4x4 column-major affine transform, matching the convention used by Three.js and glTF. */
-export type Matrix4Tuple = readonly [
-  number,
-  number,
-  number,
-  number,
-  number,
-  number,
-  number,
-  number,
-  number,
-  number,
-  number,
-  number,
-  number,
-  number,
-  number,
-  number,
-];
-
-export const IDENTITY_MATRIX4: Matrix4Tuple = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
-
 /** Identifier of the format a mesh was read from. Mirrors `@cadfixer/file-formats`. */
 export type SourceFormatId = string;
 
@@ -99,20 +75,6 @@ export interface MeshGroup {
 export interface MeshMetadata {
   /** Format the mesh was read from, or `undefined` if constructed in-app. */
   readonly sourceFormat?: SourceFormatId;
-  /**
-   * Unit the position values are expressed in.
-   *
-   * `undefined` means the source did not state a unit (STL and OBJ generally do
-   * not). It must NOT be defaulted to millimetres silently — an unknown unit is
-   * surfaced to the user, per the data integrity principle.
-   */
-  readonly unit?: LengthUnit;
-  /**
-   * Model-to-world transform. Kept separate from positions so that an import
-   * does not have to bake a transform into vertex data, which would lose the
-   * original coordinates.
-   */
-  readonly transform: Matrix4Tuple;
 }
 
 export interface CanonicalMesh {
@@ -136,6 +98,21 @@ export function vertexCount(mesh: CanonicalMesh): number {
 
 export function triangleCount(mesh: CanonicalMesh): number {
   return Math.floor(mesh.indices.length / 3);
+}
+
+/**
+ * Bytes of geometry a mesh occupies.
+ *
+ * DEFINED HERE, not in the runtime that used to own it, because two callers now
+ * need the same answer: the resident store budgets what it holds, and document
+ * validation budgets what it is about to admit. Two independent byte sums would
+ * be a drift bug waiting for the day one of them learns about a new attribute.
+ */
+export function meshByteLength(mesh: CanonicalMesh): number {
+  let bytes = mesh.positions.byteLength + mesh.indices.byteLength;
+  if (mesh.normals) bytes += mesh.normals.byteLength;
+  if (mesh.uvs) bytes += mesh.uvs.byteLength;
+  return bytes;
 }
 
 /**

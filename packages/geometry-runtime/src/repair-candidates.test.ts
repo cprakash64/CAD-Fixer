@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { AppErrorCode, isAppError, uncancellable } from '@cadfixer/shared';
-import { triangleCount } from '@cadfixer/mesh-core';
-import type { CanonicalMesh } from '@cadfixer/mesh-core';
+import { partId, singlePartDocument, triangleCount } from '@cadfixer/mesh-core';
+import type { CanonicalMesh, GeometryDocument } from '@cadfixer/mesh-core';
 import { analyseTopology } from '@cadfixer/mesh-topology';
 import { concat, duplicateSameOrientation, tetrahedron } from '@cadfixer/mesh-topology/fixtures';
 import {
@@ -11,7 +11,24 @@ import {
   restoreFromInverse,
 } from '@cadfixer/mesh-repair';
 import { CandidateState, RepairCandidateStore } from './repair-candidates';
-import { ResidentModelStore } from './resident-models';
+import { ResidentDocumentStore } from './resident-documents';
+
+/**
+ * The one part every fixture document holds.
+ *
+ * A single-part document is the STL shape, and it is what these transaction
+ * guards were written against — the part identity here is what makes them
+ * expressible at all now that a candidate names a part.
+ */
+const PART = partId('part-1');
+
+/** The mesh of a resolved document's only part. */
+function onlyMesh(document: GeometryDocument | { code: string }): CanonicalMesh {
+  if (!('parts' in document)) throw new Error('expected a document');
+  const part = document.parts[0];
+  if (part === undefined) throw new Error('expected a part');
+  return part.mesh;
+}
 
 /**
  * CR20–CR22, CR24 and the transaction guards.
@@ -38,14 +55,16 @@ function repairOf(mesh: CanonicalMesh): {
   result: ReturnType<typeof executeConservativeRepair>;
 } {
   const before = analyseTopology(mesh, {
-    modelId: 'm',
-    modelRevision: 1,
+    documentId: 'm',
+    partId: 'part-1',
+    documentRevision: 1,
     cancellation: uncancellable,
   }).report;
   const { plan, view, prepared } = planConservativeRepair({
     mesh,
     report: before,
-    modelId: 'm',
+    documentId: 'm',
+    partId: 'part-1',
     sourceRevision: 1,
     requested: [RepairOperation.RemoveDuplicateFaces],
   });
@@ -54,7 +73,8 @@ function repairOf(mesh: CanonicalMesh): {
     plan,
     sourceReport: before,
     cancellation: uncancellable,
-    modelId: 'm',
+    documentId: 'm',
+    partId: 'part-1',
     revision: 1,
     view,
     prepared,
@@ -63,17 +83,17 @@ function repairOf(mesh: CanonicalMesh): {
 }
 
 function setUp(): {
-  models: ResidentModelStore;
+  models: ResidentDocumentStore;
   candidates: RepairCandidateStore;
-  source: ReturnType<ResidentModelStore['commit']>;
+  source: ReturnType<ResidentDocumentStore['commit']>;
   mesh: CanonicalMesh;
   plan: ReturnType<typeof planConservativeRepair>['plan'];
   result: ReturnType<typeof executeConservativeRepair>;
 } {
   const mesh = concat(duplicateSameOrientation(), tetrahedron());
-  const models = new ResidentModelStore();
+  const models = new ResidentDocumentStore();
   const candidates = new RepairCandidateStore();
-  const source = models.commit(mesh);
+  const source = models.commit(singlePartDocument(mesh));
   const { plan, result } = repairOf(mesh);
   return { models, candidates, source, mesh, plan, result };
 }
@@ -85,6 +105,7 @@ describe('repair candidate transactions', () => {
 
     const handle = candidates.create(
       source,
+      PART,
       must(result.candidate, 'candidate'),
       result.validation,
       result.inverse,
@@ -92,45 +113,46 @@ describe('repair candidate transactions', () => {
     expect(candidates.stateOf(handle)).toBe(CandidateState.Resolved);
 
     const mesh = candidates.prepareCommit(
-      { candidate: handle, expectedSource: source, planHash: plan.planHash },
-      models.revisionOf(source.modelId),
+      { candidate: handle, expectedSource: source, expectedPart: PART, planHash: plan.planHash },
+      models.revisionOf(source.documentId),
     );
     expect(isAppError(mesh)).toBe(false);
 
-    const next = models.replace(source, mesh as CanonicalMesh);
+    const next = models.replace(source, singlePartDocument(mesh as CanonicalMesh));
     expect(isAppError(next)).toBe(false);
     candidates.markCommitted(handle);
 
     if (isAppError(next)) return;
     // Same lineage, NEW revision, parent recorded by the revision itself.
-    expect(next.modelId).toBe(source.modelId);
+    expect(next.documentId).toBe(source.documentId);
     expect(next.revision).toBe(source.revision + 1);
-    expect(models.revisionOf(source.modelId)).toBe(2);
+    expect(models.revisionOf(source.documentId)).toBe(2);
 
     // The old handle is now stale and must not resolve.
     expect(isAppError(models.resolve(source))).toBe(true);
     // And the new one resolves to the REPAIRED geometry.
     const committed = models.resolve(next);
     expect(isAppError(committed)).toBe(false);
-    expect(triangleCount(committed as CanonicalMesh)).toBe(result.counts.candidateFaceCount);
+    expect(triangleCount(onlyMesh(committed))).toBe(result.counts.candidateFaceCount);
   });
 
   it('CR20: a candidate whose source revision moved on cannot commit', () => {
     const { models, candidates, source, plan, result } = setUp();
     const handle = candidates.create(
       source,
+      PART,
       must(result.candidate, 'candidate'),
       result.validation,
       result.inverse,
     );
 
     // Something else replaces the model first.
-    const moved = models.replace(source, tetrahedron());
+    const moved = models.replace(source, singlePartDocument(tetrahedron()));
     expect(isAppError(moved)).toBe(false);
 
     const outcome = candidates.prepareCommit(
-      { candidate: handle, expectedSource: source, planHash: plan.planHash },
-      models.revisionOf(source.modelId),
+      { candidate: handle, expectedSource: source, expectedPart: PART, planHash: plan.planHash },
+      models.revisionOf(source.documentId),
     );
     expect(isAppError(outcome)).toBe(true);
     if (isAppError(outcome)) expect(outcome.code).toBe(AppErrorCode.ModelUnavailable);
@@ -138,7 +160,7 @@ describe('repair candidate transactions', () => {
     // The newer geometry is untouched: the stale repair did not land on it.
     if (!isAppError(moved)) {
       const current = models.resolve(moved);
-      expect(triangleCount(current as CanonicalMesh)).toBe(triangleCount(tetrahedron()));
+      expect(triangleCount(onlyMesh(current))).toBe(triangleCount(tetrahedron()));
     }
   });
 
@@ -146,6 +168,7 @@ describe('repair candidate transactions', () => {
     const { models, candidates, source, plan, result } = setUp();
     const handle = candidates.create(
       source,
+      PART,
       must(result.candidate, 'candidate'),
       result.validation,
       result.inverse,
@@ -155,8 +178,8 @@ describe('repair candidate transactions', () => {
     expect(candidates.stateOf(handle)).toBe(CandidateState.Discarded);
 
     const outcome = candidates.prepareCommit(
-      { candidate: handle, expectedSource: source, planHash: plan.planHash },
-      models.revisionOf(source.modelId),
+      { candidate: handle, expectedSource: source, expectedPart: PART, planHash: plan.planHash },
+      models.revisionOf(source.documentId),
     );
     expect(isAppError(outcome)).toBe(true);
     if (isAppError(outcome)) expect(outcome.code).toBe(AppErrorCode.InvalidState);
@@ -169,6 +192,7 @@ describe('repair candidate transactions', () => {
     const { candidates, source, result } = setUp();
     const handle = candidates.create(
       source,
+      PART,
       must(result.candidate, 'candidate'),
       result.validation,
       result.inverse,
@@ -183,22 +207,23 @@ describe('repair candidate transactions', () => {
     const { models, candidates, source, plan, result } = setUp();
     const handle = candidates.create(
       source,
+      PART,
       must(result.candidate, 'candidate'),
       result.validation,
       result.inverse,
     );
 
     const first = candidates.prepareCommit(
-      { candidate: handle, expectedSource: source, planHash: plan.planHash },
-      models.revisionOf(source.modelId),
+      { candidate: handle, expectedSource: source, expectedPart: PART, planHash: plan.planHash },
+      models.revisionOf(source.documentId),
     );
-    const next = models.replace(source, first as CanonicalMesh);
+    const next = models.replace(source, singlePartDocument(first as CanonicalMesh));
     candidates.markCommitted(handle);
     expect(isAppError(next)).toBe(false);
 
     const second = candidates.prepareCommit(
-      { candidate: handle, expectedSource: source, planHash: plan.planHash },
-      models.revisionOf(source.modelId),
+      { candidate: handle, expectedSource: source, expectedPart: PART, planHash: plan.planHash },
+      models.revisionOf(source.documentId),
     );
     expect(isAppError(second)).toBe(true);
     if (isAppError(second)) expect(second.code).toBe(AppErrorCode.InvalidState);
@@ -212,14 +237,15 @@ describe('repair candidate transactions', () => {
     };
     const handle = candidates.create(
       source,
+      PART,
       must(result.candidate, 'candidate'),
       rejected,
       result.inverse,
     );
 
     const outcome = candidates.prepareCommit(
-      { candidate: handle, expectedSource: source, planHash: plan.planHash },
-      models.revisionOf(source.modelId),
+      { candidate: handle, expectedSource: source, expectedPart: PART, planHash: plan.planHash },
+      models.revisionOf(source.documentId),
     );
     expect(isAppError(outcome)).toBe(true);
     if (isAppError(outcome)) expect(outcome.code).toBe(AppErrorCode.InvalidState);
@@ -229,14 +255,15 @@ describe('repair candidate transactions', () => {
     const { models, candidates, source, result } = setUp();
     const handle = candidates.create(
       source,
+      PART,
       must(result.candidate, 'candidate'),
       result.validation,
       result.inverse,
     );
 
     const outcome = candidates.prepareCommit(
-      { candidate: handle, expectedSource: source, planHash: 'deadbeef' },
-      models.revisionOf(source.modelId),
+      { candidate: handle, expectedSource: source, expectedPart: PART, planHash: 'deadbeef' },
+      models.revisionOf(source.documentId),
     );
     expect(isAppError(outcome)).toBe(true);
     if (isAppError(outcome)) expect(outcome.code).toBe(AppErrorCode.InvalidState);
@@ -246,12 +273,14 @@ describe('repair candidate transactions', () => {
     const { candidates, source, result } = setUp();
     const first = candidates.create(
       source,
+      PART,
       must(result.candidate, 'candidate'),
       result.validation,
       result.inverse,
     );
     const second = candidates.create(
       source,
+      PART,
       must(result.candidate, 'candidate'),
       result.validation,
       result.inverse,
@@ -268,6 +297,7 @@ describe('repair candidate transactions', () => {
     const { models, candidates, source, result } = setUp();
     candidates.create(
       source,
+      PART,
       must(result.candidate, 'candidate'),
       result.validation,
       result.inverse,
@@ -277,13 +307,14 @@ describe('repair candidate transactions', () => {
     // has not become the export target.
     const resolved = models.resolve(source);
     expect(isAppError(resolved)).toBe(false);
-    expect(triangleCount(resolved as CanonicalMesh)).toBe(result.counts.sourceFaceCount);
+    expect(triangleCount(onlyMesh(resolved))).toBe(result.counts.sourceFaceCount);
   });
 
   it('worker loss invalidates every candidate and records no commit', () => {
     const { models, candidates, source, result } = setUp();
     const handle = candidates.create(
       source,
+      PART,
       must(result.candidate, 'candidate'),
       result.validation,
       result.inverse,
@@ -298,8 +329,8 @@ describe('repair candidate transactions', () => {
     expect(candidates.stateOf(handle)).toBeUndefined();
     expect(candidates.stats().candidateCount).toBe(0);
     const outcome = candidates.prepareCommit(
-      { candidate: handle, expectedSource: source, planHash: 'x' },
-      models.revisionOf(source.modelId),
+      { candidate: handle, expectedSource: source, expectedPart: PART, planHash: 'x' },
+      models.revisionOf(source.documentId),
     );
     expect(isAppError(outcome)).toBe(true);
     if (isAppError(outcome)) expect(outcome.code).toBe(AppErrorCode.ModelUnavailable);
@@ -310,15 +341,16 @@ describe('repair candidate transactions', () => {
     const { models, candidates, source, mesh, plan, result } = setUp();
     const handle = candidates.create(
       source,
+      PART,
       must(result.candidate, 'candidate'),
       result.validation,
       result.inverse,
     );
     const committedMesh = candidates.prepareCommit(
-      { candidate: handle, expectedSource: source, planHash: plan.planHash },
-      models.revisionOf(source.modelId),
+      { candidate: handle, expectedSource: source, expectedPart: PART, planHash: plan.planHash },
+      models.revisionOf(source.documentId),
     ) as CanonicalMesh;
-    const next = models.replace(source, committedMesh);
+    const next = models.replace(source, singlePartDocument(committedMesh));
     candidates.markCommitted(handle);
     expect(isAppError(next)).toBe(false);
 

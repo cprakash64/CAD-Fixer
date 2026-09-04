@@ -25,8 +25,9 @@ import {
 function reportWith(overrides: Partial<TopologyReport> = {}): TopologyReport {
   return {
     schemaVersion: 1,
-    modelId: 'model-1',
-    modelRevision: 1,
+    documentId: 'model-1',
+    documentRevision: 1,
+    partId: 'part-1',
     identityMode: 'exact-stored-coordinate',
     sourceFaceCount: 4,
     sourceCornerCount: 12,

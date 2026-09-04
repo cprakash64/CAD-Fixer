@@ -3,8 +3,8 @@ import { AppErrorCode, isAppError } from '@cadfixer/shared';
 import type { OperationId } from '@cadfixer/shared';
 import type {
   ModelAnalyzeResult,
-  ModelHandle,
-  ModelId,
+  DocumentHandle,
+  DocumentId,
   OperationHandle,
   ProgressUpdate,
 } from '@cadfixer/geometry-runtime';
@@ -21,7 +21,8 @@ import {
  * covered end to end by Playwright.
  */
 
-const HANDLE: ModelHandle = { modelId: 'model-1' as ModelId, revision: 1 };
+const HANDLE: DocumentHandle = { documentId: 'model-1' as DocumentId, revision: 1 };
+const PART = 'part-1';
 
 interface Controllable {
   readonly client: AnalysisCapableClient;
@@ -43,7 +44,7 @@ function controllableClient(): Controllable {
   });
 
   const client: AnalysisCapableClient = {
-    analyzeModel(_handle, progress): OperationHandle<ModelAnalyzeResult> {
+    analyzeModel(_handle, _partId, progress): OperationHandle<ModelAnalyzeResult> {
       onProgress = progress;
       return {
         id: 1 as unknown as OperationId,
@@ -73,14 +74,15 @@ function controllableClient(): Controllable {
   };
 }
 
-function resultFor(handle: ModelHandle): ModelAnalyzeResult {
+function resultFor(handle: DocumentHandle, partId = PART): ModelAnalyzeResult {
   return {
     handle,
+    partId,
     // The service does not inspect the report's contents; it routes it.
     // Contents are irrelevant here: the service routes the report, it does not
     // read it. Cast through `unknown` because a partial report is deliberately
     // not a valid one.
-    report: { modelId: handle.modelId } as unknown as ModelAnalyzeResult['report'],
+    report: { documentId: handle.documentId } as unknown as ModelAnalyzeResult['report'],
     detail: {} as unknown as ModelAnalyzeResult['detail'],
   };
 }
@@ -107,25 +109,37 @@ describe('handle verification', () => {
    */
   it('rejects a result whose handle does not match the request', async () => {
     const controllable = controllableClient();
-    const session = analyzeModelTopology({ handle: HANDLE, client: controllable.client });
+    const session = analyzeModelTopology({
+      handle: HANDLE,
+      partId: PART,
+      client: controllable.client,
+    });
 
-    controllable.resolve(resultFor({ modelId: 'model-2' as ModelId, revision: 1 }));
+    controllable.resolve(resultFor({ documentId: 'model-2' as DocumentId, revision: 1 }));
 
     await expect(session.promise).rejects.toThrow(/different model/i);
   });
 
   it('rejects a result for the right model at the wrong revision', async () => {
     const controllable = controllableClient();
-    const session = analyzeModelTopology({ handle: HANDLE, client: controllable.client });
+    const session = analyzeModelTopology({
+      handle: HANDLE,
+      partId: PART,
+      client: controllable.client,
+    });
 
-    controllable.resolve(resultFor({ modelId: 'model-1' as ModelId, revision: 2 }));
+    controllable.resolve(resultFor({ documentId: 'model-1' as DocumentId, revision: 2 }));
 
     await expect(session.promise).rejects.toThrow(/different model/i);
   });
 
   it('accepts a matching result', async () => {
     const controllable = controllableClient();
-    const session = analyzeModelTopology({ handle: HANDLE, client: controllable.client });
+    const session = analyzeModelTopology({
+      handle: HANDLE,
+      partId: PART,
+      client: controllable.client,
+    });
 
     controllable.resolve(resultFor(HANDLE));
 
@@ -138,7 +152,11 @@ describe('handle verification', () => {
 describe('cancellation', () => {
   it('forwards the cancel to the worker operation', async () => {
     const controllable = controllableClient();
-    const session = analyzeModelTopology({ handle: HANDLE, client: controllable.client });
+    const session = analyzeModelTopology({
+      handle: HANDLE,
+      partId: PART,
+      client: controllable.client,
+    });
 
     // Let the service dispatch before cancelling.
     await Promise.resolve();
@@ -151,7 +169,11 @@ describe('cancellation', () => {
 
   it('refuses a result that arrives after the user cancelled', async () => {
     const controllable = controllableClient();
-    const session = analyzeModelTopology({ handle: HANDLE, client: controllable.client });
+    const session = analyzeModelTopology({
+      handle: HANDLE,
+      partId: PART,
+      client: controllable.client,
+    });
 
     await Promise.resolve();
     session.cancel();
@@ -180,6 +202,7 @@ describe('progress', () => {
 
     const session = analyzeModelTopology({
       handle: HANDLE,
+      partId: PART,
       client: controllable.client,
       onProgress: (progress) => seen.push({ ...progress }),
     });

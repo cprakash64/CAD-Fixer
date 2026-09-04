@@ -28,8 +28,8 @@ export function describeMalformedGeometry(message: unknown): string | undefined 
   const fields = message as Record<string, unknown>;
 
   if (typeof fields.operationId !== 'string') return 'operationId must be a string';
-  if (typeof fields.modelId !== 'string') return 'modelId must be a string';
-  if (!Number.isInteger(fields.modelRevision)) return 'modelRevision must be an integer';
+  if (typeof fields.documentId !== 'string') return 'documentId must be a string';
+  if (!Number.isInteger(fields.documentRevision)) return 'documentRevision must be an integer';
 
   const positions = fields.positions;
   const triangles = fields.triangles;

@@ -1,6 +1,12 @@
 import { cleanup, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { ModelHandle, RenderSnapshot, TopologyReport } from '@cadfixer/geometry-runtime';
+import { IDENTITY_PART_TRANSFORM } from '@cadfixer/mesh-core';
+import type {
+  DocumentHandle,
+  DocumentRenderSnapshot,
+  PartDescriptor,
+  TopologyReport,
+} from '@cadfixer/geometry-runtime';
 import { RepairPanel } from './RepairPanel';
 import { GeometryClientProvider } from '../runtime/client-context';
 import { GeometryClient } from '../runtime/geometry-client';
@@ -64,15 +70,35 @@ function renderPanel(configure: (store: WorkspaceStore) => void = () => undefine
   return store;
 }
 
-function loadModel(store: WorkspaceStore): ModelHandle {
-  const handle = { modelId: 'model-1', revision: 1 } as ModelHandle;
-  const render_: RenderSnapshot = {
-    positions: new Float32Array(9),
-    normals: new Float32Array(9),
-    vertexCount: 3,
+const PART = 'part-1';
+
+function partDescriptor(): PartDescriptor {
+  return {
+    partId: PART,
+    transform: IDENTITY_PART_TRANSFORM,
+    triangleCount: 4,
+    vertexCount: 12,
+    bounds: undefined,
+    meshResourceIndex: 0,
+  };
+}
+
+function loadModel(store: WorkspaceStore): DocumentHandle {
+  const handle = { documentId: 'model-1', revision: 1 } as DocumentHandle;
+  const render_: DocumentRenderSnapshot = {
+    parts: [
+      {
+        partId: PART,
+        transform: IDENTITY_PART_TRANSFORM,
+        positions: new Float32Array(9),
+        normals: new Float32Array(9),
+        vertexCount: 3,
+      },
+    ],
   };
   const model: Omit<LoadedModel, 'revision'> = {
     handle,
+    parts: [partDescriptor()],
     render: render_,
     source: {
       fileName: 'part.stl',
@@ -151,7 +177,7 @@ describe('when the topology report is not usable', () => {
   it('says nothing about the model while an analysis is still running', () => {
     renderPanel((store) => {
       const handle = loadModel(store);
-      store.beginAnalysis(handle);
+      store.beginAnalysis(handle, PART);
     });
 
     expect(screen.getByTestId('repair-analysis-note')).toHaveTextContent(
@@ -169,10 +195,12 @@ describe('when the topology report is not usable', () => {
      */
     renderPanel((store) => {
       const handle = loadModel(store);
-      const token = store.beginAnalysis(handle);
-      store.commitAnalysis(token, handle, {} as TopologyReport, {} as never, 1);
+      const token = store.beginAnalysis(handle, PART);
+      store.commitAnalysis(token, handle, PART, {} as TopologyReport, {} as never, 1);
       store.applyRepairResult({
-        handle: { modelId: 'model-1', revision: 2 } as ModelHandle,
+        handle: { documentId: 'model-1', revision: 2 } as DocumentHandle,
+        partId: PART,
+        parts: [partDescriptor()],
         parentRevision: 1,
         recordId: 'record-1',
         appliedOperations: [],
@@ -203,7 +231,9 @@ describe('after a repair has been applied', () => {
     renderPanel((store) => {
       loadModel(store);
       store.applyRepairResult({
-        handle: { modelId: 'model-1', revision: 2 } as ModelHandle,
+        handle: { documentId: 'model-1', revision: 2 } as DocumentHandle,
+        partId: PART,
+        parts: [partDescriptor()],
         parentRevision: 1,
         recordId: 'record-1',
         appliedOperations: ['remove-duplicate-faces'],
@@ -245,7 +275,9 @@ describe('after a repair has been applied', () => {
     renderPanel((store) => {
       loadModel(store);
       store.applyRepairResult({
-        handle: { modelId: 'model-1', revision: 2 } as ModelHandle,
+        handle: { documentId: 'model-1', revision: 2 } as DocumentHandle,
+        partId: PART,
+        parts: [partDescriptor()],
         parentRevision: 1,
         recordId: 'record-1',
         appliedOperations: [],

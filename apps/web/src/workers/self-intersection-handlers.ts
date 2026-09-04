@@ -1,10 +1,10 @@
 import { triangleCount } from '@cadfixer/mesh-core';
-import type { CanonicalMesh } from '@cadfixer/mesh-core';
+import type { CanonicalMesh, PartId } from '@cadfixer/mesh-core';
 import { recoverVertexIdentity } from '@cadfixer/mesh-topology';
 import { SELF_INTERSECTION_MAX_FACES, narrowLimits } from '@cadfixer/mesh-self-intersection';
 import type { OperationHandler } from '@cadfixer/geometry-runtime';
 import { invalidState, isAppError } from '@cadfixer/shared';
-import { residentModels } from './stl-handlers';
+import { residentDocuments } from './stl-handlers';
 
 /**
  * THE PRODUCER SIDE OF THE DIAGNOSTIC CHANNEL.
@@ -77,8 +77,19 @@ export const modelSendForDiagnosticHandler: OperationHandler<'model/send-for-dia
     // being terminated.
     context.throwIfCancelled();
 
-    const resolved = residentModels.resolve(payload.handle);
-    if (isAppError(resolved)) throw resolved;
+    /*
+     * PER PART, and only ever per part.
+     *
+     * Self-intersection asks whether ONE part's own faces cross. Flattening a
+     * document into one soup first would report two independently valid parts
+     * that happen to overlap in world space as self-intersecting — a claim
+     * about the model that nothing checked and that is not even true. Inter-part
+     * overlap is a different question with a different name and no
+     * implementation; see docs/adr/0013.
+     */
+    const part = residentDocuments.resolvePart(payload.handle, payload.partId as PartId);
+    if (isAppError(part)) throw part;
+    const resolved = part.mesh;
 
     const faceCount = triangleCount(resolved);
 
@@ -106,8 +117,9 @@ export const modelSendForDiagnosticHandler: OperationHandler<'model/send-for-dia
       {
         kind: 'geometry',
         operationId: payload.operationId,
-        modelId: payload.handle.modelId,
-        modelRevision: payload.handle.revision,
+        documentId: payload.handle.documentId,
+        documentRevision: payload.handle.revision,
+        partId: part.id,
         positions,
         triangles,
         limits: narrowLimits(payload.limits),

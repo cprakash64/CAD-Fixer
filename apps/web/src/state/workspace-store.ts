@@ -1,7 +1,9 @@
 import type {
   ConservativeRepairPlan,
+  DocumentRenderSnapshot,
   MeshBounds,
-  ModelHandle,
+  DocumentHandle,
+  PartDescriptor,
   RenderSnapshot,
   RepairCandidateHandle,
   RepairChangeCounts,
@@ -156,8 +158,16 @@ export interface AnalysisFailure {
  */
 export interface AnalysisSnapshot {
   readonly state: AnalysisState;
-  /** The model this state describes. `undefined` only when unavailable. */
-  readonly handle: ModelHandle | undefined;
+  /** The document this state describes. `undefined` only when unavailable. */
+  readonly handle: DocumentHandle | undefined;
+  /**
+   * The PART this state describes.
+   *
+   * Analysis is per part, so a handle alone no longer identifies a report: two
+   * parts of one document share a revision. A report that arrives for a part
+   * the user has since switched away from is discarded rather than shown.
+   */
+  readonly partId: string | undefined;
   /** 0..1, meaningful only while `state` is `analyzing`. */
   readonly fraction: number;
   /** Already translated for display by the analysis service. */
@@ -197,8 +207,15 @@ export type SelfIntersectionToken = number & {
 export interface SelfIntersectionSnapshot {
   readonly phase: SelfIntersectionPhase;
   readonly band: SelfIntersectionBand;
-  /** The model this state describes. `undefined` when nothing is loaded. */
-  readonly handle: ModelHandle | undefined;
+  /** The document this state describes. `undefined` when nothing is loaded. */
+  readonly handle: DocumentHandle | undefined;
+  /**
+   * The PART this state describes.
+   *
+   * Self-intersection is intra-part. The band is derived from THIS part's face
+   * count, not the document's total, because the check runs on one mesh.
+   */
+  readonly partId: string | undefined;
   /** Faces examined so far, reported by the worker. Scalar only. */
   readonly faceCount: number | undefined;
   /**
@@ -217,6 +234,7 @@ const EMPTY_SELF_INTERSECTION: SelfIntersectionSnapshot = {
   phase: SelfIntersectionPhase.Idle,
   band: SelfIntersectionBand.AutoEligible,
   handle: undefined,
+  partId: undefined,
   faceCount: undefined,
   report: undefined,
   error: undefined,
@@ -226,6 +244,7 @@ const EMPTY_SELF_INTERSECTION: SelfIntersectionSnapshot = {
 const EMPTY_ANALYSIS: AnalysisSnapshot = {
   state: AnalysisState.Unavailable,
   handle: undefined,
+  partId: undefined,
   fraction: 0,
   phase: undefined,
   report: undefined,
@@ -342,12 +361,14 @@ export type RepairToken = number & { readonly [repairTokenBrand]: true };
  * WHAT IS DELIBERATELY ABSENT: the candidate's `CanonicalMesh`. It stays
  * worker-resident exactly as the authoritative model's does. `render` is a
  * display-only snapshot, and `candidate` is a handle the UI can name but cannot
- * export — `RepairCandidateHandle` is a distinct type from `ModelHandle`, so the
+ * export — `RepairCandidateHandle` is a distinct type from `DocumentHandle`, so the
  * compiler refuses to let a candidate reach an operation that takes a model.
  */
 export interface RepairPreview {
   readonly candidate: RepairCandidateHandle;
-  readonly source: ModelHandle;
+  readonly source: DocumentHandle;
+  /** The part this candidate replaces. Bound at creation, never inferred later. */
+  readonly partId: string;
   readonly planHash: string;
   readonly validation: RepairValidation;
   readonly counts: RepairChangeCounts;
@@ -361,7 +382,9 @@ export interface RepairPreview {
 export interface AppliedRepair {
   readonly recordId: string;
   /** The revision the repair produced. */
-  readonly handle: ModelHandle;
+  readonly handle: DocumentHandle;
+  /** The part whose geometry changed. Every other part is untouched. */
+  readonly partId: string;
   readonly parentRevision: number;
   readonly appliedOperations: readonly RepairOperation[];
   readonly counts: RepairChangeCounts;
@@ -394,8 +417,10 @@ const CHANGE_OVERLAYS_SHOWN: ChangeOverlayVisibility = {
 };
 
 export interface RepairSnapshot {
-  /** The model the plan and candidate belong to. Checked on every write. */
-  readonly handle: ModelHandle | undefined;
+  /** The document the plan and candidate belong to. Checked on every write. */
+  readonly handle: DocumentHandle | undefined;
+  /** The PART the plan and candidate belong to. Checked on every write. */
+  readonly partId: string | undefined;
   readonly planState: RepairPlanState;
   readonly plan: ConservativeRepairPlan | undefined;
   readonly planError: RepairFailure | undefined;
@@ -434,6 +459,7 @@ export const DEFAULT_REPAIR_SELECTION: readonly RepairOperation[] = Object.freez
 
 const EMPTY_REPAIR: RepairSnapshot = {
   handle: undefined,
+  partId: undefined,
   planState: RepairPlanState.Unavailable,
   plan: undefined,
   planError: undefined,
@@ -461,6 +487,19 @@ export interface WorkspaceState {
    * next file turned out to be broken would be its own kind of data loss.
    */
   readonly model: LoadedModel | undefined;
+  /**
+   * The part every part-targeted action currently addresses.
+   *
+   * WORKSPACE STATE, NOT GEOMETRY IDENTITY. Changing it does NOT change the
+   * document revision: selecting a different part inspects the same
+   * authoritative geometry from a different angle, and burning a revision for a
+   * selection would invalidate every in-flight result for no reason.
+   *
+   * Always either `undefined` — no model loaded — or the id of a part that
+   * exists in `model.parts`. The two are updated in the same `update` call, so
+   * there is no render in which the selection points at a part that is gone.
+   */
+  readonly activePartId: string | undefined;
   readonly importProgress: ImportProgressState;
   readonly exportProgress: ExportProgressState;
   /** Topology diagnostics for `model`, or the unavailable state when empty. */
@@ -497,6 +536,7 @@ const MAX_STATUS_ENTRIES = 50;
 const INITIAL_STATE: WorkspaceState = {
   selectedWorkflow: undefined,
   model: undefined,
+  activePartId: undefined,
   importProgress: { state: ImportState.Idle, fraction: 0 },
   exportProgress: { state: ExportState.Idle, fraction: 0 },
   analysis: EMPTY_ANALYSIS,
@@ -508,6 +548,36 @@ const INITIAL_STATE: WorkspaceState = {
   viewportFailure: undefined,
   geometrySessionLost: undefined,
 };
+
+/**
+ * Splices one part's new drawable buffers into a document snapshot.
+ *
+ * ONLY THE CHANGED PART IS REPLACED. Every other entry is carried over by
+ * reference, which matters for more than allocation: two parts that share one
+ * `Float32Array` keep sharing it, so repairing a third part does not quietly
+ * un-share the two that were never touched.
+ *
+ * Returns the original snapshot unchanged when the part is not in it, so a
+ * result that arrives for a part the document no longer has cannot invent one.
+ */
+function withPartRender(
+  snapshot: DocumentRenderSnapshot,
+  partId: string,
+  render: RenderSnapshot,
+): DocumentRenderSnapshot {
+  const index = snapshot.parts.findIndex((part) => part.partId === partId);
+  const existing = index < 0 ? undefined : snapshot.parts[index];
+  if (existing === undefined) return snapshot;
+
+  const parts = snapshot.parts.slice();
+  parts[index] = {
+    ...existing,
+    positions: render.positions,
+    normals: render.normals,
+    vertexCount: render.vertexCount,
+  };
+  return { parts };
+}
 
 export class WorkspaceStore {
   private state: WorkspaceState = INITIAL_STATE;
@@ -624,30 +694,111 @@ export class WorkspaceStore {
     // being replaced, so it must not land on the replacement.
     this.currentSelfIntersectionToken = undefined;
 
+    /*
+     * THE INITIAL SELECTION IS DETERMINISTIC: the first part in document order.
+     *
+     * For an STL — one part — that means the user's experience is unchanged:
+     * there is only one thing to select and it is selected. For a multi-part
+     * document it means the same file always opens on the same part, rather
+     * than on whichever one happened to be built first.
+     */
+    const activePart = model.parts[0];
+
     this.update({
       model: { ...model, revision },
+      activePartId: activePart?.partId,
       importProgress: { state: ImportState.Ready, fraction: 1 },
       analysis: {
         ...EMPTY_ANALYSIS,
         state: AnalysisState.Idle,
         handle: model.handle,
+        partId: activePart?.partId,
       },
-      repair: { ...EMPTY_REPAIR, handle: model.handle },
+      repair: { ...EMPTY_REPAIR, handle: model.handle, partId: activePart?.partId },
       /*
-       * The new model's size decides its own policy. A small model becomes
-       * eligible for an automatic check; a large one is refused before anything
-       * is allocated. Nothing is carried over from the previous model.
+       * The ACTIVE PART's size decides its own policy — not the document total.
+       * The check runs on one mesh, so a small part inside a large document is
+       * still auto-eligible. Nothing is carried over from the previous model.
        */
       selfIntersection: {
         ...EMPTY_SELF_INTERSECTION,
         handle: model.handle,
-        band: bandForFaceCount(model.triangleCount),
+        partId: activePart?.partId,
+        band: bandForFaceCount(activePart?.triangleCount ?? model.triangleCount),
       },
       // A successful import means a live worker, so any previous loss notice is
       // stale and must go.
       geometrySessionLost: undefined,
     });
     return true;
+  }
+
+  /**
+   * Points every part-targeted action at a different part.
+   *
+   * NO NEW REVISION. Selection is workspace state; the authoritative document
+   * is untouched, every handle stays valid, and no in-flight operation is
+   * invalidated by the switch.
+   *
+   * WHAT IS RESET, and why. The analysis, self-intersection and repair slices
+   * all describe ONE part. Carrying part A's boundary-edge count or "None
+   * found" verdict across to part B would put a number beside geometry nothing
+   * examined, which is exactly the diagnostic dishonesty the product forbids —
+   * so they are cleared and re-bound to the new part.
+   *
+   * A CANDIDATE IS NOT SILENTLY DISCARDED. Its worker-side geometry is released
+   * by the caller (`useConservativeRepair`), which returns the handle to
+   * discard; clearing the slice here without that would leak a resident mesh.
+   * The token streams are dropped so a result computed for the old part cannot
+   * install itself against the new one.
+   *
+   * Returns false when the id is not a part of the loaded document, so a caller
+   * cannot leave the selection pointing at something that does not exist.
+   */
+  public selectPart(partId: string): boolean {
+    const model = this.state.model;
+    if (model === undefined) return false;
+
+    const part = model.parts.find((candidate) => candidate.partId === partId);
+    if (part === undefined) return false;
+    if (this.state.activePartId === partId) return true;
+
+    this.currentAnalysisToken = undefined;
+    this.currentRepairToken = undefined;
+    this.currentSelfIntersectionToken = undefined;
+
+    this.update({
+      activePartId: partId,
+      analysis: {
+        ...EMPTY_ANALYSIS,
+        state: AnalysisState.Idle,
+        handle: model.handle,
+        partId,
+      },
+      selfIntersection: {
+        ...EMPTY_SELF_INTERSECTION,
+        handle: model.handle,
+        partId,
+        band: bandForFaceCount(part.triangleCount),
+      },
+      repair: {
+        ...EMPTY_REPAIR,
+        handle: model.handle,
+        partId,
+        // The user's operation choices are a preference about repair, not about
+        // a particular part, so they survive a selection change.
+        selection: this.state.repair.selection,
+      },
+      overlays: OVERLAYS_HIDDEN,
+    });
+    return true;
+  }
+
+  /** The active part's descriptor, or `undefined` when nothing is loaded. */
+  public activePart(): PartDescriptor | undefined {
+    const { model, activePartId } = this.state;
+    if (model === undefined || activePartId === undefined) return undefined;
+    return model.parts.find((part) => part.partId === activePartId);
   }
 
   /* ------------------------------------------- conservative repair -- */
@@ -660,7 +811,11 @@ export class WorkspaceStore {
    * user has since changed must not install itself, and a single monotonic token
    * answers that without any reference to timing.
    */
-  public beginRepairPlan(handle: ModelHandle, selection: readonly RepairOperation[]): RepairToken {
+  public beginRepairPlan(
+    handle: DocumentHandle,
+    partId: string,
+    selection: readonly RepairOperation[],
+  ): RepairToken {
     const token = this.nextRepairToken as RepairToken;
     this.nextRepairToken += 1;
     this.currentRepairToken = token;
@@ -670,6 +825,7 @@ export class WorkspaceStore {
       repair: {
         ...repair,
         handle,
+        partId,
         planState: RepairPlanState.Planning,
         planError: undefined,
         selection,
@@ -705,12 +861,17 @@ export class WorkspaceStore {
    * a model it was never computed for is the single most damaging thing this
    * slice could do.
    */
-  public resetSelfIntersectionFor(handle: ModelHandle | undefined, faceCount: number): void {
+  public resetSelfIntersectionFor(
+    handle: DocumentHandle | undefined,
+    partId: string | undefined,
+    faceCount: number,
+  ): void {
     this.currentSelfIntersectionToken = undefined;
     this.update({
       selfIntersection: {
         ...EMPTY_SELF_INTERSECTION,
         handle,
+        partId,
         band:
           handle === undefined ? SelfIntersectionBand.AutoEligible : bandForFaceCount(faceCount),
       },
@@ -722,11 +883,16 @@ export class WorkspaceStore {
    * band forbids running one at all.
    */
   public beginSelfIntersection(
-    handle: ModelHandle,
+    handle: DocumentHandle,
+    partId: string,
     auto: boolean,
   ): SelfIntersectionToken | undefined {
     const current = this.state.selfIntersection;
     if (!sameHandle(current.handle, handle)) return undefined;
+    // Two parts share a revision, so the handle alone cannot say which part a
+    // check belongs to. Without this a check requested for part A could publish
+    // into the slice now bound to part B.
+    if (current.partId !== partId) return undefined;
     if (current.band === SelfIntersectionBand.SizeLimit) return undefined;
     if (auto && current.autoScheduled) return undefined;
 
@@ -790,8 +956,8 @@ export class WorkspaceStore {
     const current = this.state.selfIntersection;
     if (current.handle === undefined) return false;
     if (
-      current.handle.modelId !== report.modelId ||
-      current.handle.revision !== report.modelRevision
+      current.handle.documentId !== report.documentId ||
+      current.handle.revision !== report.documentRevision
     ) {
       return false;
     }
@@ -824,8 +990,9 @@ export class WorkspaceStore {
         report: {
           schemaVersion: 1,
           status,
-          modelId: current.handle.modelId,
-          modelRevision: current.handle.revision,
+          documentId: current.handle.documentId,
+          documentRevision: current.handle.revision,
+          partId: current.partId ?? '',
           faceCount: current.faceCount ?? 0,
           intersectingPairCount: 0,
           affectedFaceCount: 0,
@@ -882,7 +1049,7 @@ export class WorkspaceStore {
    */
   public commitRepairPlan(
     token: RepairToken,
-    handle: ModelHandle,
+    handle: DocumentHandle,
     plan: ConservativeRepairPlan,
   ): boolean {
     if (!this.isCurrentRepair(token)) return false;
@@ -925,7 +1092,7 @@ export class WorkspaceStore {
    * while analysis is running, cancelled or failed there is nothing honest to
    * plan from.
    */
-  public setRepairUnavailable(handle: ModelHandle | undefined): void {
+  public setRepairUnavailable(handle: DocumentHandle | undefined): void {
     this.currentRepairToken = undefined;
     this.update({
       repair: {
@@ -1203,13 +1370,15 @@ export class WorkspaceStore {
    * diagnostics re-run automatically against the repaired geometry.
    */
   public applyRepairResult(result: {
-    readonly handle: ModelHandle;
+    readonly handle: DocumentHandle;
     readonly parentRevision: number;
     readonly recordId: string;
     readonly appliedOperations: readonly RepairOperation[];
     readonly counts: RepairChangeCounts;
     readonly undoable: boolean;
+    readonly partId: string;
     readonly render: RenderSnapshot;
+    readonly parts: readonly PartDescriptor[];
     readonly bounds: MeshBounds | undefined;
     readonly triangleCount: number;
     readonly vertexCount: number;
@@ -1217,47 +1386,64 @@ export class WorkspaceStore {
   }): boolean {
     const model = this.state.model;
     if (model === undefined) return false;
-    if (model.handle.modelId !== result.handle.modelId) return false;
+    if (model.handle.documentId !== result.handle.documentId) return false;
 
     const revision = this.nextModelRevision;
     this.nextModelRevision += 1;
     this.currentAnalysisToken = undefined;
     this.currentRepairToken = undefined;
 
+    const repairedPart = result.parts.find((part) => part.partId === result.partId);
+
     this.update({
       model: {
         ...model,
         handle: result.handle,
-        render: result.render,
+        parts: result.parts,
+        // Only the repaired part's buffers change. The rest of the scene is
+        // already correct and is not re-uploaded.
+        render: withPartRender(model.render, result.partId, result.render),
         bounds: result.bounds,
         triangleCount: result.triangleCount,
         vertexCount: result.vertexCount,
         residentBytes: result.residentBytes,
         revision,
       },
-      analysis: { ...EMPTY_ANALYSIS, state: AnalysisState.Idle, handle: result.handle },
+      analysis: {
+        ...EMPTY_ANALYSIS,
+        state: AnalysisState.Idle,
+        handle: result.handle,
+        partId: this.state.activePartId,
+      },
       /*
        * A NEW REVISION GETS A NEW VERDICT, OR NONE AT ALL.
        *
        * The previous report described geometry that no longer exists. Carrying
        * it forward — even for the instant before a fresh check starts — would
        * put "None found" beside a model nothing has examined. The band is
-       * re-derived too, because a repair can move a model across a policy
+       * re-derived too, because a repair can move a part across a policy
        * boundary.
+       *
+       * EVERY part's verdict goes, not just the repaired one: the document
+       * carries a single revision, so part B's report is bound to a handle that
+       * no longer resolves. That is the qualified cost of one revision.
        */
       selfIntersection: {
         ...EMPTY_SELF_INTERSECTION,
         handle: result.handle,
-        band: bandForFaceCount(result.triangleCount),
+        partId: this.state.activePartId,
+        band: bandForFaceCount(repairedPart?.triangleCount ?? result.triangleCount),
       },
       overlays: OVERLAYS_HIDDEN,
       repair: {
         ...EMPTY_REPAIR,
         handle: result.handle,
+        partId: this.state.activePartId,
         selection: this.state.repair.selection,
         lastApplied: {
           recordId: result.recordId,
           handle: result.handle,
+          partId: result.partId,
           parentRevision: result.parentRevision,
           appliedOperations: result.appliedOperations,
           counts: result.counts,
@@ -1306,8 +1492,10 @@ export class WorkspaceStore {
    * been reversed and can no longer be reversed again.
    */
   public applyUndoResult(result: {
-    readonly handle: ModelHandle;
+    readonly handle: DocumentHandle;
+    readonly partId: string;
     readonly render: RenderSnapshot;
+    readonly parts: readonly PartDescriptor[];
     readonly bounds: MeshBounds | undefined;
     readonly triangleCount: number;
     readonly vertexCount: number;
@@ -1315,41 +1503,50 @@ export class WorkspaceStore {
   }): boolean {
     const model = this.state.model;
     if (model === undefined) return false;
-    if (model.handle.modelId !== result.handle.modelId) return false;
+    if (model.handle.documentId !== result.handle.documentId) return false;
 
     const revision = this.nextModelRevision;
     this.nextModelRevision += 1;
     this.currentAnalysisToken = undefined;
     this.currentRepairToken = undefined;
 
+    const restoredPart = result.parts.find((part) => part.partId === result.partId);
+
     this.update({
       model: {
         ...model,
         handle: result.handle,
-        render: result.render,
+        parts: result.parts,
+        render: withPartRender(model.render, result.partId, result.render),
         bounds: result.bounds,
         triangleCount: result.triangleCount,
         vertexCount: result.vertexCount,
         residentBytes: result.residentBytes,
         revision,
       },
-      analysis: { ...EMPTY_ANALYSIS, state: AnalysisState.Idle, handle: result.handle },
+      analysis: {
+        ...EMPTY_ANALYSIS,
+        state: AnalysisState.Idle,
+        handle: result.handle,
+        partId: this.state.activePartId,
+      },
       /*
-       * A NEW REVISION GETS A NEW VERDICT, OR NONE AT ALL.
-       *
-       * The previous report described geometry that no longer exists. Carrying
-       * it forward — even for the instant before a fresh check starts — would
-       * put "None found" beside a model nothing has examined. The band is
-       * re-derived too, because a repair can move a model across a policy
-       * boundary.
+       * A NEW REVISION GETS A NEW VERDICT, OR NONE AT ALL. See
+       * `applyRepairResult` — an undo is a forward revision like any other.
        */
       selfIntersection: {
         ...EMPTY_SELF_INTERSECTION,
         handle: result.handle,
-        band: bandForFaceCount(result.triangleCount),
+        partId: this.state.activePartId,
+        band: bandForFaceCount(restoredPart?.triangleCount ?? result.triangleCount),
       },
       overlays: OVERLAYS_HIDDEN,
-      repair: { ...EMPTY_REPAIR, handle: result.handle, selection: this.state.repair.selection },
+      repair: {
+        ...EMPTY_REPAIR,
+        handle: result.handle,
+        partId: this.state.activePartId,
+        selection: this.state.repair.selection,
+      },
     });
     return true;
   }
@@ -1362,23 +1559,30 @@ export class WorkspaceStore {
    * reading; if the new run is cancelled or fails, what was already known is
    * still true and still shown.
    */
-  public beginAnalysis(handle: ModelHandle): AnalysisToken {
+  public beginAnalysis(handle: DocumentHandle, partId: string): AnalysisToken {
     const token = this.nextAnalysisToken as AnalysisToken;
     this.nextAnalysisToken += 1;
     this.currentAnalysisToken = token;
 
     const previous = this.state.analysis;
+    /*
+     * The previous report is carried forward only when it describes THE SAME
+     * PART of the same revision. Two parts share a handle, so comparing handles
+     * alone would leave part A's counts on screen while part B is analysed.
+     */
+    const sameSubject = sameHandle(previous.handle, handle) && previous.partId === partId;
     this.update({
       analysis: {
         ...previous,
         state: AnalysisState.Analyzing,
         handle,
+        partId,
         fraction: 0,
         phase: undefined,
         error: undefined,
         // Report and detail intentionally carried forward.
-        report: sameHandle(previous.handle, handle) ? previous.report : undefined,
-        detail: sameHandle(previous.handle, handle) ? previous.detail : undefined,
+        report: sameSubject ? previous.report : undefined,
+        detail: sameSubject ? previous.detail : undefined,
       },
     });
     return token;
@@ -1418,19 +1622,30 @@ export class WorkspaceStore {
    */
   public commitAnalysis(
     token: AnalysisToken,
-    handle: ModelHandle,
+    handle: DocumentHandle,
+    partId: string,
     report: TopologyReport,
     detail: TopologyDetail,
     durationMs: number,
   ): boolean {
     if (!this.isCurrentAnalysis(token)) return false;
     if (!sameHandle(this.state.model?.handle, handle)) return false;
+    /*
+     * THE PART GUARD, and it is not redundant with the handle.
+     *
+     * Two parts of one document share a revision, so a report for part A and a
+     * report for part B carry IDENTICAL handles. Without this check a report
+     * that finished after the user switched parts would install itself against
+     * the part now on screen and describe geometry nobody analysed.
+     */
+    if (this.state.activePartId !== partId) return false;
     this.currentAnalysisToken = undefined;
 
     this.update({
       analysis: {
         state: AnalysisState.Ready,
         handle,
+        partId,
         fraction: 1,
         phase: undefined,
         report,
@@ -1585,10 +1800,10 @@ export class WorkspaceStore {
 /**
  * Handle equality: same model AND same revision.
  *
- * Comparing only `modelId` would accept a report computed before the model was
+ * Comparing only `documentId` would accept a report computed before the model was
  * replaced in place, which is exactly what the revision exists to catch.
  */
-function sameHandle(left: ModelHandle | undefined, right: ModelHandle | undefined): boolean {
+function sameHandle(left: DocumentHandle | undefined, right: DocumentHandle | undefined): boolean {
   if (left === undefined || right === undefined) return false;
-  return left.modelId === right.modelId && left.revision === right.revision;
+  return left.documentId === right.documentId && left.revision === right.revision;
 }

@@ -24,7 +24,7 @@ export interface ModelExportControls {
 export function useModelExport(): ModelExportControls {
   const store = useWorkspaceStore();
   const client = useGeometryClient();
-  const { model, exportProgress } = useWorkspaceState();
+  const { model, activePartId, exportProgress } = useWorkspaceState();
   const sessionRef = useRef<ExportSession | undefined>(undefined);
 
   const exportModel = useCallback(
@@ -34,12 +34,20 @@ export function useModelExport(): ModelExportControls {
         store.pushStatus(StatusSeverity.Error, 'The geometry worker is not ready yet.');
         return;
       }
+      /*
+       * EXPORT IS PART-TARGETED, because STL holds one object and has no way to
+       * say otherwise. The selected part is written; the worker returns a
+       * warning naming what a multi-part document left out, and the panel shows
+       * it. Nothing is flattened and nothing is lost silently.
+       */
+      if (activePartId === undefined) return;
 
       sessionRef.current?.cancel();
       const token: ExportToken = store.beginExport(encoding);
 
       const session = exportStlFile({
         handle: model.handle,
+        partId: activePartId,
         sourceFileName: model.source.fileName,
         encoding,
         client,
@@ -79,7 +87,7 @@ export function useModelExport(): ModelExportControls {
         },
       );
     },
-    [client, model, store],
+    [activePartId, client, model, store],
   );
 
   const cancelExport = useCallback((): void => {

@@ -44,6 +44,7 @@ import {
   type ChangeOverlayId,
 } from '../state/workspace-store';
 import { WorkflowId } from '../state/workflows';
+import { describeActivePart } from '../state/part-presentation';
 
 /**
  * The conservative repair workflow.
@@ -65,7 +66,7 @@ import { WorkflowId } from '../state/workflows';
  * the check ran.
  */
 export function RepairPanel(): ReactNode {
-  const { model, analysis, repair, selectedWorkflow } = useWorkspaceState();
+  const { model, activePartId, analysis, repair, selectedWorkflow } = useWorkspaceState();
   const store = useWorkspaceStore();
   const controls = useConservativeRepair();
   const { runAnalysis, isAnalyzing, canRetry } = useTopologyAnalysis();
@@ -145,8 +146,11 @@ export function RepairPanel(): ReactNode {
   const reportIsCurrent =
     analysis.state === AnalysisState.Ready &&
     analysis.report !== undefined &&
-    analysis.handle?.modelId === model.handle.modelId &&
-    analysis.handle.revision === model.handle.revision;
+    analysis.handle?.documentId === model.handle.documentId &&
+    analysis.handle.revision === model.handle.revision &&
+    // A plan is derived from a report of ONE part. Two parts share a revision,
+    // so without this the panel would offer a plan built from the wrong mesh.
+    analysis.partId === activePartId;
 
   return (
     <section className="panel" aria-labelledby="repair-title" data-testid="repair-panel">
@@ -156,6 +160,20 @@ export function RepairPanel(): ReactNode {
       <p className="panel__note" data-testid="repair-summary">
         {REPAIR_WORKFLOW_SUMMARY}
       </p>
+
+      {/*
+        WHICH PART A REPAIR WOULD CHANGE, said before anything is proposed.
+        Repair operates on ONE part; on a multi-part document, leaving that
+        implicit would let a user believe an Apply had touched their whole
+        model. Rendered only when there is more than one part, so the
+        single-part panel is unchanged.
+      */}
+      {model.parts.length > 1 ? (
+        <p className="panel__note" data-testid="repair-part-scope">
+          This repairs <strong>{describeActivePart(model.parts, activePartId)}</strong> only, of{' '}
+          {model.parts.length.toLocaleString()} parts. The other parts are left exactly as they are.
+        </p>
+      ) : null}
 
       {repair.lastApplied === undefined ? null : (
         <AppliedBanner

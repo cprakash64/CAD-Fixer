@@ -35,7 +35,9 @@ import type { RepairView } from './view';
 export interface RepairPlanInput {
   readonly mesh: CanonicalMesh;
   readonly report: TopologyReport;
-  readonly modelId: string;
+  readonly documentId: string;
+  /** The part being repaired. Bound into the plan hash — see `hashPlan`. */
+  readonly partId: string;
   readonly sourceRevision: number;
   readonly requested: readonly RepairOperation[];
   /** Reject before allocating if the estimated peak exceeds this. */
@@ -175,7 +177,8 @@ export function planConservativeRepair(input: RepairPlanInput): RepairPlanResult
 
   const plan: ConservativeRepairPlan = {
     schemaVersion: REPAIR_PLAN_VERSION,
-    modelId: input.modelId,
+    documentId: input.documentId,
+    partId: input.partId,
     sourceRevision: input.sourceRevision,
     reportVersion: report.schemaVersion,
     requested: [...requested],
@@ -183,7 +186,7 @@ export function planConservativeRepair(input: RepairPlanInput): RepairPlanResult
     decisions,
     memory,
     warnings,
-    planHash: hashPlan(input.modelId, input.sourceRevision, order, decisions),
+    planHash: hashPlan(input.documentId, input.partId, input.sourceRevision, order, decisions),
     noOp: order.length === 0,
   };
 
@@ -340,7 +343,8 @@ export function estimateRepairMemory(
  * so the same request against the same model yields the same hash.
  */
 function hashPlan(
-  modelId: string,
+  documentId: string,
+  partId: string,
   revision: number,
   order: readonly RepairOperation[],
   decisions: readonly RepairOperationDecision[],
@@ -352,7 +356,11 @@ function hashPlan(
       hash = Math.imul(hash, 0x01000193) >>> 0;
     }
   };
-  feed(modelId);
+  feed(documentId);
+  // The part is part of the identity, not decoration: two parts of one document
+  // share a revision, so without this a plan for A and a plan for B could hash
+  // equally whenever their decisions happened to match.
+  feed(`/${partId}`);
   feed(`@${String(revision)}`);
   for (const operation of order) feed(`|${operation}`);
   for (const entry of decisions) {

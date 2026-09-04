@@ -1,12 +1,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { it } from 'vitest';
-import {
-  createIndexArray,
-  createPositionArray,
-  IDENTITY_MATRIX4,
-  triangleCount,
-} from '@cadfixer/mesh-core';
+import { createIndexArray, createPositionArray, triangleCount } from '@cadfixer/mesh-core';
 import type { CanonicalMesh } from '@cadfixer/mesh-core';
 import { uncancellable } from '@cadfixer/shared';
 import { analyseTopology } from '@cadfixer/mesh-topology';
@@ -71,7 +66,7 @@ function generate(targetFaces: number, defectRate: number): CanonicalMesh {
   return {
     positions: out,
     indices,
-    metadata: { sourceFormat: 'stl', transform: IDENTITY_MATRIX4 },
+    metadata: { sourceFormat: 'stl' },
   };
 }
 
@@ -111,8 +106,9 @@ it('measures conservative repair at realistic sizes', () => {
 
       const t0 = performance.now();
       const report = analyseTopology(mesh, {
-        modelId: 'bench',
-        modelRevision: 1,
+        documentId: 'bench',
+        partId: 'part-1',
+        documentRevision: 1,
         cancellation: uncancellable,
       }).report;
       const t1 = performance.now();
@@ -120,7 +116,8 @@ it('measures conservative repair at realistic sizes', () => {
       const { plan, view, prepared } = planConservativeRepair({
         mesh,
         report,
-        modelId: 'bench',
+        documentId: 'bench',
+        partId: 'part-1',
         sourceRevision: 1,
         requested: [
           RepairOperation.RemoveDuplicateFaces,
@@ -136,7 +133,8 @@ it('measures conservative repair at realistic sizes', () => {
         plan,
         sourceReport: report,
         cancellation: uncancellable,
-        modelId: 'bench',
+        documentId: 'bench',
+        partId: 'part-1',
         revision: 1,
         view,
         prepared,

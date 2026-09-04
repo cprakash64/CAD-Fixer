@@ -1,6 +1,7 @@
 import { invalidState, modelUnavailable, type AppError } from '@cadfixer/shared';
 import type { RepairInversePatch, RepairOperation } from '@cadfixer/mesh-repair';
-import type { ModelHandle, ModelId } from './resident-models';
+import type { PartId } from '@cadfixer/mesh-core';
+import type { DocumentHandle, DocumentId } from './resident-documents';
 
 /**
  * WORKER-RESIDENT REPAIR HISTORY.
@@ -26,7 +27,16 @@ import type { ModelHandle, ModelId } from './resident-models';
 /** What a committed repair did. Never carries geometry. */
 export interface RepairHistoryEntry {
   readonly recordId: string;
-  readonly modelId: ModelId;
+  readonly documentId: DocumentId;
+  /**
+   * The part whose mesh this repair replaced.
+   *
+   * Undo has to put geometry back where it came from. Without the part id an
+   * undo could only say "restore the previous mesh" and would have to guess
+   * which part that was — and in a multi-part document a wrong guess overwrites
+   * a part the user never repaired.
+   */
+  readonly partId: PartId;
   /** Revision the repair was computed from. */
   readonly parentRevision: number;
   /** Revision the repair produced. */
@@ -73,8 +83,8 @@ const MAX_RETAINED_DESCRIPTORS = 64;
 
 export class RepairHistoryStore {
   private readonly records = new Map<string, HistoryRecord>();
-  /** Newest undoable record id per model. At most one — see the header. */
-  private readonly undoableByModel = new Map<ModelId, string>();
+  /** Newest undoable record id per document. At most one — see the header. */
+  private readonly undoableByDocument = new Map<DocumentId, string>();
   /** Insertion order, so the oldest descriptors can be evicted first. */
   private readonly order: string[] = [];
 
@@ -87,18 +97,20 @@ export class RepairHistoryStore {
    */
   public record(input: {
     readonly recordId: string;
-    readonly source: ModelHandle;
-    readonly result: ModelHandle;
+    readonly source: DocumentHandle;
+    readonly part: PartId;
+    readonly result: DocumentHandle;
     readonly appliedOperations: readonly RepairOperation[];
     readonly planHash: string;
     readonly inverse: RepairInversePatch | undefined;
   }): RepairHistoryEntry {
-    const previous = this.undoableByModel.get(input.source.modelId);
+    const previous = this.undoableByDocument.get(input.source.documentId);
     if (previous !== undefined) this.release(previous, 'superseded');
 
     const entry: RepairHistoryEntry = {
       recordId: input.recordId,
-      modelId: input.source.modelId,
+      documentId: input.source.documentId,
+      partId: input.part,
       parentRevision: input.source.revision,
       resultRevision: input.result.revision,
       appliedOperations: [...input.appliedOperations],
@@ -115,15 +127,15 @@ export class RepairHistoryStore {
     });
     this.order.push(input.recordId);
     if (input.inverse !== undefined) {
-      this.undoableByModel.set(input.source.modelId, input.recordId);
+      this.undoableByDocument.set(input.source.documentId, input.recordId);
     }
     this.trim();
     return entry;
   }
 
-  /** The record `undo` would reverse for this model, if there is one. */
-  public undoableFor(modelId: ModelId): RepairHistoryEntry | undefined {
-    const recordId = this.undoableByModel.get(modelId);
+  /** The record `undo` would reverse for this document, if there is one. */
+  public undoableFor(documentId: DocumentId): RepairHistoryEntry | undefined {
+    const recordId = this.undoableByDocument.get(documentId);
     if (recordId === undefined) return undefined;
     return this.records.get(recordId)?.entry;
   }
@@ -142,7 +154,7 @@ export class RepairHistoryStore {
    */
   public prepareUndo(
     recordId: string,
-    expected: ModelHandle,
+    expected: DocumentHandle,
     currentRevision: number | undefined,
   ): RepairUndoPreparation | AppError {
     const record = this.records.get(recordId);
@@ -157,11 +169,11 @@ export class RepairHistoryStore {
         recordId,
       });
     }
-    if (record.entry.modelId !== expected.modelId) {
+    if (record.entry.documentId !== expected.documentId) {
       return invalidState('That repair belongs to a different model.', {
         recordId,
-        recordModelId: record.entry.modelId,
-        requestedModelId: expected.modelId,
+        recordDocumentId: record.entry.documentId,
+        requestedDocumentId: expected.documentId,
       });
     }
     /*
@@ -207,8 +219,8 @@ export class RepairHistoryStore {
    * geometry that no longer exists, and the patch would hold bytes for a repair
    * nothing can reverse.
    */
-  public releaseModel(modelId: ModelId): void {
-    const recordId = this.undoableByModel.get(modelId);
+  public releaseDocument(documentId: DocumentId): void {
+    const recordId = this.undoableByDocument.get(documentId);
     if (recordId !== undefined) this.release(recordId, 'superseded');
   }
 
@@ -216,7 +228,7 @@ export class RepairHistoryStore {
   public releaseAll(): void {
     for (const record of this.records.values()) record.patch = undefined;
     this.records.clear();
-    this.undoableByModel.clear();
+    this.undoableByDocument.clear();
     this.order.length = 0;
   }
 
@@ -238,8 +250,8 @@ export class RepairHistoryStore {
     if (cause === 'undone') record.undone = true;
     else record.superseded = true;
     record.entry = { ...record.entry, undoable: false };
-    if (this.undoableByModel.get(record.entry.modelId) === recordId) {
-      this.undoableByModel.delete(record.entry.modelId);
+    if (this.undoableByDocument.get(record.entry.documentId) === recordId) {
+      this.undoableByDocument.delete(record.entry.documentId);
     }
   }
 
@@ -256,7 +268,7 @@ export class RepairHistoryStore {
       const oldest = this.order[0];
       if (oldest === undefined) return;
       const record = this.records.get(oldest);
-      if (record !== undefined && this.undoableByModel.get(record.entry.modelId) === oldest) {
+      if (record !== undefined && this.undoableByDocument.get(record.entry.documentId) === oldest) {
         // Keep it; move it behind the others so the scan makes progress.
         this.order.shift();
         this.order.push(oldest);

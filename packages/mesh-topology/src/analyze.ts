@@ -73,8 +73,10 @@ export interface TopologyProgress {
 }
 
 export interface TopologyAnalysisOptions {
-  readonly modelId: string;
-  readonly modelRevision: number;
+  readonly documentId: string;
+  readonly documentRevision: number;
+  /** Which part of that document is being analysed. See `TopologyReport.partId`. */
+  readonly partId: string;
   readonly cancellation: CancellationToken;
   onProgress?(progress: TopologyProgress): void;
   /** Upper bound on retained detail samples per category. */
@@ -398,8 +400,9 @@ export function analyseTopology(
 
   const report: TopologyReport = {
     schemaVersion: TOPOLOGY_REPORT_VERSION,
-    modelId: options.modelId,
-    modelRevision: options.modelRevision,
+    documentId: options.documentId,
+    documentRevision: options.documentRevision,
+    partId: options.partId,
     identityMode: identity.mode,
 
     sourceFaceCount: faceCount,

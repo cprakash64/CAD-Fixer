@@ -140,8 +140,18 @@ export interface TopologyDetail {
 
 export interface TopologyReport {
   readonly schemaVersion: number;
-  readonly modelId: string;
-  readonly modelRevision: number;
+  readonly documentId: string;
+  readonly documentRevision: number;
+  /**
+   * The part this report describes.
+   *
+   * ANALYSIS IS PER PART. A document's parts are separate meshes; running one
+   * analysis over all of them would report connectivity between things the file
+   * declared separate, and two clean parts that happen to touch would acquire
+   * shared edges neither of them has. Naming the part here is what lets a
+   * consumer refuse a report that arrived for a part it is no longer showing.
+   */
+  readonly partId: string;
   /** e.g. `exact-stored-coordinate`. The report states its own identity rules. */
   readonly identityMode: string;
 

@@ -64,8 +64,9 @@ const DEFAULTS = {
  */
 export function diagnose(mesh: CanonicalMesh): TopologyReport {
   return analyseTopology(mesh, {
-    modelId: 'evaluation',
-    modelRevision: 1,
+    documentId: 'evaluation',
+    partId: 'part-1',
+    documentRevision: 1,
     cancellation: uncancellable,
   }).report;
 }

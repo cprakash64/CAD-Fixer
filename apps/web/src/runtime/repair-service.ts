@@ -2,7 +2,7 @@ import { internalError, operationCancelled } from '@cadfixer/shared';
 import {
   DEFAULT_SESSION_MEMORY_BUDGET,
   type ConservativeRepairPlan,
-  type ModelHandle,
+  type DocumentHandle,
   type OperationHandle,
   type ProgressUpdate,
   type RepairCandidateHandle,
@@ -74,13 +74,15 @@ export interface RepairProgress {
  */
 export interface RepairCapableClient {
   planRepair(
-    handle: ModelHandle,
+    handle: DocumentHandle,
+    partId: string,
     requested: readonly RepairOperation[],
     onProgress: (update: ProgressUpdate) => void,
     memoryBudgetBytes?: number,
   ): OperationHandle<RepairPlanOperationResult>;
   createRepairCandidate(
-    handle: ModelHandle,
+    handle: DocumentHandle,
+    partId: string,
     requested: readonly RepairOperation[],
     planHash: string,
     onProgress: (update: ProgressUpdate) => void,
@@ -88,13 +90,14 @@ export interface RepairCapableClient {
   ): OperationHandle<RepairCandidateResult>;
   commitRepair(
     candidate: RepairCandidateHandle,
-    expectedSource: ModelHandle,
+    expectedSource: DocumentHandle,
+    expectedPart: string,
     planHash: string,
     onProgress: (update: ProgressUpdate) => void,
   ): OperationHandle<RepairCommitResult>;
   discardRepairCandidate(candidate: RepairCandidateHandle): OperationHandle<RepairDiscardResult>;
   undoRepair(
-    handle: ModelHandle,
+    handle: DocumentHandle,
     recordId: string,
     onProgress: (update: ProgressUpdate) => void,
   ): OperationHandle<RepairUndoResult>;
@@ -118,7 +121,8 @@ export interface RepairSession<T> {
 }
 
 export interface RepairPlanOutcome {
-  readonly handle: ModelHandle;
+  readonly handle: DocumentHandle;
+  readonly partId: string;
   readonly plan: ConservativeRepairPlan;
   readonly durationMs: number;
 }
@@ -177,7 +181,9 @@ export function resolveRepairMemoryCeiling(search: string): RepairMemoryCeiling 
 /* ------------------------------------------------------------------ plan -- */
 
 export interface RepairPlanRequest {
-  readonly handle: ModelHandle;
+  readonly handle: DocumentHandle;
+  /** The part to plan a repair for. Repair operates on one part at a time. */
+  readonly partId: string;
   readonly client: RepairCapableClient;
   readonly requested: readonly RepairOperation[];
   readonly memoryBudgetBytes?: number;
@@ -196,6 +202,7 @@ export function planConservativeRepair(
     const startedAt = Date.now();
     const operation = request.client.planRepair(
       request.handle,
+      request.partId,
       request.requested,
       report,
       request.memoryBudgetBytes,
@@ -205,15 +212,23 @@ export function planConservativeRepair(
     const result = await operation.promise;
     if (isCancelled()) throw operationCancelled('Repair planning was cancelled.');
     assertSameModel(result.handle, request.handle, 'repair plan');
+    assertSamePart(result.partId, request.partId, 'repair plan');
 
-    return { handle: result.handle, plan: result.plan, durationMs: Date.now() - startedAt };
+    return {
+      handle: result.handle,
+      partId: result.partId,
+      plan: result.plan,
+      durationMs: Date.now() - startedAt,
+    };
   });
 }
 
 /* ------------------------------------------------------------- candidate -- */
 
 export interface RepairCandidateRequest {
-  readonly handle: ModelHandle;
+  readonly handle: DocumentHandle;
+  /** The part the candidate will replace. Bound into the candidate handle. */
+  readonly partId: string;
   readonly client: RepairCapableClient;
   readonly requested: readonly RepairOperation[];
   /** The plan the user saw. The worker refuses if it no longer matches. */
@@ -235,6 +250,7 @@ export function createRepairCandidate(
     const startedAt = Date.now();
     const operation = request.client.createRepairCandidate(
       request.handle,
+      request.partId,
       request.requested,
       request.planHash,
       report,
@@ -267,6 +283,7 @@ export function createRepairCandidate(
     }
 
     assertSameModel(result.source, request.handle, 'repair candidate');
+    assertSamePart(result.partId, request.partId, 'repair candidate');
 
     return { ...result, durationMs: Date.now() - startedAt };
   });
@@ -277,7 +294,9 @@ export function createRepairCandidate(
 export interface RepairCommitRequest {
   readonly client: RepairCapableClient;
   readonly candidate: RepairCandidateHandle;
-  readonly expectedSource: ModelHandle;
+  readonly expectedSource: DocumentHandle;
+  /** The part the caller believes it is replacing. Re-checked in the worker. */
+  readonly expectedPart: string;
   readonly planHash: string;
   /**
    * Declared as a property rather than a method so it can be PASSED to the
@@ -292,6 +311,7 @@ export function commitRepair(request: RepairCommitRequest): RepairSession<Repair
     const operation = request.client.commitRepair(
       request.candidate,
       request.expectedSource,
+      request.expectedPart,
       request.planHash,
       report,
     );
@@ -305,7 +325,10 @@ export function commitRepair(request: RepairCommitRequest): RepairSession<Repair
      * interface showing the previous revision while the worker holds the new
      * one, which is the one inconsistency that matters most.
      */
-    if (result.handle.modelId !== request.expectedSource.modelId) {
+    if (
+      result.handle.documentId !== request.expectedSource.documentId ||
+      result.partId !== request.expectedPart
+    ) {
       throw internalError('A repair commit returned a different model than the one requested.');
     }
     return result;
@@ -316,7 +339,7 @@ export function commitRepair(request: RepairCommitRequest): RepairSession<Repair
 
 export interface RepairUndoRequest {
   readonly client: RepairCapableClient;
-  readonly handle: ModelHandle;
+  readonly handle: DocumentHandle;
   readonly recordId: string;
   /**
    * Declared as a property rather than a method so it can be PASSED to the
@@ -331,7 +354,7 @@ export function undoRepair(request: RepairUndoRequest): RepairSession<RepairUndo
     const operation = request.client.undoRepair(request.handle, request.recordId, report);
     register(operation);
     const result = await operation.promise;
-    if (result.handle.modelId !== request.handle.modelId) {
+    if (result.handle.documentId !== request.handle.documentId) {
       throw internalError('An undo returned a different model than the one requested.');
     }
     return result;
@@ -404,8 +427,21 @@ function runSession<T>(
  * safe response is to refuse it. Silently accepting would attach one model's
  * repair plan to another model's geometry.
  */
-function assertSameModel(actual: ModelHandle, expected: ModelHandle, what: string): void {
-  if (actual.modelId !== expected.modelId || actual.revision !== expected.revision) {
+function assertSameModel(actual: DocumentHandle, expected: DocumentHandle, what: string): void {
+  if (actual.documentId !== expected.documentId || actual.revision !== expected.revision) {
     throw internalError(`A ${what} arrived for a different model than the one requested.`);
+  }
+}
+
+/**
+ * The PART guard, which the handle check cannot stand in for.
+ *
+ * Two parts of one document carry identical handles, so a result routed to the
+ * wrong part would pass `assertSameModel` unchanged and then be displayed
+ * against geometry it does not describe.
+ */
+function assertSamePart(actual: string, expected: string, what: string): void {
+  if (actual !== expected) {
+    throw internalError(`A ${what} arrived for a different part than the one requested.`);
   }
 }

@@ -62,16 +62,23 @@ describe('binary STL import', () => {
 
     expect(result.mesh.metadata.sourceFormat).toBe('stl');
     // STL has no standardised unit field. Claiming millimetres would be
-    // inventing information about the user's model.
-    expect(result.mesh.metadata.unit).toBeUndefined();
-    expect('unit' in result.mesh.metadata).toBe(false);
+    // inventing information about the user's model. The unit travels on the
+    // READ RESULT and lands on the document, so its absence is asserted there.
+    expect(result.unit).toBeUndefined();
+    expect('unit' in result).toBe(false);
   });
 
-  it('applies no transform on import', async () => {
+  it('leaves placement to the part and never touches the coordinates', async () => {
     const result = await readStl(buildBinaryStl([UNIT_TRIANGLE]), testContext());
-    expect([...result.mesh.metadata.transform]).toEqual([
-      1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1,
-    ]);
+
+    // A mesh carries no transform of its own. Placement is a property of the
+    // PART that holds the mesh, so there is exactly one transform authority and
+    // a shared mesh cannot be placed two contradictory ways at once.
+    expect(Object.keys(result.mesh.metadata)).toEqual(['sourceFormat']);
+
+    // The property the removed transform field was standing in for: import
+    // applies nothing to the file's coordinates.
+    expect([...result.mesh.positions]).toEqual(UNIT_TRIANGLE.vertices.flatMap((v) => [...v]));
   });
 
   it('does not store the file’s facet normals as geometry', async () => {

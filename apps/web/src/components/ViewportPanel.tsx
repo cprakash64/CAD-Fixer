@@ -14,21 +14,25 @@ export function ViewportPanel(): ReactNode {
   const containerRef = useRef<HTMLDivElement>(null);
   const viewportRef = useRef<ViewportHandle | undefined>(undefined);
   const store = useWorkspaceStore();
-  const { viewportFailure, model, analysis, overlays, repair } = useWorkspaceState();
+  const { viewportFailure, model, activePartId, analysis, overlays, repair } = useWorkspaceState();
 
   /**
    * The candidate the viewport may legitimately draw.
    *
-   * Three conditions, all necessary. It must be READY — a building or failed
-   * candidate has nothing to show. It must carry a render snapshot. And it must
+   * Four conditions, all necessary. It must be READY — a building or failed
+   * candidate has nothing to show. It must carry a render snapshot. It must
    * belong to the model that is actually loaded: a candidate for a model the
-   * user has replaced describes geometry that is no longer on screen.
+   * user has replaced describes geometry that is no longer on screen. And it
+   * must belong to the PART that is selected — two parts share a revision, so
+   * without that check a candidate for part A would be drawn in part B's frame,
+   * on top of geometry it says nothing about.
    */
   const previewable =
     repair.candidateState === RepairCandidateState.Ready &&
     repair.candidate?.render !== undefined &&
-    repair.candidate.source.modelId === model?.handle.modelId &&
-    repair.candidate.source.revision === model.handle.revision
+    repair.candidate.source.documentId === model?.handle.documentId &&
+    repair.candidate.source.revision === model.handle.revision &&
+    repair.candidate.partId === activePartId
       ? repair.candidate
       : undefined;
 
@@ -76,14 +80,32 @@ export function ViewportPanel(): ReactNode {
       return;
     }
 
+    /*
+     * The render snapshot and the part descriptors are joined here rather than
+     * in the worker, because they travel for different reasons: the buffers are
+     * transferred and the bounds are scalars the panel also displays. Joining by
+     * part id keeps the two in step without sending either twice.
+     */
+    const descriptorsById = new Map(model.parts.map((part) => [part.partId, part]));
+
     viewport.setModel({
-      positions: model.render.positions,
-      normals: model.render.normals,
+      parts: model.render.parts.map((part) => {
+        const descriptor = descriptorsById.get(part.partId);
+        return {
+          partId: part.partId,
+          transform: part.transform,
+          positions: part.positions,
+          normals: part.normals,
+          center: descriptor?.bounds?.center ?? [0, 0, 0],
+          radius: descriptor?.bounds?.radius ?? 1,
+        };
+      }),
+      activePartId,
       center: model.bounds?.center ?? [0, 0, 0],
       radius: model.bounds?.radius ?? 1,
       revision: model.revision,
     });
-  }, [model]);
+  }, [model, activePartId]);
 
   /**
    * Pushes diagnostic overlays for the model that is actually displayed.
@@ -101,8 +123,11 @@ export function ViewportPanel(): ReactNode {
     const detail = analysis.detail;
     const belongsToLoadedModel =
       model !== undefined &&
-      analysis.handle?.modelId === model.handle.modelId &&
-      analysis.handle.revision === model.handle.revision;
+      analysis.handle?.documentId === model.handle.documentId &&
+      analysis.handle.revision === model.handle.revision &&
+      // Samples are part-local. Drawing part A's defects while part B is
+      // selected would put markers at coordinates that mean nothing.
+      analysis.partId === activePartId;
 
     if (detail === undefined || !belongsToLoadedModel) {
       viewport.setOverlays(undefined);
@@ -121,7 +146,7 @@ export function ViewportPanel(): ReactNode {
       visibility: overlays,
       revision: model.revision,
     });
-  }, [analysis.detail, analysis.handle, model, overlays]);
+  }, [activePartId, analysis.detail, analysis.handle, analysis.partId, model, overlays]);
 
   /**
    * Pushes the repair preview.

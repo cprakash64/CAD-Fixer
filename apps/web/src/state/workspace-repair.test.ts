@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest';
+import { IDENTITY_PART_TRANSFORM } from '@cadfixer/mesh-core';
 import type {
   ConservativeRepairPlan,
+  DocumentRenderSnapshot,
   MeshBounds,
-  ModelHandle,
+  DocumentHandle,
+  PartDescriptor,
   RenderSnapshot,
   RepairCandidateHandle,
   RepairValidation,
@@ -30,12 +33,40 @@ import type { LoadedModel } from './model';
  * The store is deliberately framework-free, so none of this needs a DOM.
  */
 
-function handle(revision: number, modelId = 'model-1'): ModelHandle {
-  return { modelId, revision } as ModelHandle;
+function handle(revision: number, documentId = 'model-1'): DocumentHandle {
+  return { documentId, revision } as DocumentHandle;
 }
 
 function render(): RenderSnapshot {
   return { positions: new Float32Array(9), normals: new Float32Array(9), vertexCount: 3 };
+}
+
+const PART = 'part-1';
+
+function partDescriptor(): PartDescriptor {
+  return {
+    partId: PART,
+    transform: IDENTITY_PART_TRANSFORM,
+    triangleCount: 6,
+    vertexCount: 18,
+    bounds: undefined,
+    meshResourceIndex: 0,
+  };
+}
+
+function documentRender(): DocumentRenderSnapshot {
+  const single = render();
+  return {
+    parts: [
+      {
+        partId: PART,
+        transform: IDENTITY_PART_TRANSFORM,
+        positions: single.positions,
+        normals: single.normals,
+        vertexCount: single.vertexCount,
+      },
+    ],
+  };
 }
 
 function loadedModel(
@@ -43,7 +74,8 @@ function loadedModel(
 ): Omit<LoadedModel, 'revision'> {
   return {
     handle: handle(1),
-    render: render(),
+    parts: [partDescriptor()],
+    render: documentRender(),
     source: {
       fileName: 'part.stl',
       fileBytes: 100,
@@ -62,10 +94,11 @@ function loadedModel(
   };
 }
 
-function planFor(handleValue: ModelHandle, noOp = false): ConservativeRepairPlan {
+function planFor(handleValue: DocumentHandle, noOp = false): ConservativeRepairPlan {
   return {
     schemaVersion: 1,
-    modelId: handleValue.modelId,
+    documentId: handleValue.documentId,
+    partId: PART,
     sourceRevision: handleValue.revision,
     reportVersion: 1,
     requested: DEFAULT_REPAIR_SELECTION,
@@ -84,15 +117,17 @@ function planFor(handleValue: ModelHandle, noOp = false): ConservativeRepairPlan
   };
 }
 
-function previewFor(source: ModelHandle): RepairPreview {
+function previewFor(source: DocumentHandle): RepairPreview {
   return {
     candidate: {
       candidateId: 'candidate-1',
-      modelId: source.modelId,
+      documentId: source.documentId,
+      partId: PART,
       sourceRevision: source.revision,
       generation: 1,
     } as RepairCandidateHandle,
     source,
+    partId: PART,
     planHash: 'plan-hash',
     validation: { acceptance: 'ACCEPTED' } as RepairValidation,
     counts: {
@@ -118,13 +153,13 @@ function previewFor(source: ModelHandle): RepairPreview {
 }
 
 /** A store with a model loaded, a plan installed, and a candidate ready. */
-function storeWithCandidate(): { store: WorkspaceStore; source: ModelHandle } {
+function storeWithCandidate(): { store: WorkspaceStore; source: DocumentHandle } {
   const store = new WorkspaceStore();
   const token = store.beginImport('part.stl');
   store.commitImport(token, loadedModel());
   const source = handle(1);
 
-  const planToken = store.beginRepairPlan(source, DEFAULT_REPAIR_SELECTION);
+  const planToken = store.beginRepairPlan(source, PART, DEFAULT_REPAIR_SELECTION);
   store.commitRepairPlan(planToken, source, planFor(source));
 
   const previewToken = store.beginRepairPreview();
@@ -149,7 +184,7 @@ describe('planning', () => {
     const importToken = store.beginImport('part.stl');
     store.commitImport(importToken, loadedModel());
 
-    const token = store.beginRepairPlan(handle(1), DEFAULT_REPAIR_SELECTION);
+    const token = store.beginRepairPlan(handle(1), PART, DEFAULT_REPAIR_SELECTION);
     expect(store.commitRepairPlan(token, handle(1), planFor(handle(1)))).toBe(true);
     expect(store.getSnapshot().repair.planState).toBe(RepairPlanState.Ready);
   });
@@ -159,8 +194,8 @@ describe('planning', () => {
     const importToken = store.beginImport('part.stl');
     store.commitImport(importToken, loadedModel());
 
-    const first = store.beginRepairPlan(handle(1), DEFAULT_REPAIR_SELECTION);
-    const second = store.beginRepairPlan(handle(1), DEFAULT_REPAIR_SELECTION);
+    const first = store.beginRepairPlan(handle(1), PART, DEFAULT_REPAIR_SELECTION);
+    const second = store.beginRepairPlan(handle(1), PART, DEFAULT_REPAIR_SELECTION);
 
     expect(store.commitRepairPlan(first, handle(1), planFor(handle(1)))).toBe(false);
     expect(store.commitRepairPlan(second, handle(1), planFor(handle(1)))).toBe(true);
@@ -172,7 +207,7 @@ describe('planning', () => {
     const store = new WorkspaceStore();
     const first = store.beginImport('one.stl');
     store.commitImport(first, loadedModel());
-    const token = store.beginRepairPlan(handle(1), DEFAULT_REPAIR_SELECTION);
+    const token = store.beginRepairPlan(handle(1), PART, DEFAULT_REPAIR_SELECTION);
 
     const second = store.beginImport('two.stl');
     store.commitImport(second, loadedModel({ handle: handle(1, 'model-2') }));
@@ -190,7 +225,7 @@ describe('planning', () => {
     const store = new WorkspaceStore();
     const importToken = store.beginImport('part.stl');
     store.commitImport(importToken, loadedModel());
-    const token = store.beginRepairPlan(handle(1), DEFAULT_REPAIR_SELECTION);
+    const token = store.beginRepairPlan(handle(1), PART, DEFAULT_REPAIR_SELECTION);
     store.commitRepairPlan(token, handle(1), planFor(handle(1)));
 
     store.setRepairSelection(['unify-winding']);
@@ -206,7 +241,7 @@ describe('planning', () => {
     const store = new WorkspaceStore();
     const importToken = store.beginImport('part.stl');
     store.commitImport(importToken, loadedModel());
-    const token = store.beginRepairPlan(handle(1), DEFAULT_REPAIR_SELECTION);
+    const token = store.beginRepairPlan(handle(1), PART, DEFAULT_REPAIR_SELECTION);
     store.commitRepairPlan(token, handle(1), planFor(handle(1)));
 
     store.setRepairSelection(['unify-winding']);
@@ -218,7 +253,7 @@ describe('planning', () => {
     const store = new WorkspaceStore();
     const importToken = store.beginImport('part.stl');
     store.commitImport(importToken, loadedModel());
-    const token = store.beginRepairPlan(handle(1), DEFAULT_REPAIR_SELECTION);
+    const token = store.beginRepairPlan(handle(1), PART, DEFAULT_REPAIR_SELECTION);
     store.commitRepairPlan(token, handle(1), planFor(handle(1), true));
 
     expect(store.beginRepairPreview()).toBeUndefined();
@@ -237,7 +272,7 @@ describe('the candidate', () => {
     const store = new WorkspaceStore();
     const importToken = store.beginImport('part.stl');
     store.commitImport(importToken, loadedModel());
-    const planToken = store.beginRepairPlan(handle(1), DEFAULT_REPAIR_SELECTION);
+    const planToken = store.beginRepairPlan(handle(1), PART, DEFAULT_REPAIR_SELECTION);
     store.commitRepairPlan(planToken, handle(1), planFor(handle(1)));
     const token = store.beginRepairPreview();
     if (token === undefined) throw new Error('preview token was refused');
@@ -255,7 +290,7 @@ describe('the candidate', () => {
     const store = new WorkspaceStore();
     const first = store.beginImport('one.stl');
     store.commitImport(first, loadedModel());
-    const planToken = store.beginRepairPlan(handle(1), DEFAULT_REPAIR_SELECTION);
+    const planToken = store.beginRepairPlan(handle(1), PART, DEFAULT_REPAIR_SELECTION);
     store.commitRepairPlan(planToken, handle(1), planFor(handle(1)));
     const token = store.beginRepairPreview();
     if (token === undefined) throw new Error('preview token was refused');
@@ -326,6 +361,8 @@ describe('applying', () => {
       radius: 1,
     };
     const applied = store.applyRepairResult({
+      partId: PART,
+      parts: [partDescriptor()],
       handle: handle(2),
       parentRevision: 1,
       recordId: 'record-1',
@@ -363,6 +400,8 @@ describe('applying', () => {
     store.beginRepairCommit();
 
     const applied = store.applyRepairResult({
+      partId: PART,
+      parts: [partDescriptor()],
       handle: handle(2, 'model-9'),
       parentRevision: 1,
       recordId: 'record-1',
@@ -399,6 +438,8 @@ describe('undo', () => {
     const { store } = storeWithCandidate();
     store.beginRepairCommit();
     store.applyRepairResult({
+      partId: PART,
+      parts: [partDescriptor()],
       handle: handle(2),
       parentRevision: 1,
       recordId: 'record-1',
@@ -426,6 +467,8 @@ describe('undo', () => {
     const { store } = storeWithCandidate();
     store.beginRepairCommit();
     store.applyRepairResult({
+      partId: PART,
+      parts: [partDescriptor()],
       handle: handle(2),
       parentRevision: 1,
       recordId: 'record-1',
@@ -453,6 +496,8 @@ describe('undo', () => {
     store.beginRepairUndo();
 
     const restored = store.applyUndoResult({
+      partId: PART,
+      parts: [partDescriptor()],
       handle: handle(3),
       render: render(),
       bounds: undefined,
@@ -510,8 +555,8 @@ describe('progress', () => {
     const importToken = store.beginImport('part.stl');
     store.commitImport(importToken, loadedModel());
 
-    const stale = store.beginRepairPlan(handle(1), DEFAULT_REPAIR_SELECTION);
-    store.beginRepairPlan(handle(1), DEFAULT_REPAIR_SELECTION);
+    const stale = store.beginRepairPlan(handle(1), PART, DEFAULT_REPAIR_SELECTION);
+    store.beginRepairPlan(handle(1), PART, DEFAULT_REPAIR_SELECTION);
 
     store.reportRepairProgress(stale, 0.5, 'Building');
 
@@ -557,6 +602,8 @@ describe('a commit whose result cannot be installed', () => {
     store.beginRepairCommit();
 
     const applied = store.applyRepairResult({
+      partId: PART,
+      parts: [partDescriptor()],
       handle: handle(2, 'model-9'),
       parentRevision: 1,
       recordId: 'record-1',
@@ -581,6 +628,8 @@ describe('a commit whose result cannot be installed', () => {
     const { store } = storeWithCandidate();
     store.beginRepairCommit();
     store.applyRepairResult({
+      partId: PART,
+      parts: [partDescriptor()],
       handle: handle(2, 'model-9'),
       parentRevision: 1,
       recordId: 'record-1',
@@ -608,6 +657,8 @@ describe('a commit whose result cannot be installed', () => {
     const { store } = storeWithCandidate();
     store.beginRepairCommit();
     store.applyRepairResult({
+      partId: PART,
+      parts: [partDescriptor()],
       handle: handle(2),
       parentRevision: 1,
       recordId: 'record-1',
@@ -625,6 +676,8 @@ describe('a commit whose result cannot be installed', () => {
     // A restored result for a model that is no longer loaded.
     expect(
       store.applyUndoResult({
+        partId: PART,
+        parts: [partDescriptor()],
         handle: handle(3, 'model-9'),
         render: render(),
         bounds: undefined,
@@ -664,7 +717,7 @@ describe('CC12: Cancel is not Discard', () => {
    */
   function storeWithAcceptedCandidate(): {
     store: WorkspaceStore;
-    source: ModelHandle;
+    source: DocumentHandle;
     staleToken: ReturnType<WorkspaceStore['beginRepairPlan']>;
   } {
     const store = new WorkspaceStore();
@@ -673,7 +726,7 @@ describe('CC12: Cancel is not Discard', () => {
     const source = handle(1);
 
     // A first attempt that is cancelled, so its token is genuinely stale.
-    const firstPlan = store.beginRepairPlan(source, DEFAULT_REPAIR_SELECTION);
+    const firstPlan = store.beginRepairPlan(source, PART, DEFAULT_REPAIR_SELECTION);
     store.commitRepairPlan(firstPlan, source, planFor(source));
     const staleToken = store.beginRepairPreview();
     if (staleToken === undefined) throw new Error('preview token was refused');
@@ -681,7 +734,7 @@ describe('CC12: Cancel is not Discard', () => {
     store.cancelRepairCandidate(staleToken);
 
     // A second attempt that succeeds and publishes an ACCEPTED candidate.
-    const planToken = store.beginRepairPlan(source, DEFAULT_REPAIR_SELECTION);
+    const planToken = store.beginRepairPlan(source, PART, DEFAULT_REPAIR_SELECTION);
     store.commitRepairPlan(planToken, source, planFor(source));
     const liveToken = store.beginRepairPreview();
     if (liveToken === undefined) throw new Error('preview token was refused');

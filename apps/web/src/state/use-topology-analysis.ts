@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef } from 'react';
 import { AppErrorCode, toAppError } from '@cadfixer/shared';
-import type { ModelHandle } from '@cadfixer/geometry-runtime';
+import type { DocumentHandle } from '@cadfixer/geometry-runtime';
 import { analyzeModelTopology, type AnalysisSession } from '../runtime/analysis-service';
 import { useGeometryClient } from '../runtime/client-context';
 import { useWorkspaceState, useWorkspaceStore } from './store-context';
@@ -32,21 +32,22 @@ export interface TopologyAnalysisControls {
 export function useTopologyAnalysis(): TopologyAnalysisControls {
   const store = useWorkspaceStore();
   const client = useGeometryClient();
-  const { model, analysis } = useWorkspaceState();
+  const { model, activePartId, analysis } = useWorkspaceState();
   const sessionRef = useRef<AnalysisSession | undefined>(undefined);
 
   const start = useCallback(
-    (handle: ModelHandle): void => {
+    (handle: DocumentHandle, partId: string): void => {
       if (client === undefined) {
         store.pushStatus(StatusSeverity.Error, 'The geometry worker is not ready yet.');
         return;
       }
 
       sessionRef.current?.cancel();
-      const token: AnalysisToken = store.beginAnalysis(handle);
+      const token: AnalysisToken = store.beginAnalysis(handle, partId);
 
       const session = analyzeModelTopology({
         handle,
+        partId,
         client,
         onProgress: (progress) => {
           store.reportAnalysisProgress(token, progress.fraction, progress.phase);
@@ -59,6 +60,7 @@ export function useTopologyAnalysis(): TopologyAnalysisControls {
           const installed = store.commitAnalysis(
             token,
             outcome.handle,
+            outcome.partId,
             outcome.report,
             outcome.detail,
             outcome.durationMs,
@@ -116,27 +118,32 @@ export function useTopologyAnalysis(): TopologyAnalysisControls {
   );
 
   /**
-   * Starts analysis once per imported model.
+   * Starts analysis once per (document revision, active part).
    *
-   * Keyed on the handle rather than on the model object, and guarded by a ref,
-   * because `StrictMode` runs effects twice in development and an unguarded
-   * version would dispatch two analyses for every import. The ref records what
-   * has been started, so re-renders from unrelated state changes do not restart
-   * anything.
+   * Keyed on the handle AND the part, and guarded by a ref, because
+   * `StrictMode` runs effects twice in development and an unguarded version
+   * would dispatch two analyses for every import. The part belongs in the key
+   * for a reason that is not cosmetic: two parts share a revision, so a
+   * handle-only key would leave the second part unanalysed after a switch and
+   * the panel showing the first part's counts.
+   *
+   * ONE PART AT A TIME, deliberately. Analysing every part of a hundred-part
+   * document on import would spend a hundred full topology passes to fill a
+   * panel that shows one of them.
    */
   const startedForRef = useRef<string | undefined>(undefined);
   useEffect(() => {
-    if (model === undefined) {
+    if (model === undefined || activePartId === undefined) {
       startedForRef.current = undefined;
       return;
     }
     if (client === undefined) return;
 
-    const key = `${model.handle.modelId}@${String(model.handle.revision)}`;
+    const key = `${model.handle.documentId}@${String(model.handle.revision)}/${activePartId}`;
     if (startedForRef.current === key) return;
     startedForRef.current = key;
-    start(model.handle);
-  }, [client, model, start]);
+    start(model.handle, activePartId);
+  }, [activePartId, client, model, start]);
 
   /**
    * Cancels the in-flight analysis when the model goes away.
@@ -152,9 +159,9 @@ export function useTopologyAnalysis(): TopologyAnalysisControls {
   }, [model]);
 
   const runAnalysis = useCallback((): void => {
-    if (model === undefined) return;
-    start(model.handle);
-  }, [model, start]);
+    if (model === undefined || activePartId === undefined) return;
+    start(model.handle, activePartId);
+  }, [activePartId, model, start]);
 
   const cancelAnalysis = useCallback((): void => {
     sessionRef.current?.cancel();

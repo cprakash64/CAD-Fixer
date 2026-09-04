@@ -1,13 +1,29 @@
-import { malformedFile, throwIfCancelled, type CancellationToken } from '@cadfixer/shared';
 import {
+  diagnostic,
+  malformedFile,
+  throwIfCancelled,
+  type CancellationToken,
+  type Diagnostic,
+} from '@cadfixer/shared';
+import {
+  assertGeometryDocument,
   assertMeshStructure,
   computeBounds,
   computeVertexNormals,
+  distinctMeshes,
+  documentTriangleCount,
+  documentVertexCount,
+  singlePartDocument,
+  transformBounds,
   triangleCount,
+  unionBounds,
   vertexCount,
   validateMeshStructure,
   MeshValidationSeverity,
   type CanonicalMesh,
+  type GeometryDocument,
+  type MeshBounds,
+  type PartId,
 } from '@cadfixer/mesh-core';
 import {
   DEFAULT_IMPORT_BUDGET,
@@ -26,14 +42,19 @@ import {
 } from '@cadfixer/geometry-runtime';
 import {
   checkImportPeak,
+  documentByteLength,
   estimateImportPeak,
+  isDocument,
+  isPart,
   requestAnalysisWorkspace,
-  meshByteLength,
   renderBytesFor,
-  ResidentModelStore,
+  ResidentDocumentStore,
+  type DocumentRenderSnapshot,
   type MeshValidationSummary,
-  type ModelId,
+  type DocumentId,
   type OperationHandler,
+  type PartDescriptor,
+  type PartRenderSnapshot,
   type RenderSnapshot,
   type StlExportResult,
   type ModelImportResult,
@@ -64,7 +85,7 @@ registerBuiltInFormats();
  * Repair candidates live beside the authoritative models, in the same worker.
  *
  * Separate store, separate handle type: a candidate can never be resolved by an
- * operation that takes a `ModelHandle`, so export and analysis cannot reach
+ * operation that takes a `DocumentHandle`, so export and analysis cannot reach
  * proposed geometry by accident.
  */
 export const repairCandidates = new RepairCandidateStore();
@@ -89,7 +110,7 @@ export const repairHistory = new RepairHistoryStore();
  */
 export const topologyReports = new TopologyReportCache();
 
-export const residentModels = new ResidentModelStore();
+export const residentDocuments = new ResidentDocumentStore();
 
 /**
  * Returns control to the worker's event loop.
@@ -197,6 +218,148 @@ export function buildRenderSnapshot(mesh: CanonicalMesh): RenderSnapshot {
   };
 }
 
+/**
+ * Drawable buffers for a whole document, WITH RENDER GEOMETRY SHARED.
+ *
+ * Buffers are built once per DISTINCT authoritative mesh and then referenced by
+ * every part that uses it. Structured clone preserves object identity across
+ * `postMessage`, so two parts that share a mesh here arrive on the main thread
+ * still sharing one `Float32Array` — which is what lets the viewport give them
+ * one `BufferGeometry` and two object transforms. A thousand placements of one
+ * component therefore cost one copy of the geometry, not a thousand.
+ *
+ * The placement travels beside the buffers and is never baked into them. Baking
+ * would make each placement a different buffer and destroy the sharing this
+ * function exists to preserve.
+ */
+export function buildDocumentRenderSnapshot(document: GeometryDocument): DocumentRenderSnapshot {
+  const byMesh = new Map<CanonicalMesh, RenderSnapshot>();
+  const parts: PartRenderSnapshot[] = [];
+
+  for (const part of document.parts) {
+    let snapshot = byMesh.get(part.mesh);
+    if (snapshot === undefined) {
+      snapshot = buildRenderSnapshot(part.mesh);
+      byMesh.set(part.mesh, snapshot);
+    }
+    parts.push({
+      partId: part.id,
+      transform: part.transform,
+      positions: snapshot.positions,
+      normals: snapshot.normals,
+      vertexCount: snapshot.vertexCount,
+    });
+  }
+
+  return { parts };
+}
+
+/**
+ * The buffers of a document snapshot, deduplicated for a transfer list.
+ *
+ * Passing one buffer twice throws `DataCloneError`, and shared render geometry
+ * guarantees duplicates.
+ */
+export function documentRenderTransferables(snapshot: DocumentRenderSnapshot): ArrayBufferLike[] {
+  const buffers = new Set<ArrayBufferLike>();
+  for (const part of snapshot.parts) {
+    buffers.add(part.positions.buffer);
+    buffers.add(part.normals.buffer);
+  }
+  return [...buffers];
+}
+
+/**
+ * Scalar metadata about each part, for the main thread.
+ *
+ * `meshResourceIndex` is assigned by first appearance of the underlying mesh
+ * OBJECT, so two parts sharing geometry report the same index. That is the only
+ * way the page — or a test — can observe structural sharing without holding the
+ * geometry that is shared.
+ */
+export function describeParts(document: GeometryDocument): readonly PartDescriptor[] {
+  const resourceIndex = new Map<CanonicalMesh, number>();
+  const localBounds = boundsPerMesh(document);
+  const descriptors: PartDescriptor[] = [];
+
+  for (const part of document.parts) {
+    let index = resourceIndex.get(part.mesh);
+    if (index === undefined) {
+      index = resourceIndex.size;
+      resourceIndex.set(part.mesh, index);
+    }
+    descriptors.push({
+      partId: part.id,
+      ...(part.name === undefined ? {} : { name: part.name }),
+      transform: part.transform,
+      triangleCount: triangleCount(part.mesh),
+      vertexCount: vertexCount(part.mesh),
+      bounds: localBounds.get(part.mesh),
+      meshResourceIndex: index,
+    });
+  }
+
+  return descriptors;
+}
+
+/**
+ * Each DISTINCT mesh's local box, computed once.
+ *
+ * MEASURED, NOT ASSUMED. `computeBounds` walks every coordinate, so calling it
+ * per PART made a 1,000-placement document walk one shared mesh a thousand
+ * times: 356 ms of pure repetition in the document benchmark, for an answer
+ * that is identical every time. Local bounds belong to the MESH; only the
+ * placement differs, and a placement is applied to the box afterwards.
+ */
+function boundsPerMesh(document: GeometryDocument): Map<CanonicalMesh, MeshBounds | undefined> {
+  const bounds = new Map<CanonicalMesh, MeshBounds | undefined>();
+  for (const mesh of distinctMeshes(document)) bounds.set(mesh, computeBounds(mesh));
+  return bounds;
+}
+
+/**
+ * The document's world-space extent.
+ *
+ * Each part's local box is transformed by its placement and the results are
+ * unioned, so a document whose parts sit apart frames all of them. Transforming
+ * a box means transforming all eight corners — see `transformBounds`.
+ */
+export function documentBounds(document: GeometryDocument): MeshBounds | undefined {
+  const localBounds = boundsPerMesh(document);
+  let bounds: MeshBounds | undefined;
+  for (const part of document.parts) {
+    const local = localBounds.get(part.mesh);
+    if (local === undefined) continue;
+    bounds = unionBounds(bounds, transformBounds(local, part.transform));
+  }
+  return bounds;
+}
+
+/**
+ * The structural validation summary for a document.
+ *
+ * Reported per DISTINCT mesh and merged, because that is what was actually
+ * validated: a shared mesh is one mesh however many parts place it.
+ */
+function summariseDocument(document: GeometryDocument): MeshValidationSummary {
+  let valid = true;
+  let issueCount = 0;
+  let warningCount = 0;
+  let truncated = false;
+  const codes = new Set<string>();
+
+  for (const mesh of distinctMeshes(document)) {
+    const summary = summarise(mesh);
+    valid = valid && summary.valid;
+    issueCount += summary.issueCount;
+    warningCount += summary.warningCount;
+    truncated = truncated || summary.truncated;
+    for (const code of summary.codes) codes.add(code);
+  }
+
+  return { valid, issueCount, warningCount, truncated, codes: [...codes] };
+}
+
 export const modelImportHandler: OperationHandler<'model/import'> = async (payload, context) => {
   const source = payload.bytes;
   if (!(source instanceof ArrayBuffer)) {
@@ -227,6 +390,29 @@ export const modelImportHandler: OperationHandler<'model/import'> = async (paylo
   // and nothing is committed.
   assertMeshStructure(parsed.mesh, 'STL import');
 
+  /*
+   * ONE FILE, ONE DOCUMENT, ONE PART.
+   *
+   * An STL file describes exactly one triangle soup: no object records, no
+   * placement, no unit. So the document it produces has one part at the
+   * identity transform, and `unit` is whatever the reader stated — which for
+   * STL is nothing at all. Nothing about the geometry changed by being wrapped:
+   * `parsed.mesh` is the same object, holding the same buffers.
+   */
+  const document = singlePartDocument(parsed.mesh, {
+    ...(parsed.unit === undefined ? {} : { unit: parsed.unit }),
+  });
+
+  /*
+   * THE SECOND GATE. Structural mesh validity is not document validity: unique
+   * part ids, a finite placement, a recognised unit and the document-wide
+   * resource ceilings are questions only this can answer. Meshes are not
+   * re-walked — `assertMeshStructure` cleared this one moments ago and walking
+   * every coordinate twice on import is exactly the kind of cost a large model
+   * cannot absorb.
+   */
+  assertGeometryDocument(document, 'STL import', { validateMeshes: false });
+
   context.reportProgress(VALIDATE_SHARE, 'preparing');
 
   // SESSION BUDGET. The parser's own budget already cleared the candidate's
@@ -234,61 +420,84 @@ export const modelImportHandler: OperationHandler<'model/import'> = async (paylo
   // candidate fits ALONGSIDE what is still resident. During a transactional
   // replacement the outgoing model, the input buffer and the candidate are all
   // live at once, and that is the moment memory is tightest.
-  const residentNow = residentModels.stats();
+  const residentNow = residentDocuments.stats();
+  const documentTriangles = documentTriangleCount(document);
   const peak = estimateImportPeak({
     currentResidentBytes: residentNow.totalBytes,
-    currentRenderBytes: renderBytesFor(triangleCount(parsed.mesh)),
+    currentRenderBytes: renderBytesFor(documentTriangles),
     inputBytes: bytes.byteLength,
-    candidateTriangles: triangleCount(parsed.mesh),
+    candidateTriangles: documentTriangles,
   });
   const overBudget = checkImportPeak(peak);
   if (overBudget) throw overBudget;
 
-  const bounds = computeBounds(parsed.mesh);
-  const render = buildRenderSnapshot(parsed.mesh);
+  const bounds = documentBounds(document);
+  const render = buildDocumentRenderSnapshot(document);
 
   // TRANSACTIONAL. Nothing above this line touched the store, so a parse
   // failure, a validation failure, a budget rejection, or a cancellation leaves
-  // any previously resident model exactly as it was. The commit is the last
-  // thing that happens, and only on complete success.
+  // any previously resident document exactly as it was.
   throwIfCancelled(cancellation);
-  const handle = residentModels.commit(parsed.mesh);
+  const handle = residentDocuments.commit(document);
 
   context.reportProgress(1, 'complete');
 
   const value: ModelImportResult = {
     handle,
     encoding: parsed.encoding,
-    unit: parsed.mesh.metadata.unit,
+    unit: document.unit,
     bounds,
-    triangleCount: triangleCount(parsed.mesh),
-    vertexCount: vertexCount(parsed.mesh),
+    triangleCount: documentTriangles,
+    vertexCount: documentVertexCount(document),
+    parts: describeParts(document),
     render,
     warnings: parsed.warnings,
-    validation: summarise(parsed.mesh),
-    residentBytes: meshByteLength(parsed.mesh),
+    validation: summariseDocument(document),
+    residentBytes: documentByteLength(document),
   };
 
-  // Only the render snapshot is transferred. The canonical mesh stays here.
-  return {
-    value,
-    transfer: [render.positions.buffer, render.normals.buffer],
-  };
+  // Only the render snapshots are transferred. The canonical document stays here.
+  return { value, transfer: documentRenderTransferables(render) };
 };
 
+/**
+ * Names the parts an STL export will NOT contain.
+ *
+ * STL has one implicit part and no way to say otherwise, so exporting part A of
+ * a three-part document genuinely loses B and C. Returning that as a warning is
+ * the difference between a documented loss and a silent one. Whole-document
+ * multi-part export waits for Stage 4A-2B, which can state the loss through a
+ * conversion report rather than through a note attached to one file.
+ */
+function describeOmittedParts(document: GeometryDocument, exported: PartId): readonly Diagnostic[] {
+  const omitted = document.parts.filter((part) => part.id !== exported);
+  if (omitted.length === 0) return [];
+  return [
+    diagnostic(
+      'STL_EXPORT_SINGLE_PART',
+      `STL files hold one object, so this file contains only the selected part. ${String(omitted.length)} other ${omitted.length === 1 ? 'part was' : 'parts were'} not written.`,
+      { exportedPartId: exported, omittedPartCount: omitted.length },
+    ),
+  ];
+}
+
 export const modelExportHandler: OperationHandler<'model/export'> = async (payload, context) => {
-  // Resolving the handle is also the staleness check: an export queued against
-  // a model that has since been replaced fails here rather than silently
-  // writing out the wrong geometry.
-  const resolved = residentModels.resolve(payload.handle);
-  if (!isMesh(resolved)) throw resolved;
+  // Resolving the handle AND the part is also the staleness check: an export
+  // queued against a document that has since been replaced, or naming a part
+  // that no longer exists, fails here rather than silently writing out the
+  // wrong geometry.
+  const document = residentDocuments.resolve(payload.handle);
+  if (!isDocument(document)) throw document;
+
+  const part = residentDocuments.resolvePart(payload.handle, payload.partId as PartId);
+  if (!isPart(part)) throw part;
 
   // Export must never produce a file from geometry we would refuse to load.
-  assertMeshStructure(resolved, 'STL export');
+  assertMeshStructure(part.mesh, 'STL export');
   context.reportProgress(0.02, 'writing');
 
   const writer = requireWriter(MeshFormatId.Stl);
-  const written = await writer.write(resolved, {
+  const written = await writer.write(part.mesh, {
     cancellation: context.cancellation,
     budget: DEFAULT_IMPORT_BUDGET,
     encoding: payload.encoding,
@@ -306,38 +515,36 @@ export const modelExportHandler: OperationHandler<'model/export'> = async (paylo
     bytes: written.bytes.buffer,
     byteLength: written.bytes.byteLength,
     encoding: payload.encoding,
-    warnings: written.warnings,
+    warnings: [...written.warnings, ...describeOmittedParts(document, part.id)],
   };
 
   return { value, transfer: [written.bytes.buffer] };
 };
 
 export const modelReleaseHandler: OperationHandler<'model/release'> = (payload) => {
-  const modelId = payload.modelId as ModelId;
-  const released = residentModels.release(modelId);
-  // The repair history for a released model describes geometry that no longer
-  // exists. Retaining its inverse patch would hold bytes for a repair nothing
-  // can reverse, and its report would describe a mesh nothing can resolve.
-  repairHistory.releaseModel(modelId);
-  topologyReports.release(modelId);
+  const documentId = payload.documentId as DocumentId;
+  const released = residentDocuments.release(documentId);
+  // The repair history for a released document describes geometry that no
+  // longer exists. Retaining its inverse patch would hold bytes for a repair
+  // nothing can reverse, and its reports would describe meshes nothing can
+  // resolve.
+  repairHistory.releaseDocument(documentId);
+  topologyReports.release(documentId);
   const value: ModelReleaseResult = { released };
   return Promise.resolve({ value });
 };
 
-/** Narrows the store's union return without an assertion. */
-function isMesh(value: CanonicalMesh | { code: string }): value is CanonicalMesh {
-  return 'positions' in value;
-}
-
 export const modelAnalyzeHandler: OperationHandler<'model/analyze'> = async (payload, context) => {
-  // Resolving is also the staleness check: an analysis queued against a model
-  // that has since been replaced fails here rather than quietly producing a
-  // report describing different geometry.
-  const resolved = residentModels.resolve(payload.handle);
-  if (!isMesh(resolved)) throw resolved;
+  // Resolving is also the staleness check: an analysis queued against a
+  // document that has since been replaced — or naming a part that is not in
+  // this revision — fails here rather than quietly producing a report
+  // describing different geometry.
+  const part = residentDocuments.resolvePart(payload.handle, payload.partId as PartId);
+  if (!isPart(part)) throw part;
 
-  const faceCount = triangleCount(resolved);
-  const cornerCount = Math.floor(resolved.positions.length / 3);
+  const mesh = part.mesh;
+  const faceCount = triangleCount(mesh);
+  const cornerCount = Math.floor(mesh.positions.length / 3);
 
   // MEMORY PREFLIGHT. Topology scratch runs several times the size of the mesh,
   // so the estimate is checked BEFORE any bulk array is allocated. Refusing
@@ -351,9 +558,10 @@ export const modelAnalyzeHandler: OperationHandler<'model/analyze'> = async (pay
 
   context.reportProgress(0, 'analyzing');
 
-  const result = analyseTopology(resolved, {
-    modelId: payload.handle.modelId,
-    modelRevision: payload.handle.revision,
+  const result = analyseTopology(mesh, {
+    documentId: payload.handle.documentId,
+    documentRevision: payload.handle.revision,
+    partId: part.id,
     cancellation: context.cancellation,
     ...(payload.sampleLimit === undefined ? {} : { sampleLimit: payload.sampleLimit }),
     onProgress: (progress) => {
@@ -367,14 +575,15 @@ export const modelAnalyzeHandler: OperationHandler<'model/analyze'> = async (pay
   throwIfCancelled(context.cancellation);
 
   // Retained for the repair workflow, which is planned from a report and would
-  // otherwise recompute this one immediately. Stored against the handle, so it
-  // is returned only for the revision it actually describes.
-  topologyReports.set(payload.handle, result.report);
+  // otherwise recompute this one immediately. Stored against the handle AND the
+  // part, so it is returned only for the geometry it actually describes.
+  topologyReports.set(payload.handle, part.id, result.report);
 
   const value: ModelAnalyzeResult = {
-    // Echoed so a late report can be matched against the model the application
-    // currently holds, and discarded if it has moved on.
+    // Echoed so a late report can be matched against the document and part the
+    // application currently shows, and discarded if either has moved on.
     handle: payload.handle,
+    partId: part.id,
     report: result.report,
     detail: result.detail,
   };

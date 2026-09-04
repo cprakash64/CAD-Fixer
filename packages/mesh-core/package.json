@@ -6,12 +6,14 @@
   "sideEffects": false,
   "description": "Canonical in-memory mesh contract and structural validation for CAD Fixer.",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./fixtures": "./src/document-fixtures.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
     "@cadfixer/shared": "*"
-  }
+  },
+  "//exports": "./fixtures exposes the deterministic MULTI-PART document fixtures (MP01-MP08) so the runtime, worker and application tests exercise the SAME documents rather than each growing its own divergent copy. Test-only: no production path imports it, and the boundary scan checks that."
 }

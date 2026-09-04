@@ -1,4 +1,4 @@
-import { createIndexArray, createPositionArray, IDENTITY_MATRIX4 } from '@cadfixer/mesh-core';
+import { createIndexArray, createPositionArray } from '@cadfixer/mesh-core';
 import type { CanonicalMesh } from '@cadfixer/mesh-core';
 
 /**
@@ -32,7 +32,7 @@ export function soup(triangles: readonly Triangle[]): CanonicalMesh {
   }
   for (let i = 0; i < indices.length; i += 1) indices[i] = i;
 
-  return { positions, indices, metadata: { sourceFormat: 'stl', transform: IDENTITY_MATRIX4 } };
+  return { positions, indices, metadata: { sourceFormat: 'stl' } };
 }
 
 export function translate(triangles: readonly Triangle[], offset: Point): Triangle[] {

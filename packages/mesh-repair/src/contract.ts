@@ -147,7 +147,15 @@ export interface RepairMemoryEstimate {
 
 export interface ConservativeRepairPlan {
   readonly schemaVersion: typeof REPAIR_PLAN_VERSION;
-  readonly modelId: string;
+  readonly documentId: string;
+  /**
+   * The part this plan repairs.
+   *
+   * A plan describes what will happen to ONE mesh. Naming the part makes the
+   * plan hash bind to it too, so a plan previewed for part A cannot be
+   * presented as the plan for part B at the same document revision.
+   */
+  readonly partId: string;
   readonly sourceRevision: number;
   /** Version of the topology report the plan was derived from. */
   readonly reportVersion: number;

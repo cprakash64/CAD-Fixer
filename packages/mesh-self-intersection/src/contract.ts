@@ -111,8 +111,18 @@ export interface SelfIntersectionReport {
   readonly schemaVersion: number;
   readonly status: SelfIntersectionStatus;
 
-  readonly modelId: string;
-  readonly modelRevision: number;
+  readonly documentId: string;
+  readonly documentRevision: number;
+  /**
+   * The part this report describes.
+   *
+   * SELF-INTERSECTION IS INTRA-PART. Two independently valid parts that overlap
+   * in world space are NOT self-intersecting, and a report that did not name its
+   * part could be shown beside a different part of the same document at the same
+   * revision. Inter-part overlap is a separate, unimplemented concept — see
+   * docs/adr/0013.
+   */
+  readonly partId: string;
 
   readonly faceCount: number;
 

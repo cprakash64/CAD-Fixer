@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { computeBounds, computeVertexNormals, triangleNormal } from './analysis';
-import { IDENTITY_MATRIX4, type CanonicalMesh } from './mesh';
+import type { CanonicalMesh } from './mesh';
 
 /**
  * These functions produce the numbers the interface shows and the normals the
@@ -13,7 +13,7 @@ function mesh(positions: readonly number[], indices: readonly number[]): Canonic
   return {
     positions: new Float32Array(positions),
     indices: new Uint32Array(indices),
-    metadata: { sourceFormat: 'stl', transform: IDENTITY_MATRIX4 },
+    metadata: { sourceFormat: 'stl' },
   };
 }
 
