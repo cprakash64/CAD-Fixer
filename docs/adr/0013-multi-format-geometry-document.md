@@ -285,3 +285,253 @@ detection, split/connectors.
 
 No printability claim. Units, wall thickness, manufacturability and slicer
 behaviour remain outside what any of this establishes.
+
+---
+
+# R1 — closing the qualification gaps (2026-09-03)
+
+Status: **Qualified.** Stage 4A-1 left four gaps: 3MF geometry construction, a
+3MF writer and round-trip, an executable document prototype, and the component
+scope. All four are closed below. The Stage 4A-1 findings above stand unchanged;
+nothing in them was revised.
+
+## The document prototype is executable, and the single revision holds
+
+`experiments/format-io/document.mjs` implements the model this ADR argued for.
+**20/20 checks pass**, and the two that matter most are byte-level rather than
+by hash:
+
+|     |                                                                                                                                    |
+| --- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| D01 | two-part document starts at revision 1                                                                                             |
+| D02 | editing part A leaves B's mesh the **same object and the same bytes**; one revision consumed; no per-part revision exists anywhere |
+| D03 | the same invariant editing B                                                                                                       |
+| D04 | undo restores contents as a **new, higher** revision (1 → 2 → 3), never by decrementing                                            |
+| D05 | a result bound to revision N cannot publish once N+1 exists, and a stale **write** is refused by the document itself               |
+| D06 | a transform-only change bumps the revision while the mesh object and its bytes are untouched                                       |
+
+MD01–MD08 add: two placements of one geometry **share the mesh object** rather
+than duplicating it; a result for part A cannot publish as part B at the same
+revision; a result from one document cannot publish against another.
+
+**A cost worth naming.** MD08 shows a change to an _unrelated_ part invalidates
+a candidate, because the guard compares one document revision. That is a real
+consequence of the single-revision choice. It is the safe direction to err in —
+an over-invalidated candidate is recomputed, an under-invalidated one is applied
+to geometry it was not built from — and it is why per-part revisions were not
+adopted to avoid it.
+
+The repair transaction shape (RX01–RX03) is unchanged from Stage 3B: rev N →
+candidate for one part → apply → rev N+1, with B untouched, undo restoring A
+alone, and a stale candidate refused. **It did not become more complicated.**
+
+## Components ARE supported — Option A
+
+Stage 4A-1 left this ambiguous. Resolved by building it: expansion is a
+depth-first walk carrying a composed transform, with an explicit path set for
+cycle detection and a hard depth cap of 16.
+
+It was affordable because **geometry is shared structurally**. Each object's
+Float32 buffers are materialised once; N placements cost N transforms, not N
+meshes. RT09, RT10 and F15 assert `parts[0].mesh === parts[1].mesh` directly.
+
+Cycles and missing references are refused (`COMPONENT_CYCLE`,
+`MISSING_OBJECT_REFERENCE`), not survived.
+
+## 3MF reader and writer
+
+**42/42 checks pass.** Reader: model unit, mesh objects, component objects,
+build items, item and component transforms, object names, `pid` material
+references. Writer: fixed archive paths, content types, relationships, model
+XML, unit, resources, vertices, triangles, build items, transforms, names.
+
+Part mapping, frozen:
+
+| Source                                | Becomes                                         |
+| ------------------------------------- | ----------------------------------------------- |
+| build item → mesh object              | one part                                        |
+| two build items → two objects         | two parts                                       |
+| two build items → **same** object     | two parts sharing one mesh                      |
+| build item → component object         | one part per leaf instance, transforms composed |
+| object with vertices but no triangles | **no part**                                     |
+| object never referenced by build      | **no part** (parsed as a resource, not shown)   |
+
+## Structural validity is not mesh health
+
+`TRIANGLE_INDEX_OUT_OF_RANGE`, `DUPLICATE_OBJECT_ID`,
+`MISSING_OBJECT_REFERENCE`, `NON_FINITE_COORDINATE`, `MALFORMED_TRANSFORM`,
+`UNSUPPORTED_UNIT`, `COMPONENT_CYCLE` are refusals — the **file** is broken.
+
+A zero-area triangle is valid 3MF describing a defective mesh, so it **imports**
+and becomes Mesh Health's problem. Confusing the two would leave the importer
+unable to load the very models the product exists to repair.
+
+## A bounded scanner, not DOMParser, for the model part
+
+`DOMParser` builds a full node tree before the caller sees anything, and every
+vertex in 3MF is an element. The model part is scanned directly instead: one
+pass, only the geometry arrays the caller wants, a natural yield point between
+elements for a cancellation poll, and no DOM.
+
+Measured heap growth during parse+build: **27.0 MiB for a 10.8 MiB model,
+136.3 MiB for a 55.0 MiB model** — roughly 2.5×, which is the geometry itself
+plus the scan. `DOMParser` remains appropriate for the tiny relationship and
+content-type parts.
+
+The DTD refusal is unchanged and still applies **before** scanning.
+
+## Numeric fidelity through the real pipeline
+
+Stage 4A-1 proved nine digits survive `parseFloat`. That is a different claim
+from surviving the writer, XML escaping, the scanner and `Number(...)`. Measured
+on the actual path:
+
+|                       | Values  | Bit-identical | Failed |
+| --------------------- | ------- | ------------- | ------ |
+| Coordinates (Float32) | 200,017 | **200,017**   | 0      |
+| Transforms (Float64)  | 99,959  | **99,959**    | 0      |
+
+Negative zero is written as `-0` and returns `-0`.
+
+**Transforms get their own contract.** They are Float64 read from text and
+written back to text; narrowing them to Float32 would add an error the source
+never had. A `toFixed(6)` transform writer would lose **51,649 of 99,959**
+values.
+
+## Round-trip: geometry, structure and unit reported separately
+
+RT01–RT10 all pass, comparing coordinates bit-for-bit, then structure, then
+unit. Units round-trip exactly for `micron`, `millimeter`, `centimeter`,
+`inch`, `foot`, `meter`, and **coordinates are never rescaled by the unit**
+(F12 asserts the numeric value is unchanged under `inch`).
+
+## Unknown unit → 3MF is BLOCKED
+
+Frozen. 3MF requires a unit; STL and OBJ often have none. The conversion returns
+`BLOCKED` with `UNIT_REQUIRED` rather than writing `millimeter`. It proceeds only
+with an explicit user-supplied unit, and then records
+`UNIT_ASSERTED_BY_USER` — the report states that the unit is a claim the user
+made, not something read from the file. The writer itself throws
+`BLOCKED_UNIT_REQUIRED` if called without one, so the policy cannot be bypassed
+by a caller that skips the report.
+
+## Conversion verdicts are distinguishable in real cases
+
+11/11 checks. All five verdicts are reachable and distinct (CV06):
+
+| Case                             | Verdict                                              |
+| -------------------------------- | ---------------------------------------------------- |
+| supported 3MF → 3MF              | `LOSSLESS_FOR_SUPPORTED_FEATURES`                    |
+| single-part 3MF → STL            | `LOSSY_METADATA` (unit only)                         |
+| multi-part transformed 3MF → STL | `LOSSY_STRUCTURE` (+ parts, transforms, unit, names) |
+| textured source → 3MF            | `UNSUPPORTED_INPUT_FEATURE`                          |
+| unknown-unit STL → 3MF           | `BLOCKED`                                            |
+
+## Performance
+
+Sizes are quoted by **inflated model XML**, which is what drives parser cost; a
+compressed MiB says little about the work required.
+
+| Target  | Faces   | ZIP     | XML      | Export (xml+zip) | Import total | Heap      |
+| ------- | ------- | ------- | -------- | ---------------- | ------------ | --------- |
+| ~1 MiB  | 7,000   | 0.1 MiB | 1.0 MiB  | 43 + 22 ms       | 28 ms        | —         |
+| ~10 MiB | 70,000  | 1.0 MiB | 10.8 MiB | 299 + 119 ms     | 165 ms       | 27.0 MiB  |
+| ~50 MiB | 350,000 | 5.1 MiB | 55.0 MiB | 1453 + 841 ms    | 805 ms       | 136.3 MiB |
+
+Import breakdown at 55 MiB: directory 0 ms, inflate 94 ms, decode 9 ms, parse
+691 ms, geometry build 11 ms.
+
+**Multi-part overhead is essentially nil.** At a constant 70,000 faces:
+
+| Parts | Import | Built |
+| ----- | ------ | ----- |
+| 1     | 156 ms | 1     |
+| 10    | 160 ms | 10    |
+| 100   | 145 ms | 100   |
+| 1,000 | 150 ms | 1,000 |
+
+The document model does not degrade with part count.
+
+Browser, same code: a 20,000-face 3MF exports in 131 ms and imports in 41 ms
+with **bit-exact coordinates**.
+
+## Cancellation
+
+Three phases, three honest answers:
+
+- **Inflation** — `DecompressionStream` is asynchronous and chunked;
+  `reader.cancel()` aborts it. Already used to enforce the byte budget mid-flight.
+- **Scanning and geometry build** — our own loops, with a yield point between
+  elements. The Stage 3B cooperative `SharedArrayBuffer` token works here, and is
+  preferable because it interrupts without discarding the worker.
+- **The `DOMParser` calls on the relationship and content-type parts** — one
+  opaque synchronous call each, and **not cooperatively cancellable**. They are
+  kilobytes, so the bound is negligible; this is stated rather than glossed.
+
+## Security after adding geometry
+
+Adding a geometry layer is where a bypass appears, so the hardened corpus was
+re-run **through the geometry reader**: 7/7 container attacks still refused,
+5/5 XML attacks refused inside a real archive.
+
+Deterministic seeded mutation fuzz of valid model XML, 3,000 cases: 2,089
+refused with typed errors (`XML_MALFORMED` 641, `NON_FINITE_COORDINATE` 561,
+`TRIANGLE_INDEX_OUT_OF_RANGE` 470, `XML_ENTITY_REFUSED` 165,
+`MISSING_OBJECT_REFERENCE` 147, `UNSUPPORTED_UNIT` 105), 911 accepted, and
+**0 unsound or untyped outcomes** — every accepted mutation produced
+structurally sound geometry.
+
+## Writer security
+
+Part names are **content, never paths**. Archive entry paths are a fixed
+three-element list decided by the writer. Eight hostile names — `../../evil`,
+`/absolute/path`, `C:\windows\system32`, `https://evil.test/x`, XML
+metacharacters, an `<!ENTITY>` declaration, a tag-closing injection, and Unicode
+with a fullwidth solidus — all: left archive paths unchanged, produced
+well-formed XML with no DTD or entity, and **round-tripped byte-identically as
+names**.
+
+## Independent oracles
+
+Produced archives are validated by a reader that does **not** use the code under
+test: a separate local-header walk driven by Node's `zlib`, checking entry
+count, declared-versus-actual sizes and CRCs, plus a stack-based XML
+well-formedness check independent of the scanner. Our reader agreeing with
+itself would prove only self-consistency.
+
+## Stage 4A-2 production scope, frozen
+
+| Area               | Decision                                                            |
+| ------------------ | ------------------------------------------------------------------- |
+| OBJ geometry       | triangles only; n-gons refused with a reason                        |
+| OBJ structure      | `o` → part, `g` → group within a part                               |
+| OBJ MTL            | `mtllib` recorded as a string; **never opened**                     |
+| OBJ normals/UVs    | parsed, not authoritative; recomputed as today                      |
+| 3MF units          | all six spec values; preserved; **never rescaled**                  |
+| 3MF geometry       | mesh objects, vertices, triangles                                   |
+| 3MF build          | build items with transforms                                         |
+| **3MF components** | **supported**, cycle-detected, depth ≤ 16, geometry shared          |
+| Names              | preserved as opaque strings, both formats                           |
+| Materials          | reference string only; no colours, no base materials resolved       |
+| Textures           | **unsupported**, reported as `UNSUPPORTED_INPUT_FEATURE`            |
+| Unknown unit → 3MF | **BLOCKED** unless the user supplies one, then recorded as asserted |
+| Document           | multi-part, one monotonic revision                                  |
+| Conversion         | canonical document as the only intermediate                         |
+| Validation         | parse-back for all three formats                                    |
+| ZIP caps           | 512 MiB archive, 4,096 entries, 256 MiB/entry, 200:1 ratio          |
+| XML caps           | depth 64, 80M elements, 64 KiB attributes                           |
+| OBJ caps           | 512 MiB, 65,536-char lines, 40M vertices/faces                      |
+| Import UX          | single-file picker                                                  |
+| Worker             | disposable format worker → direct transfer to the geometry worker   |
+
+## Still unresolved
+
+1. **No production integration exists.** Everything above is a prototype under
+   `experiments/`; the canonical model, store, protocol and UI are untouched.
+2. **The `DOMParser` calls on small package parts are not cancellable.** Bounded
+   by size, not by a token.
+3. **Export of very large documents is slower than import** (2.3 s versus 0.8 s
+   at 55 MiB), dominated by string building. Not optimised, and not yet a
+   product constraint.
+4. **No STL/OBJ writer was built in R1** — only the 3MF writer. The cross-format
+   analysis is executable, but STL and OBJ serialisation remain Stage 4A-2 work.

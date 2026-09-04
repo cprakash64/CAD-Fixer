@@ -25,6 +25,12 @@ Conclusions: `docs/adr/0013-multi-format-geometry-document.md`
 node experiments/format-io/float32-roundtrip.mjs
 node experiments/format-io/zip-security.mjs
 node experiments/format-io/obj-matrix.mjs
+node experiments/format-io/document-matrix.mjs
+node experiments/format-io/threemf-matrix.mjs
+node experiments/format-io/threemf-numeric.mjs
+node experiments/format-io/conversion-matrix.mjs
+node experiments/format-io/threemf-fuzz.mjs
+node experiments/format-io/threemf-bench.mjs
 npx playwright test --config experiments/format-io/playwright.format.config.ts
 ```
 
@@ -36,3 +42,11 @@ npx playwright test --config experiments/format-io/playwright.format.config.ts
 2. **A naive polygon fan invents geometry.** On the concave pentagon fixture it
    emits a triangle of the opposite orientation — outside the polygon. OBJ
    n-gons are refused, not triangulated.
+
+3. **Components were affordable because geometry is shared structurally.** N
+   placements of one object cost N transforms, not N meshes — which is also why
+   1,000 parts import no slower than 1.
+
+4. **A transform is not mesh data.** Coordinates are Float32 and need nine
+   significant digits; transforms are Float64 and need seventeen. A
+   `toFixed(6)` transform writer would lose 51.7% of values.
