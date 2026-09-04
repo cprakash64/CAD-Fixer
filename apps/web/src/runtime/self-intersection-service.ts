@@ -53,19 +53,52 @@ export class SelfIntersectionCancelled extends Error {
 
 let nextOperation = 1;
 
+/**
+ * How the service obtains a diagnostic worker.
+ *
+ * Injectable so the FAILURE path can be exercised against a real worker
+ * lifecycle — a `Promise` rejected by hand proves nothing about whether the
+ * `error` listener, the port cleanup and the reference release actually work.
+ * This is a construction seam, NOT a fault switch: the default is the only
+ * behaviour the application ever uses, and nothing in the product can select
+ * another.
+ */
+export type DiagnosticWorkerFactory = () => Worker;
+
+const defaultWorkerFactory: DiagnosticWorkerFactory = () =>
+  new Worker(new URL('../workers/self-intersection.worker.ts', import.meta.url), {
+    type: 'module',
+    name: 'cadfixer-self-intersection',
+  });
+
 export class SelfIntersectionService {
   private worker: Worker | undefined;
   private channel: MessageChannel | undefined;
   private activeOperationId: string | undefined;
   private readonly client: GeometryClient;
+  private readonly createWorker: DiagnosticWorkerFactory;
 
-  public constructor(client: GeometryClient) {
+  public constructor(
+    client: GeometryClient,
+    createWorker: DiagnosticWorkerFactory = defaultWorkerFactory,
+  ) {
     this.client = client;
+    this.createWorker = createWorker;
   }
 
   /** Live disposable workers. A diagnostic that leaks one is a leak per run. */
   public get liveWorkerCount(): number {
     return this.worker === undefined ? 0 : 1;
+  }
+
+  /** Live message channels. Should track `liveWorkerCount` exactly. */
+  public get liveChannelCount(): number {
+    return this.channel === undefined ? 0 : 1;
+  }
+
+  /** The operation currently in flight, if any. Used to prove release. */
+  public get activeOperation(): string | undefined {
+    return this.activeOperationId;
   }
 
   /**
@@ -83,10 +116,7 @@ export class SelfIntersectionService {
     nextOperation += 1;
     this.activeOperationId = operationId;
 
-    const worker = new Worker(new URL('../workers/self-intersection.worker.ts', import.meta.url), {
-      type: 'module',
-      name: 'cadfixer-self-intersection',
-    });
+    const worker = this.createWorker();
     const channel = new MessageChannel();
     this.worker = worker;
     this.channel = channel;
@@ -111,12 +141,14 @@ export class SelfIntersectionService {
             options.onStarted?.(data.faceCount);
             return;
           case 'report':
-            this.finish(operationId);
+            // Settled first, then torn down: `dispose` rejects whatever is still
+            // pending, and a resolve arriving afterwards would be ignored.
             resolve(data.report);
+            this.finish(operationId);
             return;
           case 'failed':
-            this.finish(operationId);
             reject(toAppError(new Error(data.reason)));
+            this.finish(operationId);
             return;
           default:
             return;
@@ -130,8 +162,8 @@ export class SelfIntersectionService {
        * explicitly rather than relying on an event.
        */
       worker.addEventListener('error', () => {
-        this.finish(operationId);
         reject(toAppError(new Error('The self-intersection worker failed.')));
+        this.finish(operationId);
       });
 
       this.cancelCurrent = (): void => {
@@ -154,10 +186,17 @@ export class SelfIntersectionService {
       })
       .catch((cause: unknown) => {
         if (this.activeOperationId !== operationId) return;
+        /*
+         * THE REJECTION IS CAPTURED BEFORE THE TEARDOWN, and the order is the
+         * whole fix. `finish` disposes the operation, and disposal clears
+         * `rejectCurrent` — so rejecting afterwards called nothing at all and
+         * the promise stayed pending forever. A producer-side refusal (an
+         * above-ceiling model, a released handle) then left the panel saying
+         * "Checking…" with no worker running and no way out.
+         */
+        const rejectProducerFailure = this.rejectCurrent;
+        rejectProducerFailure?.(toAppError(cause));
         this.finish(operationId);
-        // Surfaced through the same promise so a producer-side refusal — an
-        // above-ceiling model, a released handle — is reported once, not twice.
-        this.rejectCurrent?.(toAppError(cause));
       });
 
     return {
@@ -169,8 +208,22 @@ export class SelfIntersectionService {
     };
   }
 
-  /** Releases the worker and the channel. Safe to call repeatedly. */
+  /**
+   * Releases the worker and the channel. Safe to call repeatedly.
+   *
+   * ALSO SETTLES A STILL-PENDING OPERATION. Superseding a run — starting a
+   * second check, or unmounting — used to terminate the worker and drop the
+   * reject function, leaving the first operation's promise pending forever.
+   * Nothing user-visible waited on it, but a promise that can never settle is a
+   * retained object with a retained closure, and "nobody happens to await it"
+   * is not a lifecycle guarantee. Settling is a no-op when the promise already
+   * resolved.
+   */
   public dispose(): void {
+    const abandoned = this.rejectCurrent;
+    this.rejectCurrent = undefined;
+    abandoned?.(new SelfIntersectionCancelled());
+
     this.worker?.terminate();
     this.worker = undefined;
     this.channel?.port1.close();
@@ -178,7 +231,6 @@ export class SelfIntersectionService {
     this.channel = undefined;
     this.activeOperationId = undefined;
     this.cancelCurrent = undefined;
-    this.rejectCurrent = undefined;
   }
 
   private finish(operationId: string): void {

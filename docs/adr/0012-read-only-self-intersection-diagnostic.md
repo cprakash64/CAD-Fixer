@@ -476,3 +476,40 @@ Remaining limitations:
    selects it; the abortable tree makes it moot for the chosen path.
 5. **Capacity 20 is not proven sufficient by construction** — only measured over
    1.18M production-realistic pairs, and guarded if it ever fails.
+
+---
+
+# Stage 3C-1B-R1 — production measurements, and one correction
+
+The research numbers above are NATIVE. Stage 3C-1B-R1 measured the shipped
+WebAssembly in real Chromium, which is what users experience.
+
+| Faces   | Diagnostic (browser) | Native equivalent above |
+| ------- | -------------------- | ----------------------- |
+| 49,928  | 3,311 ms             | ~1.8 s at 50k           |
+| 100,352 | 6,327 ms             | ~3.6 s at 100k          |
+| 199,712 | 12,364 ms            | ~7.5 s at 200k          |
+| 249,218 | 14,875 ms            | ~9.4 s extrapolated     |
+
+**The browser is roughly 1.6-1.9x the native figures**, more than the ~25% this
+ADR estimated from the R1 WASM harness. The invocation bands are unchanged and
+still defensible — the check is explicit, cancellable, progress-reporting and
+provably off the main thread (longest frame gap 19 ms against a 19 ms idle
+baseline at 115,200 faces) — but the ceiling's real cost is ~15 s, not ~9 s, and
+`docs/SELF_INTERSECTION.md` records the browser numbers as the operative ones.
+
+Worker construction, WebAssembly instantiation and the worker-to-worker geometry
+transfer together cost 32-58 ms at every size, and do not scale with the model.
+
+## A note on timing proofs in CI
+
+The Stage 3B-1 cancellation ratio was briefly relaxed from 0.8 to 0.9 during
+3C-1B after a full-suite failure. R1 established that was the wrong diagnosis:
+ten consecutive isolated runs measure 0.608-0.640, while five full-suite runs
+under four parallel workers ranged 0.640-1.17 — a ratio above 1.0 being
+impossible as a statement about cancellation. Timing proofs now run serially
+under `playwright.timing.config.ts` and the original 0.8 threshold is restored.
+
+They remain sensitive to WHOLE-MACHINE load, which no test configuration can
+remove: on a host running at load average 21-28 the same suite took 42 minutes
+and two specs timed out, and passed in seconds once the machine was quiet.

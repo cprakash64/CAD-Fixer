@@ -72,6 +72,16 @@ export function SelfIntersectionSection(): ReactNode {
         <CategoryBreakdown report={report} />
       ) : null}
 
+      {/* How much work the check actually did. Bounded scalars, and the honest
+          answer to "did it really look at everything?" — a reader comparing
+          tested against candidate pairs can see for themselves when a result
+          was capped. */}
+      {report !== undefined && report.candidatePairCount > 0 ? (
+        <p className="panel__note" data-testid="self-intersection-work-summary">
+          {`Examined ${report.testedPairCount.toLocaleString()} of ${report.candidatePairCount.toLocaleString()} candidate triangle pairs.`}
+        </p>
+      ) : null}
+
       {controls.isBusy ? (
         <div className="repair__progress" data-testid="self-intersection-progress">
           {selfIntersection.faceCount === undefined ? null : (

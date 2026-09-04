@@ -10,6 +10,7 @@ import type {
   DiagnosticPortMessage,
   DiagnosticWorkerOutbound,
 } from './self-intersection-protocol';
+import { describeMalformedGeometry } from './self-intersection-validation';
 
 /**
  * THE DISPOSABLE SELF-INTERSECTION WORKER.
@@ -92,30 +93,8 @@ const post = (message: DiagnosticWorkerOutbound): void => {
   self.postMessage(message);
 };
 
-/**
- * Rejects a request whose shape could make the kernel read outside its heap.
- *
- * The producer is our own authoritative worker, so in a correct build this
- * never fires. It exists because everything downstream indexes raw WASM memory,
- * and "the caller is internal" is an assumption that outlives the code that
- * made it. The kernel validates independently; this is the outer layer.
- */
-function describeMalformed(message: DiagnosticGeometryMessage): string | undefined {
-  const { positions, triangles } = message;
-  if (!(positions instanceof Float64Array)) return 'positions must be a Float64Array';
-  if (!(triangles instanceof Uint32Array)) return 'triangles must be a Uint32Array';
-  if (positions.length % 3 !== 0) return 'positions length must be a multiple of 3';
-  if (triangles.length % 3 !== 0) return 'triangles length must be a multiple of 3';
-  const vertexCount = positions.length / 3;
-  if (triangles.length > 0 && vertexCount < 3) return 'a face needs at least three vertices';
-  for (const index of triangles) {
-    if (index >= vertexCount) return 'a face index addresses no vertex';
-  }
-  return undefined;
-}
-
 async function runDiagnostic(message: DiagnosticGeometryMessage): Promise<void> {
-  const malformed = describeMalformed(message);
+  const malformed = describeMalformedGeometry(message);
   if (malformed !== undefined) {
     post({ kind: 'failed', operationId: message.operationId, reason: malformed });
     return;

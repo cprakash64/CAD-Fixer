@@ -135,6 +135,7 @@ npm run format:check # Prettier check
 npm run typecheck    # TypeScript, all projects
 npm test             # Vitest unit and component tests
 npm run test:e2e     # Playwright end-to-end (needs `npx playwright install chromium`)
+npm run test:e2e:timing # Timing/responsiveness proofs, SERIAL (see below)
 npm run verify       # format:check + lint + typecheck + test + build
 npm run bench:stl      # STL parser benchmark (NOT in CI)
 npm run bench:topology # small topology benchmark (NOT in CI)
@@ -145,6 +146,21 @@ npm run check:node     # runtime version guard; also runs before test/build/veri
 
 Before declaring work complete, run `npm run verify`. Run `npm run test:e2e` as
 well when you have touched the shell, the worker, or the build.
+
+**`npm run test:e2e:timing` is a SEPARATE command, and it is not optional.**
+Timing and responsiveness proofs — cancellation ratios, main-thread gaps — live
+in `playwright.timing.config.ts` and run single-worker. They are excluded from
+`test:e2e` because a ratio between two measurements is only meaningful when both
+see the same machine load: under four parallel workers the Stage 3B cancellation
+ratio was measured anywhere from 0.640 to 1.17, and a ratio above 1.0 cannot be
+a statement about cancellation at all. Run it whenever you touch cancellation,
+the worker lifecycle, or anything that could move work onto the main thread.
+
+These proofs are also sensitive to WHOLE-MACHINE load, which no test
+configuration can remove. On a busy host the same suite has taken 42 minutes
+with spurious timeouts and seconds when quiet. A timing failure on a loaded
+machine is not evidence of a regression — re-run it on a quiet one before
+believing it.
 
 ## Repair invariants (Stage 3B-1)
 
