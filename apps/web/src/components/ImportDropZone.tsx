@@ -2,6 +2,7 @@ import { useCallback, useRef, useState, type DragEvent, type ReactNode } from 'r
 import {
   describeFormat,
   FILE_INPUT_ACCEPT,
+  IMPLEMENTED_FORMATS,
   isFormatImplemented,
   screenFile,
   SUPPORTED_EXTENSIONS,
@@ -50,14 +51,23 @@ export function ImportDropZone(): ReactNode {
         return;
       }
 
-      // OBJ and 3MF have descriptors but no codec. Saying so plainly beats
-      // starting an import that can only fail deeper in. Capability is read from
-      // the declaration rather than the registry, because the registry is
-      // populated inside the worker and is empty on this thread.
+      /*
+       * A DESCRIPTOR IS NOT A CODEC.
+       *
+       * STL, OBJ and 3MF all have readers as of Stage 4A-2B1, so this gate does
+       * not fire today — and it stays, because the next format to get a
+       * descriptor will reach here before its codec does. Saying so plainly
+       * beats starting an import that can only fail deeper in.
+       *
+       * Capability is read from the declaration rather than from the registry,
+       * because codecs register inside the worker and the registry is
+       * legitimately empty on this thread.
+       */
       if (!isFormatImplemented(screening.claimedFormat)) {
         store.pushStatus(
           StatusSeverity.Warning,
-          `${describeFormat(screening.claimedFormat).label} import is not implemented yet. Only STL can be opened.`,
+          `${describeFormat(screening.claimedFormat).label} import is not implemented yet. ` +
+            `CAD Fixer can open ${describeImplementedFormats()}.`,
         );
         return;
       }
@@ -92,6 +102,7 @@ export function ImportDropZone(): ReactNode {
   }, []);
 
   const percent = Math.round(importProgress.fraction * 100);
+  const detail = describeImportDetail(importProgress.note);
 
   return (
     <section className="import" aria-label="Import a model">
@@ -102,10 +113,11 @@ export function ImportDropZone(): ReactNode {
         onDragLeave={handleDragLeave}
         data-testid="drop-zone"
       >
-        <p className="import__headline">Drop an STL file here</p>
+        <p className="import__headline">Drop a model file here</p>
         <p className="import__detail">
-          Accepted extensions: {SUPPORTED_EXTENSIONS.join(', ')} — only STL can be opened so far.
-          Files are read on this device and never uploaded.
+          Opens {describeImplementedFormats()} ({SUPPORTED_EXTENSIONS.join(', ')}). Geometry only:
+          OBJ material libraries and 3MF textures are not loaded. Files are read on this device and
+          never uploaded.
         </p>
 
         {/* Drag and drop is never the only route in: a file picker keeps the
@@ -144,14 +156,24 @@ export function ImportDropZone(): ReactNode {
       {isImporting ? (
         <div className="import__progress" data-testid="import-progress">
           <div className="import__progress-row">
-            <span data-testid="import-phase">{describePhase(importProgress.state)}</span>
+            <span data-testid="import-phase">
+              {describePhase(importProgress.state)}
+              {detail === undefined ? null : (
+                <span className="import__detail" data-testid="import-detail">
+                  {' — '}
+                  {detail}
+                </span>
+              )}
+            </span>
             <span>{percent}%</span>
           </div>
           <progress
             className="import__bar"
             max={100}
             value={percent}
-            aria-label={`Import progress: ${describePhase(importProgress.state)}`}
+            aria-label={`Import progress: ${describePhase(importProgress.state)}${
+              detail === undefined ? '' : ` — ${detail}`
+            }`}
           />
           <button
             type="button"
@@ -165,6 +187,34 @@ export function ImportDropZone(): ReactNode {
       ) : null}
     </section>
   );
+}
+
+/**
+ * The codec's own note, in words for a person — or nothing.
+ *
+ * WHY A MAP RATHER THAN THE NOTE ITSELF. The notes are the readers' internal
+ * vocabulary, and rendering one raw would put a word like `parsing model` on
+ * screen because that is what a function happened to pass. Anything not listed
+ * shows NOTHING: the phase label above it is already true on its own, and a
+ * blank detail is better than an internal token.
+ *
+ * Only the notes that tell the user something the phase does not are listed.
+ * "Decompressing" is the clearest case — a 3MF spends real time there, and
+ * without this the interface says `Parsing geometry` while it inflates.
+ */
+function describeImportDetail(note: string | undefined): string | undefined {
+  switch (note) {
+    case 'reading package':
+      return 'reading the archive';
+    case 'decompressing':
+      return 'decompressing';
+    case 'parsing model':
+      return 'reading the model part';
+    case 'building document':
+      return 'building parts';
+    default:
+      return undefined;
+  }
 }
 
 function describePhase(state: ImportState): string {
@@ -185,4 +235,11 @@ function describePhase(state: ImportState): string {
     default:
       return 'Idle';
   }
+}
+
+/** The formats this build can actually open, for a message that stays true. */
+function describeImplementedFormats(): string {
+  const labels = IMPLEMENTED_FORMATS.map((formatId) => describeFormat(formatId).label);
+  if (labels.length <= 1) return labels[0] ?? 'no formats';
+  return `${labels.slice(0, -1).join(', ')} and ${labels[labels.length - 1] ?? ''}`;
 }

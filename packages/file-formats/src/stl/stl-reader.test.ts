@@ -773,6 +773,13 @@ describe('cancellation', () => {
       cancellation: source.token,
       budget: DEFAULT_IMPORT_BUDGET,
       yieldToEventLoop: (): Promise<void> => Promise.resolve(),
+      decodeText: (): string => {
+        // The STL readers scan bytes and never decode text. Throwing rather than
+
+        // stubbing keeps that a fact rather than an assumption.
+
+        throw new Error('the STL reader does not decode text');
+      },
       progress: {
         report(): void {
           reports += 1;
@@ -821,6 +828,9 @@ describe('cancellation', () => {
         if (yields >= 2) source.cancel();
         return Promise.resolve();
       },
+      decodeText: (): string => {
+        throw new Error('the STL reader does not decode text');
+      },
     };
 
     await expectAppError(
@@ -843,6 +853,9 @@ describe('cancellation', () => {
         yields += 1;
         return Promise.resolve();
       },
+      decodeText: (): string => {
+        throw new Error('the STL reader does not decode text');
+      },
     };
 
     await readStl(buildBinaryStl(many), context);
@@ -856,6 +869,13 @@ describe('cancellation', () => {
       cancellation: source.token,
       budget: DEFAULT_IMPORT_BUDGET,
       yieldToEventLoop: (): Promise<void> => Promise.resolve(),
+      decodeText: (): string => {
+        // The STL readers scan bytes and never decode text. Throwing rather than
+
+        // stubbing keeps that a fact rather than an assumption.
+
+        throw new Error('the STL reader does not decode text');
+      },
       progress: { report: (): void => undefined },
     };
 

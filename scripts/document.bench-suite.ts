@@ -171,6 +171,9 @@ it('measures the single-part cost of the document wrapper', async () => {
       cancellation: uncancellable,
       budget: DEFAULT_IMPORT_BUDGET,
       yieldToEventLoop,
+      decodeText: (): string => {
+        throw new Error('the STL reader does not decode text');
+      },
       progress: { report: (): void => undefined },
     });
     const mesh = parsed.mesh;

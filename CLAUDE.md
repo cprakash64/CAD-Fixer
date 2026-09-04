@@ -13,8 +13,9 @@ matter more than moving fast.
 Five workflows are planned: **Repair, Convert, Split, Texture, Hollow**. Target
 formats: **STL, OBJ, 3MF**.
 
-**Current stage: Stage 4A-2A complete — the multi-part geometry document
-foundation, on top of conservative deterministic repair.** The engine, the transaction and the user workflow are all
+**Current stage: Stage 4A-2B1 complete — production OBJ and 3MF IMPORT, on top
+of the multi-part geometry document foundation and conservative deterministic
+repair.** The engine, the transaction and the user workflow are all
 production. Implemented: structural STL encoding detection, hand-written binary
 and ASCII STL parsers with resource budgets, worker-based parsing with progress
 and working cancellation, a real Three.js viewport with camera controls, model
@@ -32,16 +33,24 @@ geometry structurally shared between parts. STL still describes one thing, so an
 STL import produces a one-part document and the single-part workflow is
 unchanged. See `docs/adr/0014-multi-part-geometry-document-foundation.md`.
 
+Stage 4A-2B1 added production IMPORT for OBJ and 3MF. All three formats go
+through one path: `identifyFormat` decides from the BYTES, `requireReader`
+returns that format's reader, every reader produces a `GeometryDocument`, and
+`commitImportedDocument` is the one transaction that installs it. See
+`docs/adr/0015-production-obj-and-3mf-import.md`.
+
 NOT implemented, and not to be implemented unless a task explicitly asks:
-tolerance welding, hole filling, booleans, remeshing, OBJ or 3MF codecs, format
-conversion, splitting, connectors, texturing, hollowing, drainage holes,
+tolerance welding, hole filling, booleans, remeshing, an OBJ writer, a 3MF
+writer, format conversion, OBJ polygons, MTL resolution, 3MF textures or
+materials, splitting, connectors, texturing, hollowing, drainage holes,
 wall-thickness analysis, inter-part overlap detection, redo, multi-step undo,
 transform editing, and any repair that is not one of the four conservative
 operations.
 
-**CAD Fixer reads and writes STL and nothing else.** The document layer exists;
-the OBJ and 3MF codecs that will fill it do not. No interface may suggest
-otherwise.
+**CAD Fixer READS STL, OBJ and 3MF. It WRITES STL and nothing else.** There is
+no OBJ writer, no 3MF writer and no conversion workflow. No interface may
+suggest otherwise: Convert stays disabled, and the Model panel states that STL
+is the only format that can be written before the user reaches Export.
 
 **Topology diagnoses; it never repairs.** Connectivity is recovered from exact
 stored coordinates with no tolerance, and analysis leaves the canonical buffers
@@ -116,7 +125,8 @@ apps/web/                   React application shell
   src/workers/              worker entry point (own tsconfig: WebWorker lib)
 packages/shared/            typed errors, units, ids, cancellation
 packages/mesh-core/         canonical mesh + multi-part document + validation
-packages/file-formats/      format descriptors, screening, budgets, STL codec
+packages/file-formats/      format descriptors, screening, budgets, identification,
+                            STL codec, OBJ + 3MF readers, bounded ZIP and XML
 packages/mesh-topology/     read-only topology analysis (no mutation, no welding)
 packages/mesh-repair/       conservative deterministic repair (kernel-free)
 packages/geometry-runtime/  worker protocol, coordinator, worker host
@@ -154,6 +164,7 @@ npm run bench:stl      # STL parser benchmark (NOT in CI)
 npm run bench:topology # small topology benchmark (NOT in CI)
 npm run bench:pipeline # whole-pipeline benchmark, 1/10/50/100 MiB (NOT in CI)
 npm run bench:document # document-wrapper cost + part-count scaling (NOT in CI)
+npm run bench:formats  # OBJ + 3MF import at 1/10/50 MiB (NOT in CI)
 npm run bench:repair-browser # repair workflow timings in a real browser (NOT in CI)
 npm run check:node     # runtime version guard; also runs before test/build/verify
 ```
@@ -243,6 +254,55 @@ believing it.
 - **Local bounds belong to the MESH, not the part.** Compute them once per
   DISTINCT mesh and apply the placement to the box afterwards. Computing per part
   walked one shared buffer a thousand times — 356 ms at 1,000 placements.
+
+## Import invariants (Stage 4A-2B1)
+
+- **THE BYTES DECIDE THE FORMAT, never the extension.** `identifyFormat` sniffs
+  at most 4 KiB plus the file length. The name is used only to disambiguate an
+  ambiguous sniff and to REPORT a mismatch: a `.stl` holding an OBJ is refused
+  as `ContentExtensionMismatch`, not parsed as either.
+- **ONE COMMIT PATH.** Every reader returns a `GeometryDocument` and every
+  import goes through `commitImportedDocument`. A format-specific commit is a
+  second transaction that can disagree with the first.
+- **`assertMeshStructure` runs per DISTINCT mesh, not per part.** A thousand
+  placements of one object share one `CanonicalMesh`; validating per part
+  validates the same buffer a thousand times.
+- **OBJ REFUSES A POLYGON, it never fans one.** A naive fan of the research
+  corpus's concave pentagon produced a triangle of the opposite orientation,
+  covering area outside the polygon the file described. `o` becomes a part; `g`
+  is recorded as group membership and does NOT create one.
+- **`mtllib` IS NEVER OPENED**, and no 3MF texture, material, schema or
+  relationship is ever resolved. They are recorded as unsupported features and
+  reported by name. Following a path chosen by an untrusted file is a read the
+  user did not ask for.
+- **ZIP budgets are enforced DURING inflation, chunk by chunk.** The directory's
+  declared uncompressed size is a claim by the attacker; checking it and then
+  inflating anyway proves nothing. `inflateRaw` yields chunks for exactly this
+  reason — a `Promise<Uint8Array>` would mean the allocation had already
+  happened.
+- **XML IS FAIL-CLOSED BEFORE IT IS PARSED.** `describeUnsafeXml` refuses any
+  DOCTYPE, ENTITY, SYSTEM or PUBLIC identifier before a single element is read,
+  and the scanner is ours — never `DOMParser`. The refusal must not depend on a
+  parser being configured correctly.
+- **A 3MF without `unit` means MILLIMETRE.** The specification defaults the
+  attribute, so an absent one is a stated unit, not an unknown one
+  (`THREE_MF_DEFAULT_UNIT`). This is not "inventing a unit": the value comes
+  from the format's definition. STL is the opposite case — no unit field exists,
+  so an STL states nothing and the interface says `Unspecified by STL`.
+  Coordinates are never rescaled either way.
+- **The platform primitives are INJECTED, not imported.** `file-formats`
+  compiles with `lib: ES2023` and no DOM or Node types, so `TextDecoder` and
+  `DecompressionStream` arrive as `decodeText` and `inflateRaw` on
+  `FormatReadContext`. A codec that reached for them directly would stop being
+  runnable under plain Node, and the differential suite against the research
+  readers would stop being possible.
+- **Every refusal carries an `ImportRefusal` code** in `AppError.details.reason`.
+  Tests assert the CODE, never the sentence, so wording can change without
+  weakening what a test proves.
+- **Names and parser text from a file are UNTRUSTED.** Object names, group
+  names, material references and file names render as text. No
+  `dangerouslySetInnerHTML`, and no error message may carry archive, XML or OBJ
+  content into markup.
 
 ## Repair invariants (Stage 3B-1)
 
@@ -418,11 +478,13 @@ believing it.
   remaining difference was predicted before the rebuild and confirmed after it —
   including a boundary-edge count that rose because a duplicate that was hiding
   an opening has been removed. Never label one of those an error.
-- **Never register a stub codec.** STL is real; OBJ and 3MF must keep failing
-  loudly. Two tests hold this line: `registry.test.ts` asserts unimplemented
-  formats throw rather than returning a placeholder, and `capabilities.test.ts`
-  asserts the capability list the UI reads matches exactly what actually
-  registers — so the interface cannot advertise a format that does not work.
+- **Never register a stub codec.** All three READERS are real, and STL is the
+  only real WRITER — so `requireWriter('obj')` and `requireWriter('3mf')` must
+  keep failing loudly rather than returning a placeholder. Two tests hold this
+  line: `registry.test.ts` asserts an unimplemented direction throws, and
+  `capabilities.test.ts` asserts the capability list the UI reads matches
+  exactly what actually registers, so the interface cannot advertise something
+  that does not work.
 
 ## Out of scope right now
 

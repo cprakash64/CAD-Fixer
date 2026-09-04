@@ -32,6 +32,8 @@ function context(): FormatReadContext {
     budget: DEFAULT_IMPORT_BUDGET,
     progress: { report: (): void => undefined },
     yieldToEventLoop: (): Promise<void> => Promise.resolve(),
+    decodeText: (input: Uint8Array): string =>
+      new TextDecoder('utf-8', { fatal: false }).decode(input),
   };
 }
 

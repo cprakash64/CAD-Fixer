@@ -19,7 +19,24 @@ import { MeshFormatId } from './formats';
  * `capabilities.test.ts` registers the real codecs and asserts this list matches
  * exactly what got registered. The two cannot disagree without failing a test.
  */
-export const IMPLEMENTED_FORMATS: readonly MeshFormatId[] = Object.freeze([MeshFormatId.Stl]);
+export const IMPLEMENTED_FORMATS: readonly MeshFormatId[] = Object.freeze([
+  MeshFormatId.Stl,
+  MeshFormatId.Obj,
+  MeshFormatId.ThreeMf,
+]);
+
+/**
+ * Formats this build can WRITE, which is a different and smaller list.
+ *
+ * Stage 4A-2B1 added OBJ and 3MF import; export for them is 4A-2B2. Keeping the
+ * two lists separate is what stops the interface offering a Save As for a
+ * format that has a reader and no writer.
+ */
+export const WRITABLE_FORMATS: readonly MeshFormatId[] = Object.freeze([MeshFormatId.Stl]);
+
+export function isFormatWritable(formatId: MeshFormatId): boolean {
+  return WRITABLE_FORMATS.includes(formatId);
+}
 
 export function isFormatImplemented(formatId: MeshFormatId): boolean {
   return IMPLEMENTED_FORMATS.includes(formatId);

@@ -19,6 +19,7 @@ export type {
 
 export {
   applyPartTransform,
+  composePartTransforms,
   DEFAULT_DOCUMENT_LIMITS,
   distinctMeshes,
   documentTriangleCount,

@@ -76,7 +76,7 @@ describe('import dispatch', () => {
     const coordinator = new GeometryCoordinator(endpoint, { onDiagnostic: vi.fn() });
     const bytes = new ArrayBuffer(1024);
 
-    coordinator.dispatch('model/import', { bytes }, { transfer: [bytes] });
+    coordinator.dispatch('model/import', { fileName: 'fixture.stl', bytes }, { transfer: [bytes] });
 
     expect(sent).toHaveLength(1);
     expect(sent[0]?.transfer).toContain(bytes);
@@ -87,7 +87,11 @@ describe('import dispatch', () => {
     const coordinator = new GeometryCoordinator(endpoint, { onDiagnostic: vi.fn() });
     const bytes = new ArrayBuffer(8);
 
-    const handle = coordinator.dispatch('model/import', { bytes }, { transfer: [bytes] });
+    const handle = coordinator.dispatch(
+      'model/import',
+      { fileName: 'fixture.stl', bytes },
+      { transfer: [bytes] },
+    );
 
     expect(sent[0]?.message).toMatchObject({
       channel: PROTOCOL_CHANNEL,
@@ -126,7 +130,9 @@ describe('worker result path', () => {
       Promise.resolve({
         value: {
           handle: { documentId: 'model-1' as DocumentId, revision: 1 },
+          formatId: 'stl',
           encoding: 'binary',
+          unsupportedFeatures: [],
           unit: undefined,
           bounds: undefined,
           triangleCount: 4,

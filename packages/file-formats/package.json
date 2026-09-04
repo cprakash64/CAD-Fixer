@@ -4,9 +4,10 @@
   "private": true,
   "type": "module",
   "sideEffects": false,
-  "description": "Format descriptors, UI-level filename screening, resource budgets, and the STL codec. OBJ and 3MF are not implemented.",
+  "description": "Format descriptors, UI-level filename screening, resource budgets, byte-based format identification, the STL codec, and the OBJ and 3MF readers with their bounded ZIP and XML scanners. Reading only: there is no OBJ or 3MF writer.",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./threemf-fixtures": "./src/threemf/zip-fixtures.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json"
@@ -14,5 +15,6 @@
   "dependencies": {
     "@cadfixer/mesh-core": "*",
     "@cadfixer/shared": "*"
-  }
+  },
+  "//exports": "./threemf-fixtures exposes the hand-authored hostile and valid ZIP/3MF archives so the worker and application suites exercise the SAME corpus the reader package does, rather than each growing a divergent copy. Test-only: no production path imports it, and the boundary scan checks that."
 }

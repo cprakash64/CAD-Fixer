@@ -507,3 +507,77 @@ million triangles.
 **Change overlays are bounded by the engine's sample cap (256 per category), not
 by mesh size**, so they do not appear in the scaling argument at all. That is why
 the sample limit exists.
+
+---
+
+# Performance baseline — Stage 4A-2B1 (OBJ and 3MF import)
+
+STL's numbers say nothing about the two formats added in this stage, because the
+work has a different shape. An STL parse is a walk over a fixed-stride binary
+buffer. An OBJ parse is a character scan with per-part vertex remapping. A 3MF
+parse inflates an archive in bounded chunks and then scans XML, where one
+triangle costs roughly 180 bytes of markup against fifty of binary STL.
+
+Not a CI gate, for the reasons recorded above. Reproduce with:
+
+```bash
+npm run bench:formats
+```
+
+Sizes are configurable: `CADFIXER_FORMAT_MB=1,10,50 npm run bench:formats`.
+
+## Environment
+
+Node v22.22.2 on darwin/arm64, 8 hardware threads. Same machine as the Stage 3B-1B
+run. Measured in Node against the production readers with the same platform
+primitives the worker injects — `TextDecoder` and a chunked
+`DecompressionStream('deflate-raw')`.
+
+## Results
+
+OBJ, ten objects per file, one triangle per face:
+
+| Input size | Triangles | Identify | Parse  | Throughput | Resident geometry |
+| ---------- | --------- | -------- | ------ | ---------- | ----------------- |
+| 1.1 MiB    | 12,787    | 1 ms     | 31 ms  | 35 MiB/s   | 0.6 MiB           |
+| 11.4 MiB   | 127,875   | 0 ms     | 192 ms | 60 MiB/s   | 5.9 MiB           |
+| 59.4 MiB   | 639,375   | 6 ms     | 954 ms | 62 MiB/s   | 29.3 MiB          |
+
+3MF, one object, sized by the MODEL XML rather than by the archive:
+
+| XML size | Archive | Triangles | Inflate + scan + build | Throughput (XML) | Resident geometry |
+| -------- | ------- | --------- | ---------------------- | ---------------- | ----------------- |
+| 1.0 MiB  | 0.1 MiB | 5,890     | 29 ms                  | 34 MiB/s         | 0.3 MiB           |
+| 10.0 MiB | 0.9 MiB | 58,908    | 161 ms                 | 62 MiB/s         | 2.7 MiB           |
+| 51.2 MiB | 4.3 MiB | 294,543   | 750 ms                 | 68 MiB/s         | 13.5 MiB          |
+
+## What the numbers say
+
+**Both formats settle at roughly 60–68 MiB/s of source text**, and the constant
+holds from 10 MiB to 50 MiB, so neither reader has a super-linear term hiding in
+it. The 1 MiB rows are lower because fixed costs — decoding, allocating, the
+first growth of the vertex map — have not yet been amortised.
+
+**A 3MF's archive size is not its cost.** The 50 MiB row is a 4.3 MiB file:
+model XML compresses about 12:1. Sizing intake on the compressed bytes would
+under-count the work by an order of magnitude, which is exactly why
+`readZipEntry` enforces its budget DURING inflation rather than trusting the
+declared uncompressed size in the directory.
+
+**Identification is free.** It reads at most 4 KiB and never the whole file. The
+6 ms on the 59 MiB OBJ is the one case where it is measurable at all, and it is
+the record-pattern scan over that prefix, not a walk over the file.
+
+**Resident geometry is well under the source size for both.** Text is a verbose
+encoding: 59.4 MiB of OBJ becomes 29.3 MiB of canonical arrays. This is the
+opposite of binary STL, where 50 MiB of file becomes roughly 100 MiB of geometry,
+and it means the text formats reach the memory budget much later than STL does.
+
+## Not measured here
+
+Browser wall-clock for these two formats, and process memory. The browser
+evidence that matters for import is responsiveness and cancellation, and that is
+asserted rather than recorded — `e2e/format-import.timing.spec.ts` proves the
+main thread keeps rendering frames throughout a 200,000-triangle OBJ and a
+150,000-triangle 3MF import, and that cancelling one is materially faster than
+letting it finish.

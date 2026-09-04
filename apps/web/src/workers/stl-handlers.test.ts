@@ -61,7 +61,10 @@ const PART = partId('part-1');
 
 describe('import handler', () => {
   it('parses a valid STL and reports what the worker measured', async () => {
-    const outcome = await modelImportHandler({ bytes: binaryStl(3) }, context());
+    const outcome = await modelImportHandler(
+      { fileName: 'fixture.stl', bytes: binaryStl(3) },
+      context(),
+    );
 
     expect(outcome.value.encoding).toBe('binary');
     expect(outcome.value.triangleCount).toBe(3);
@@ -74,7 +77,10 @@ describe('import handler', () => {
   });
 
   it('transfers the mesh buffers instead of cloning them', async () => {
-    const outcome = await modelImportHandler({ bytes: binaryStl(2) }, context());
+    const outcome = await modelImportHandler(
+      { fileName: 'fixture.stl', bytes: binaryStl(2) },
+      context(),
+    );
 
     // Only the RENDER SNAPSHOT is transferred. The authoritative mesh stays
     // resident in the worker, which is the whole point of the resident runtime.
@@ -86,7 +92,10 @@ describe('import handler', () => {
 
   it('rejects a payload that is not a transferable buffer', async () => {
     // A malformed or hostile message must not reach the parser.
-    const badPayload = { bytes: 'not a buffer' } as unknown as { bytes: ArrayBufferLike };
+    const badPayload = { bytes: 'not a buffer' } as unknown as {
+      fileName: 'fixture.stl';
+      bytes: ArrayBufferLike;
+    };
 
     expect(await rejection(() => modelImportHandler(badPayload, context()))).toBe(
       AppErrorCode.MalformedFile,
@@ -95,7 +104,10 @@ describe('import handler', () => {
 
   it('honours a budget override that LOWERS a limit', async () => {
     const outcome = await rejection(() =>
-      modelImportHandler({ bytes: binaryStl(10), budget: { maxTriangles: 2 } }, context()),
+      modelImportHandler(
+        { fileName: 'fixture.stl', bytes: binaryStl(10), budget: { maxTriangles: 2 } },
+        context(),
+      ),
     );
 
     expect(outcome).toBe(AppErrorCode.ResourceLimitExceeded);
@@ -107,7 +119,10 @@ describe('import handler', () => {
     // belong to the sender rather than to the budget.
     const raised = { maxInputBytes: Number.MAX_SAFE_INTEGER, maxTriangles: 1e12 };
 
-    const outcome = await modelImportHandler({ bytes: binaryStl(2), budget: raised }, context());
+    const outcome = await modelImportHandler(
+      { fileName: 'fixture.stl', bytes: binaryStl(2), budget: raised },
+      context(),
+    );
 
     // Still parses — the defaults are ample for two triangles — and the raised
     // ceiling had no effect, which the next assertion pins.
@@ -117,6 +132,7 @@ describe('import handler', () => {
   it('ignores unknown and nonsensical override keys instead of trusting them', async () => {
     const outcome = await modelImportHandler(
       {
+        fileName: 'fixture.stl',
         bytes: binaryStl(2),
         budget: { notARealLimit: 1, maxTriangles: Number.NaN, maxVertices: -5 },
       },
@@ -133,7 +149,9 @@ describe('import handler', () => {
     };
 
     expect(
-      await rejection(() => modelImportHandler({ bytes: binaryStl(2) }, context(cancelled))),
+      await rejection(() =>
+        modelImportHandler({ fileName: 'fixture.stl', bytes: binaryStl(2) }, context(cancelled)),
+      ),
     ).toBe(AppErrorCode.OperationCancelled);
   });
 });

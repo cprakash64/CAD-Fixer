@@ -165,6 +165,13 @@ export function testContext(
     // resolving immediately keeps the suite fast. The real worker supplies a
     // macrotask, which is what actually lets a queued cancel be delivered.
     yieldToEventLoop: (): Promise<void> => Promise.resolve(),
+    decodeText: (): string => {
+      // The STL readers scan bytes and never decode text. Throwing rather than
+
+      // stubbing keeps that a fact rather than an assumption.
+
+      throw new Error('the STL reader does not decode text');
+    },
     fractions,
     notes,
   };

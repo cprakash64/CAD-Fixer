@@ -6,6 +6,7 @@ import {
   type OperationHandler,
 } from '@cadfixer/geometry-runtime';
 import { malformedFile } from '@cadfixer/shared';
+import { EMPTY_COMPATIBILITY } from '@cadfixer/file-formats';
 import { assertGeometryDocument, distinctMeshes } from '@cadfixer/mesh-core';
 import {
   commitImportedDocument,
@@ -103,11 +104,14 @@ const harnessImportHandler: OperationHandler<'model/import'> = (payload, context
       {
         document,
         operation: `harness fixture ${requested}`,
-        // Honest: no file was decoded, so no encoding was detected.
+        // Honest: nothing was decoded, so no format was identified and no
+        // encoding was detected.
+        formatId: 'harness',
         encoding: 'synthetic',
         // The fixture id is all that crossed; the geometry was built in here.
         inputBytes: source.byteLength,
         warnings: [],
+        compatibility: EMPTY_COMPATIBILITY,
       },
       context,
     ),

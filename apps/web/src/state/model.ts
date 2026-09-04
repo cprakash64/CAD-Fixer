@@ -1,3 +1,4 @@
+import { describeFormat, MeshFormatId } from '@cadfixer/file-formats';
 import type { MeshBounds } from '@cadfixer/mesh-core';
 import type { Diagnostic } from '@cadfixer/shared';
 import type {
@@ -50,8 +51,15 @@ export interface ModelSource {
   readonly fileName: string;
   /** Size of the file on disk, in bytes. */
   readonly fileBytes: number;
+  /**
+   * The format the WORKER identified from the bytes.
+   *
+   * A `MeshFormatId` value in every case the worker can produce, but typed as
+   * `string` because it crosses the worker boundary: a value the main thread
+   * does not recognise must be displayable rather than unrepresentable.
+   */
   readonly formatId: string;
-  /** `binary` or `ascii`, as detected from the file's structure. */
+  /** How the file was physically encoded, as detected from its structure. */
   readonly encoding: string;
   /** The unit the source stated, or `undefined` when it stated none. */
   readonly unit: string | undefined;
@@ -68,4 +76,59 @@ export interface ModelSource {
 export function describeUnit(source: ModelSource): string {
   if (source.unit !== undefined) return source.unit;
   return source.formatId === 'stl' ? 'Unspecified by STL' : 'Unspecified';
+}
+
+/**
+ * The format's own name, as identified from the file's bytes.
+ *
+ * NEVER the extension. A `.stl` holding an OBJ is reported as what it is, and
+ * an identifier this build does not know is shown verbatim rather than
+ * flattened into a familiar-looking label.
+ */
+export function describeSourceFormat(source: ModelSource): string {
+  for (const id of Object.values(MeshFormatId)) {
+    if (id === source.formatId) return describeFormat(id).label;
+  }
+  return source.formatId;
+}
+
+/**
+ * How the file was encoded, in terms that mean something to a reader.
+ *
+ * STL is the only format with two encodings a user can meaningfully be told
+ * apart, and those two words are the reader's own. The others are stated
+ * plainly instead of echoing an internal tag: showing `3mf` under a heading
+ * that already says 3MF tells nobody anything.
+ */
+export function describeEncoding(source: ModelSource): string {
+  switch (source.encoding) {
+    case MeshFormatId.ThreeMf:
+      return 'Compressed package';
+    case 'text':
+      return 'Text';
+    default:
+      return source.encoding;
+  }
+}
+
+/**
+ * The one-line summary an import announces when it succeeds.
+ *
+ * Decided here so the status line cannot drift from the Model panel. It used to
+ * read `(binary STL)` unconditionally, which was true while STL was the only
+ * readable format and became a false statement about every OBJ and 3MF the
+ * moment they could be imported.
+ *
+ * The encoding is named only for STL: binary and ASCII are two genuinely
+ * different files a user may care to tell apart, whereas "text OBJ" and
+ * "compressed package 3MF" add a word and no information.
+ */
+export function describeImport(
+  source: ModelSource,
+  triangleCount: number,
+  partCount: number,
+): string {
+  const parts = partCount > 1 ? `${partCount.toLocaleString()} parts, ` : '';
+  const encoding = source.formatId === MeshFormatId.Stl ? `${source.encoding} ` : '';
+  return `${parts}${triangleCount.toLocaleString()} triangles (${encoding}${describeSourceFormat(source)}).`;
 }

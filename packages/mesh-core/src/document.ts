@@ -41,8 +41,21 @@ export function partId(value: string): PartId {
 }
 
 /**
- * A part's placement, as twelve Float64 values in row-major 3x4 order:
- * `[m00 m01 m02, m10 m11 m12, m20 m21 m22, tx ty tz]`.
+ * A part's placement, as twelve Float64 values in the order 3MF states them:
+ * `[m00 m01 m02, m10 m11 m12, m20 m21 m22, m30 m31 m32]`, where the last three
+ * are the translation.
+ *
+ * POINTS ARE ROW VECTORS: `p' = p * M`, so
+ * `x' = x*m00 + y*m10 + z*m20 + m30`. That is the 3MF core specification's own
+ * convention and the one the Stage 4A research qualified against — see RT05 in
+ * `experiments/format-io/threemf-matrix.mjs`, which places `(1,0,0)` under
+ * `[0 2 0, -2 0 0, 0 0 2, 0 0 0]` and expects `(0, 2, …)`.
+ *
+ * THIS IS THE TRANSPOSE OF THE COLUMN-VECTOR READING, and getting it backwards
+ * is invisible until a file contains a rotation: translation lives at indices
+ * 9..11 either way, so identity and pure-translation fixtures agree under both.
+ * Stage 4A-2A had only those, and read the values the other way round; Stage
+ * 4A-2B1 corrected it when real 3MF rotations arrived.
  *
  * TWELVE, NOT SIXTEEN. The bottom row of an affine 3D transform is always
  * `0 0 0 1`; storing it invites a caller to write something else there and
@@ -76,6 +89,48 @@ export type PartTransform = readonly [
 ];
 
 export const IDENTITY_PART_TRANSFORM: PartTransform = [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0];
+
+/**
+ * Composes two placements: `outer` applied after `inner`.
+ *
+ * WHY THIS BELONGS HERE. 3MF components nest, and each level carries its own
+ * transform, so a leaf placement is the composition of every transform on the
+ * path to it. Composing in the importer would put matrix arithmetic in a
+ * parser; composing here keeps one implementation beside the convention it
+ * depends on, where a reader can check the two against each other.
+ *
+ * Float64 throughout — see `PartTransform` on why placements are never
+ * narrowed.
+ */
+export function composePartTransforms(outer: PartTransform, inner: PartTransform): PartTransform {
+  /*
+   * DESTRUCTURED RATHER THAN INDEXED. `noUncheckedIndexedAccess` types a
+   * computed index into a tuple as possibly `undefined`, so an arithmetic loop
+   * over these would be a wall of `?? 0` defaults that quietly turn a wiring
+   * mistake into a zero. Naming all twenty-four values costs two lines and
+   * makes the composition below read as the matrix product it is.
+   */
+  const [a00, a01, a02, a10, a11, a12, a20, a21, a22, a30, a31, a32] = inner;
+  const [b00, b01, b02, b10, b11, b12, b20, b21, b22, b30, b31, b32] = outer;
+
+  return [
+    a00 * b00 + a01 * b10 + a02 * b20,
+    a00 * b01 + a01 * b11 + a02 * b21,
+    a00 * b02 + a01 * b12 + a02 * b22,
+
+    a10 * b00 + a11 * b10 + a12 * b20,
+    a10 * b01 + a11 * b11 + a12 * b21,
+    a10 * b02 + a11 * b12 + a12 * b22,
+
+    a20 * b00 + a21 * b10 + a22 * b20,
+    a20 * b01 + a21 * b11 + a22 * b21,
+    a20 * b02 + a21 * b12 + a22 * b22,
+
+    a30 * b00 + a31 * b10 + a32 * b20 + b30,
+    a30 * b01 + a31 * b11 + a32 * b21 + b31,
+    a30 * b02 + a31 * b12 + a32 * b22 + b32,
+  ];
+}
 
 /**
  * One thing in the document.
@@ -292,11 +347,13 @@ export function applyPartTransform(
   y: number,
   z: number,
 ): Vector3Tuple {
-  const [m00, m01, m02, m10, m11, m12, m20, m21, m22, tx, ty, tz] = transform;
+  const [m00, m01, m02, m10, m11, m12, m20, m21, m22, m30, m31, m32] = transform;
+  // Row-vector convention: the FIRST index of each term varies with the input
+  // axis, not with the output axis. See `PartTransform`.
   return [
-    m00 * x + m01 * y + m02 * z + tx,
-    m10 * x + m11 * y + m12 * z + ty,
-    m20 * x + m21 * y + m22 * z + tz,
+    m00 * x + m10 * y + m20 * z + m30,
+    m01 * x + m11 * y + m21 * z + m31,
+    m02 * x + m12 * y + m22 * z + m32,
   ];
 }
 

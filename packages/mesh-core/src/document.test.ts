@@ -3,6 +3,8 @@ import { AppErrorCode, isAppError, LengthUnit } from '@cadfixer/shared';
 import { createIndexArray, createPositionArray, meshByteLength } from './mesh';
 import type { CanonicalMesh } from './mesh';
 import {
+  applyPartTransform,
+  composePartTransforms,
   distinctMeshes,
   documentTriangleCount,
   documentVertexCount,
@@ -166,8 +168,11 @@ describe('placement arithmetic', () => {
      * `min` and `max` produces a box whose min is greater than its max on one
      * axis — and the model gets silently clipped. Eight corners is the only
      * arithmetic that is right.
+     *
+     * The rotation is expressed in 3MF's ROW-VECTOR convention, so
+     * `[0 -1 0, 1 0 0, 0 0 1]` sends (x, y, z) to (y, -x, z).
      */
-    const rotateZ90: PartTransform = [0, -1, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0];
+    const rotateZ: PartTransform = [0, -1, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0];
     const box = computeBounds({
       positions: new Float32Array([0, 0, 0, 4, 0, 0, 0, 2, 0]),
       indices: new Uint32Array([0, 1, 2]),
@@ -175,15 +180,70 @@ describe('placement arithmetic', () => {
     });
     if (box === undefined) throw new Error('expected bounds');
 
-    const rotated = transformBounds(box, rotateZ90);
+    const rotated = transformBounds(box, rotateZ);
 
-    expect(rotated.min[0]).toBeCloseTo(-2, 10);
-    expect(rotated.max[0]).toBeCloseTo(0, 10);
-    expect(rotated.min[1]).toBeCloseTo(0, 10);
-    expect(rotated.max[1]).toBeCloseTo(4, 10);
+    // x' = y over [0, 2]; y' = -x over [-4, 0].
+    expect(rotated.min[0]).toBeCloseTo(0, 10);
+    expect(rotated.max[0]).toBeCloseTo(2, 10);
+    expect(rotated.min[1]).toBeCloseTo(-4, 10);
+    expect(rotated.max[1]).toBeCloseTo(0, 10);
     for (let axis = 0; axis < 3; axis += 1) {
       expect(rotated.min[axis] ?? 0).toBeLessThanOrEqual(rotated.max[axis] ?? 0);
     }
+  });
+
+  it('reads a placement exactly as the qualified 3MF reference does', () => {
+    /*
+     * RT05 FROM `experiments/format-io/threemf-matrix.mjs`, asserted against
+     * production. The research reference places (1,0,0) under this transform at
+     * (0, 2, 0); reading the same twelve numbers as column vectors would give
+     * (0, -2, 0), and no fixture made of identity and translation can tell the
+     * two apart. Stage 4A-2A had only such fixtures and read them the other way
+     * round.
+     */
+    const rotScale: PartTransform = [0, 2, 0, -2, 0, 0, 0, 0, 2, 0, 0, 0];
+
+    const placed = applyPartTransform(rotScale, 1, 0, 0);
+
+    expect(placed[0]).toBeCloseTo(0, 12);
+    expect(placed[1]).toBeCloseTo(2, 12);
+    expect(placed[2]).toBeCloseTo(0, 12);
+  });
+
+  it('composes nested placements the way 3MF components nest', () => {
+    /*
+     * RT10's composition: an outer placement of (0, +5) applied after an inner
+     * placement of (+10, 0) puts the leaf at (10, 5). Getting the operand order
+     * backwards produces the same answer for pure translations and a different
+     * one the moment either level rotates, so the rotation is included.
+     */
+    const outer: PartTransform = [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 5, 0];
+    const inner: PartTransform = [1, 0, 0, 0, 1, 0, 0, 0, 1, 10, 0, 0];
+
+    const composed = composePartTransforms(outer, inner);
+    const placed = applyPartTransform(composed, 0, 0, 0);
+
+    expect(placed[0]).toBeCloseTo(10, 12);
+    expect(placed[1]).toBeCloseTo(5, 12);
+
+    // Composition must equal applying the two in order, for any point.
+    const stepwise = applyPartTransform(outer, ...applyPartTransform(inner, 2, -3, 4));
+    const direct = applyPartTransform(composed, 2, -3, 4);
+    for (let axis = 0; axis < 3; axis += 1) {
+      expect(direct[axis]).toBeCloseTo(stepwise[axis] ?? 0, 10);
+    }
+  });
+
+  it('composes a rotation with a translation in the right order', () => {
+    // Rotate (x,y) -> (y,-x), then translate by (+10, 0). A reversed order
+    // would translate first and rotate the offset with it.
+    const outer: PartTransform = [1, 0, 0, 0, 1, 0, 0, 0, 1, 10, 0, 0];
+    const inner: PartTransform = [0, -1, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0];
+
+    const placed = applyPartTransform(composePartTransforms(outer, inner), 1, 0, 0);
+
+    expect(placed[0]).toBeCloseTo(10, 12);
+    expect(placed[1]).toBeCloseTo(-1, 12);
   });
 
   it('unions two boxes into the smallest containing one', () => {

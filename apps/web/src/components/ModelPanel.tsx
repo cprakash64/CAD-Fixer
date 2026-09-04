@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { describeUnit } from '../state/model';
+import { describeEncoding, describeSourceFormat, describeUnit } from '../state/model';
 import { useWorkspaceState } from '../state/store-context';
 import { useModelExport } from '../state/use-model-export';
 
@@ -35,8 +35,8 @@ export function ModelPanel(): ReactNode {
 
       <dl className="facts" data-testid="model-facts">
         <Fact label="File" value={model.source.fileName} testId="fact-filename" />
-        <Fact label="Format" value="STL" />
-        <Fact label="Encoding" value={model.source.encoding} testId="fact-encoding" />
+        <Fact label="Format" value={describeSourceFormat(model.source)} testId="fact-format" />
+        <Fact label="Encoding" value={describeEncoding(model.source)} testId="fact-encoding" />
         <Fact label="File size" value={formatBytes(model.source.fileBytes)} />
         <Fact
           label="Triangles"
@@ -88,9 +88,22 @@ export function ModelPanel(): ReactNode {
 
       <h3 className="panel__subtitle">Export</h3>
       <p className="panel__note">
-        Re-exports this STL. Converting between formats is not implemented — only STL can be read or
-        written. Files are written on this device; nothing is uploaded.
+        Writes STL. STL, OBJ and 3MF can be read; STL is the only format CAD Fixer can write, so
+        Convert stays unavailable. Files are written on this device; nothing is uploaded.
       </p>
+      {model.source.formatId === 'stl' ? null : (
+        /* STATED BEFORE THE CLICK. Reading an OBJ or a 3MF and writing an STL
+           does change format, and pretending otherwise would be the dishonesty
+           this note exists to prevent — so it says exactly what the STL will
+           not carry. */
+        <p className="panel__note" data-testid="export-format-note">
+          This model was read from {describeSourceFormat(model.source)}. The export is an STL, which
+          records no unit
+          {model.source.unit === undefined
+            ? ' — and the source stated none either, so nothing is lost.'
+            : `, so the source's stated unit (${model.source.unit}) is not written into the file. The coordinates are written unchanged.`}
+        </p>
+      )}
       {model.parts.length > 1 ? (
         /* STATED BEFORE THE CLICK, not warned about after it. An STL file holds
            one object, so exporting a multi-part document cannot keep the parts

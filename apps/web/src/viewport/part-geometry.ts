@@ -12,26 +12,35 @@ import { BufferAttribute, BufferGeometry, Matrix4, Sphere, Vector3 } from 'three
  */
 
 /**
- * A part's row-major 3x4 placement as a Three.js matrix.
+ * A part's placement as a Three.js matrix.
  *
- * `Matrix4.set` takes ROW-MAJOR arguments — despite Three.js storing column-
- * major internally — so the twelve values map across directly with the
- * translation column filled from the last three, and the implicit `0 0 0 1`
- * bottom row supplied here rather than being carried in the data.
+ * TWO CONVENTIONS MEET HERE, and the transpose between them is the whole point
+ * of this function. `PartTransform` is 3MF's: points are ROW vectors, so
+ * `x' = x*m00 + y*m10 + z*m20 + m30`. Three.js treats points as COLUMN vectors,
+ * so its first matrix row must be `(m00, m10, m20, m30)` — the transform's
+ * values read down the columns, not along the rows.
+ *
+ * `Matrix4.set` takes its arguments in ROW-MAJOR order despite Three.js storing
+ * column-major internally, so the mapping below is written out element by
+ * element rather than being spread, and the implicit `0 0 0 1` bottom row is
+ * supplied here rather than carried in the data.
+ *
+ * Getting this backwards is invisible until a file contains a rotation:
+ * translation is at indices 9..11 under either reading.
  */
 export function partMatrix(transform: readonly number[]): Matrix4 {
   const matrix = new Matrix4();
   matrix.set(
     transform[0] ?? 1,
-    transform[1] ?? 0,
-    transform[2] ?? 0,
-    transform[9] ?? 0,
     transform[3] ?? 0,
-    transform[4] ?? 1,
-    transform[5] ?? 0,
-    transform[10] ?? 0,
     transform[6] ?? 0,
+    transform[9] ?? 0,
+    transform[1] ?? 0,
+    transform[4] ?? 1,
     transform[7] ?? 0,
+    transform[10] ?? 0,
+    transform[2] ?? 0,
+    transform[5] ?? 0,
     transform[8] ?? 1,
     transform[11] ?? 0,
     0,
