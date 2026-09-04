@@ -37,6 +37,14 @@ export const ImportRefusal = {
   ObjPolygonUnsupported: 'OBJ_POLYGON_UNSUPPORTED',
   ObjTooFewFaceVertices: 'OBJ_TOO_FEW_FACE_VERTICES',
   ObjZeroIndex: 'OBJ_ZERO_INDEX',
+  /**
+   * A face corner that names a texture or a normal but no POSITION.
+   *
+   * Its own reason rather than `ObjZeroIndex`, which is what `Number('')` made
+   * it look like: a file that omits the position index and a file that writes
+   * `0` are two different mistakes and deserve two different sentences.
+   */
+  ObjMissingPositionIndex: 'OBJ_MISSING_POSITION_INDEX',
   ObjBadIndex: 'OBJ_BAD_INDEX',
   ObjNonFinite: 'OBJ_NON_FINITE_COORDINATE',
   ObjMalformedNumber: 'OBJ_MALFORMED_NUMBER',
@@ -55,6 +63,14 @@ export const ImportRefusal = {
   ZipEntryTooLarge: 'ZIP_ENTRY_TOO_LARGE',
   ZipArchiveTooLarge: 'ZIP_ARCHIVE_TOO_LARGE',
   ZipRatioExceeded: 'ZIP_COMPRESSION_RATIO_EXCEEDED',
+  /**
+   * The archive's entries, TOGETHER, expand past the total budget.
+   *
+   * Distinct from `ZipArchiveTooLarge`, which is about the size of the file on
+   * disk. This one is about what comes out of it, and it is the only refusal
+   * that no single entry can trigger on its own.
+   */
+  ZipTotalTooLarge: 'ZIP_TOTAL_UNCOMPRESSED_TOO_LARGE',
   ZipEncrypted: 'ZIP_ENCRYPTED_ENTRY',
   ZipUnsupportedMethod: 'ZIP_UNSUPPORTED_COMPRESSION_METHOD',
   ZipUnsafePath: 'ZIP_UNSAFE_PATH',
@@ -81,6 +97,15 @@ export const ImportRefusal = {
   ThreeMfComponentTooDeep: 'THREEMF_COMPONENT_TOO_DEEP',
   ThreeMfTooManyObjects: 'THREEMF_TOO_MANY_OBJECTS',
   ThreeMfTooManyParts: 'THREEMF_TOO_MANY_PARTS',
+  /**
+   * The EXPANSION's totals, not one object's.
+   *
+   * A document counts triangles and vertices per part, so repeated placements
+   * of one small object multiply them. These fire during the walk, before the
+   * part that would cross the ceiling is built.
+   */
+  ThreeMfTooManyTriangles: 'THREEMF_TOO_MANY_TRIANGLES',
+  ThreeMfTooManyVertices: 'THREEMF_TOO_MANY_VERTICES',
   ThreeMfNoBuildItems: 'THREEMF_NO_BUILD_ITEMS',
   ThreeMfMalformedStructure: 'THREEMF_MALFORMED_STRUCTURE',
 

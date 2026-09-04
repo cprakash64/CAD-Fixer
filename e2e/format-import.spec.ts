@@ -11,6 +11,7 @@ import {
   threeMfHostileName,
   threeMfLarge,
   threeMfNestedComponents,
+  threeMfPlacements,
   threeMfSharedPlacements,
   threeMfTwoParts,
   threeMfWithDoctype,
@@ -19,6 +20,7 @@ import {
   modelXml,
   zipCompressionBomb,
   zipEncryptedEntry,
+  zipOverTotalBudget,
   zipWithTraversalPath,
 } from './format-fixtures';
 import { binaryStl } from './stl-fixtures';
@@ -51,6 +53,8 @@ async function readScene(page: Page): Promise<{
   drawCalls: number;
   modelObjects: number;
   sharedGeometries: number;
+  geometriesCreated: number;
+  geometriesDisposed: number;
   partTransforms: string;
 }> {
   return page.evaluate(() => {
@@ -60,6 +64,8 @@ async function readScene(page: Page): Promise<{
       drawCalls: read('drawCalls'),
       modelObjects: read('modelObjects'),
       sharedGeometries: read('sharedGeometries'),
+      geometriesCreated: read('geometriesCreated'),
+      geometriesDisposed: read('geometriesDisposed'),
       partTransforms: canvas?.dataset.partTransforms ?? '',
     };
   });
@@ -348,6 +354,83 @@ test('a failed 3MF import leaves the loaded model untouched', async ({ page }) =
 
   await expect(page.getByTestId('fact-parts')).toHaveText('2');
   expect((await readScene(page)).modelObjects).toBe(2);
+});
+
+/* ------------------------------------------------------- resource bounds -- */
+
+test.describe('a document that cannot be held is refused without disturbing the one that is', () => {
+  /*
+   * THE TWO OVERFLOW MODES ADDED IN STAGE 4A-2B1-R1, in a real browser.
+   *
+   * Both are refused far from the geometry: one while walking a component
+   * graph, the other while accounting inflated bytes. Neither reaches the
+   * document gate, and — the property that actually matters to a user — neither
+   * takes away the model they already had open.
+   */
+  test('refuses more parts than a document may hold', async ({ page }) => {
+    test.setTimeout(180_000);
+
+    await openFile(page, 'good.3mf', threeMfTwoParts());
+    await expect(page.getByTestId('fact-parts')).toHaveText('2', { timeout: 60_000 });
+    await expect(page.getByTestId('part-option-part-1')).toHaveAttribute('aria-pressed', 'true');
+    const before = await readScene(page);
+
+    // 4,097 placements of one object: a few kilobytes describing a document
+    // nothing can hold.
+    await openFile(page, 'toomany.3mf', threeMfPlacements(4_097));
+    await expect
+      .poll(async () => statusText(page), { timeout: 120_000 })
+      .toMatch(/more parts than CAD Fixer will hold/i);
+
+    // THE PREVIOUS MODEL IS UNTOUCHED: same parts, same selection, same scene.
+    await expect(page.getByTestId('fact-parts')).toHaveText('2');
+    await expect(page.getByTestId('fact-filename')).toHaveText('good.3mf');
+    await expect(page.getByTestId('part-option-part-1')).toHaveAttribute('aria-pressed', 'true');
+    const after = await readScene(page);
+    expect(after.modelObjects).toBe(before.modelObjects);
+    expect(after.sharedGeometries).toBe(before.sharedGeometries);
+    // No fragment of the refused document was drawn.
+    expect(after.geometriesCreated).toBe(before.geometriesCreated);
+
+    // And a valid file still imports afterwards.
+    await openFile(page, 'next.obj', objMultiPart(3).bytes);
+    await expect(page.getByTestId('fact-parts')).toHaveText('3', { timeout: 60_000 });
+  });
+
+  test('refuses an archive that expands past the total budget', async ({ page }) => {
+    test.setTimeout(180_000);
+
+    await openFile(page, 'good.3mf', threeMfTwoParts());
+    await expect(page.getByTestId('fact-parts')).toHaveText('2', { timeout: 60_000 });
+    const before = await readScene(page);
+
+    await openFile(page, 'oversized.3mf', zipOverTotalBudget());
+    await expect
+      .poll(async () => statusText(page), { timeout: 120_000 })
+      .toMatch(/more data in total than CAD Fixer will extract/i);
+
+    await expect(page.getByTestId('fact-parts')).toHaveText('2');
+    await expect(page.getByTestId('fact-filename')).toHaveText('good.3mf');
+    const after = await readScene(page);
+    expect(after.modelObjects).toBe(before.modelObjects);
+    expect(after.geometriesCreated).toBe(before.geometriesCreated);
+
+    await openFile(page, 'next.3mf', threeMfSharedPlacements(4));
+    await expect(page.getByTestId('fact-parts')).toHaveText('4', { timeout: 60_000 });
+  });
+
+  test('imports a document that reaches the part ceiling exactly', async ({ page }) => {
+    test.setTimeout(180_000);
+
+    // The other side of the boundary, through the real UI: 4,096 placements is
+    // a document CAD Fixer holds, draws, and still shares one geometry for.
+    await openFile(page, 'atlimit.3mf', threeMfPlacements(4_096));
+    await expect(page.getByTestId('fact-parts')).toHaveText('4,096', { timeout: 120_000 });
+
+    const scene = await readScene(page);
+    expect(scene.modelObjects).toBe(4_096);
+    expect(scene.sharedGeometries).toBe(1);
+  });
 });
 
 /* --------------------------------------------------------- STL unchanged -- */

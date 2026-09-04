@@ -1,6 +1,9 @@
 import {
   composePartTransforms,
   createIndexArray,
+  DEFAULT_DOCUMENT_LIMITS,
+  triangleCount,
+  vertexCount,
   createPositionArray,
   partId,
   IDENTITY_PART_TRANSFORM,
@@ -25,7 +28,16 @@ import {
   type ImportCompatibility,
 } from '../document-reader';
 import { ImportRefusal, importMalformed, importTooLarge, internalRefusal } from '../import-errors';
-import { DEFAULT_ZIP_LIMITS, readZipDirectory, readZipEntry, type ZipLimits } from './zip';
+import {
+  createInflationBudget,
+  DEFAULT_ZIP_LIMITS,
+  readZipDirectory,
+  readZipEntry,
+  type InflationBudget,
+  type ZipEntry,
+  type ZipLimits,
+  type ZipReadOptions,
+} from './zip';
 import { DEFAULT_XML_LIMITS, readAttrs, scanXml, type XmlLimits } from './xml-scan';
 
 /**
@@ -49,6 +61,14 @@ import { DEFAULT_XML_LIMITS, readAttrs, scanXml, type XmlLimits } from './xml-sc
 
 export interface ThreeMfLimits {
   readonly maxObjects: number;
+  /**
+   * The most parts an expansion may EMIT.
+   *
+   * NOT THE READER'S OWN NUMBER. It is `DocumentLimits.maxParts`, because the
+   * document is the thing that has to hold the result: a reader ceiling above
+   * the document's would let a file be fully expanded and then refused, which
+   * is all of the work and none of the protection.
+   */
   readonly maxParts: number;
   readonly maxComponentDepth: number;
   readonly maxVerticesPerObject: number;
@@ -57,11 +77,32 @@ export interface ThreeMfLimits {
 
 export const DEFAULT_3MF_LIMITS: ThreeMfLimits = Object.freeze({
   maxObjects: 65_536,
-  maxParts: 65_536,
+  /*
+   * ONE AUTHORITY FOR THE PART CEILING, read from `mesh-core` rather than
+   * restated here.
+   *
+   * This used to be 65,536 — sixteen times the document's ceiling — so a
+   * hostile component graph was expanded to sixty-five thousand parts, each
+   * with a transform and a mesh reference, before `assertGeometryDocument`
+   * refused the candidate at four thousand and ninety-six. The refusal was
+   * correct and the work was wasted, which is the shape of a resource bug even
+   * when nothing is committed. A test asserts the two stay equal.
+   */
+  maxParts: DEFAULT_DOCUMENT_LIMITS.maxParts,
   /** ADR 0013's frozen cap. Deep enough for real assemblies, shallow enough to bound. */
   maxComponentDepth: 16,
+  /*
+   * Tighter than the document's 60,000,000 total, and left where it is: a
+   * limit is not broadened to match a looser sibling.
+   */
   maxVerticesPerObject: 40_000_000,
-  maxTrianglesPerObject: 40_000_000,
+  /*
+   * ONE OBJECT CANNOT EXCEED THE DOCUMENT'S TOTAL, because a placed object
+   * contributes its triangles at least once. This was 40,000,000 against a
+   * 20,000,000 document ceiling, so a single oversized object was materialised
+   * in full before anything could refuse it.
+   */
+  maxTrianglesPerObject: DEFAULT_DOCUMENT_LIMITS.maxTotalTriangles,
 });
 
 /** The canonical model part path, and the fallback the research allowed. */
@@ -267,10 +308,20 @@ export function parseModelXml(
               { objectId: id.slice(0, 64) },
             );
           }
+          /*
+           * NAMES ARE TRUNCATED, NOT REFUSED, and to the DOCUMENT'S cap.
+           *
+           * A name is display metadata, and refusing an entire model because a
+           * string is long would be the wrong trade — but truncating to a
+           * larger number than the document accepts is not truncating at all.
+           * A 600-character object name used to be carried through the reader
+           * intact and then refused by `assertGeometryDocument`, which made a
+           * perfectly good model unimportable for a cosmetic reason.
+           */
           const record: ObjectRecord = {
             id,
-            name: attrs.name,
-            materialRef: attrs.pid,
+            name: attrs.name?.slice(0, DEFAULT_DOCUMENT_LIMITS.maxNameLength),
+            materialRef: attrs.pid?.slice(0, DEFAULT_DOCUMENT_LIMITS.maxMaterialRefLength),
             positions: [],
             triangles: [],
             components: [],
@@ -305,7 +356,7 @@ export function parseModelXml(
           );
           if (current.positions.length / 3 > limits.maxVerticesPerObject) {
             throw importTooLarge(
-              ImportRefusal.ThreeMfTooManyObjects,
+              ImportRefusal.ThreeMfTooManyVertices,
               'This 3MF file contains an object with more vertices than CAD Fixer will hold.',
               { limit: limits.maxVerticesPerObject },
             );
@@ -322,7 +373,7 @@ export function parseModelXml(
           );
           if (current.triangles.length / 3 > limits.maxTrianglesPerObject) {
             throw importTooLarge(
-              ImportRefusal.ThreeMfTooManyObjects,
+              ImportRefusal.ThreeMfTooManyTriangles,
               'This 3MF file contains an object with more triangles than CAD Fixer will hold.',
               { limit: limits.maxTrianglesPerObject },
             );
@@ -413,9 +464,10 @@ export function parseModelXml(
  * object receives the SAME `CanonicalMesh` object, so N placements cost N
  * transforms rather than N copies of the geometry.
  */
-function materialiseMeshes(model: ParsedModel): void {
+function materialiseMeshes(model: ParsedModel, stats?: ThreeMfExpansionStats): void {
   for (const object of model.objects.values()) {
     if (object.triangles.length === 0) continue;
+    if (stats !== undefined) stats.meshResourcesMaterialised += 1;
     const positions = createPositionArray(object.positions.length);
     // ONE ASSIGNMENT PER COMPONENT — the single Float64-to-Float32 conversion.
     for (let index = 0; index < object.positions.length; index += 1) {
@@ -442,8 +494,29 @@ function materialiseMeshes(model: ParsedModel): void {
  * is one part per leaf with transforms composed; an object with vertices but no
  * triangles, or one the build never references, becomes NO part.
  */
-function expandBuild(model: ParsedModel, limits: ThreeMfLimits): readonly GeometryPart[] {
+function expandBuild(
+  model: ParsedModel,
+  limits: ThreeMfLimits,
+  stats?: ThreeMfExpansionStats,
+): readonly GeometryPart[] {
   const parts: GeometryPart[] = [];
+  /*
+   * RUNNING DOCUMENT TOTALS, because the document counts PER PART.
+   *
+   * `documentTriangleCount` sums every part, so a shared mesh multiplies: four
+   * thousand placements of a five-thousand-triangle object is twenty million
+   * and one triangles against a twenty-million ceiling. A file that small can
+   * therefore be expanded to completion and then refused, which is the same
+   * class of wasted work the part ceiling above fixes. Both totals are O(1) per
+   * part, so keeping them is free.
+   *
+   * BYTES ARE NOT COUNTED HERE, and that is not an oversight:
+   * `maxTotalGeometryBytes` is charged per DISTINCT mesh, so placements do not
+   * multiply it and the per-object caps already bound each mesh. It stays with
+   * the document gate, where the distinct set is known.
+   */
+  let totalTriangles = 0;
+  let totalVertices = 0;
 
   const walk = (
     objectId: string,
@@ -479,6 +552,7 @@ function expandBuild(model: ParsedModel, limits: ThreeMfLimits): readonly Geomet
 
     const mesh = object.mesh;
     if (mesh !== undefined) {
+      if (stats !== undefined) stats.leafPlacementsVisited += 1;
       /*
        * PART IDS ARE GENERATED FROM EXPANSION ORDER, never from the file's
        * object ids or names. Object ids are unique among RESOURCES but two
@@ -486,6 +560,43 @@ function expandBuild(model: ParsedModel, limits: ThreeMfLimits): readonly Geomet
        * or be a kilobyte of hostile text. Identity has to be unique, short and
        * ours; the name travels as display metadata.
        */
+      /*
+       * CHECKED BEFORE THE PART EXISTS, not after.
+       *
+       * The budget is spent by APPENDING, so the only moment at which refusing
+       * costs nothing is before the append. Building part 4,097 and then
+       * throwing would allocate it, name it, compose its transform and attach
+       * its mesh reference — and the throw would unwind all of that anyway.
+       * More importantly the walk stops HERE, so the remainder of a
+       * combinatorial subtree is never visited: an expansion is refused as soon
+       * as it is known to be too large, not after it has been performed.
+       */
+      if (parts.length >= limits.maxParts) {
+        throw importTooLarge(
+          ImportRefusal.ThreeMfTooManyParts,
+          'This 3MF file expands to more parts than CAD Fixer will hold.',
+          { limit: limits.maxParts, emitted: parts.length },
+        );
+      }
+
+      const prospectiveTriangles = totalTriangles + triangleCount(mesh);
+      if (prospectiveTriangles > DEFAULT_DOCUMENT_LIMITS.maxTotalTriangles) {
+        throw importTooLarge(
+          ImportRefusal.ThreeMfTooManyTriangles,
+          'This 3MF file expands to more triangles than CAD Fixer will hold.',
+          { limit: DEFAULT_DOCUMENT_LIMITS.maxTotalTriangles, emitted: parts.length },
+        );
+      }
+      const prospectiveVertices = totalVertices + vertexCount(mesh);
+      if (prospectiveVertices > DEFAULT_DOCUMENT_LIMITS.maxTotalVertices) {
+        throw importTooLarge(
+          ImportRefusal.ThreeMfTooManyVertices,
+          'This 3MF file expands to more vertices than CAD Fixer will hold.',
+          { limit: DEFAULT_DOCUMENT_LIMITS.maxTotalVertices, emitted: parts.length },
+        );
+      }
+      totalTriangles = prospectiveTriangles;
+      totalVertices = prospectiveVertices;
       parts.push({
         id: partId(`part-${String(parts.length + 1)}`),
         mesh,
@@ -497,13 +608,7 @@ function expandBuild(model: ParsedModel, limits: ThreeMfLimits): readonly Geomet
           : { name: object.name }),
         ...(object.materialRef === undefined ? {} : { materialRef: object.materialRef }),
       });
-      if (parts.length > limits.maxParts) {
-        throw importTooLarge(
-          ImportRefusal.ThreeMfTooManyParts,
-          'This 3MF file expands to more parts than CAD Fixer will hold.',
-          { limit: limits.maxParts },
-        );
-      }
+      if (stats !== undefined) stats.partsEmitted = parts.length;
     }
 
     const nextPath = new Set(path).add(objectId);
@@ -525,7 +630,15 @@ function expandBuild(model: ParsedModel, limits: ThreeMfLimits): readonly Geomet
 }
 
 /** Finds the model part, preferring the spec's fixed path. */
-function findModelEntry(entries: readonly { readonly name: string }[]): { readonly name: string } {
+/**
+ * The model part, by its canonical path or by extension.
+ *
+ * TYPED AS `ZipEntry`, which it always was. The narrower `{ name: string }`
+ * signature forced an `as never` at the only call site, and that cast erased
+ * the one check worth having there: that what reaches `readZipEntry` is a real
+ * directory entry with a real offset and size.
+ */
+function findModelEntry(entries: readonly ZipEntry[]): ZipEntry {
   const canonical = entries.find((entry) => entry.name.toLowerCase() === MODEL_PART);
   if (canonical !== undefined) return canonical;
   const anyModel = entries.find((entry) => entry.name.toLowerCase().endsWith('.model'));
@@ -536,10 +649,41 @@ function findModelEntry(entries: readonly { readonly name: string }[]): { readon
   );
 }
 
+/**
+ * What an expansion actually did, for tests and research to assert on.
+ *
+ * INSTRUMENTATION, NOT A RESULT. It exists because "no work was wasted" is
+ * otherwise only inferrable: a refusal that stops early and one that expands a
+ * subtree and then throws are indistinguishable from the outside, and both
+ * produce the same error. Mutated in place rather than returned, precisely so
+ * it can be read after a refusal has unwound the call.
+ *
+ * Nothing in production passes one, and a boundary test asserts that.
+ */
+export interface ThreeMfExpansionStats {
+  /** Leaf placements the walk reached — objects carrying a mesh. */
+  leafPlacementsVisited: number;
+  /** Parts appended to the document. Never more than `maxParts`. */
+  partsEmitted: number;
+  /** Distinct `CanonicalMesh` objects built. One per mesh-bearing OBJECT. */
+  meshResourcesMaterialised: number;
+}
+
 export interface ThreeMfReadOptions {
   readonly limits?: ThreeMfLimits;
   readonly zipLimits?: ZipLimits;
   readonly xmlLimits?: XmlLimits;
+  /** See `ThreeMfExpansionStats`. Test and research use only. */
+  readonly stats?: ThreeMfExpansionStats;
+  /**
+   * The archive-wide inflation budget.
+   *
+   * Supplied only by tests that want to observe or narrow it; production
+   * creates a fresh one per import, which is the correct scope — a budget
+   * shared between imports would refuse a second valid file for the sins of the
+   * first.
+   */
+  readonly budget?: InflationBudget;
 }
 
 export async function read3mf(
@@ -565,13 +709,23 @@ export async function read3mf(
   const modelEntry = findModelEntry(entries);
   context.progress.report(0.1, 'decompressing');
 
-  const modelBytes = await readZipEntry(bytes, modelEntry as never, {
+  /*
+   * ONE BUDGET FOR THE WHOLE ARCHIVE, created here and passed to every entry
+   * this import inflates. Today that is the model part alone; the budget is
+   * threaded rather than inlined so that reading a second entry cannot
+   * accidentally get a second full allowance.
+   */
+  const budget = options.budget ?? createInflationBudget(zipLimits);
+  const zipOptions: ZipReadOptions = {
     limits: zipLimits,
     inflateRaw,
+    budget,
     throwIfCancelled: () => {
       throwIfCancelled(context.cancellation);
     },
-  });
+  };
+
+  const modelBytes = await readZipEntry(bytes, modelEntry, zipOptions);
   throwIfCancelled(context.cancellation);
 
   context.progress.report(0.3, 'parsing model');
@@ -587,8 +741,8 @@ export async function read3mf(
   throwIfCancelled(context.cancellation);
 
   context.progress.report(0.75, 'building document');
-  materialiseMeshes(model);
-  const parts = expandBuild(model, limits);
+  materialiseMeshes(model, options.stats);
+  const parts = expandBuild(model, limits, options.stats);
   throwIfCancelled(context.cancellation);
 
   if (parts.length === 0) {

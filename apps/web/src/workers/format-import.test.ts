@@ -460,11 +460,11 @@ describe('the document gate runs for every format', () => {
 
   it('refuses a part count JUST ABOVE the document ceiling, and commits nothing', async () => {
     /*
-     * ONE ITEM MORE. The 3MF reader's own part cap is far higher than the
-     * document's on purpose — the reader bounds what it will BUILD, the
-     * document bounds what a session may HOLD — so this refusal comes from
-     * `assertGeometryDocument`, after the reader has succeeded. What matters is
-     * that it happens before the commit: nothing resident, nothing to clean up.
+     * ONE ITEM MORE. As of Stage 4A-2B1-R1 this refusal comes from the READER,
+     * during expansion, rather than from `assertGeometryDocument` after it: the
+     * reader's part ceiling IS the document's, so the 4,097th part is never
+     * built. Both orderings leave nothing resident; this one does far less work
+     * to get there, and the typed reason below is what distinguishes them.
      */
     const first = await modelImportHandler(
       { fileName: 'good.3mf', bytes: toArrayBuffer(await valid3mf()) },
@@ -477,18 +477,81 @@ describe('the document gate runs for every format', () => {
       () => '<item objectid="1"/>',
     ).join('');
 
-    await expect(
-      modelImportHandler(
+    let caught: unknown;
+    try {
+      await modelImportHandler(
         {
           fileName: 'toomany.3mf',
           bytes: toArrayBuffer(await valid3mf(modelXml({ build: items }))),
         },
         context(),
-      ),
-    ).rejects.toThrow();
+      );
+    } catch (error) {
+      caught = error;
+    }
 
+    // REFUSED BY THE EXPANDER, not by the document gate afterwards.
+    expect(isAppError(caught) && refusalOf(caught)).toBe(ImportRefusal.ThreeMfTooManyParts);
     expect(residentDocuments.resolve(first.value.handle)).toBe(before);
     expect(residentDocuments.stats().documentCount).toBe(1);
+  });
+
+  it('refuses an archive whose entries together exceed the inflation budget', async () => {
+    /*
+     * THE CUMULATIVE BUDGET, through the real worker handler. The model part
+     * declares one byte and inflates to far more, so every ceiling checked
+     * before inflation is satisfied and only the running count of produced
+     * bytes can stop it.
+     */
+    const first = await modelImportHandler(
+      { fileName: 'good.3mf', bytes: toArrayBuffer(await valid3mf()) },
+      context(),
+    );
+    const before = residentDocuments.resolve(first.value.handle);
+
+    /*
+     * THREE ENTRIES OF TWO HUNDRED MEGABYTES, declared. Each is inside the
+     * 256 MiB per-entry cap and each declares a 100:1 ratio, inside the 200:1
+     * cap — so every per-entry ceiling is satisfied and only the archive-wide
+     * total, 600 MiB against 512 MiB, refuses this.
+     *
+     * DECLARED rather than real: producing 512 MiB of output to prove a 512 MiB
+     * ceiling would allocate exactly what the ceiling exists to prevent. The
+     * RUNTIME half of the same rule — the count of bytes actually produced,
+     * which catches a directory that lies — is proven against the reader in
+     * `threemf/zip.test.ts` (ZT01–ZT05) with the limits narrowed instead.
+     */
+    const oversized = await buildZip(
+      ['a', 'b', 'c'].map((name) => ({
+        name: `3D/${name}.model`,
+        content: 'x',
+        method: 8,
+        declaredUncompressedSize: 200 * 1024 * 1024,
+        declaredCompressedSize: 2 * 1024 * 1024,
+      })),
+    );
+
+    let caught: unknown;
+    try {
+      await modelImportHandler(
+        { fileName: 'huge.3mf', bytes: toArrayBuffer(oversized) },
+        context(),
+      );
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(isAppError(caught) && refusalOf(caught)).toBe(ImportRefusal.ZipTotalTooLarge);
+    expect(residentDocuments.resolve(first.value.handle)).toBe(before);
+    expect(residentDocuments.stats().documentCount).toBe(1);
+
+    // AND THE NEXT VALID IMPORT SUCCEEDS. A budget that leaked into the next
+    // import, or a decompressor left in a bad state, shows up only here.
+    const recovered = await modelImportHandler(
+      { fileName: 'again.3mf', bytes: toArrayBuffer(await valid3mf()) },
+      context(),
+    );
+    expect(recovered.value.parts).toHaveLength(1);
   });
 
   it('validates each DISTINCT mesh once, not once per placement', async () => {

@@ -1,5 +1,6 @@
 import {
   createIndexArray,
+  DEFAULT_DOCUMENT_LIMITS,
   createPositionArray,
   partId,
   IDENTITY_PART_TRANSFORM,
@@ -387,6 +388,19 @@ function readFace(
     // v, v/vt, v//vn and v/vt/vn all begin with the position index.
     const slash = corner.indexOf('/');
     const token = slash === -1 ? corner : corner.slice(0, slash);
+    if (token.length === 0) {
+      /*
+       * `f /1/1` — a corner that gives a texture and a normal and no position.
+       * Reported as what it is. `Number('')` is 0, so without this the refusal
+       * came out as "uses vertex index 0", which describes a file that says
+       * something different from the one the user actually has.
+       */
+      throw importMalformed(
+        ImportRefusal.ObjMissingPositionIndex,
+        `This OBJ file has a face corner with no vertex position on line ${String(line)}.`,
+        { line, corner: corner.slice(0, 64) },
+      );
+    }
     const parsed = Number(token);
     if (!Number.isInteger(parsed)) {
       throw importMalformed(
@@ -565,6 +579,26 @@ export async function readObj(
       ImportRefusal.ObjNoGeometry,
       'This OBJ file contains no triangles, so there is nothing to import.',
       { vertices: parsed.positions.length / 3 },
+    );
+  }
+
+  /*
+   * REFUSED BEFORE A SINGLE MESH IS BUILT.
+   *
+   * `planParts` produces names and face ranges — a few numbers per part — so an
+   * over-large OBJ is known to be over-large before any geometry exists. Doing
+   * this after the loop below would allocate a position and index array per
+   * part, walk the file's vertex pool once per part, and then discard all of it
+   * when `assertGeometryDocument` refused the result.
+   *
+   * The ceiling is the DOCUMENT'S, read from `mesh-core`, for the same reason
+   * the 3MF expander uses it: the document is what has to hold the result.
+   */
+  if (plans.length > DEFAULT_DOCUMENT_LIMITS.maxParts) {
+    throw importTooLarge(
+      ImportRefusal.ObjTooManyObjects,
+      'This OBJ file declares more objects than CAD Fixer will hold.',
+      { limit: DEFAULT_DOCUMENT_LIMITS.maxParts, planned: plans.length },
     );
   }
 

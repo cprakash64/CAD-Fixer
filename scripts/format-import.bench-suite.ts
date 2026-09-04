@@ -4,6 +4,7 @@ import { it } from 'vitest';
 import { uncancellable } from '@cadfixer/shared';
 import { distinctMeshes, documentTriangleCount } from '@cadfixer/mesh-core';
 import {
+  DEFAULT_3MF_LIMITS,
   DEFAULT_IMPORT_BUDGET,
   identifyFormat,
   read3mf,
@@ -298,3 +299,85 @@ it('measures OBJ and 3MF import across representative sizes', async () => {
     );
   }
 }, 900_000);
+
+/**
+ * WHAT THE EARLY STOP SAVES on a file designed to be too large.
+ *
+ * The reader's part ceiling used to be 65,536 — sixteen times the document's —
+ * so an over-large component graph was expanded to sixty-five thousand parts
+ * and then refused by `assertGeometryDocument`. Both runs below take the SAME
+ * code path with only that ceiling changed, so the difference is the work the
+ * old ceiling did before reaching the same refusal.
+ */
+it('measures the cost of refusing an over-large expansion', async () => {
+  /*
+   * DISTINCT TRANSFORMS, so the XML does not compress past the 200:1 ratio cap.
+   * Seventy thousand IDENTICAL items deflate about 300:1 and are refused as a
+   * bomb before expansion ever starts — which measures the ratio check rather
+   * than the thing being compared here.
+   */
+  const items = Array.from(
+    { length: 70_000 },
+    (_item, index) =>
+      `<item objectid="1" transform="1 0 0 0 1 0 0 0 1 ${String(index * 3)} ${String(index % 977)} 0"/>`,
+  ).join('');
+  const xml =
+    '<?xml version="1.0" encoding="UTF-8"?>' +
+    '<model unit="millimeter" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02">' +
+    '<resources><object id="1" type="model"><mesh>' +
+    '<vertices><vertex x="0" y="0" z="0"/><vertex x="1" y="0" z="0"/>' +
+    '<vertex x="0" y="1" z="0"/><vertex x="0" y="0" z="1"/></vertices>' +
+    '<triangles><triangle v1="0" v2="2" v3="1"/><triangle v1="0" v2="1" v3="3"/>' +
+    '<triangle v1="0" v2="3" v3="2"/><triangle v1="1" v2="2" v3="3"/></triangles>' +
+    '</mesh></object></resources>' +
+    `<build>${items}</build></model>`;
+
+  const archive = buildZip([
+    { name: '[Content_Types].xml', content: Buffer.from(CONTENT_TYPES, 'utf8') },
+    { name: '_rels/.rels', content: Buffer.from(RELS, 'utf8') },
+    { name: '3D/3dmodel.model', content: Buffer.from(xml, 'utf8') },
+  ]);
+  const bytes = new Uint8Array(archive);
+
+  const timeRefusal = async (maxParts: number): Promise<number> => {
+    const started = performance.now();
+    try {
+      await read3mf(bytes, context, { limits: { ...DEFAULT_3MF_LIMITS, maxParts } });
+      throw new Error('expected a refusal');
+    } catch {
+      // The refusal IS the measurement; its typed reason is asserted in
+      // `threemf-reader.test.ts`, which is where correctness belongs.
+    }
+    return performance.now() - started;
+  };
+
+  // Warm the XML scan so neither run pays for it alone: it dominates both, and
+  // measuring it twice would drown the thing being compared.
+  await timeRefusal(4_096);
+
+  // Averaged over several runs, because the quantity being measured is under a
+  // millisecond and a single sample of that is noise.
+  const sample = async (maxParts: number): Promise<number> => {
+    let total = 0;
+    for (let run = 0; run < 20; run += 1) total += await timeRefusal(maxParts);
+    return total / 20;
+  };
+
+  const now = await sample(4_096);
+  const before = await sample(65_536);
+
+  process.stdout.write(
+    `=== refusing a 70,000-placement 3MF (whole import, XML scan included) ===\n` +
+      `  stop at 4,096 (production)     ${now.toFixed(2).padStart(8)} ms\n` +
+      `  stop at 65,536 (before R1)     ${before.toFixed(2).padStart(8)} ms\n` +
+      `  part records built             4,096 vs 65,536 (16x fewer)\n` +
+      `\n` +
+      `  NOTE: both runs pay for the same XML scan of a 4 MB model part, which\n` +
+      `  is most of each number. The difference between them is the expansion,\n` +
+      `  and it is the whole of the expansion: stopping at 4,096 rather than\n` +
+      `  65,536 removes sixty-one thousand part records and the walk that built\n` +
+      `  them. Correctness is still the reason the ceilings were unified — the\n` +
+      `  reader now refuses on the rule that will actually be enforced, and\n` +
+      `  names it — but the work saved is real and measurable.\n\n`,
+  );
+}, 300_000);

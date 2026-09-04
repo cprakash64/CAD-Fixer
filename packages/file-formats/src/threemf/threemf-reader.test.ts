@@ -1,10 +1,21 @@
 import { describe, expect, it } from 'vitest';
 import { AppErrorCode, isAppError, LengthUnit } from '@cadfixer/shared';
-import { applyPartTransform, distinctMeshes, triangleCount } from '@cadfixer/mesh-core';
+import {
+  applyPartTransform,
+  assertGeometryDocument,
+  DEFAULT_DOCUMENT_LIMITS,
+  distinctMeshes,
+  triangleCount,
+} from '@cadfixer/mesh-core';
 import { testReadContext } from '../test-context';
 import { ImportRefusal, refusalOf } from '../import-errors';
-import { UnsupportedFeature } from '../document-reader';
-import { read3mf, DEFAULT_3MF_LIMITS, THREE_MF_DEFAULT_UNIT } from './threemf-reader';
+import { UnsupportedFeature, type DocumentReadResult } from '../document-reader';
+import {
+  read3mf,
+  DEFAULT_3MF_LIMITS,
+  THREE_MF_DEFAULT_UNIT,
+  type ThreeMfExpansionStats,
+} from './threemf-reader';
 import { DEFAULT_ZIP_LIMITS } from './zip';
 import {
   buildZip,
@@ -797,5 +808,400 @@ describe('wiring faults are not blamed on the file', () => {
     // Telling a user their good file is corrupt would send them looking for a
     // problem that is not there.
     expect(caught.code).toBe(AppErrorCode.Internal);
+  });
+});
+
+/* ------------------------------------------- R1: bounded part expansion -- */
+
+describe('the part ceiling is the DOCUMENT’s, and it stops expansion', () => {
+  function items(count: number): string {
+    return Array.from({ length: count }, () => '<item objectid="1"/>').join('');
+  }
+
+  async function readItems(
+    count: number,
+    stats?: ThreeMfExpansionStats,
+  ): Promise<DocumentReadResult> {
+    return read3mf(
+      await valid3mf(modelXml({ resources: object('1'), build: items(count) })),
+      testReadContext(),
+      stats === undefined ? {} : { stats },
+    );
+  }
+
+  it('uses the production document limit rather than a number of its own', () => {
+    /*
+     * THE DRIFT THIS EXISTS TO PREVENT. The reader's own cap used to be 65,536
+     * — sixteen times the document's — so a hostile component graph was fully
+     * expanded and then refused by `assertGeometryDocument`. The refusal was
+     * correct; the sixty-five thousand parts built to reach it were not.
+     */
+    expect(DEFAULT_3MF_LIMITS.maxParts).toBe(DEFAULT_DOCUMENT_LIMITS.maxParts);
+    expect(DEFAULT_3MF_LIMITS.maxParts).toBe(4096);
+  });
+
+  it('accepts 4,095 parts', async () => {
+    const result = await readItems(4_095);
+    expect(result.document.parts).toHaveLength(4_095);
+  });
+
+  it('accepts 4,096 parts — the ceiling itself is inside the contract', async () => {
+    const result = await readItems(4_096);
+    expect(result.document.parts).toHaveLength(4_096);
+    // AND THEY STILL SHARE ONE MESH. A bounded expansion must not have become
+    // a copying one on the way to being bounded.
+    expect(distinctMeshes(result.document)).toHaveLength(1);
+  });
+
+  it('refuses 4,097 parts, and never builds the 4,097th', async () => {
+    const stats: ThreeMfExpansionStats = {
+      leafPlacementsVisited: 0,
+      partsEmitted: 0,
+      meshResourcesMaterialised: 0,
+    };
+
+    await expectRefusal(
+      async () => readItems(4_097, stats),
+      AppErrorCode.ResourceLimitExceeded,
+      ImportRefusal.ThreeMfTooManyParts,
+    );
+
+    // THE PART THAT WOULD HAVE CROSSED THE LINE WAS NEVER CONSTRUCTED. The
+    // check runs before the append, so `partsEmitted` stops at the ceiling
+    // rather than one past it.
+    expect(stats.partsEmitted).toBe(DEFAULT_DOCUMENT_LIMITS.maxParts);
+    // The walk reached the leaf that would have been 4,097 and stopped there.
+    expect(stats.leafPlacementsVisited).toBe(DEFAULT_DOCUMENT_LIMITS.maxParts + 1);
+    // One object, one mesh — no per-placement geometry, even on the way to a
+    // refusal.
+    expect(stats.meshResourcesMaterialised).toBe(1);
+  });
+
+  it('bounds a NESTED component expansion during the walk, not after it', async () => {
+    /*
+     * A COMBINATORIAL SUBTREE THAT COULD NEVER BE FLATTENED.
+     *
+     * Sixteen levels, four children each: 4^16 leaf placements, about 4.3
+     * billion. Building a complete instance list first — or continuing to
+     * recurse after the budget was spent — does not finish, on any machine, in
+     * any amount of time this suite would tolerate. That this test RETURNS is
+     * the proof that expansion stops at the ceiling.
+     */
+    const depth = DEFAULT_3MF_LIMITS.maxComponentDepth;
+    let resources = object('0');
+    for (let level = 1; level <= depth; level += 1) {
+      const child = String(level - 1);
+      const children = Array.from({ length: 4 }, () => `<component objectid="${child}"/>`).join('');
+      resources += `<object id="${String(level)}" type="model"><components>${children}</components></object>`;
+    }
+
+    const stats: ThreeMfExpansionStats = {
+      leafPlacementsVisited: 0,
+      partsEmitted: 0,
+      meshResourcesMaterialised: 0,
+    };
+
+    const started = Date.now();
+    await expectRefusal(
+      async () =>
+        read3mf(
+          await valid3mf(modelXml({ resources, build: `<item objectid="${String(depth)}"/>` })),
+          testReadContext(),
+          { stats },
+        ),
+      AppErrorCode.ResourceLimitExceeded,
+      ImportRefusal.ThreeMfTooManyParts,
+    );
+    const elapsed = Date.now() - started;
+
+    expect(stats.partsEmitted).toBe(DEFAULT_DOCUMENT_LIMITS.maxParts);
+    expect(stats.leafPlacementsVisited).toBe(DEFAULT_DOCUMENT_LIMITS.maxParts + 1);
+    expect(stats.meshResourcesMaterialised).toBe(1);
+    /*
+     * A generous ceiling on a proposition about 4.3 billion placements. Even a
+     * machine a thousand times slower than this one cannot visit them in ten
+     * seconds, so this is not a timing measurement dressed up as a limit — it
+     * is the difference between finishing and not finishing.
+     */
+    expect(elapsed).toBeLessThan(10_000);
+  });
+
+  it('keeps depth, cycles and missing references independent of the part budget', async () => {
+    // Each of the three must still be reported as ITSELF, not swallowed by the
+    // part ceiling now that the ceiling is sixteen times lower.
+    const deep = ((): string => {
+      let resources = object('0');
+      for (let level = 1; level <= DEFAULT_3MF_LIMITS.maxComponentDepth + 1; level += 1) {
+        resources += `<object id="${String(level)}" type="model"><components><component objectid="${String(level - 1)}"/></components></object>`;
+      }
+      return resources;
+    })();
+
+    await expectRefusal(
+      async () =>
+        read3mf(
+          await valid3mf(
+            modelXml({
+              resources: deep,
+              build: `<item objectid="${String(DEFAULT_3MF_LIMITS.maxComponentDepth + 1)}"/>`,
+            }),
+          ),
+          testReadContext(),
+        ),
+      AppErrorCode.ResourceLimitExceeded,
+      ImportRefusal.ThreeMfComponentTooDeep,
+    );
+
+    await expectRefusal(
+      async () =>
+        read3mf(
+          await valid3mf(
+            modelXml({
+              resources:
+                '<object id="1" type="model"><components><component objectid="2"/></components></object>' +
+                '<object id="2" type="model"><components><component objectid="1"/></components></object>',
+              build: '<item objectid="1"/>',
+            }),
+          ),
+          testReadContext(),
+        ),
+      AppErrorCode.MalformedFile,
+      ImportRefusal.ThreeMfComponentCycle,
+    );
+
+    await expectRefusal(
+      async () =>
+        read3mf(
+          await valid3mf(modelXml({ resources: object('1'), build: '<item objectid="9"/>' })),
+          testReadContext(),
+        ),
+      AppErrorCode.MalformedFile,
+      ImportRefusal.ThreeMfMissingObject,
+    );
+  });
+
+  it('refuses a mixed flat-and-nested expansion at the same ceiling', async () => {
+    // Four thousand flat items plus a component that fans out to a hundred
+    // more: the budget is one budget, not one per shape of placement.
+    const fan = Array.from({ length: 100 }, () => '<component objectid="1"/>').join('');
+    const resources = `${object('1')}<object id="2" type="model"><components>${fan}</components></object>`;
+    const build = `${Array.from({ length: 4_050 }, () => '<item objectid="1"/>').join('')}<item objectid="2"/>`;
+
+    const stats: ThreeMfExpansionStats = {
+      leafPlacementsVisited: 0,
+      partsEmitted: 0,
+      meshResourcesMaterialised: 0,
+    };
+
+    await expectRefusal(
+      async () =>
+        read3mf(await valid3mf(modelXml({ resources, build })), testReadContext(), { stats }),
+      AppErrorCode.ResourceLimitExceeded,
+      ImportRefusal.ThreeMfTooManyParts,
+    );
+    expect(stats.partsEmitted).toBe(DEFAULT_DOCUMENT_LIMITS.maxParts);
+  });
+});
+
+/* ------------------------------------ R1: cumulative inflation, in situ -- */
+
+describe('the archive-wide inflation budget reaches the real import path', () => {
+  it('refuses a model part that inflates past the archive budget', async () => {
+    const big = 'x'.repeat(200_000);
+    const archive = await valid3mf(
+      modelXml({ resources: object('1'), build: `<item objectid="1"/><!--${big}-->` }),
+    );
+
+    await expectRefusal(
+      async () =>
+        read3mf(archive, testReadContext(), {
+          zipLimits: { ...DEFAULT_ZIP_LIMITS, maxTotalUncompressedBytes: 4_096 },
+        }),
+      AppErrorCode.ResourceLimitExceeded,
+      ImportRefusal.ZipTotalTooLarge,
+    );
+  });
+
+  it('gives the next import a fresh allowance', async () => {
+    // A budget is per import. Reusing one across imports would refuse a
+    // perfectly good second file for what the first one spent.
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const result = await read3mf(await valid3mf(), testReadContext());
+      expect(result.document.parts).toHaveLength(1);
+    }
+  });
+
+  it('leaves the reader recoverable after a budget refusal', async () => {
+    const big = 'x'.repeat(200_000);
+    const hostile = await valid3mf(
+      modelXml({ resources: object('1'), build: `<item objectid="1"/><!--${big}-->` }),
+    );
+
+    await expectRefusal(
+      async () =>
+        read3mf(hostile, testReadContext(), {
+          zipLimits: { ...DEFAULT_ZIP_LIMITS, maxTotalUncompressedBytes: 4_096 },
+        }),
+      AppErrorCode.ResourceLimitExceeded,
+      ImportRefusal.ZipTotalTooLarge,
+    );
+
+    // THE VERY NEXT IMPORT SUCCEEDS. A refusal that left the decompressor or
+    // the reader in a bad state would show up here and nowhere else.
+    const recovered = await read3mf(await valid3mf(), testReadContext());
+    expect(recovered.document.parts).toHaveLength(1);
+  });
+});
+
+/* -------------------------- R1: other document-wide limits, during build -- */
+
+describe('document-wide ceilings that an expansion can reach', () => {
+  /** A strip: `triangles` faces over `triangles + 2` vertices. */
+  function strip(triangles: number): string {
+    const vertices: string[] = [];
+    for (let index = 0; index < triangles + 2; index += 1) {
+      vertices.push(`<vertex x="${String(index % 64)}" y="${String(index % 7)}" z="0"/>`);
+    }
+    const faces: string[] = [];
+    for (let index = 0; index < triangles; index += 1) {
+      faces.push(
+        `<triangle v1="${String(index)}" v2="${String(index + 1)}" v3="${String(index + 2)}"/>`,
+      );
+    }
+    return `<mesh><vertices>${vertices.join('')}</vertices><triangles>${faces.join('')}</triangles></mesh>`;
+  }
+
+  it('refuses on the document TRIANGLE total, before the part that crosses it', async () => {
+    /*
+     * A DOCUMENT COUNTS PER PART, so repeated placements of one object multiply
+     * its triangles. Five thousand triangles placed four thousand times is
+     * exactly the twenty-million ceiling, and the four-thousand-and-first
+     * placement crosses it — while the PART count, 4,001, is still comfortably
+     * inside its own 4,096 ceiling.
+     *
+     * Without the running total this file expands completely and is refused by
+     * `assertGeometryDocument` afterwards: twenty million triangles' worth of
+     * part records built to reach a refusal that was knowable at the first one.
+     */
+    const perPlacement = 5_000;
+    const allowed = DEFAULT_DOCUMENT_LIMITS.maxTotalTriangles / perPlacement;
+    expect(allowed).toBeLessThan(DEFAULT_DOCUMENT_LIMITS.maxParts);
+
+    const stats: ThreeMfExpansionStats = {
+      leafPlacementsVisited: 0,
+      partsEmitted: 0,
+      meshResourcesMaterialised: 0,
+    };
+    const resources = `<object id="1" type="model">${strip(perPlacement)}</object>`;
+    const build = Array.from({ length: allowed + 1 }, () => '<item objectid="1"/>').join('');
+
+    await expectRefusal(
+      async () =>
+        read3mf(await valid3mf(modelXml({ resources, build })), testReadContext(), { stats }),
+      AppErrorCode.ResourceLimitExceeded,
+      ImportRefusal.ThreeMfTooManyTriangles,
+    );
+
+    // Stopped at the ceiling, with the crossing part never built.
+    expect(stats.partsEmitted).toBe(allowed);
+    expect(stats.meshResourcesMaterialised).toBe(1);
+  });
+
+  it('accepts a placement count that reaches the triangle ceiling exactly', async () => {
+    // The other side of the same boundary: at the ceiling, not past it.
+    const perPlacement = 5_000;
+    const allowed = DEFAULT_DOCUMENT_LIMITS.maxTotalTriangles / perPlacement;
+    const resources = `<object id="1" type="model">${strip(perPlacement)}</object>`;
+    const build = Array.from({ length: allowed }, () => '<item objectid="1"/>').join('');
+
+    const result = await read3mf(await valid3mf(modelXml({ resources, build })), testReadContext());
+    expect(result.document.parts).toHaveLength(allowed);
+    // ONE MESH for four thousand placements, at the ceiling.
+    expect(distinctMeshes(result.document)).toHaveLength(1);
+  });
+
+  it('refuses on the document VERTEX total when that ceiling is reached first', async () => {
+    /*
+     * A DIFFERENT SHAPE OF MESH REACHES A DIFFERENT CEILING FIRST. Twenty
+     * thousand vertices carrying a hundred triangles crosses sixty million
+     * vertices at the three-thousand-and-first placement, while its triangles
+     * are nowhere near their own limit and the part count is inside 4,096.
+     *
+     * Both totals are kept for exactly this reason: whichever ceiling a file
+     * reaches first should be the one it is refused on, and should be named.
+     */
+    const vertices = 20_000;
+    const allowed = Math.floor(DEFAULT_DOCUMENT_LIMITS.maxTotalVertices / vertices);
+    expect(allowed).toBeLessThan(DEFAULT_DOCUMENT_LIMITS.maxParts);
+
+    const vertexXml = Array.from(
+      { length: vertices },
+      (_v, index) => `<vertex x="${String(index % 64)}" y="${String(index % 7)}" z="0"/>`,
+    ).join('');
+    const faceXml = Array.from(
+      { length: 100 },
+      (_f, index) =>
+        `<triangle v1="${String(index)}" v2="${String(index + 1)}" v3="${String(index + 2)}"/>`,
+    ).join('');
+    const resources = `<object id="1" type="model"><mesh><vertices>${vertexXml}</vertices><triangles>${faceXml}</triangles></mesh></object>`;
+    const build = Array.from({ length: allowed + 1 }, () => '<item objectid="1"/>').join('');
+
+    const stats: ThreeMfExpansionStats = {
+      leafPlacementsVisited: 0,
+      partsEmitted: 0,
+      meshResourcesMaterialised: 0,
+    };
+
+    await expectRefusal(
+      async () =>
+        read3mf(await valid3mf(modelXml({ resources, build })), testReadContext(), { stats }),
+      AppErrorCode.ResourceLimitExceeded,
+      ImportRefusal.ThreeMfTooManyVertices,
+    );
+    expect(stats.partsEmitted).toBe(allowed);
+  });
+
+  it('truncates a long object name instead of making the model unimportable', async () => {
+    /*
+     * THE BUG THIS PINS. The reader carried a 600-character name through
+     * intact, and `assertGeometryDocument` — whose cap is 512 — then refused
+     * the whole document. A perfectly good model was unopenable because of a
+     * display string, which is precisely the trade the truncation rule exists
+     * to avoid.
+     */
+    const name = 'n'.repeat(600);
+    const result = await read3mf(
+      await valid3mf(
+        modelXml({
+          resources: `<object id="1" type="model" name="${name}">${TETRAHEDRON_MESH}</object>`,
+        }),
+      ),
+      testReadContext(),
+    );
+
+    expect(result.document.parts[0]?.name).toHaveLength(DEFAULT_DOCUMENT_LIMITS.maxNameLength);
+    // AND THE DOCUMENT GATE ACCEPTS IT, which is the half that was failing.
+    expect(() => {
+      assertGeometryDocument(result.document, '3MF import');
+    }).not.toThrow();
+  });
+
+  it('truncates a long material reference for the same reason', async () => {
+    const pid = 'm'.repeat(900);
+    const result = await read3mf(
+      await valid3mf(
+        modelXml({
+          resources: `<object id="1" type="model" pid="${pid}">${TETRAHEDRON_MESH}</object>`,
+        }),
+      ),
+      testReadContext(),
+    );
+
+    expect(result.document.parts[0]?.materialRef).toHaveLength(
+      DEFAULT_DOCUMENT_LIMITS.maxMaterialRefLength,
+    );
+    expect(() => {
+      assertGeometryDocument(result.document, '3MF import');
+    }).not.toThrow();
   });
 });

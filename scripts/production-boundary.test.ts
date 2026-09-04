@@ -184,6 +184,34 @@ describe('the geometry engines stay in the worker', () => {
     expect(offenders, 'a test-only fixture module became reachable from production').toEqual([]);
   });
 
+  it('keeps the 3MF expansion counters out of production code', () => {
+    /*
+     * `ThreeMfExpansionStats` exists so a test can prove that an over-large
+     * expansion stops at the ceiling instead of running to completion. It is
+     * instrumentation, and instrumentation that production passes is a debug
+     * channel: it would mean the shipped reader writes counters nobody reads,
+     * on a path taken by every import.
+     */
+    const offenders: string[] = [];
+    const productionFiles = [
+      ...sourceFilesUnder(join(REPO_ROOT, 'apps', 'web', 'src')),
+      ...sourceFilesUnder(join(REPO_ROOT, 'packages')),
+    ].filter(
+      (file) =>
+        !/\.(test|bench-suite)\.(ts|tsx)$/.test(file) &&
+        !file.endsWith(join('threemf', 'threemf-reader.ts')),
+    );
+
+    for (const file of productionFiles) {
+      const contents = readFileSync(file, 'utf8');
+      // The type name is the exact marker: naming it is the only way to pass
+      // one, and `stats:` alone matches unrelated fields elsewhere.
+      if (/\bThreeMfExpansionStats\b/.test(contents)) offenders.push(relative(REPO_ROOT, file));
+    }
+
+    expect(offenders, 'expansion counters must stay test-only').toEqual([]);
+  });
+
   it('keeps the end-to-end harness out of the application', () => {
     /*
      * THE HARNESS IS NOT A BACKDOOR, and this is what makes that checkable.
