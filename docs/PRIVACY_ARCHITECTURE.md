@@ -114,12 +114,15 @@ The screening step at the import boundary is a **usability filter, not a
 security control**. It checks a filename extension and a declared size. It reads
 no bytes and establishes no trust.
 
-The real boundary is the STL parser, which handles untrusted, potentially
-hostile files. It runs in a worker, treats every declared value as adversarial,
-preflights every allocation against a typed budget, and rejects rather than
-repairs what it cannot represent. Its requirements are recorded in
-[ARCHITECTURE.md](ARCHITECTURE.md) §4, and the adversarial cases it is tested
-against are in `packages/file-formats/src/stl/stl-reader.test.ts`.
+The real boundary is the PARSERS, which handle untrusted, potentially hostile
+files. All of them run in a worker, treat every declared value as adversarial,
+preflight every allocation against a typed budget, and reject rather than repair
+what they cannot represent. Their requirements are recorded in
+[ARCHITECTURE.md](ARCHITECTURE.md) §4, and the adversarial cases they are tested
+against are in `packages/file-formats/src/stl/stl-reader.test.ts`,
+`obj/obj-reader.test.ts` and `threemf/threemf-reader.test.ts` — the last of which
+also covers the archive and the XML scanner, since a 3MF's attack surface starts
+well before its geometry does.
 
 Note what this does and does not protect against. It protects the tab from
 malformed and hostile files: no unbounded allocation, no unchecked offset, no
@@ -245,3 +248,66 @@ Unchanged from Stage 2 and re-checked for the repair surface: no repair-derived
 string reaches the DOM except as a text node. There is no `innerHTML`,
 `dangerouslySetInnerHTML`, `document.write` or `eval` anywhere in the
 application, and no repair path constructs a URL from file contents.
+
+---
+
+## Stage 4A-2B1 — OBJ and 3MF import
+
+Two new formats reach the parser boundary, and both of them can NAME things
+outside themselves in a way STL cannot. This section records what was checked.
+
+### The new references, and what CAD Fixer does with them
+
+| Reference in the file                      | What CAD Fixer does                                      |
+| ------------------------------------------ | -------------------------------------------------------- |
+| OBJ `mtllib path/to/materials.mtl`         | records the name, reports it, opens nothing              |
+| OBJ `usemtl name`                          | kept as an opaque string on the part                     |
+| 3MF `<texture2d path="…">`                 | records that textures exist, reports it, fetches nothing |
+| 3MF material and colour resources          | recorded as unsupported, never resolved                  |
+| 3MF `_rels` relationship targets           | resolved only WITHIN the archive, never off it           |
+| XML `SYSTEM` / `PUBLIC` / DOCTYPE / ENTITY | refused before any element is parsed                     |
+
+**Nothing in any of these paths is dereferenced.** There is no file-system read
+of a sibling file, no URL resolution, and no network call — which the repo-wide
+ESLint ban on `fetch`, `XMLHttpRequest`, `WebSocket`, `EventSource` and
+`sendBeacon` makes structurally impossible rather than merely intended.
+
+The browser suite asserts the negative directly: `e2e/format-import.spec.ts`
+imports an OBJ whose `mtllib` is `https://evil.test/materials.mtl` and a 3MF
+whose `texture2d` path is `https://evil.test/skin.png`, records every request
+the page makes, and asserts none of them went off-origin — while also asserting
+the omission is REPORTED to the user rather than hidden.
+
+### External XML entities
+
+The model part is scanned by our own bounded scanner, never `DOMParser`, and
+`describeUnsafeXml` refuses a DOCTYPE, ENTITY, SYSTEM or PUBLIC identifier
+BEFORE parsing begins. Fail-closed by construction: the refusal does not depend
+on a parser being configured correctly and cannot regress when a platform
+default changes. The classic XXE payloads — `file:///etc/passwd`, a remote DTD,
+a billion-laughs expansion — are refused at that gate, in the reader suite and
+again in the browser.
+
+### Untrusted content, extended
+
+OBJ object and group names, 3MF object names, material references and archive
+entry paths join STL solid names as untrusted text. They are rendered as React
+children, and browser tests import files whose object names are
+`<img src=x onerror="document.title='XSS'">` and assert the payload survives as
+a text node with no element created and no handler run.
+
+**Archive paths are refused, not sanitised.** A path is rejected for traversal,
+absoluteness, a drive letter, a backslash, a URL shape, percent encoding or ANY
+control character. Nothing writes to the file system, so this is defence in
+depth rather than the only thing standing between an archive and a file — but a
+path that could name something outside the archive has no legitimate reason to
+be in a 3MF.
+
+### Resource exhaustion
+
+A 50 MiB 3MF is a 4.3 MiB file: model XML compresses about 12:1. The archive
+reader therefore enforces its total and ratio budgets DURING inflation, chunk by
+chunk, rather than trusting the uncompressed size the directory declares — a
+declared size is a claim by whoever wrote the archive. A component graph that
+would expand past the part ceiling is refused before the expansion, because a
+few hundred bytes of XML can describe an enormous document.

@@ -4,7 +4,7 @@ import type { ModelImportResult } from '@cadfixer/geometry-runtime';
 import type { GeometryClient } from './geometry-client';
 
 /**
- * The one and only path from a user's file to a parsed model.
+ * The one and only path from a user's file to a parsed document.
  *
  * WHY THIS EXISTS AS A SERVICE: `file.arrayBuffer()` is called in exactly one
  * place in the entire application — here. Scattering it through components
@@ -65,7 +65,7 @@ export interface ImportRequest {
   readonly budget?: Readonly<Record<string, number>>;
 }
 
-export function importStlFile(request: ImportRequest): ImportSession {
+export function importModelFile(request: ImportRequest): ImportSession {
   const { file, client, callbacks } = request;
 
   let cancelled = false;
@@ -102,6 +102,7 @@ export function importStlFile(request: ImportRequest): ImportSession {
 
     const handle = client.importModel(
       buffer,
+      file.name,
       (update) => {
         const phase = update.fraction >= 0.85 ? ImportPhase.Validating : ImportPhase.Parsing;
         // The worker's 0..1 maps onto the remaining 95% of the overall bar, so

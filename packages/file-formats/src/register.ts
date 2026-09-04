@@ -1,5 +1,7 @@
 import { registerReader, registerWriter } from './registry';
+import { objReader } from './obj/codec';
 import { stlReader, stlWriter } from './stl/codec';
+import { threeMfReader } from './threemf/codec';
 
 /**
  * Registers the codecs that ship with the application.
@@ -13,5 +15,12 @@ import { stlReader, stlWriter } from './stl/codec';
  */
 export function registerBuiltInFormats(): void {
   registerReader(stlReader);
+  registerReader(objReader);
+  registerReader(threeMfReader);
+  /*
+   * ONE WRITER. Export for OBJ and 3MF is Stage 4A-2B2, and registering a stub
+   * now would let the interface advertise a Save that cannot happen — a test
+   * asserts the capability list matches exactly what registers here.
+   */
   registerWriter(stlWriter);
 }

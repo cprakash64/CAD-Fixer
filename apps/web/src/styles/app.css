@@ -406,6 +406,11 @@ button:disabled {
   margin-bottom: var(--space-1);
 }
 
+/* The codec's own note, quieter than the phase it qualifies. */
+.import__detail {
+  opacity: 0.75;
+}
+
 .import__bar {
   width: 100%;
   height: 6px;

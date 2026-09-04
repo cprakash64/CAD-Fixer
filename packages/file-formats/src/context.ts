@@ -35,6 +35,35 @@ export interface FormatReadContext {
    * platform concern, and this package compiles without DOM or Node types.
    */
   readonly yieldToEventLoop: () => Promise<void>;
+  /**
+   * Decodes UTF-8 bytes into text.
+   *
+   * INJECTED FOR THE SAME REASON `yieldToEventLoop` IS. `TextDecoder` is a
+   * platform global, and this package compiles with `lib: ES2023` alone —
+   * deliberately, so a codec cannot quietly acquire a DOM or Node dependency
+   * and stop being testable under plain Node. The STL readers never needed it
+   * because STL's only text is a `solid` name they scan byte by byte; OBJ is
+   * text throughout and 3MF's model part is XML, so both do.
+   *
+   * Implementations must be lenient (`fatal: false`): a stray byte in a comment
+   * is far more often a real file from a real tool than an attack, and nothing
+   * downstream treats decoded text as markup or as a path.
+   */
+  readonly decodeText: (bytes: Uint8Array) => string;
+  /**
+   * Inflates a raw DEFLATE stream, yielding output as it is produced.
+   *
+   * CHUNKED, NOT WHOLE-BUFFER, and that is the entire security property. A zip
+   * bomb is refused by abandoning the stream after the first chunk that takes
+   * the total past budget, so peak memory stays bounded by the limit rather
+   * than by whatever the archive claimed. A `Promise<Uint8Array>` signature
+   * would make that impossible: the allocation would already have happened.
+   *
+   * Injected because `DecompressionStream` is a platform primitive. Optional
+   * because only 3MF needs it, and a caller importing STL should not have to
+   * supply one.
+   */
+  readonly inflateRaw?: (compressed: Uint8Array) => AsyncIterable<Uint8Array>;
 }
 
 export interface FormatWriteContext {

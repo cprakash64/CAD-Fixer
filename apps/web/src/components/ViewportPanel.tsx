@@ -249,7 +249,7 @@ export function ViewportPanel(): ReactNode {
         </p>
       ) : model === undefined ? (
         <p className="viewport__empty" data-testid="viewport-empty">
-          Empty workspace — open an STL file to view it.
+          Empty workspace — open an STL, OBJ or 3MF file to view it.
         </p>
       ) : (
         <div className="viewport__toolbar">

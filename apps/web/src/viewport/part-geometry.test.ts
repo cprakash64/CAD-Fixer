@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { Vector3 } from 'three';
+import { applyPartTransform } from '@cadfixer/mesh-core';
 import { buildPartGeometry, partMatrix, SharedPartGeometry } from './part-geometry';
 
 /**
@@ -33,15 +34,37 @@ describe('part placement', () => {
     expect(moved.z).toBeCloseTo(3, 10);
   });
 
-  it('applies rotation from the first nine values, in row order', () => {
-    // 90 degrees about Z: x -> y, y -> -x.
-    const rotateZ90: readonly number[] = [0, -1, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0];
+  it('reads the linear part as 3MF does — points are ROW vectors', () => {
+    /*
+     * THE TRANSPOSE THAT HIDES. Under `[0 2 0, -2 0 0, 0 0 2, 0 0 0]` the 3MF
+     * convention sends (1,0,0) to (0,2,0): the first index of each term varies
+     * with the INPUT axis. Reading the same twelve numbers as column vectors
+     * sends it to (0,-2,0) instead — same magnitude, wrong sign, and no fixture
+     * made of identity and translation can tell the two apart.
+     *
+     * This is the placement `experiments/format-io/threemf-matrix.mjs` RT05
+     * asserts, so production and the qualified reference agree by construction.
+     */
+    const rotScale: readonly number[] = [0, 2, 0, -2, 0, 0, 0, 0, 2, 0, 0, 0];
 
-    const rotated = new Vector3(1, 0, 0).applyMatrix4(partMatrix(rotateZ90));
+    const placed = new Vector3(1, 0, 0).applyMatrix4(partMatrix(rotScale));
 
-    expect(rotated.x).toBeCloseTo(0, 10);
-    expect(rotated.y).toBeCloseTo(1, 10);
-    expect(rotated.z).toBeCloseTo(0, 10);
+    expect(placed.x).toBeCloseTo(0, 10);
+    expect(placed.y).toBeCloseTo(2, 10);
+    expect(placed.z).toBeCloseTo(0, 10);
+  });
+
+  it('agrees with the canonical placement helper on the same transform', () => {
+    // The renderer and the bounds arithmetic must not disagree about where a
+    // part is: one drives pixels and the other drives the camera.
+    const rotScale: readonly number[] = [0, 2, 0, -2, 0, 0, 0, 0, 2, 1, 2, 3];
+
+    const viaThree = new Vector3(1, -1, 2).applyMatrix4(partMatrix(rotScale));
+    const viaCanonical = applyPartTransform(rotScale as never, 1, -1, 2);
+
+    expect(viaThree.x).toBeCloseTo(viaCanonical[0], 10);
+    expect(viaThree.y).toBeCloseTo(viaCanonical[1], 10);
+    expect(viaThree.z).toBeCloseTo(viaCanonical[2], 10);
   });
 
   it('leaves a point where it was under the identity placement', () => {

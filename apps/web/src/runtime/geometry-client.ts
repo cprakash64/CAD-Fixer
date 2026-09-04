@@ -181,20 +181,25 @@ export class GeometryClient {
   }
 
   /**
-   * Parses an STL file in the worker and commits it as the resident model.
+   * Parses a model file in the worker and commits it as the resident document.
    *
    * `bytes` is TRANSFERRED: the caller's buffer is detached as soon as this
-   * returns and must not be read again. What comes back is a handle plus a
-   * render snapshot — the authoritative geometry stays in the worker.
+   * returns and must not be read again. What comes back is a handle plus render
+   * snapshots — the authoritative geometry stays in the worker.
+   *
+   * `fileName` is passed for FORMAT IDENTIFICATION and nothing else. The worker
+   * decides what a file is from its bytes; the name only breaks the one
+   * ambiguity bytes cannot settle and lets a name/content mismatch be reported.
    */
   public importModel(
     bytes: ArrayBuffer,
+    fileName: string,
     onProgress: (update: ProgressUpdate) => void,
     budget?: Readonly<Record<string, number>>,
   ): OperationHandle<ModelImportResult> {
     return this.coordinator.dispatch(
       'model/import',
-      budget === undefined ? { bytes } : { bytes, budget },
+      budget === undefined ? { bytes, fileName } : { bytes, fileName, budget },
       { onProgress, transfer: [bytes] },
     );
   }

@@ -138,6 +138,9 @@ it('measures the whole local pipeline across representative sizes', async () => 
       budget: DEFAULT_IMPORT_BUDGET,
       cancellation: uncancellable,
       yieldToEventLoop,
+      decodeText: (): string => {
+        throw new Error('the STL reader does not decode text');
+      },
       progress: { report: () => undefined },
     });
     const parseMs = performance.now() - parseStart;

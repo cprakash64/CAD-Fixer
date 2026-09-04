@@ -300,6 +300,16 @@ export interface RepairUndoResult {
 
 export interface StlImportPayload {
   /**
+   * The file's name, for FORMAT IDENTIFICATION only.
+   *
+   * Never trusted on its own: the worker decides what a file is from its bytes
+   * and consults this only to break the one ambiguity bytes cannot settle —
+   * plain text that could be OBJ or ASCII STL — and to report a mismatch when
+   * the name and the content disagree. It is also untrusted TEXT: it is never
+   * resolved as a path and never used to open anything.
+   */
+  readonly fileName: string;
+  /**
    * The whole file. Transferred, so the main thread loses access the moment
    * dispatch returns — see docs/ARCHITECTURE.md on transfer ownership.
    */
@@ -422,6 +432,20 @@ export interface ModelImportResult {
   readonly parts: readonly PartDescriptor[];
   readonly render: DocumentRenderSnapshot;
   readonly warnings: readonly Diagnostic[];
+  /**
+   * Which format was actually read, as identified from the BYTES.
+   *
+   * Reported rather than echoed from the file name, so the panel can say what
+   * CAD Fixer actually opened.
+   */
+  readonly formatId: string;
+  /**
+   * Source features the reader recognised and did not import.
+   *
+   * Empty for an ordinary file. A valid STL or a plain OBJ must not be
+   * decorated with warnings about things it never contained.
+   */
+  readonly unsupportedFeatures: readonly string[];
   /** Structural validation summary. The import already passed the gate. */
   readonly validation: MeshValidationSummary;
   /** Bytes of authoritative geometry the worker now holds for this model. */

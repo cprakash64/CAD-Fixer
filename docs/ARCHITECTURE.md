@@ -184,11 +184,21 @@ before anything is committed, so a parse failure, a validation failure, a budget
 rejection or a cancellation leaves the previously resident model exactly as it
 was.
 
-Only STL is implemented. OBJ and 3MF have descriptors but no codec; the
-interface says so rather than starting an import that cannot finish. Capability
-is declared in `file-formats/capabilities` rather than read from the registry,
-because the registry is populated inside the worker and is legitimately empty on
-the main thread — a test asserts the declaration matches what actually registers.
+**Since Stage 4A-2B1, three formats can be READ: STL, OBJ and 3MF.** They share
+one path — `identifyFormat` decides from the bytes, `requireReader` returns the
+reader for that format, every reader returns a `GeometryDocument`, and
+`commitImportedDocument` is the single transaction that installs it. OBJ is
+triangles only and refuses a polygon rather than fanning it; 3MF supports build
+items, component instances and all six units, and never resolves a texture, a
+material library or an external reference. See
+[ADR 0015](adr/0015-production-obj-and-3mf-import.md).
+
+**Only STL can be WRITTEN.** There is no OBJ or 3MF writer and no conversion
+workflow; the Convert workflow is visibly unavailable and the Model panel says
+so before the Export button. Capability is declared in
+`file-formats/capabilities` rather than read from the registry, because the
+registry is populated inside the worker and is legitimately empty on the main
+thread — a test asserts the declaration matches what actually registers.
 
 ### Cancellation requires yielding
 
@@ -406,13 +416,14 @@ reviewable act rather than an accident.
 
 ## 12. What is deliberately not implemented
 
-STL is implemented, read and written. Nothing else is:
+STL, OBJ and 3MF can be read. Only STL can be written. Nothing else is
+implemented:
 
-No OBJ or 3MF codec, no format conversion, no welding, no booleans, no
+No OBJ writer, no 3MF writer, no format conversion, no OBJ polygons, no MTL
+resolution, no 3MF textures or materials, no welding, no booleans, no
 connectors, no splitting, no displacement, no hollowing, no drainage holes, no
-self-intersection detection, no wall-thickness analysis, no auth, no billing, no
-database, no backend, no analytics, no persistence — and no stub that pretends to
-be any of them.
+wall-thickness analysis, no auth, no billing, no database, no backend, no
+analytics, no persistence — and no stub that pretends to be any of them.
 
 Repair is implemented only in its **conservative** form: exact duplicate removal,
 safe degenerate removal, and relative winding unification. It does not weld,

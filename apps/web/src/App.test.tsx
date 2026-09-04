@@ -149,16 +149,37 @@ describe('file intake at the UI boundary', () => {
     expect(screen.getByTestId('status-list')).toHaveTextContent(/supported extension/i);
   });
 
-  it('says OBJ import is unimplemented rather than pretending to open it', () => {
-    // OBJ has a descriptor and a recognised extension but no codec. Starting an
-    // import that could only fail deeper in would be worse than saying so.
+  it('starts a real import for an OBJ file rather than refusing it', async () => {
+    /*
+     * OBJ IMPORT IS IMPLEMENTED as of Stage 4A-2B1, so the file is genuinely
+     * read — the opposite of the Stage 1 assertion this replaces. What the
+     * worker then makes of the contents is the parser's business and is tested
+     * against it directly; what matters here is that the interface no longer
+     * refuses the format at the door.
+     */
     renderApp();
+    const file = new File(['v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n'], 'part.obj');
+    const readAsBuffer = vi.spyOn(file, 'arrayBuffer');
 
-    dropFiles([new File(['a'], 'part.obj')]);
+    dropFiles([file]);
 
-    const log = screen.getByTestId('status-list');
-    expect(within(log).getByText(/OBJ import is not implemented yet/i)).toBeInTheDocument();
-    expect(log.textContent).not.toMatch(/loaded|imported successfully/i);
+    expect(await screen.findByTestId('import-progress')).toBeInTheDocument();
+    expect(readAsBuffer).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId('status-list').textContent).not.toMatch(/not implemented/i);
+  });
+
+  it('starts a real import for a 3MF file rather than refusing it', async () => {
+    renderApp();
+    // A ZIP signature is enough to reach the worker; the archive's validity is
+    // the reader's business, and it is tested against the reader.
+    const file = new File([new Uint8Array([0x50, 0x4b, 0x03, 0x04])], 'part.3mf');
+    const readAsBuffer = vi.spyOn(file, 'arrayBuffer');
+
+    dropFiles([file]);
+
+    expect(await screen.findByTestId('import-progress')).toBeInTheDocument();
+    expect(readAsBuffer).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId('status-list').textContent).not.toMatch(/not implemented/i);
   });
 
   it('starts a real import for an STL file and reads it locally', async () => {
@@ -210,7 +231,9 @@ describe('file intake at the UI boundary', () => {
 
     const log = screen.getByTestId('status-list');
     expect(within(log).getByText(/Only one model can be open at a time/i)).toBeInTheDocument();
-    expect(within(log).getByText(/OBJ import is not implemented yet/i)).toBeInTheDocument();
+    // And the FIRST file is the one that was taken, not the last or the one
+    // that happens to be a format the application has supported longest.
+    expect(log.textContent).toMatch(/first\.obj/i);
   });
 
   it('reports an empty drop instead of doing nothing', () => {

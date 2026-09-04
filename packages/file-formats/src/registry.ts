@@ -1,36 +1,29 @@
 import { unsupportedFile } from '@cadfixer/shared';
 import type { CanonicalMesh } from '@cadfixer/mesh-core';
-import type {
-  FormatReadContext,
-  FormatWriteContext,
-  MeshReadResult,
-  MeshWriteResult,
-} from './context';
+import type { FormatWriteContext, MeshWriteResult } from './context';
+import type { DocumentReader } from './document-reader';
 import { describeFormat, type MeshFormatId } from './formats';
 
 /**
  * The seam between file bytes and the canonical mesh.
  *
- * STL is implemented as of Stage 1 and registers itself (see `./stl`). OBJ and
- * 3MF are not, and every lookup for them fails loudly rather than returning a
- * stub that pretends to work — a test enforces that.
+ * STL, OBJ and 3MF all register readers as of Stage 4A-2B1. Only STL registers
+ * a WRITER: export for the other two is Stage 4A-2B2, and a lookup for them
+ * fails loudly rather than returning a stub that pretends to work — a test
+ * enforces that.
  *
  * Implementations must run inside a worker: they touch whole-file buffers and
  * are the single most likely place for a hostile file to cause a stall.
  */
 
-export interface MeshReader {
-  readonly formatId: MeshFormatId;
-  /**
-   * Parses `bytes` into a canonical mesh.
-   *
-   * Implementations must treat `bytes` as hostile: validate every declared
-   * count against the actual buffer length before allocating, bound all
-   * allocations, and poll `context.cancellation`. The caller is responsible for
-   * validating the returned mesh — see `assertMeshStructure`.
-   */
-  read(bytes: Uint8Array, context: FormatReadContext): Promise<MeshReadResult>;
-}
+/**
+ * Readers produce DOCUMENTS, not meshes, since Stage 4A-2B1.
+ *
+ * The contract lives in `document-reader.ts`; this alias keeps the registry's
+ * vocabulary in one place. See that file for why every format — STL included —
+ * converges on one shape.
+ */
+export type MeshReader = DocumentReader;
 
 export interface MeshWriter {
   readonly formatId: MeshFormatId;

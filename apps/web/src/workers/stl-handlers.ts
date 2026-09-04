@@ -13,7 +13,6 @@ import {
   distinctMeshes,
   documentTriangleCount,
   documentVertexCount,
-  singlePartDocument,
   transformBounds,
   triangleCount,
   unionBounds,
@@ -27,12 +26,16 @@ import {
 } from '@cadfixer/mesh-core';
 import {
   DEFAULT_IMPORT_BUDGET,
-  readStl,
+  describeFormat,
+  identifyFormat,
   registerBuiltInFormats,
+  requireReader,
   requireWriter,
   MeshFormatId,
   type FormatProgressReporter,
+  type FormatReadContext,
   type ImportBudget,
+  type ImportCompatibility,
 } from '@cadfixer/file-formats';
 import { analyseTopology, estimateTopologyWorkspaceBytes } from '@cadfixer/mesh-topology';
 import {
@@ -362,6 +365,86 @@ function summariseDocument(document: GeometryDocument): MeshValidationSummary {
   return { valid, issueCount, warningCount, truncated, codes: [...codes] };
 }
 
+/**
+ * Inflates a raw DEFLATE stream, chunk by chunk.
+ *
+ * SUPPLIED BY THE WORKER because `DecompressionStream` is a platform primitive
+ * and `@cadfixer/file-formats` compiles without DOM or Node types — the same
+ * reason `yieldToEventLoop` is injected. Chunked rather than whole-buffer so
+ * the ZIP reader can abandon a bomb after the first chunk over budget.
+ */
+async function* inflateRaw(compressed: Uint8Array): AsyncIterable<Uint8Array> {
+  const stream = new DecompressionStream('deflate-raw');
+  const writer = stream.writable.getWriter();
+  /*
+   * COPIED INTO A PLAIN `ArrayBuffer` VIEW. `compressed` is a subarray of the
+   * transferred file buffer, whose type is `ArrayBufferLike` — which may be a
+   * `SharedArrayBuffer`, and `WritableStream.write` will not accept one. The
+   * copy is one entry's compressed bytes, already bounded by the archive caps.
+   */
+  const payload = new Uint8Array(compressed.byteLength);
+  payload.set(compressed);
+  // Written without awaiting so the reader below can consume as it goes; a
+  // rejection here surfaces as the reader ending early.
+  void writer
+    .write(payload)
+    .then(() => writer.close())
+    .catch(() => undefined);
+
+  const reader = stream.readable.getReader();
+  try {
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      yield value;
+    }
+  } finally {
+    // Releases the underlying resources whether the consumer finished or threw
+    // — a budget refusal exits this loop through the `finally`.
+    await reader.cancel().catch(() => undefined);
+  }
+}
+
+/** The read context every codec receives. One shape, whatever the format. */
+function readContext(
+  payload: { readonly budget?: Readonly<Record<string, number>> },
+  context: OperationContext,
+  from: number,
+  to: number,
+): FormatReadContext {
+  return {
+    cancellation: context.cancellation,
+    budget: resolveBudget(payload.budget),
+    yieldToEventLoop,
+    decodeText: (input: Uint8Array): string =>
+      new TextDecoder('utf-8', { fatal: false }).decode(input),
+    inflateRaw,
+    progress: progressReporter(
+      (fraction, note) => {
+        context.reportProgress(fraction, note);
+      },
+      from,
+      to,
+    ),
+  };
+}
+
+/**
+ * IMPORT, FOR EVERY FORMAT.
+ *
+ * The handler identifies the file from its BYTES, dispatches to the registered
+ * reader, validates what came back, and commits it. There is no per-format
+ * branching after the dispatch line: every reader produces a
+ * `GeometryDocument`, and `commitImportedDocument` is the single place one
+ * becomes authoritative — so OBJ and 3MF cannot acquire their own residency
+ * rules, their own revision semantics, or their own idea of what validation
+ * means.
+ *
+ * TRANSACTIONAL THROUGHOUT. Identification, parsing, mesh validation, document
+ * validation and the memory preflight all happen before the store is touched,
+ * so a malformed OBJ or a hostile 3MF leaves the previously resident document
+ * exactly as it was.
+ */
 export const modelImportHandler: OperationHandler<'model/import'> = async (payload, context) => {
   const source = payload.bytes;
   if (!(source instanceof ArrayBuffer)) {
@@ -371,47 +454,42 @@ export const modelImportHandler: OperationHandler<'model/import'> = async (paylo
   const bytes = new Uint8Array(source);
   const cancellation: CancellationToken = context.cancellation;
 
-  const parsed = await readStl(bytes, {
-    cancellation,
-    budget: resolveBudget(payload.budget),
-    yieldToEventLoop,
-    progress: progressReporter(
-      (fraction, note) => {
-        context.reportProgress(fraction, note);
-      },
-      0,
-      PARSE_SHARE,
-    ),
-  });
+  /*
+   * WHAT IS THIS FILE? Answered once, from the bytes, before any parser runs.
+   * A name is user-supplied text and is consulted only to break the OBJ/ASCII-
+   * STL ambiguity and to refuse a file whose name and contents disagree.
+   */
+  context.reportProgress(0, 'identifying');
+  const identified = identifyFormat(bytes, payload.fileName);
+  throwIfCancelled(cancellation);
+
+  const reader = requireReader(identified.formatId);
+  const parsed = await reader.read(bytes, readContext(payload, context, 0.02, PARSE_SHARE));
 
   throwIfCancelled(cancellation);
   context.reportProgress(PARSE_SHARE, 'validating');
 
-  // THE GATE. A parser returning a mesh is not a successful import; passing
-  // structural validation is. This throws GEOMETRY_VALIDATION_FAILED otherwise,
-  // and nothing is committed.
-  assertMeshStructure(parsed.mesh, 'STL import');
-
   /*
-   * ONE FILE, ONE DOCUMENT, ONE PART.
-   *
-   * An STL file describes exactly one triangle soup: no object records, no
-   * placement, no unit. So the document it produces has one part at the
-   * identity transform, and `unit` is whatever the reader stated — which for
-   * STL is nothing at all. Nothing about the geometry changed by being wrapped:
-   * `parsed.mesh` is the same object, holding the same buffers.
+   * THE MESH GATE. A parser returning geometry is not a successful import;
+   * passing structural validation is. Run per DISTINCT mesh, so a document with
+   * a thousand placements of one component validates one mesh rather than a
+   * thousand.
    */
-  const document = singlePartDocument(parsed.mesh, {
-    ...(parsed.unit === undefined ? {} : { unit: parsed.unit }),
-  });
+  const operation = `${describeFormat(identified.formatId).label} import`;
+  for (const mesh of distinctMeshes(parsed.document)) {
+    assertMeshStructure(mesh, operation);
+    throwIfCancelled(cancellation);
+  }
 
   return commitImportedDocument(
     {
-      document,
-      operation: 'STL import',
+      document: parsed.document,
+      operation,
+      formatId: identified.formatId,
       encoding: parsed.encoding,
       inputBytes: bytes.byteLength,
       warnings: parsed.warnings,
+      compatibility: parsed.compatibility,
     },
     context,
   );
@@ -423,6 +501,8 @@ export interface DocumentCommitInput {
   readonly document: GeometryDocument;
   /** Names the caller in validation failures, e.g. `STL import`. */
   readonly operation: string;
+  /** Which format was actually read, as identified from the bytes. */
+  readonly formatId: string;
   /** As actually detected. Reported, never guessed. */
   readonly encoding: string;
   /**
@@ -433,6 +513,8 @@ export interface DocumentCommitInput {
    */
   readonly inputBytes: number;
   readonly warnings: readonly Diagnostic[];
+  /** What the reader recognised in the source and did not carry across. */
+  readonly compatibility: ImportCompatibility;
 }
 
 /**
@@ -494,7 +576,9 @@ export function commitImportedDocument(
 
   const value: ModelImportResult = {
     handle,
+    formatId: input.formatId,
     encoding: input.encoding,
+    unsupportedFeatures: input.compatibility.unsupported,
     unit: document.unit,
     bounds,
     triangleCount: documentTriangles,

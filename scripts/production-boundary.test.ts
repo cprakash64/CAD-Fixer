@@ -48,6 +48,20 @@ const WORKER_ONLY_IMPORTS: readonly string[] = [
   'requireWriter',
   'requireReader',
   'registerBuiltInFormats',
+  /*
+   * STAGE 4A-2B1. Three more parsers now live behind the same boundary, and
+   * each is a different way to pull whole-file work into the application
+   * bundle: `readObj` is a character scan, `read3mf` inflates an archive and
+   * scans XML, and `identifyFormat` reads the head of the bytes. The main
+   * thread never does any of it — it hands the file to the worker and receives
+   * scalars back.
+   */
+  'readObj',
+  'read3mf',
+  'identifyFormat',
+  'readZipDirectory',
+  'readZipEntry',
+  'scanXml',
 ];
 
 /** Kernels qualified by research and deliberately not shipped. */
@@ -125,6 +139,49 @@ describe('the geometry engines stay in the worker', () => {
     }
 
     expect(offenders, 'a format codec became reachable from the application bundle').toEqual([]);
+  });
+
+  it('keeps the TEST-ONLY fixture and context modules out of production code', () => {
+    /*
+     * `file-formats` ships three modules that exist only for tests: the STL
+     * fixture builders, the hand-authored ZIP/3MF archives, and the read
+     * context that supplies `TextDecoder` and `DecompressionStream`. The
+     * archives are deliberately EXPORTED from the package so the worker and
+     * application suites exercise the same corpus the reader package does —
+     * which is exactly why this check has to exist: an export is reachable, and
+     * a production file that reached for one would ship a corpus of hostile
+     * archives inside the application bundle.
+     */
+    const TEST_ONLY = [
+      '@cadfixer/file-formats/threemf-fixtures',
+      'threemf/zip-fixtures',
+      'stl/fixtures',
+      'file-formats/src/test-context',
+      './test-context',
+      '../test-context',
+    ];
+    const offenders: string[] = [];
+
+    const productionFiles = [
+      ...sourceFilesUnder(join(REPO_ROOT, 'apps', 'web', 'src')),
+      ...sourceFilesUnder(join(REPO_ROOT, 'packages')),
+      // Tests may import fixtures; so, obviously, may the fixture modules.
+    ].filter(
+      (file) => !/\.(test|bench-suite)\.(ts|tsx)$/.test(file) && !file.endsWith('fixtures.ts'),
+    );
+
+    for (const file of productionFiles) {
+      const contents = readFileSync(file, 'utf8');
+      const importBlocks = contents.match(/(?:import|export)[\s\S]*?from\s+['"][^'"]+['"]/g) ?? [];
+      for (const block of importBlocks) {
+        for (const specifier of TEST_ONLY) {
+          if (block.includes(specifier))
+            offenders.push(`${relative(REPO_ROOT, file)}: ${specifier}`);
+        }
+      }
+    }
+
+    expect(offenders, 'a test-only fixture module became reachable from production').toEqual([]);
   });
 
   it('keeps the end-to-end harness out of the application', () => {
@@ -338,8 +395,21 @@ describe('no UNSHIPPED geometry kernel reaches production', () => {
     const offenders: string[] = [];
     for (const file of files) {
       const contents = readFileSync(file, 'utf8');
-      // An import OF the experiments tree, in any form a bundler would follow.
-      if (/from\s+['"][^'"]*experiments\//.test(contents)) {
+      /*
+       * AN IMPORT OF THE EXPERIMENTS TREE, in any form a bundler would follow.
+       *
+       * TESTS ARE EXEMPT, and deliberately so. Stage 4A-2B1's differential
+       * suite runs the same bytes through the production parsers and through
+       * the qualified research readers and compares the results — which is the
+       * whole point: a parser that is its own oracle proves only that it is
+       * self-consistent. A `.test.ts` never ships, so importing a reference
+       * implementation into one puts nothing in front of a user.
+       *
+       * The ban stays absolute for everything else, including test HELPERS that
+       * are not themselves tests, because those can be imported by anything.
+       */
+      const isTest = /\.test\.(ts|tsx)$/.test(file);
+      if (!isTest && /from\s+['"][^'"]*experiments\//.test(contents)) {
         offenders.push(`${relative(REPO_ROOT, file)} (imports from experiments/)`);
       }
       for (const kernel of RESEARCH_KERNELS) {
@@ -350,6 +420,28 @@ describe('no UNSHIPPED geometry kernel reaches production', () => {
     }
 
     expect(offenders, 'a geometry kernel became reachable from production code').toEqual([]);
+  });
+
+  it('lets ONLY tests reach the research tree, and names the ones that do', () => {
+    /*
+     * The exemption above is narrow, and this is what keeps it narrow: the list
+     * of files allowed to import a research reference is written down, so
+     * adding another is a deliberate act that shows up in review rather than a
+     * quiet widening of the rule.
+     */
+    const files = [
+      ...sourceFilesUnder(join(REPO_ROOT, 'apps')),
+      ...sourceFilesUnder(join(REPO_ROOT, 'packages')),
+    ];
+
+    const importers = files
+      .filter((file) => /from\s+['"][^'"]*experiments\//.test(readFileSync(file, 'utf8')))
+      .map((file) => relative(REPO_ROOT, file))
+      .sort();
+
+    expect(importers).toEqual([
+      join('packages', 'file-formats', 'src', 'format-differential.test.ts'),
+    ]);
   });
 
   it('is not declared as a dependency of any shipped package', () => {

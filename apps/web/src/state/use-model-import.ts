@@ -1,7 +1,8 @@
 import { useCallback, useRef } from 'react';
 import { AppErrorCode, toAppError } from '@cadfixer/shared';
-import { importStlFile, ImportPhase, type ImportSession } from '../runtime/import-service';
+import { importModelFile, ImportPhase, type ImportSession } from '../runtime/import-service';
 import { useGeometryClient } from '../runtime/client-context';
+import { describeImport, type ModelSource } from './model';
 import { useWorkspaceState, useWorkspaceStore } from './store-context';
 import { ImportState, StatusSeverity, type ImportToken } from './workspace-store';
 
@@ -50,7 +51,7 @@ export function useModelImport(): ModelImportControls {
 
       const token: ImportToken = store.beginImport(file.name);
 
-      const session = importStlFile({
+      const session = importModelFile({
         file,
         client,
         callbacks: {
@@ -74,6 +75,17 @@ export function useModelImport(): ModelImportControls {
           // model must still be there.
           const replaced = store.getSnapshot().model?.handle;
 
+          const source: ModelSource = {
+            fileName: file.name,
+            fileBytes: file.size,
+            // What the worker actually identified from the BYTES, not what the
+            // file was named.
+            formatId: result.formatId,
+            encoding: result.encoding,
+            unit: result.unit,
+            importedAt: Date.now(),
+          };
+
           const installed = store.commitImport(token, {
             handle: result.handle,
             parts: result.parts,
@@ -84,14 +96,7 @@ export function useModelImport(): ModelImportControls {
             validation: result.validation,
             warnings: result.warnings,
             residentBytes: result.residentBytes,
-            source: {
-              fileName: file.name,
-              fileBytes: file.size,
-              formatId: 'stl',
-              encoding: result.encoding,
-              unit: result.unit,
-              importedAt: Date.now(),
-            },
+            source,
           });
 
           // A superseded import says nothing at all. Reporting "Loaded A" after
@@ -112,7 +117,7 @@ export function useModelImport(): ModelImportControls {
           sessionRef.current = undefined;
           store.pushStatus(
             StatusSeverity.Success,
-            `Loaded ${file.name}: ${result.triangleCount.toLocaleString()} triangles (${result.encoding} STL).`,
+            `Loaded ${file.name}: ${describeImport(source, result.triangleCount, result.parts.length)}`,
           );
           for (const warning of result.warnings) {
             store.pushStatus(StatusSeverity.Warning, warning.message);

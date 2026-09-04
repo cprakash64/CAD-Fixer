@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import type { TopologyReport, VolumeStatus } from '@cadfixer/geometry-runtime';
-import { describeUnit } from '../state/model';
+import { describeEncoding, describeSourceFormat, describeUnit } from '../state/model';
 import { useWorkspaceState, useWorkspaceStore } from '../state/store-context';
 import { useTopologyAnalysis } from '../state/use-topology-analysis';
 import {
@@ -53,6 +53,19 @@ export function MeshHealthPanel(): ReactNode {
   }
 
   const unit = model.source.unit;
+  /*
+   * The counts this panel is scoped to.
+   *
+   * `model.triangleCount` is the DOCUMENT total, which is the right number for
+   * the Model panel and the wrong one here. Falling back to the document's
+   * totals keeps the panel readable in the instant between a document arriving
+   * and a part being selected.
+   */
+  const active = model.parts.find((part) => part.partId === activePartId);
+  const scoped = active ?? {
+    triangleCount: model.triangleCount,
+    vertexCount: model.vertexCount,
+  };
   const report = analysis.report;
   const percent = Math.round(analysis.fraction * 100);
 
@@ -82,17 +95,21 @@ export function MeshHealthPanel(): ReactNode {
       <h3 className="panel__subtitle">Source and structure</h3>
       <dl className="facts" data-testid="health-source">
         <Fact label="File" value={model.source.fileName} testId="health-filename" />
-        <Fact label="Format" value="STL" />
-        <Fact label="Encoding" value={model.source.encoding} testId="health-encoding" />
+        <Fact label="Format" value={describeSourceFormat(model.source)} testId="health-format" />
+        <Fact label="Encoding" value={describeEncoding(model.source)} testId="health-encoding" />
         <Fact label="File size" value={formatBytes(model.source.fileBytes)} />
+        {/* THE ACTIVE PART'S COUNTS, not the document's. The scope note above
+            says every number here describes one part; showing the document
+            total under that sentence would make the sentence a lie. A one-part
+            document has one total, so the single-part panel is unchanged. */}
         <Fact
           label="Triangles"
-          value={model.triangleCount.toLocaleString()}
+          value={scoped.triangleCount.toLocaleString()}
           testId="health-triangles"
         />
         <Fact
           label="Source corners"
-          value={model.vertexCount.toLocaleString()}
+          value={scoped.vertexCount.toLocaleString()}
           testId="health-corners"
         />
         <Fact label="Units" value={describeUnit(model.source)} testId="health-units" />
@@ -369,8 +386,13 @@ function TopologySections({
         />
       </dl>
       <p className="panel__note">
-        STL states no unit, so areas and volumes are given in the model&rsquo;s own unspecified
-        unit. The signed volume is an algebraic sum over all components; its sign reflects triangle
+        {/* THE UNIT SENTENCE DEPENDS ON THE FILE, and used to name STL
+            unconditionally. A 3MF states its unit, so telling that user "STL
+            states no unit" would be describing a format they did not open. */}
+        {unit === undefined
+          ? `This file states no unit, so areas and volumes are given in the model’s own unspecified unit.`
+          : `Areas and volumes are in the unit the file stated (${unit}); nothing was rescaled on import.`}{' '}
+        The signed volume is an algebraic sum over all components; its sign reflects triangle
         orientation, not physical quantity.
       </p>
 

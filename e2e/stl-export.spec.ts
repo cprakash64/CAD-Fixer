@@ -80,11 +80,14 @@ test('the UI does not claim format conversion is available', async ({ page }) =>
   await page.goto('/');
   await loadModel(page, 40);
 
-  // STL re-export is not conversion, and Convert must stay visibly unavailable.
+  // Reading OBJ and 3MF did NOT make writing them possible, and Convert must
+  // stay visibly unavailable.
   await expect(page.getByTestId('workflow-convert')).toBeDisabled();
   await expect(page.getByRole('region', { name: 'Model information' })).toContainText(
-    'Converting between formats is not implemented',
+    'STL is the only format CAD Fixer can write',
   );
+  // An STL source loses nothing on export, so the format note stays away.
+  await expect(page.getByTestId('export-format-note')).toHaveCount(0);
 });
 
 test('importing and exporting a model sends nothing to the network', async ({ page }) => {

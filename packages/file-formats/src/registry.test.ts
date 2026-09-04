@@ -45,29 +45,40 @@ describe('after registering the built-in formats', () => {
   });
 
   it.each([MeshFormatId.Obj, MeshFormatId.ThreeMf])(
-    'still reports %s as unsupported, because no codec exists',
+    'reads %s and does not claim to write it',
     (formatId) => {
+      // Stage 4A-2B1 added import. Export is 4A-2B2, and until then a writer
+      // lookup must fail rather than return something that pretends to work.
       registerBuiltInFormats();
 
-      expect(canRead(formatId)).toBe(false);
+      expect(canRead(formatId)).toBe(true);
       expect(canWrite(formatId)).toBe(false);
     },
   );
 
   it.each([MeshFormatId.Obj, MeshFormatId.ThreeMf])(
-    'fails loudly rather than returning a stub reader for %s',
+    'fails loudly rather than returning a stub writer for %s',
     (formatId) => {
       registerBuiltInFormats();
 
       try {
-        requireReader(formatId);
-        expect.unreachable('requireReader should have thrown');
+        requireWriter(formatId);
+        expect.unreachable('requireWriter should have thrown');
       } catch (caught) {
         expect(isAppError(caught)).toBe(true);
         if (!isAppError(caught)) return;
         expect(caught.code).toBe(AppErrorCode.UnsupportedFile);
         expect(caught.message).toContain('not implemented');
       }
+    },
+  );
+
+  it.each([MeshFormatId.Obj, MeshFormatId.ThreeMf])(
+    'returns a real reader for %s, bound to that format',
+    (formatId) => {
+      registerBuiltInFormats();
+
+      expect(requireReader(formatId).formatId).toBe(formatId);
     },
   );
 
