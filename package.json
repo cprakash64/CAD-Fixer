@@ -31,7 +31,8 @@
     "verify": "npm run format:check && npm run lint && npm run typecheck && npm run test && npm run build",
     "bench:topology": "vitest run --config vitest.bench.config.ts scripts/topology.bench-suite.ts",
     "bench:pipeline": "vitest run --config vitest.bench.config.ts scripts/pipeline.bench-suite.ts",
-    "bench:repair-browser": "CADFIXER_BROWSER_BENCH=1 playwright test e2e/repair-benchmark.spec.ts --reporter=list"
+    "bench:repair-browser": "CADFIXER_BROWSER_BENCH=1 playwright test e2e/repair-benchmark.spec.ts --reporter=list",
+    "test:e2e:timing": "playwright test --config playwright.timing.config.ts"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

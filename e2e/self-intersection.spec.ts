@@ -2,6 +2,7 @@ import { expect, test, type Page } from '@playwright/test';
 import {
   cleanGridStl,
   crossingTrianglesStl,
+  duplicateFaceStl,
   selfIntersectingShellStl,
   tetrahedronStl,
 } from './stl-fixtures';
@@ -39,14 +40,30 @@ async function instrumentWorkers(page: Page): Promise<void> {
   await page.addInitScript(() => {
     const created: string[] = [];
     (globalThis as { __cadfixerWorkers?: string[] }).__cadfixerWorkers = created;
+    const scope = globalThis as { __cadfixerLiveWorkers?: number };
+    scope.__cadfixerLiveWorkers = 0;
     const Real = globalThis.Worker;
     class Recording extends Real {
       public constructor(url: string | URL, options?: WorkerOptions) {
         // The name is what identifies the diagnostic worker; the URL is only a
         // fallback for a worker that did not set one.
-        created.push(options?.name ?? (typeof url === 'string' ? url : url.href));
+        const name = options?.name ?? (typeof url === 'string' ? url : url.href);
+        created.push(name);
         super(url, options);
+        if (name === 'cadfixer-self-intersection') {
+          scope.__cadfixerLiveWorkers = (scope.__cadfixerLiveWorkers ?? 0) + 1;
+        }
+        this.__cadfixerName = name;
       }
+
+      public override terminate(): void {
+        if (this.__cadfixerName === 'cadfixer-self-intersection') {
+          scope.__cadfixerLiveWorkers = Math.max(0, (scope.__cadfixerLiveWorkers ?? 0) - 1);
+        }
+        super.terminate();
+      }
+
+      private readonly __cadfixerName: string;
     }
     globalThis.Worker = Recording;
   });
@@ -241,4 +258,199 @@ test('SI-P08: the diagnostic sends nothing to the network', async ({ page }) => 
   });
 
   expect(offOrigin).toEqual([]);
+});
+
+/* ------------------------------------------------------------- SI-P09 -- */
+
+test('SI-P09: applying a repair invalidates the previous revision’s verdict', async ({ page }) => {
+  test.setTimeout(180_000);
+  await page.goto('/');
+
+  /*
+   * A repair produces a NEW authoritative revision. The verdict computed for the
+   * old one describes geometry that no longer exists, so it must not survive the
+   * transition even for a moment — a stale "None found" beside changed geometry
+   * is the most damaging thing this slice could do.
+   */
+  await openFile(page, 'duplicate.stl', duplicateFaceStl());
+
+  // Revision A is small, so it is checked automatically.
+  await expect(page.getByTestId('self-intersection-headline')).toHaveText('None found', {
+    timeout: 60_000,
+  });
+
+  await page.getByTestId('preview-repair').click();
+  await expect(page.getByTestId('repair-candidate')).toBeVisible({ timeout: 60_000 });
+  await page.getByTestId('apply-repair').click();
+  await expect(page.getByTestId('repair-applied')).toBeVisible({ timeout: 60_000 });
+
+  /*
+   * Revision B is also small, so policy re-derives to AUTO and a fresh check
+   * runs. What must never happen is the old verdict simply persisting: the
+   * headline is asserted again AFTER the apply, and the work summary must
+   * describe the new revision's own examination.
+   */
+  await expect(page.getByTestId('self-intersection-headline')).toHaveText('None found', {
+    timeout: 60_000,
+  });
+  await expect(page.getByTestId('self-intersection-work-summary')).toBeVisible();
+
+  // The applied repair is real: the model changed.
+  await expect(page.getByTestId('repair-applied')).toBeVisible();
+});
+
+/* ------------------------------------------------------------- SI-P10 -- */
+
+test('SI-P10: undoing a repair re-derives the diagnostic for the restored revision', async ({
+  page,
+}) => {
+  test.setTimeout(180_000);
+  await page.goto('/');
+
+  await openFile(page, 'duplicate.stl', duplicateFaceStl());
+  await expect(page.getByTestId('self-intersection-headline')).toHaveText('None found', {
+    timeout: 60_000,
+  });
+  const trianglesBefore = await page.getByTestId('fact-triangles').textContent();
+
+  await page.getByTestId('preview-repair').click();
+  await expect(page.getByTestId('repair-candidate')).toBeVisible({ timeout: 60_000 });
+  await page.getByTestId('apply-repair').click();
+  await expect(page.getByTestId('repair-applied')).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByTestId('self-intersection-headline')).toHaveText('None found', {
+    timeout: 60_000,
+  });
+
+  // Undo produces yet another revision. The B verdict belongs to B.
+  await page.getByTestId('undo-repair').click();
+  await expect(page.getByTestId('fact-triangles')).toHaveText(trianglesBefore ?? '', {
+    timeout: 60_000,
+  });
+
+  // The restored revision gets its own check, from its own policy band.
+  await expect(page.getByTestId('self-intersection-headline')).toHaveText('None found', {
+    timeout: 60_000,
+  });
+  await expect(page.getByTestId('self-intersection-work-summary')).toBeVisible();
+});
+
+/* ------------------------------------------------------------- SI-P11 -- */
+
+test('SI-P11: repeated check / cancel / retry cycles retain no diagnostic workers', async ({
+  page,
+}) => {
+  test.setTimeout(600_000);
+  await instrumentWorkers(page);
+  await page.goto('/');
+
+  /*
+   * LIFECYCLE, NOT GARBAGE COLLECTION. This does not claim memory is reclaimed
+   * at any particular moment — that is the collector's business and no test can
+   * honestly assert it. What it proves is REACHABILITY: after every terminal
+   * operation the previous worker has been terminated, so live diagnostic
+   * workers never accumulate no matter how many cycles run.
+   */
+  const model = cleanGridStl(120); // 28,800 triangles: explicit band, real WASM path
+  await openFile(page, 'cycles.stl', model.bytes);
+  await expect(page.getByTestId('self-intersection-headline')).toHaveText('Not checked', {
+    timeout: 180_000,
+  });
+
+  const liveWorkers = async (): Promise<number> =>
+    page.evaluate(
+      () => (globalThis as { __cadfixerLiveWorkers?: number }).__cadfixerLiveWorkers ?? 0,
+    );
+
+  const constructed: number[] = [];
+  const live: number[] = [];
+
+  // complete, complete, complete, cancel, retry, complete, cancel, complete
+  const plan = ['run', 'run', 'run', 'cancel', 'run', 'run', 'cancel', 'run'] as const;
+  for (const [index, step] of plan.entries()) {
+    await page.getByTestId('run-self-intersection').click();
+
+    if (step === 'cancel') {
+      await expect(page.getByTestId('cancel-self-intersection')).toBeVisible({ timeout: 60_000 });
+      await page.getByTestId('cancel-self-intersection').click();
+      await expect(page.getByTestId('self-intersection-headline')).toHaveText('Check cancelled', {
+        timeout: 60_000,
+      });
+    } else {
+      await expect(page.getByTestId('self-intersection-headline')).toHaveText('None found', {
+        timeout: 180_000,
+      });
+    }
+
+    constructed.push(
+      (await workerNames(page)).filter((n) => n === 'cadfixer-self-intersection').length,
+    );
+    live.push(await liveWorkers());
+
+    // THE INVARIANT, checked after EVERY terminal operation.
+    expect(await liveWorkers(), `after step ${String(index)} (${step})`).toBe(0);
+  }
+
+  // Exactly one worker per invocation — no hidden retain, no doubling.
+  expect(constructed[constructed.length - 1]).toBe(plan.length);
+  // And never a growing population of live ones.
+  expect(live.every((count) => count === 0)).toBe(true);
+});
+
+/* ------------------------------------------------------------- SI-P12 -- */
+
+test('SI-P12: a diagnostic worker that fails to load is reported, released and retryable', async ({
+  page,
+}) => {
+  test.setTimeout(180_000);
+
+  /*
+   * A REAL WORKER FAILURE, not a rejected promise.
+   *
+   * The Worker constructor is redirected — for the diagnostic worker only, and
+   * only for the first construction — at a URL that cannot load. The browser
+   * then delivers a genuine `error` event, which is the path under test: the
+   * listener, the port cleanup, the reference release and the retry. A hand
+   * rejected promise would exercise none of that.
+   *
+   * TEST-ONLY, and deliberately not reachable from the product: it lives in an
+   * init script, not behind a flag the application can read.
+   */
+  await page.addInitScript(() => {
+    const scope = globalThis as { __cadfixerFailNext?: boolean };
+    scope.__cadfixerFailNext = true;
+    const Real = globalThis.Worker;
+    class Failing extends Real {
+      public constructor(url: string | URL, options?: WorkerOptions) {
+        if (options?.name === 'cadfixer-self-intersection' && scope.__cadfixerFailNext === true) {
+          scope.__cadfixerFailNext = false;
+          super('/this-worker-does-not-exist.js', options);
+          return;
+        }
+        super(url, options);
+      }
+    }
+    globalThis.Worker = Failing;
+  });
+
+  await page.goto('/');
+  await openFile(page, 'crossing.stl', crossingTrianglesStl());
+
+  // The failure is surfaced as a failure — not as a clean result, and not as a
+  // check that never finishes.
+  await expect(page.getByTestId('self-intersection-headline')).toHaveText('Check failed', {
+    timeout: 60_000,
+  });
+  await expect(page.getByTestId('self-intersection-headline')).not.toHaveText('None found');
+  // The UI does not sit on "Checking…" forever.
+  await expect(page.getByTestId('cancel-self-intersection')).toHaveCount(0);
+
+  // The authoritative model is untouched and the app is still usable.
+  await expect(page.getByTestId('fact-triangles')).toHaveText('2');
+  await expect(page.getByTestId('topology-headline')).toBeVisible();
+
+  // RETRY on a fresh worker succeeds: only the first construction was sabotaged.
+  await page.getByTestId('run-self-intersection').click();
+  await expect(page.getByTestId('self-intersection-headline')).toContainText('intersecting', {
+    timeout: 60_000,
+  });
 });

@@ -160,23 +160,29 @@ test('cancelling a heavy repair stops the work early and leaves the model untouc
   /* ---- the acceptance gate ---- */
 
   /*
-   * EARLY TERMINATION, measured two ways, because one of them is contention-
-   * sensitive and the other is not.
+   * EARLY TERMINATION, at the ORIGINAL Stage 3B-1 threshold.
    *
-   * THE RATIO. Calibrated at 0.9, not 0.8. The measured window necessarily
-   * contains fixed overhead that cancellation cannot shrink — the click round
-   * trip, the worker message hop and a React commit — and when the full suite
-   * runs four workers in parallel that overhead grows while the cancellable work
-   * does not. Isolated runs sit at 0.62; under contention this has been observed
-   * at 0.85. An 0.8 threshold was therefore measuring machine load, not
-   * cancellation, and failed the suite for a reason unrelated to the product.
-   * 0.9 still separates "stopped early" from "ran to completion", which would be
-   * at or above 1.0.
+   * WHY 0.8 AND NOT SOMETHING LOOSER. Stage 3C-1B briefly relaxed this to 0.9
+   * after a full-suite failure at 0.852. That was the wrong diagnosis. Measured
+   * properly — ten consecutive isolated runs — this implementation sits at
+   * 0.608 to 0.640, nowhere near either threshold. What failed was the
+   * MEASUREMENT: under four parallel workers the uncancelled and cancelled
+   * halves land in different contention windows, and across five full-suite runs
+   * the ratio ranged from 0.640 to 1.17. A ratio above 1.0 means the "cancelled"
+   * run took longer than the uncancelled one, which cannot be a statement about
+   * cancellation at all.
    *
-   * THE ABSOLUTE SAVING. Independent of the ratio and of the fixed overhead:
-   * cancelling must save real time, not a few milliseconds.
+   * The fix was to make the measurement valid rather than the threshold
+   * forgiving: this spec now runs single-worker under
+   * `playwright.timing.config.ts`, and the approved Stage 3B-1 contract stands
+   * unchanged.
+   *
+   * THE ABSOLUTE SAVING is kept alongside the ratio. It is retained from the
+   * 3C-1B revision because it genuinely adds something the ratio does not: on a
+   * hypothetically tiny workload a ratio could pass while saving almost no real
+   * time.
    */
-  expect(tCancel).toBeLessThan(tFull * 0.9);
+  expect(tCancel).toBeLessThan(tFull * 0.8);
   expect(tFull - tCancel).toBeGreaterThan(300);
 
   // WORK PROGRESS: the pipeline had started and had NOT finished. This is

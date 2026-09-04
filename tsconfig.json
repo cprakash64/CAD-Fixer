@@ -16,7 +16,9 @@
     "e2e-browser/**/*.ts",
     "experiments/**/*.spec.ts",
     "experiments/**/*.config.ts",
+    "playwright.timing.config.ts",
     "packages/self-intersection-kernel/types/**/*.d.ts",
+    "packages/self-intersection-kernel/src/**/*.ts",
     "scripts/**/*.ts"
   ]
 }

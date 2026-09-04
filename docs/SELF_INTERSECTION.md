@@ -25,10 +25,45 @@ byte counts as STL, OBJ or 3MF.
 | `EXPLICIT_CHECK` | 25,001 – 250,000 | Offered as a button; never started on its own  |
 | `SIZE_LIMIT`     | > 250,000        | Not started at all                             |
 
-Measured latency behind those thresholds (median of three, reference device):
-20k **0.70 s**, 50k **1.79 s**, 100k **3.55 s**, 200k **7.50 s**, 500k **17.5 s**,
-1M **34.8 s**. These are a conservative MVP product decision about acceptable
-waiting, not a hardware-independent guarantee.
+### Measured in the browser (Stage 3C-1B-R1)
+
+Real Chromium, production build, median of three measured invocations after a
+warmup. Import is measured and reported separately — folding it in would
+attribute parsing cost to the check.
+
+| Faces   | Import   | Worker + WASM + transfer | Diagnostic | Total     | Candidate pairs |
+| ------- | -------- | ------------------------ | ---------- | --------- | --------------- |
+| 49,928  | 1,137 ms | 32 ms                    | 3,311 ms   | 3,341 ms  | 420,604         |
+| 100,352 | 1,254 ms | 51 ms                    | 6,327 ms   | 6,378 ms  | 847,624         |
+| 199,712 | 2,010 ms | 35 ms                    | 12,364 ms  | 12,398 ms | 1,689,976       |
+| 249,218 | 2,348 ms | 58 ms                    | 14,875 ms  | 14,956 ms | 2,109,889       |
+
+Every one reported `CHECKED` with tested pairs equal to candidate pairs — no
+capping anywhere in the supported band.
+
+**Startup is negligible and does not scale**: constructing the worker,
+instantiating the WebAssembly and transferring the geometry cost 32–58 ms at
+every size. The diagnostic itself is the entire cost.
+
+**Automatic band**, measured at 24,642 faces: the model became usable after
+1,046 ms and the verdict arrived **1,806 ms later, in the background**. Nobody
+waits for it.
+
+**These browser numbers are higher than the native figures ADR 0012 set the
+policy from** — 14.9 s at the ceiling against a native extrapolation nearer 9 s.
+WASM is slower than native, and the browser number is the one users actually
+experience. The bands still hold (see below), but the ceiling's real cost is
+~15 s, not ~9 s.
+
+These are a conservative MVP product decision about acceptable waiting on one
+reference device, not a hardware-independent guarantee.
+
+**Why 250,000 still stands at ~15 s.** The check is explicitly invoked, shows
+progress, is cancellable at any moment, and — measured — leaves the main thread
+completely free: the longest frame gap during a 115,200-face check was 19 ms,
+identical to the idle baseline, with UI interaction responding in 42 ms and
+Cancel taking effect in 43 ms. A user who starts it can keep working or stop it.
+A shorter ceiling would exclude models the diagnostic handles correctly.
 
 **The ceiling is a preflight gate.** Above it no diagnostic worker is created, no
 WebAssembly is instantiated, no geometry is copied and no broadphase is built —
