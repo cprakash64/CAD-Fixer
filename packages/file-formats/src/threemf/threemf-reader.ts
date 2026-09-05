@@ -21,6 +21,18 @@ import {
 } from '@cadfixer/shared';
 import type { FormatReadContext } from '../context';
 import { MeshFormatId } from '../formats';
+/*
+ * THE UNIT TOKENS LIVE IN A LEAF MODULE, not here.
+ *
+ * `export/compatibility.ts` runs on the MAIN THREAD and needs this list to
+ * decide whether a unit the user chose can be written. Importing it from this
+ * file would invite a bundler to follow this file's own imports — the XML
+ * scanner, the ZIP reader, the whole intake path — into the application bundle,
+ * for six strings. Re-exported so every existing caller is unaffected.
+ */
+import { THREE_MF_DEFAULT_UNIT, THREE_MF_UNITS } from './units';
+
+export { THREE_MF_DEFAULT_UNIT, THREE_MF_UNITS };
 import {
   EMPTY_COMPATIBILITY,
   UnsupportedFeature,
@@ -116,14 +128,6 @@ const MODEL_PART = '3d/3dmodel.model';
  * `packages/shared/src/units.ts` chose them from this list. The check below is
  * still explicit rather than trusting that they stay aligned.
  */
-export const THREE_MF_UNITS: readonly string[] = Object.freeze([
-  'micron',
-  'millimeter',
-  'centimeter',
-  'inch',
-  'foot',
-  'meter',
-]);
 
 /**
  * What `<model>` means when it omits `unit`.
@@ -133,7 +137,6 @@ export const THREE_MF_UNITS: readonly string[] = Object.freeze([
  * opposite of STL, which has no unit field at all and therefore genuinely
  * states nothing — see `describeUnit` in the application.
  */
-export const THREE_MF_DEFAULT_UNIT = 'millimeter';
 
 /** Resource elements CAD Fixer knowingly does not model. Recorded, never dropped silently. */
 const UNSUPPORTED_RESOURCE_ELEMENTS: readonly string[] = Object.freeze([
@@ -494,12 +497,29 @@ function materialiseMeshes(model: ParsedModel, stats?: ThreeMfExpansionStats): v
  * is one part per leaf with transforms composed; an object with vertices but no
  * triangles, or one the build never references, becomes NO part.
  */
+interface ExpandedBuild {
+  readonly parts: readonly GeometryPart[];
+  /**
+   * True when at least one imported part came from inside a `<component>`.
+   *
+   * RECORDED BECAUSE THE HIERARCHY IS NOT RETAINED. A `GeometryDocument` holds
+   * leaf placements with composed transforms, which is a faithful description of
+   * WHERE everything is and a lossy one of HOW the file said so. Export can
+   * therefore not reconstruct the nesting, and a conversion report has to be
+   * able to say that — but only when there was nesting to lose. A flat file gets
+   * no such note, because inventing one would be a warning about a structure the
+   * user never wrote.
+   */
+  readonly expandedFromComponents: boolean;
+}
+
 function expandBuild(
   model: ParsedModel,
   limits: ThreeMfLimits,
   stats?: ThreeMfExpansionStats,
-): readonly GeometryPart[] {
+): ExpandedBuild {
   const parts: GeometryPart[] = [];
+  let expandedFromComponents = false;
   /*
    * RUNNING DOCUMENT TOTALS, because the document counts PER PART.
    *
@@ -612,6 +632,7 @@ function expandBuild(
     }
 
     const nextPath = new Set(path).add(objectId);
+    if (object.components.length > 0) expandedFromComponents = true;
     for (const component of object.components) {
       walk(
         component.objectId,
@@ -626,7 +647,7 @@ function expandBuild(
   for (const item of model.build) {
     walk(item.objectId, item.transform, new Set<string>(), 0, undefined);
   }
-  return parts;
+  return { parts, expandedFromComponents };
 }
 
 /** Finds the model part, preferring the spec's fixed path. */
@@ -742,7 +763,7 @@ export async function read3mf(
 
   context.progress.report(0.75, 'building document');
   materialiseMeshes(model, options.stats);
-  const parts = expandBuild(model, limits, options.stats);
+  const { parts, expandedFromComponents } = expandBuild(model, limits, options.stats);
   throwIfCancelled(context.cancellation);
 
   if (parts.length === 0) {
@@ -797,6 +818,21 @@ export async function read3mf(
       diagnostic(
         'THREEMF_MATERIALS_NOT_IMPORTED',
         'This 3MF file contains colour or material definitions. CAD Fixer keeps the reference each part names but does not interpret them, so colours are not shown.',
+      ),
+    );
+  }
+
+  if (expandedFromComponents) {
+    /*
+     * NOT AN ERROR AND NOT A DEGRADED IMPORT. Every placement is present and in
+     * the right place; what is gone is the nesting that described it. Recorded
+     * so a later conversion can say so, and recorded ONLY when it happened.
+     */
+    unsupportedFeatures.push(UnsupportedFeature.ComponentHierarchy);
+    warnings.push(
+      diagnostic(
+        'THREEMF_COMPONENT_HIERARCHY_FLATTENED',
+        'This 3MF file nests objects inside components. Every placement was imported in the right position, but the nesting itself is not kept, so exporting cannot rebuild it.',
       ),
     );
   }

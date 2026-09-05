@@ -1074,3 +1074,240 @@ button:disabled {
   color: var(--text-secondary);
   font-family: var(--font-mono);
 }
+
+/* ------------------------------------------------- export / convert -- */
+
+/*
+ * The conversion dialog.
+ *
+ * SIZED IN `min()` RATHER THAN A FIXED WIDTH, so it stays usable at the narrow
+ * layouts the shell already supports rather than forcing a horizontal scroll.
+ * Every string it shows can be user-supplied — a filename, a part name — so all
+ * of them wrap and none of them can push the panel wider than the viewport.
+ */
+.convert__backdrop {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: var(--space-4);
+  background: rgb(4 8 12 / 72%);
+  z-index: 20;
+}
+
+.convert {
+  width: min(46rem, 100%);
+  max-height: min(90dvh, 100%);
+  overflow-y: auto;
+  background: var(--surface-panel);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  padding: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.convert__bar {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.convert__title {
+  margin: 0;
+  font-size: 1rem;
+  letter-spacing: 0.02em;
+}
+
+.convert__subtitle {
+  margin: 0 0 var(--space-1);
+  font-size: 0.8125rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-secondary);
+}
+
+.convert__source,
+.convert__note,
+.convert__qualifier {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 0.8125rem;
+  /* Long filenames and part names WRAP rather than widening the dialog. */
+  overflow-wrap: anywhere;
+}
+
+.convert__qualifier {
+  border-top: 1px solid var(--border-subtle);
+  padding-top: var(--space-3);
+}
+
+.convert__filename {
+  font-family: var(--font-mono);
+  color: var(--text-primary);
+}
+
+.convert__targets {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.convert__legend {
+  padding: 0;
+  font-size: 0.8125rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-secondary);
+}
+
+.convert__target {
+  display: grid;
+  grid-template-columns: auto auto 1fr;
+  align-items: baseline;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+
+.convert__target--selected {
+  border-color: var(--accent);
+  background: var(--surface-raised);
+}
+
+.convert__target-name {
+  font-weight: 600;
+}
+
+.convert__target-summary {
+  color: var(--text-secondary);
+  font-size: 0.8125rem;
+}
+
+.convert__report {
+  display: grid;
+  gap: var(--space-3);
+}
+
+/*
+ * VERDICT AND SECTION SEVERITY.
+ *
+ * Colour is never the only signal: every section carries a heading that states
+ * its meaning in words, and the verdict line is a sentence rather than a badge.
+ * The left border is reinforcement for people who read colour, not the message.
+ */
+.convert__verdict {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border-left: 3px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+}
+
+.convert__verdict--clear {
+  border-left-color: var(--severity-success);
+}
+
+.convert__verdict--note {
+  border-left-color: var(--accent);
+}
+
+.convert__verdict--caution {
+  border-left-color: var(--severity-warning);
+}
+
+.convert__verdict--action {
+  border-left-color: var(--severity-error);
+}
+
+.convert__section {
+  border-left: 3px solid var(--border-strong);
+  padding-left: var(--space-3);
+}
+
+.convert__section--clear {
+  border-left-color: var(--severity-success);
+}
+
+.convert__section--note {
+  border-left-color: var(--accent);
+}
+
+.convert__section--caution {
+  border-left-color: var(--severity-warning);
+}
+
+.convert__section--action {
+  border-left-color: var(--severity-error);
+}
+
+.convert__facts {
+  margin: 0;
+  padding-left: var(--space-4);
+  color: var(--text-secondary);
+  font-size: 0.8125rem;
+}
+
+.convert__facts li + li {
+  margin-top: var(--space-1);
+}
+
+.convert__clear {
+  margin: 0;
+  color: var(--severity-success);
+}
+
+.convert__unit {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--severity-warning);
+  border-radius: var(--radius);
+}
+
+.convert__unit-label {
+  font-size: 0.8125rem;
+  color: var(--text-secondary);
+}
+
+.convert__unit-select {
+  font: inherit;
+  color: inherit;
+  background: var(--surface-raised);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  padding: var(--space-2);
+  max-width: 20rem;
+}
+
+.convert__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.action--primary {
+  border-color: var(--accent);
+}
+
+.convert__progress {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.convert__failure {
+  margin: 0;
+  color: var(--severity-error);
+}
+
+.convert__saved {
+  margin: 0;
+  color: var(--severity-success);
+  overflow-wrap: anywhere;
+}

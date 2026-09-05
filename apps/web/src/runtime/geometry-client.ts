@@ -285,6 +285,8 @@ export class GeometryClient {
     target: string;
     operationId: string;
     port: MessagePort;
+    /** Applied only when the DOCUMENT states no unit. The worker decides that. */
+    unitAssertion?: string;
   }): Promise<SendForExportResult> {
     return this.coordinator.dispatch(
       'document/send-for-export',
@@ -293,6 +295,7 @@ export class GeometryClient {
         target: request.target,
         operationId: request.operationId,
         port: request.port,
+        ...(request.unitAssertion === undefined ? {} : { unitAssertion: request.unitAssertion }),
       },
       { transfer: [request.port] },
     ).promise;

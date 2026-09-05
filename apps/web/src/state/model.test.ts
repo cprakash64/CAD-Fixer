@@ -14,6 +14,8 @@ function source(overrides: Partial<ModelSource> = {}): ModelSource {
     formatId: 'stl',
     encoding: 'binary',
     unit: undefined,
+    unsupportedFeatures: [],
+    externalReferences: [],
     importedAt: 0,
     ...overrides,
   };

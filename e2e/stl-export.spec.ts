@@ -76,17 +76,22 @@ test('exports an ASCII STL that is valid, locale-independent text', async ({ pag
   expect(text).not.toMatch(/\d,\d/);
 });
 
-test('the UI does not claim format conversion is available', async ({ page }) => {
+test('the UI describes what CAD Fixer can now actually write', async ({ page }) => {
   await page.goto('/');
   await loadModel(page, 40);
 
-  // Reading OBJ and 3MF did NOT make writing them possible, and Convert must
-  // stay visibly unavailable.
-  await expect(page.getByTestId('workflow-convert')).toBeDisabled();
-  await expect(page.getByRole('region', { name: 'Model information' })).toContainText(
-    'STL is the only format CAD Fixer can write',
-  );
-  // An STL source loses nothing on export, so the format note stays away.
+  /*
+   * STAGE 4A-2B3 MADE THIS TRUE, so the assertion changed with it rather than
+   * being relaxed. Until this stage the product could read three formats and
+   * write one, and the panel said exactly that; it can now write all three, and
+   * saying otherwise would be the mirror-image dishonesty.
+   */
+  const panel = page.getByRole('region', { name: 'Model information' });
+  await expect(panel).toContainText('reads STL, OBJ and 3MF, and writes all three');
+  await expect(panel).not.toContainText('STL is the only format CAD Fixer can write');
+  await expect(page.getByTestId('workflow-convert')).toBeEnabled();
+
+  // An STL source loses nothing on the ACTIVE-PART export, so its note stays away.
   await expect(page.getByTestId('export-format-note')).toHaveCount(0);
 });
 

@@ -4,7 +4,7 @@ import { App } from './App';
 import { GeometryClientProvider } from './runtime/client-context';
 import { GeometryClient } from './runtime/geometry-client';
 import { WorkspaceProvider } from './state/store-context';
-import { WORKFLOWS } from './state/workflows';
+import { WORKFLOWS, WorkflowId } from './state/workflows';
 import { WorkspaceStore } from './state/workspace-store';
 
 /**
@@ -77,13 +77,18 @@ describe('workflow navigation', () => {
   });
 
   /**
-   * Repair became the FIRST enabled workflow in Stage 3B-1B, so the assertion
-   * moved from "none of them work" to "exactly the implemented one works".
-   * Deliberately keyed off `WORKFLOWS[].implemented` rather than a hard-coded
-   * name, so the day Convert ships this test still describes the truth instead
-   * of needing to be loosened.
+   * Repair became the FIRST enabled workflow in Stage 3B-1B and Convert became
+   * the second in Stage 4A-2B3. The assertion is keyed off
+   * `WORKFLOWS[].implemented` rather than a hard-coded name, and the explicit
+   * list below is stated so that flipping a workflow's flag without shipping it
+   * fails here rather than passing quietly.
+   *
+   * CONVERT IS IMPLEMENTED AND STILL DISABLED IN THIS RENDER, because no model
+   * is loaded. That is not the same state as "not implemented", and the two are
+   * asserted apart in the test below: one says the feature does not exist, the
+   * other says it has nothing to act on.
    */
-  it('enables exactly the workflows that are implemented', () => {
+  it('enables exactly the workflows that are implemented and have something to act on', () => {
     renderApp();
     const nav = screen.getByRole('navigation', { name: 'Workflows' });
 
@@ -92,30 +97,41 @@ describe('workflow navigation', () => {
       .filter((button) => !(button as HTMLButtonElement).disabled)
       .map((button) => button.textContent);
 
-    const expected = WORKFLOWS.filter((workflow) => workflow.implemented).map(
+    const implemented = WORKFLOWS.filter((workflow) => workflow.implemented).map(
       (workflow) => workflow.label,
     );
 
-    expect(enabled).toEqual(expected);
-    // The one that is enabled is Repair, and it is the only one.
-    expect(expected).toEqual(['Repair']);
+    expect(implemented).toEqual(['Repair', 'Convert']);
+    // With an empty workspace, Convert has nothing to convert and says so.
+    expect(enabled).toEqual(['Repair']);
   });
 
-  it('marks the unimplemented workflows as such for assistive technology too', () => {
+  it('tells an implemented workflow with nothing to act on apart from a missing one', () => {
     renderApp();
 
     for (const workflow of WORKFLOWS) {
       const button = screen.getByTestId(`workflow-${workflow.id}`);
-      if (workflow.implemented) {
-        expect(button).toBeEnabled();
-        // No badge on a workflow that genuinely exists — the badge is a claim
-        // about absence, and printing it beside a working screen would be the
-        // mirror image of claiming a capability that is missing.
-        expect(button).not.toHaveTextContent('Not implemented');
+      if (!workflow.implemented) {
+        expect(button).toBeDisabled();
+        expect(button).toHaveTextContent('Not implemented');
         continue;
       }
-      expect(button).toBeDisabled();
-      expect(button).toHaveTextContent('Not implemented');
+
+      // No "Not implemented" badge on a workflow that genuinely exists — the
+      // badge is a claim about absence, and printing it beside a working screen
+      // would be the mirror image of claiming a capability that is missing.
+      expect(button).not.toHaveTextContent('Not implemented');
+
+      if (workflow.id === WorkflowId.Convert) {
+        // IMPLEMENTED, UNAVAILABLE, AND EXPLICIT ABOUT WHICH. A disabled button
+        // with no reason beside it is indistinguishable from a broken one.
+        expect(button).toBeDisabled();
+        expect(button).toHaveTextContent('Open a model first');
+        continue;
+      }
+
+      expect(button).toBeEnabled();
+      expect(button).not.toHaveTextContent('Open a model first');
     }
   });
 

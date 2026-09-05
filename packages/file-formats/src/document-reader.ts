@@ -39,6 +39,20 @@ export const UnsupportedFeature = {
   ExternalMaterialLibrary: 'EXTERNAL_MATERIAL_LIBRARY',
   /** A mesh resource the build never places. Parsed, then not shown. */
   UnreferencedObject: 'UNREFERENCED_OBJECT',
+  /**
+   * A 3MF nested component graph, expanded into flat parts.
+   *
+   * THE ODD ONE OUT, and deliberately listed here anyway. Components ARE
+   * imported: every leaf placement is present, with its transforms composed, in
+   * exactly the position the file describes. What is not carried across is the
+   * NESTING — a `GeometryDocument` has no notion of a part containing parts —
+   * so the structure the file used to say where things go is gone even though
+   * nothing about where they go has changed.
+   *
+   * That is a real thing a later export cannot put back, which is what this
+   * list is for. It is recorded only when a component was actually expanded.
+   */
+  ComponentHierarchy: 'COMPONENT_HIERARCHY',
 } as const;
 
 export type UnsupportedFeature = (typeof UnsupportedFeature)[keyof typeof UnsupportedFeature];

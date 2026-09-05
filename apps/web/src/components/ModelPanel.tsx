@@ -2,18 +2,32 @@ import type { ReactNode } from 'react';
 import { describeEncoding, describeSourceFormat, describeUnit } from '../state/model';
 import { useWorkspaceState } from '../state/store-context';
 import { useModelExport } from '../state/use-model-export';
+import { useDocumentConversion } from '../state/use-document-conversion';
 
 /**
- * Model information and STL re-export.
+ * Model information and the two ways out of it.
  *
  * PRESENTATION ONLY. Every number shown here was computed in the worker during
- * import, and the export button calls a hook that owns the operation. This
- * component dispatches no worker operations, builds no filenames, and triggers
- * no downloads — that all moved to `runtime/export-service`.
+ * import, and both export controls call hooks that own their operations.
+ *
+ * THERE ARE TWO EXPORTS AND THEY ARE NOT THE SAME OPERATION, which is why they
+ * are not both called "Export":
+ *
+ *   - EXPORT / CONVERT writes the WHOLE DOCUMENT, in a format the user chooses,
+ *     after showing what that format keeps and what it cannot. It is the
+ *     primary action and it is what "Export" means everywhere else in the
+ *     product.
+ *   - EXPORT ACTIVE PART AS STL writes ONE part, the selected one, and is the
+ *     only way to get a single part out of a multi-part document. It is kept
+ *     because nothing else does that, and it is labelled with the word "part"
+ *     in the button itself — a second control also called "Export STL" that
+ *     silently wrote a third of the model would be exactly the ambiguity Stage
+ *     4A-2B3 exists to remove.
  */
 export function ModelPanel(): ReactNode {
   const { model, activePartId } = useWorkspaceState();
   const { exportModel, cancelExport, isExporting, fraction, encoding } = useModelExport();
+  const { open: openConversion } = useDocumentConversion();
 
   if (model === undefined) {
     return (
@@ -88,8 +102,34 @@ export function ModelPanel(): ReactNode {
 
       <h3 className="panel__subtitle">Export</h3>
       <p className="panel__note">
-        Writes STL. STL, OBJ and 3MF can be read; STL is the only format CAD Fixer can write, so
-        Convert stays unavailable. Files are written on this device; nothing is uploaded.
+        CAD Fixer reads STL, OBJ and 3MF, and writes all three. Files are written on this device;
+        nothing is uploaded.
+      </p>
+      <div className="panel__actions">
+        <button
+          type="button"
+          className="action action--primary"
+          onClick={openConversion}
+          data-testid="open-convert"
+        >
+          Export / Convert…
+        </button>
+      </div>
+      <p className="panel__note">
+        Writes the whole document — every part — as STL, OBJ or 3MF, and shows what the format you
+        choose will keep before anything is written.
+      </p>
+
+      {/*
+        THE SMALLER OPERATION, SEPARATED AND NAMED. It writes ONE part, which is
+        a different thing from the button above, and nothing else in the product
+        can do it. The heading, the note and the buttons all say "part".
+      */}
+      <h3 className="panel__subtitle">Export one part</h3>
+      <p className="panel__note" data-testid="export-part-note">
+        {model.parts.length > 1
+          ? `Writes the selected part on its own as an STL. The other ${(model.parts.length - 1).toLocaleString()} ${model.parts.length === 2 ? 'part is' : 'parts are'} not included. Use Export / Convert above to write the whole document.`
+          : 'Writes the selected part on its own as an STL. This document has one part, so this is the whole model.'}
       </p>
       {model.source.formatId === 'stl' ? null : (
         /* STATED BEFORE THE CLICK. Reading an OBJ or a 3MF and writing an STL
@@ -104,17 +144,6 @@ export function ModelPanel(): ReactNode {
             : `, so the source's stated unit (${model.source.unit}) is not written into the file. The coordinates are written unchanged.`}
         </p>
       )}
-      {model.parts.length > 1 ? (
-        /* STATED BEFORE THE CLICK, not warned about after it. An STL file holds
-           one object, so exporting a multi-part document cannot keep the parts
-           apart — and a button that silently wrote one of three parts would be
-           losing the user's structure without saying so. */
-        <p className="panel__note" data-testid="export-part-note">
-          STL files hold one object. This writes the selected part only; the other{' '}
-          {(model.parts.length - 1).toLocaleString()} will not be included. Multi-part export
-          arrives with format conversion.
-        </p>
-      ) : null}
       <div className="panel__actions">
         <button
           type="button"
@@ -125,7 +154,7 @@ export function ModelPanel(): ReactNode {
           disabled={isExporting || activePartId === undefined}
           data-testid="export-binary"
         >
-          Export binary STL
+          Export active part as binary STL
         </button>
         <button
           type="button"
@@ -136,7 +165,7 @@ export function ModelPanel(): ReactNode {
           disabled={isExporting || activePartId === undefined}
           data-testid="export-ascii"
         >
-          Export ASCII STL
+          Export active part as ASCII STL
         </button>
       </div>
 

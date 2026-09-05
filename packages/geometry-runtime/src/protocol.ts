@@ -388,6 +388,34 @@ export interface PartDescriptor {
    * sharing without ever seeing the geometry that is shared.
    */
   readonly meshResourceIndex: number;
+
+  /* ------------------------------------------------ conversion features -- */
+  /**
+   * The rest of this interface exists so the page can answer "what would be
+   * lost if this were saved as OBJ?" without asking the worker and without
+   * touching geometry.
+   *
+   * WHY NOT A WORKER ROUND TRIP. A report fetched once goes stale the moment a
+   * repair lands, and a dialog holding a stale report is exactly the hazard
+   * Stage 4A-2B3 has to rule out. Derived from descriptors the page already
+   * holds, the report is a pure function of current state and recomputes for
+   * free when that state changes — there is no window in which it can describe
+   * a revision the user has moved off.
+   *
+   * All of it is scalar: three counts and a short opaque string. A thousand-part
+   * document pays a few kilobytes, which is what the rest of this interface
+   * already costs.
+   */
+  /** Opaque material reference this PART names, when the source had one. */
+  readonly materialRef?: string;
+  /** Canonical groups in this part's mesh. Shared meshes report the same count. */
+  readonly groupCount: number;
+  /** Groups in this part's mesh that name a material. A subset of `groupCount`. */
+  readonly groupMaterialRefCount: number;
+  /** True when this part's mesh stores per-vertex normals. */
+  readonly hasNormals: boolean;
+  /** True when this part's mesh stores per-vertex texture coordinates. */
+  readonly hasUvs: boolean;
 }
 
 /**
@@ -459,6 +487,15 @@ export interface ModelImportResult {
    * decorated with warnings about things it never contained.
    */
   readonly unsupportedFeatures: readonly string[];
+  /**
+   * Opaque names the source referred to and CAD Fixer never opened.
+   *
+   * An OBJ `mtllib` is the only producer today. Carried as TEXT for display:
+   * nothing resolves it, nothing fetches it, and nothing asks the user for it.
+   * Reported so a later conversion can say the reference existed and was not
+   * followed, rather than leaving the user to wonder where their materials went.
+   */
+  readonly externalReferences: readonly string[];
   /** Structural validation summary. The import already passed the gate. */
   readonly validation: MeshValidationSummary;
   /** Bytes of authoritative geometry the worker now holds for this model. */
@@ -625,10 +662,19 @@ export interface SendForDiagnosticPayload {
 
 export interface SendForExportPayload {
   readonly handle: DocumentHandle;
-  /** `obj` or `3mf`. Validated in the export worker, not trusted here. */
+  /** `stl`, `obj` or `3mf`. Validated in the export worker, not trusted here. */
   readonly target: string;
   readonly operationId: string;
   readonly port: ProtocolPort;
+  /**
+   * What the user says this document's numbers mean, for THIS export only.
+   *
+   * USED ONLY WHEN THE DOCUMENT STATES NO UNIT, which the authoritative worker
+   * decides — not the caller. The document is not edited, its revision does not
+   * move, and nothing is rescaled: the assertion travels on a disposable
+   * snapshot and dies with it. See ADR 0017.
+   */
+  readonly unitAssertion?: string;
 }
 
 export interface SendForExportResult {

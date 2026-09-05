@@ -262,19 +262,27 @@ test('undo restores the repaired part without disturbing the other', async ({ pa
 
 /* ------------------------------------------------------------ size policy -- */
 
-test('export states, before the click, that STL will carry one part', async ({ page }) => {
+test('the single-part export states, before the click, what it leaves out', async ({ page }) => {
   await openFile(page, 'assembly.obj', objMultiPart(3).bytes);
   await expect(page.getByTestId('fact-parts')).toHaveText('3', { timeout: 30_000 });
 
   const note = page.getByTestId('export-part-note');
   await expect(note).toBeVisible();
-  await expect(note).toContainText('the other 2 will not be included');
-  // And the format note, because an OBJ was read and an STL will be written.
+  await expect(note).toContainText('The other 2 parts are not included');
+  // And it points at the control that DOES write the whole document.
+  await expect(note).toContainText('Export / Convert');
+  // The format note, because an OBJ was read and an STL will be written.
   await expect(page.getByTestId('export-format-note')).toContainText('read from OBJ');
 
-  // The buttons still say STL, and Convert is still unavailable.
-  await expect(page.getByTestId('export-binary')).toHaveText('Export binary STL');
-  await expect(page.getByTestId('workflow-convert')).toBeDisabled();
+  /*
+   * THE TWO EXPORTS ARE NAMED APART. Stage 4A-2B3 added a whole-document
+   * conversion beside this one, and two controls both called "Export STL" —
+   * one writing three parts and one writing a third of them — would be exactly
+   * the silent loss the workflow exists to remove.
+   */
+  await expect(page.getByTestId('export-binary')).toHaveText('Export active part as binary STL');
+  await expect(page.getByTestId('open-convert')).toHaveText('Export / Convert…');
+  await expect(page.getByTestId('workflow-convert')).toBeEnabled();
 });
 
 test('a 3MF that states a unit says so, and says STL will not carry it', async ({ page }) => {

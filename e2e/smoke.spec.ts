@@ -95,17 +95,28 @@ test('the geometry worker round-trips a transferred buffer', async ({ page }) =>
 });
 
 /**
- * Repair is the first workflow to ship, so this assertion changed from "none of
- * them work" to "exactly one of them does". The four that do not exist must stay
- * disabled AND keep saying so — a navigation item that looks available and is
- * not is the first place a tool starts lying to its user.
+ * Repair shipped first and Convert second, so this assertion has moved twice —
+ * each time to describe the new truth rather than to accommodate it.
+ *
+ * IT NOW DISTINGUISHES THREE STATES, because there are three. A workflow that
+ * does not exist says so. A workflow that exists but has nothing to act on says
+ * THAT instead: on an empty workspace Convert has no document to convert, and a
+ * disabled button with no reason beside it is indistinguishable from a broken
+ * one. Anything else is the first place a tool starts lying to its user.
  */
-test('only the implemented workflow can be opened', async ({ page }) => {
+test('every workflow says which of the three states it is in', async ({ page }) => {
   await page.goto('/');
 
   await expect(page.getByTestId('workflow-repair')).toBeEnabled();
 
-  for (const workflow of ['convert', 'split', 'texture', 'hollow']) {
+  // Implemented, and waiting for a model.
+  const convert = page.getByTestId('workflow-convert');
+  await expect(convert).toBeDisabled();
+  await expect(convert).toContainText('Open a model first');
+  await expect(convert).not.toContainText('Not implemented');
+
+  // Not implemented at all.
+  for (const workflow of ['split', 'texture', 'hollow']) {
     const item = page.getByTestId(`workflow-${workflow}`);
     await expect(item).toBeDisabled();
     await expect(item).toContainText('Not implemented');

@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import { AppHeader } from './components/AppHeader';
+import { ConvertDialog } from './components/ConvertDialog';
 import { ImportDropZone } from './components/ImportDropZone';
 import { MeshHealthPanel } from './components/MeshHealthPanel';
 import { ModelPanel } from './components/ModelPanel';
@@ -47,6 +48,10 @@ export function App(): ReactNode {
         </aside>
       </div>
       <StatusPanel />
+      {/* Rendered at the shell so it overlays the workspace rather than being
+          trapped inside a sidebar panel's scroll region. It renders nothing at
+          all until the user opens it. */}
+      <ConvertDialog />
     </div>
   );
 }

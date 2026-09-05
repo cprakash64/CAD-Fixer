@@ -61,8 +61,46 @@ export interface ModelSource {
   readonly formatId: string;
   /** How the file was physically encoded, as detected from its structure. */
   readonly encoding: string;
-  /** The unit the source stated, or `undefined` when it stated none. */
+  /**
+   * The unit the source stated, or `undefined` when it stated none.
+   *
+   * THE PAGE'S ONE MIRROR OF `GeometryDocument.unit`. It is set from the
+   * IMPORT RESULT — the committed document's unit — and it stays correct
+   * across repair and undo because both build their successor with
+   * `withPartMesh`, which carries the document's unit through untouched. A
+   * test pins that; it is not left to be true by accident.
+   *
+   * Nothing writes a file from this. The authoritative worker reads the real
+   * document when it builds an export snapshot, so the worst a wrong mirror
+   * could do is offer the user a question they did not need to answer.
+   */
   readonly unit: string | undefined;
+  /**
+   * WHAT THE FILE CONTAINED AND CAD FIXER DID NOT IMPORT.
+   *
+   * KEPT FOR THE WHOLE LIFE OF THE MODEL, not just for the status line that
+   * announced it. A 3MF with textures imports its geometry perfectly and loses
+   * its textures; ten minutes later the user opens Export and has to be told
+   * that exporting cannot restore something that was never read. Before this
+   * stage the fact reached a status entry and then existed nowhere.
+   *
+   * SOURCE METADATA, NOT GEOMETRY IDENTITY. It describes the FILE that was
+   * opened, so it is not part of the document, it takes no part in any handle
+   * or revision comparison, and a repair does not change it. Replacing the
+   * model by importing another file replaces it atomically with the new file's,
+   * because it belongs to whichever file is loaded.
+   *
+   * Bounded by construction: `UnsupportedFeature` is a closed set of five
+   * tokens, so this is at most five short strings.
+   */
+  readonly unsupportedFeatures: readonly string[];
+  /**
+   * Opaque names the source referred to and CAD Fixer never opened.
+   *
+   * UNTRUSTED TEXT. Rendered as text and nothing else — never resolved as a
+   * path, never fetched, never used to name a download.
+   */
+  readonly externalReferences: readonly string[];
   readonly importedAt: number;
 }
 

@@ -105,14 +105,18 @@ function requestDigest(documentId: string, revision: number): Promise<HarnessDig
 }
 
 /*
- * THE EXPORT SERVICE, DRIVEN FROM THE HARNESS AND NOWHERE ELSE.
+ * THE EXPORT SERVICE, DRIVEN FROM THE HARNESS AS WELL AS FROM THE PRODUCT.
  *
- * Stage 4A-2B2 builds the export ENGINE; Stage 4A-2B3 builds the workflow that
- * lets a user reach it. Until then the only thing that calls it is this bridge,
- * which is not in the application build — so a browser test can prove the whole
- * path works without the product claiming a feature it has not finished
- * designing. There is deliberately no production URL, query parameter or hidden
- * button that reaches this.
+ * Stage 4A-2B2 built the export ENGINE and this bridge was its only caller;
+ * Stage 4A-2B3 built the workflow, so the application now drives the same
+ * service through `use-document-conversion.ts`. The bridge stays because it can
+ * do something the product deliberately cannot: put a SYNTHETIC multi-part
+ * document in front of the exporter — a thousand placements of one mesh, a
+ * reflection, a shared resource — none of which any production import can
+ * produce for a browser test to export.
+ *
+ * It is still not in the application build, and there is still no production
+ * URL, query parameter or hidden button that reaches it.
  */
 const exportService = new DocumentExportService(geometryClient);
 

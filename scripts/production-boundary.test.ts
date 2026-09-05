@@ -190,14 +190,15 @@ describe('the geometry engines stay in the worker', () => {
 
   it('keeps the WRITER ORACLES out of production code', () => {
     /*
-     * `obj-oracle.ts` and `threemf-oracle.ts` are structural checkers that share
+     * `obj-oracle.ts`, `threemf-oracle.ts` and `stl-oracle.ts` are structural
+     * checkers that share
      * no code with the production readers ON PURPOSE: parse-back validation runs
      * our reader over our writer, which proves the two agree and nothing more,
      * so the oracles exist to catch a shared misunderstanding. Production
      * importing one would make them a second parser — the exact thing they must
      * not become.
      */
-    const ORACLES = ['obj-oracle', 'threemf-oracle'];
+    const ORACLES = ['obj-oracle', 'threemf-oracle', 'stl-oracle'];
     const offenders: string[] = [];
     const productionFiles = [
       ...sourceFilesUnder(join(REPO_ROOT, 'apps', 'web', 'src')),
@@ -217,34 +218,52 @@ describe('the geometry engines stay in the worker', () => {
     expect(offenders, 'a test oracle became reachable from production').toEqual([]);
   });
 
-  it('keeps the document EXPORT ENGINE out of the shipped application', () => {
+  it('keeps the document WRITERS out of the main-thread bundle', () => {
     /*
-     * STAGE 4A-2B2 BUILDS THE ENGINE AND NOT THE WORKFLOW. The writers, the
-     * export worker and the export controller are complete and tested, and the
-     * only thing that calls them is the harness bridge — which is not an input
-     * to the application build.
+     * STAGE 4A-2B3 CHANGED WHAT THIS PROTECTS, and deliberately did not delete
+     * it.
      *
-     * This is what stops the product quietly acquiring a half-designed feature:
-     * a Save-as-OBJ button, a `?export=` parameter, or a component reaching for
-     * `DocumentExportService` would all show up here. Stage 4A-2B3 deletes this
-     * test when it wires the real workflow.
+     * Until B3 the rule was that NOTHING in the application could reach the
+     * export engine, because the engine existed and the workflow did not. The
+     * workflow now exists, so that rule is gone — `use-document-conversion.ts`
+     * reaches `DocumentExportService` on purpose, which is the feature.
+     *
+     * What survives is the rule that actually matters for the shipped product:
+     * the SERIALISERS stay behind the worker boundary. `writeObjDocument`,
+     * `write3mfDocument`, `writeStlDocument`, `exportDocument` and the ZIP
+     * writer are tens of kilobytes of code that only ever runs off-thread, and
+     * a main-thread import of any of them would pull all of it into the initial
+     * bundle — paid for by every user who opens the page and never exports
+     * anything. It would also be main-thread geometry work waiting to happen.
      */
-    const applicationFiles = sourceFilesUnder(join(REPO_ROOT, 'apps', 'web', 'src')).filter(
-      (file) =>
-        !/\.test\.(ts|tsx)$/.test(file) &&
-        !file.endsWith(join('runtime', 'document-export-service.ts')) &&
-        !file.endsWith(join('workers', 'export.worker.ts')),
-    );
+    /*
+     * THE READERS ARE ON THIS LIST TOO, and for the same reason. Import runs in
+     * the authoritative worker; a main-thread import of `readStl` or `read3mf`
+     * would pull the XML scanner, the ZIP reader and the STL detector into the
+     * initial bundle. It has happened once already: the conversion policy
+     * reached into the STL writer for `84 + n * 50` and arrived carrying
+     * `stl/detect.ts`'s ASCII keyword tables, which are built at module scope
+     * and therefore survive tree-shaking. The numbers now live in leaf modules
+     * (`export/stl-layout.ts`, `threemf/units.ts`) that import nothing.
+     */
+    const WORKER_ONLY = [
+      'writeObjDocument',
+      'write3mfDocument',
+      'writeStlDocument',
+      'exportDocument',
+      'buildZipArchive',
+      'writeBinaryStl',
+      'writeAsciiStl',
+      'readStl',
+      'readObj',
+      'read3mf',
+      'detectStlEncoding',
+      'readZipDirectory',
+      'readZipEntry',
+      'scanXml',
+      'parseModelXml',
+    ];
 
-    const callers: string[] = [];
-    for (const file of applicationFiles) {
-      const contents = readFileSync(file, 'utf8');
-      if (/\bDocumentExportService\b/.test(contents)) callers.push(relative(REPO_ROOT, file));
-    }
-
-    expect(callers, 'nothing in the application may reach the export engine yet').toEqual([]);
-
-    // And the writers themselves are worker-side only.
     const offenders = mainThreadFiles()
       .filter((file) => {
         const contents = readFileSync(file, 'utf8');
@@ -252,12 +271,55 @@ describe('the geometry engines stay in the worker', () => {
         return blocks.some(
           (block) =>
             block.includes('@cadfixer/file-formats') &&
-            /\b(writeObjDocument|write3mfDocument|exportDocument|buildZipArchive)\b/.test(block),
+            WORKER_ONLY.some((name) => new RegExp(`\\b${name}\\b`).test(block)),
         );
       })
       .map((file) => relative(REPO_ROOT, file));
 
-    expect(offenders, 'a document writer became reachable from the application bundle').toEqual([]);
+    expect(offenders, 'a codec became reachable from the application bundle').toEqual([]);
+  });
+
+  it('keeps the size and unit constants in leaf modules with no imports', () => {
+    /*
+     * THE MECHANISM THAT MAKES THE RULE ABOVE KEEPABLE.
+     *
+     * The main thread genuinely needs two things from the format layer: how big
+     * a binary STL of N triangles is, and which unit tokens 3MF allows. Both are
+     * arithmetic and constants. They live in modules that import NOTHING, so a
+     * main-thread import of either cannot drag a codec along with it — and a
+     * future import added to one of them would fail here rather than silently
+     * adding kilobytes to every page load.
+     */
+    for (const leaf of [
+      join(REPO_ROOT, 'packages', 'file-formats', 'src', 'export', 'stl-layout.ts'),
+      join(REPO_ROOT, 'packages', 'file-formats', 'src', 'threemf', 'units.ts'),
+    ]) {
+      const contents = readFileSync(leaf, 'utf8');
+      const imports = contents.match(/^\s*import[\s\S]*?from\s+['"][^'"]+['"]/gm) ?? [];
+      expect(imports, `${relative(REPO_ROOT, leaf)} must import nothing`).toEqual([]);
+    }
+  });
+
+  it('constructs the export worker from exactly one place', () => {
+    /*
+     * ONE OWNER OF THE DISPOSABLE WORKER.
+     *
+     * `DocumentExportService` cancels by TERMINATING its worker, which is only
+     * safe while it is the only thing that made one. A component that built its
+     * own `export.worker.ts` would be a second lifecycle: two exports racing for
+     * the same ceilings, and a Cancel that killed one of them.
+     */
+    const files = sourceFilesUnder(join(REPO_ROOT, 'apps', 'web', 'src')).filter(
+      (file) => !/\.test\.(ts|tsx)$/.test(file),
+    );
+
+    const constructors = files
+      .filter((file) => /new Worker\([\s\S]*?export\.worker/.test(readFileSync(file, 'utf8')))
+      .map((file) => relative(REPO_ROOT, file));
+
+    expect(constructors).toEqual([
+      join('apps', 'web', 'src', 'runtime', 'document-export-service.ts'),
+    ]);
   });
 
   it('keeps the 3MF expansion counters out of production code', () => {

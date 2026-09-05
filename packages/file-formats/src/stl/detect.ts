@@ -34,10 +34,27 @@ import { DEFAULT_IMPORT_BUDGET, type ImportBudget } from '../budget';
  * the binary equation.
  */
 
-export const BINARY_HEADER_BYTES = 80;
-export const BINARY_COUNT_BYTES = 4;
-export const BINARY_PREFIX_BYTES = BINARY_HEADER_BYTES + BINARY_COUNT_BYTES; // 84
-export const BINARY_FACET_BYTES = 50;
+/*
+ * THE CONTAINER'S SHAPE LIVES IN ONE PLACE, and it is not here.
+ *
+ * `export/stl-layout.ts` is a leaf module with no imports, so the conversion
+ * policy can do STL size arithmetic on the main thread without dragging this
+ * file's ASCII keyword tables into the application bundle. Re-exported so every
+ * existing caller of `detect` is unaffected.
+ */
+import {
+  BINARY_HEADER_BYTES,
+  BINARY_PREFIX_BYTES,
+  binaryStlByteLength,
+} from '../export/stl-layout';
+
+export {
+  BINARY_COUNT_BYTES,
+  BINARY_FACET_BYTES,
+  BINARY_HEADER_BYTES,
+  BINARY_PREFIX_BYTES,
+  binaryStlByteLength,
+} from '../export/stl-layout';
 
 /**
  * Surplus tolerated after a binary STL body.
@@ -100,10 +117,6 @@ export type StlDetection = StlBinaryDetected | StlAsciiDetected | StlDetectionIn
  * No modular wraparound is possible, which is what makes the truncation check
  * below sound against a hostile facet count.
  */
-export function binaryStlByteLength(triangleCount: number): number {
-  return BINARY_PREFIX_BYTES + triangleCount * BINARY_FACET_BYTES;
-}
-
 export function detectStlEncoding(
   bytes: Uint8Array,
   budget: ImportBudget = DEFAULT_IMPORT_BUDGET,

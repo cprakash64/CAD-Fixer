@@ -47,7 +47,23 @@ export const documentSendForExportHandler: OperationHandler<'document/send-for-e
     const document = residentDocuments.resolve(payload.handle);
     if (isAppError(document)) throw document;
 
-    const snapshot = exportSnapshotOf(document, payload.handle.documentId, payload.handle.revision);
+    /*
+     * THE UNIT ASSERTION IS APPLIED HERE, WHERE THE DOCUMENT IS.
+     *
+     * `exportSnapshotOf` uses it ONLY when the document itself states no unit,
+     * so a page working from an out-of-date mirror cannot relabel a model that
+     * already knows what it is. The authoritative document is not written: this
+     * builds a disposable snapshot and the store is never touched, so the
+     * revision does not move and no undo entry is created. Exporting is a read.
+     */
+    const snapshot = exportSnapshotOf(
+      document,
+      payload.handle.documentId,
+      payload.handle.revision,
+      {
+        ...(payload.unitAssertion === undefined ? {} : { unitAssertion: payload.unitAssertion }),
+      },
+    );
 
     const message: ExportSnapshotMessage = {
       kind: 'snapshot',

@@ -57,7 +57,27 @@ export interface ExportDocumentSnapshot {
    * snapshot rather than beside it so the two cannot be paired wrongly.
    */
   readonly revision: number;
+  /**
+   * The unit this export is written under. NOT necessarily the document's.
+   *
+   * A document that states a unit supplies it, and nothing can override that. A
+   * document that states NONE may have one supplied for this export by the
+   * user — see `unitAsserted` — because 3MF has to declare a unit and CAD Fixer
+   * will not choose one on someone's behalf.
+   *
+   * EXPORT-LOCAL EITHER WAY. This field lives on a disposable snapshot; the
+   * authoritative `GeometryDocument.unit` is untouched and its revision does not
+   * move. Nothing is rescaled: a unit says what the numbers mean, never what
+   * they are.
+   */
   readonly unit: string | undefined;
+  /**
+   * True when `unit` came from the USER rather than from the document.
+   *
+   * Carried so a writer can record `UNIT_ASSERTED_BY_USER` and the workflow can
+   * say, truthfully, that the file states something the model did not.
+   */
+  readonly unitAsserted: boolean;
   readonly meshes: readonly ExportMeshResource[];
   readonly parts: readonly ExportPartSnapshot[];
 }
@@ -184,6 +204,31 @@ export const ExportObservation = {
   MaterialReferencesOmitted: 'MATERIAL_REFERENCES_OMITTED',
   /** The imported nested component graph is not reconstructed; parts are flat. */
   ComponentHierarchyNotReconstructed: 'COMPONENT_HIERARCHY_NOT_RECONSTRUCTED',
+
+  /* ----------------------------------------------- whole-document STL -- */
+  /**
+   * Every part became one triangle stream, because STL has one implicit object.
+   *
+   * DISTINCT FROM `STRUCTURAL_SHARING_FLATTENED`. Sharing being flattened is
+   * about geometry being written more than once; this is about the boundary
+   * between parts ceasing to exist at all. A two-part document with no shared
+   * mesh loses its structure without duplicating a single vertex.
+   */
+  PartStructureFlattened: 'PART_STRUCTURE_FLATTENED',
+  /** Part names were not written, because the target has nowhere to put one. */
+  NamesDropped: 'NAMES_DROPPED',
+  /** Canonical groups were not written. */
+  GroupsDropped: 'GROUPS_DROPPED',
+
+  /* ------------------------------------------------------ the unit -- */
+  /**
+   * The document stated no unit and the USER stated one for this export.
+   *
+   * Recorded because it is the one fact in this list that did not come from the
+   * document: someone asserted what the numbers mean. The authoritative
+   * document is unchanged and still states nothing — see ADR 0017.
+   */
+  UnitAssertedByUser: 'UNIT_ASSERTED_BY_USER',
 } as const;
 
 export type ExportObservation = (typeof ExportObservation)[keyof typeof ExportObservation];
@@ -230,10 +275,25 @@ export interface WrittenDocument {
  * worker holding empty buffers and making a terminated export worker take the
  * user's model with it.
  */
+export interface ExportSnapshotOptions {
+  /**
+   * What the user says this document's numbers mean, for THIS export only.
+   *
+   * IGNORED when the document already states a unit. A document's own
+   * assertion is evidence that came from a file; a conversion-time choice is
+   * evidence that came from a person about a document that stated nothing, and
+   * letting the second overwrite the first would silently relabel a known
+   * model. Fail-safe in the direction that matters: the worst an out-of-date
+   * page can do is offer a choice that is then not used.
+   */
+  readonly unitAssertion?: string;
+}
+
 export function exportSnapshotOf(
   document: GeometryDocument,
   documentId: string,
   revision: number,
+  options: ExportSnapshotOptions = {},
 ): ExportDocumentSnapshot {
   const distinct = distinctMeshes(document);
   const indexOf = new Map<CanonicalMesh, number>();
@@ -253,10 +313,13 @@ export function exportSnapshotOf(
     ...(part.materialRef === undefined ? {} : { materialRef: part.materialRef }),
   }));
 
+  const asserted = document.unit === undefined ? options.unitAssertion : undefined;
+
   return {
     documentId,
     revision,
-    unit: document.unit,
+    unit: document.unit ?? asserted,
+    unitAsserted: asserted !== undefined,
     meshes,
     parts,
   };
@@ -419,6 +482,74 @@ export function expectedObjRoundTrip(snapshot: ExportDocumentSnapshot): Geometry
   // OBJ STATES NO UNIT, so the expectation states none either. Rescaling to
   // hide the loss would change the numbers to preserve a label.
   return { parts };
+}
+
+/* ---------------------------------------- STL round-trip normalisation -- */
+
+/**
+ * WHAT A WHOLE-DOCUMENT STL EXPORT IS EXPECTED TO READ BACK AS.
+ *
+ * STL is the most lossy of the three targets and this states the loss exactly
+ * rather than approximating it:
+ *
+ *   - ONE PART. Every part's triangles are concatenated in document order into
+ *     a single soup, because the format has one implicit object.
+ *   - EVERY PLACEMENT BAKED, in Float64 and narrowed once by `Math.fround` —
+ *     the same single narrowing `DataView.setFloat32` performs, so the
+ *     prediction is bit-exact rather than nearly right.
+ *   - NO UNIT, even when the document stated one and even when the user
+ *     asserted one. STL has no field to put it in.
+ *   - NO NAME, NO GROUPS, NO MATERIAL REFERENCE, NO SHARING.
+ *   - VERTICES NOT SHARED. A binary STL stores three vertices per facet and our
+ *     reader preserves exactly that, so the expected mesh is non-indexed too.
+ *
+ * The comparison this feeds is on triangle CORNERS, so the fact that a reader
+ * numbers vertices its own way never enters into it.
+ */
+export function expectedStlRoundTrip(snapshot: ExportDocumentSnapshot): GeometryDocument {
+  let totalCorners = 0;
+  for (const part of snapshot.parts) {
+    totalCorners += snapshot.meshes[part.meshResourceIndex]?.indices.length ?? 0;
+  }
+
+  const positions = createPositionArray(totalCorners * 3);
+  const indices = createIndexArray(totalCorners);
+  let at = 0;
+
+  for (const part of snapshot.parts) {
+    const mesh = snapshot.meshes[part.meshResourceIndex];
+    if (mesh === undefined) continue;
+    const identity = isIdentityTransform(part.transform);
+
+    for (const index of mesh.indices) {
+      const vertex = index * 3;
+      const x = mesh.positions[vertex] ?? 0;
+      const y = mesh.positions[vertex + 1] ?? 0;
+      const z = mesh.positions[vertex + 2] ?? 0;
+      if (identity) {
+        positions[at * 3] = x;
+        positions[at * 3 + 1] = y;
+        positions[at * 3 + 2] = z;
+      } else {
+        const [wx, wy, wz] = applyPartTransform(part.transform, x, y, z);
+        positions[at * 3] = wx;
+        positions[at * 3 + 1] = wy;
+        positions[at * 3 + 2] = wz;
+      }
+      indices[at] = at;
+      at += 1;
+    }
+  }
+
+  return {
+    parts: [
+      {
+        id: partId('part-1'),
+        mesh: { positions, indices, metadata: { sourceFormat: MeshFormatId.Stl } },
+        transform: IDENTITY_PART_TRANSFORM,
+      },
+    ],
+  };
 }
 
 /* --------------------------------------------- 3MF object planning -- */

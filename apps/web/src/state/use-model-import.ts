@@ -83,6 +83,17 @@ export function useModelImport(): ModelImportControls {
             formatId: result.formatId,
             encoding: result.encoding,
             unit: result.unit,
+            /*
+             * CARRIED INTO WORKSPACE STATE, not just announced.
+             *
+             * These reached a status entry and then vanished, so by the time a
+             * user opened Export the fact that their 3MF's textures were never
+             * imported existed nowhere the interface could reach. They belong to
+             * the FILE, so they live on the source and are replaced wholesale by
+             * the next import.
+             */
+            unsupportedFeatures: result.unsupportedFeatures,
+            externalReferences: result.externalReferences,
             importedAt: Date.now(),
           };
 

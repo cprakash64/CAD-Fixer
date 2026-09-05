@@ -87,10 +87,32 @@ already in memory and hands it to the browser's own download mechanism. No
 request is made, no server is involved, and the object URL is revoked afterwards
 so the buffer is not pinned for the life of the document.
 
-**Exported files carry no user-supplied text.** The binary STL header is a fixed
-string and the ASCII solid name is a constant. The source filename is never
-written into an exported file, so a model shared onward cannot leak the name of
-the project it came from. Tests assert this for both writers.
+**No exported file ever contains the source FILENAME.** The binary STL header is
+a fixed string, the ASCII solid name is a constant, and no writer puts the file's
+own name inside it — so a model shared onward cannot leak the name of the project
+it came from. Tests assert this for every writer.
+
+**OBJ and 3MF exports do carry the model's own names, and that is the point.**
+Since Stage 4A-2B3 a document can be written as OBJ or 3MF, and both formats can
+express part names, group names and material references. Those came from the
+user's file and are part of their model: dropping them would be the loss, not the
+protection. What is guaranteed instead is that they are written as DATA and never
+as structure —
+
+- OBJ has no escape mechanism at all, so a name's control characters are removed
+  rather than encoded: a newline inside an `o` record would end it and turn the
+  rest of the name into geometry records, putting triangles in the file that the
+  document never had.
+- 3MF names are escaped with all five predefined XML entities, and control
+  characters — which XML cannot carry — are dropped.
+- Archive entry paths are a FIXED LIST the writer decides. No entry path is
+  derived from a document name, a part name or a material reference.
+
+**The DOWNLOAD name is derived from the source name and sanitised.** Directory
+components are dropped, control characters, Unicode bidi overrides and
+Windows-reserved characters are removed, and the length is bounded; the extension
+comes from what was WRITTEN, never from the source. `../../evil.obj` exported as
+STL becomes `evil.stl`, in whatever folder the browser is already saving to.
 
 **An end-to-end test asserts network silence, twice over.** The Playwright suite
 records every request the page makes across a full import AND export cycle. One
@@ -180,11 +202,19 @@ Nothing. Verified three ways rather than asserted:
 
 ### Untrusted content
 
-STL solid names and filenames come from files the user opened and are treated as
-untrusted text. They are rendered as React children, which escapes them, and the
-application contains no `innerHTML`, `dangerouslySetInnerHTML`, `eval`, or
-`Function` constructor. On export, **solid names are generated, never copied from
-the source**, so a hostile name cannot round-trip into a file the user shares.
+Part names, group names, material references and filenames come from files the
+user opened and are treated as untrusted text. They are rendered as React
+children, which escapes them, and the application contains no `innerHTML`,
+`dangerouslySetInnerHTML`, `eval`, or `Function` constructor.
+
+The conversion report deliberately carries **counts, not names**: a fact that
+held a part name would be a fact that could carry hostile text into markup, and
+it would be a second place display copy lived. The panel says "3 part names are
+not written", never which.
+
+On STL export, **solid names are generated, never copied from the source**. On
+OBJ and 3MF export names ARE copied, because they are the user's model structure
+— see above for what is done to make that safe.
 
 ---
 
@@ -311,3 +341,30 @@ chunk, rather than trusting the uncompressed size the directory declares — a
 declared size is a claim by whoever wrote the archive. A component graph that
 would expand past the part ceiling is refused before the expansion, because a
 few hundred bytes of XML can describe an enormous document.
+
+---
+
+## Stage 4A-2B3 — format conversion
+
+Conversion made two new things reachable from the product: writing OBJ and 3MF,
+and a dialog that reads the user's model to decide what to say about it. Neither
+changes where anything goes.
+
+- **Every conversion is local.** The document snapshot travels worker to worker
+  over a `MessageChannel`; the finished file comes back to the page and becomes
+  a `Blob`. An end-to-end test drives the whole workflow — open, choose a
+  target, choose a unit, export to all three formats — while recording every
+  request the page makes, and fails if anything reaches a foreign origin or
+  carries a body.
+- **Nothing referenced by a file is ever followed.** An OBJ `mtllib` is recorded
+  as text and disclosed in the conversion report; it is never opened. A 3MF
+  texture's path is reported and never fetched. A test imports a model naming a
+  remote material library, converts it, and asserts zero external requests.
+- **No telemetry was added, and none may be.** In particular nothing records
+  which formats are used, which unit a user chose, what their model is called,
+  how large it is, or what a conversion warned about. ESLint still bans the
+  browser's network APIs outright.
+- **The unit a user states never leaves the export.** It rides on a disposable
+  snapshot into the export worker, is written into that one file, and is not
+  stored anywhere — not in the document, not in the workspace beyond the open
+  dialog, and not on disk.

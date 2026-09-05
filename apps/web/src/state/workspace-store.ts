@@ -13,6 +13,7 @@ import type {
   TopologyDetail,
   TopologyReport,
 } from '@cadfixer/geometry-runtime';
+import type { ExportStatus } from '@cadfixer/file-formats';
 import type { WorkflowId } from './workflows';
 import {
   SelfIntersectionBand,
@@ -115,6 +116,88 @@ export interface ExportProgressState {
   readonly fraction: number;
   readonly encoding?: string;
 }
+
+/* ------------------------------------------------- format conversion -- */
+
+export const ConversionState = {
+  /** The dialog is closed. */
+  Closed: 'closed',
+  /** Open, a target chosen or not, nothing running. */
+  Reviewing: 'reviewing',
+  /** A file is being written and checked. */
+  Working: 'working',
+  /** The last attempt did not produce a file. The dialog stays usable. */
+  Failed: 'failed',
+  /** A file was written, validated and handed to the browser. */
+  Saved: 'saved',
+} as const;
+
+export type ConversionState = (typeof ConversionState)[keyof typeof ConversionState];
+
+declare const conversionTokenBrand: unique symbol;
+
+/** Identifies one conversion attempt, for the same reason imports have tokens. */
+export type ConversionToken = number & { readonly [conversionTokenBrand]: true };
+
+export interface ConversionFailure {
+  /**
+   * The machine-readable outcome. The sentence is presentation's.
+   *
+   * TYPED, not `string`, so the copy layer's switch over it stays exhaustive: a
+   * new export status then fails to compile until it has been given a wording,
+   * rather than falling through to a generic sentence nobody wrote.
+   */
+  readonly status: ExportStatus;
+  readonly reason: string | undefined;
+}
+
+export interface ConversionResult {
+  readonly fileName: string;
+  readonly byteLength: number;
+  readonly target: string;
+  readonly triangleCount: number;
+  readonly partCount: number;
+}
+
+export interface ConversionSnapshot {
+  readonly state: ConversionState;
+  /**
+   * The chosen target, or `undefined` when none has been chosen.
+   *
+   * PRESELECTED TO THE SOURCE FORMAT when that format has a writer, because
+   * "save this again" is the commonest reason to open the dialog and it is the
+   * one choice that cannot surprise anyone — it bypasses no review, since the
+   * compatibility summary for that target is on screen before anything can be
+   * clicked. Nothing is ever exported without an explicit action.
+   */
+  readonly target: string | undefined;
+  /**
+   * The unit the user has stated for this export.
+   *
+   * `undefined` MEANS UNCHOSEN, and it starts that way every time. There is no
+   * preselection, no remembered value and no implicit first option — a select
+   * element that silently reports its first entry would make CAD Fixer choose a
+   * physical unit on the user's behalf, which is the one thing this stage exists
+   * to prevent.
+   */
+  readonly unitAssertion: string | undefined;
+  /** 0..1, meaningful only while `state` is `working`. */
+  readonly fraction: number;
+  /** The writer's own phase note. Never a fabricated percentage. */
+  readonly phase: string | undefined;
+  readonly failure: ConversionFailure | undefined;
+  readonly result: ConversionResult | undefined;
+}
+
+const CONVERSION_CLOSED: ConversionSnapshot = Object.freeze({
+  state: ConversionState.Closed,
+  target: undefined,
+  unitAssertion: undefined,
+  fraction: 0,
+  phase: undefined,
+  failure: undefined,
+  result: undefined,
+});
 
 export const AnalysisState = {
   /** No model is loaded, so there is nothing to analyse. */
@@ -502,6 +585,16 @@ export interface WorkspaceState {
   readonly activePartId: string | undefined;
   readonly importProgress: ImportProgressState;
   readonly exportProgress: ExportProgressState;
+  /**
+   * The format conversion workflow.
+   *
+   * DELIBERATELY HOLDS NO COMPATIBILITY REPORT. The report is derived from
+   * `model` on every render, so it cannot be older than the model it is shown
+   * beside; storing one would create exactly the stale-report hazard the
+   * workflow has to rule out. What lives here is the user's CHOICES and the
+   * progress of an attempt — things a re-render must not lose.
+   */
+  readonly conversion: ConversionSnapshot;
   /** Topology diagnostics for `model`, or the unavailable state when empty. */
   readonly analysis: AnalysisSnapshot;
   readonly selfIntersection: SelfIntersectionSnapshot;
@@ -539,6 +632,7 @@ const INITIAL_STATE: WorkspaceState = {
   activePartId: undefined,
   importProgress: { state: ImportState.Idle, fraction: 0 },
   exportProgress: { state: ExportState.Idle, fraction: 0 },
+  conversion: CONVERSION_CLOSED,
   analysis: EMPTY_ANALYSIS,
   selfIntersection: EMPTY_SELF_INTERSECTION,
   repair: EMPTY_REPAIR,
@@ -588,6 +682,8 @@ export class WorkspaceStore {
   private currentImportToken: ImportToken | undefined;
   private nextExportToken = 1;
   private currentExportToken: ExportToken | undefined;
+  private nextConversionToken = 1;
+  private currentConversionToken: ConversionToken | undefined;
   private nextAnalysisToken = 1;
   private currentAnalysisToken: AnalysisToken | undefined;
   private nextRepairToken = 1;
@@ -693,6 +789,18 @@ export class WorkspaceStore {
     // And any in-flight self-intersection check: its answer describes the model
     // being replaced, so it must not land on the replacement.
     this.currentSelfIntersectionToken = undefined;
+    /*
+     * AND ANY CONVERSION. A new FILE is a new set of source facts and, more
+     * importantly, a new answer to "what do these numbers mean" — carrying an
+     * inch assertion made about the previous model onto this one would be CAD
+     * Fixer asserting a physical fact nobody stated about this file. The dialog
+     * closes rather than being left open over a document it was not opened for.
+     *
+     * A REPAIR OR AN UNDO DOES NOT DO THIS, and the difference is the point:
+     * those produce a new revision of the SAME model, the unit still means what
+     * the user said it means, and the compatibility report simply recomputes.
+     */
+    this.currentConversionToken = undefined;
 
     /*
      * THE INITIAL SELECTION IS DETERMINISTIC: the first part in document order.
@@ -715,6 +823,7 @@ export class WorkspaceStore {
         partId: activePart?.partId,
       },
       repair: { ...EMPTY_REPAIR, handle: model.handle, partId: activePart?.partId },
+      conversion: CONVERSION_CLOSED,
       /*
        * The ACTIVE PART's size decides its own policy — not the document total.
        * The check runs on one mesh, so a small part inside a large document is
@@ -1747,6 +1856,7 @@ export class WorkspaceStore {
     this.currentExportToken = undefined;
     this.currentAnalysisToken = undefined;
     this.currentRepairToken = undefined;
+    this.currentConversionToken = undefined;
     this.update({
       model: undefined,
       geometrySessionLost: reason,
@@ -1762,6 +1872,8 @@ export class WorkspaceStore {
       // Apply button pointing at a dead candidate would be worse than showing
       // nothing, because pressing it could only fail.
       repair: EMPTY_REPAIR,
+      // The document the dialog described is gone with the worker that held it.
+      conversion: CONVERSION_CLOSED,
       overlays: OVERLAYS_HIDDEN,
     });
   }
@@ -1788,6 +1900,148 @@ export class WorkspaceStore {
     if (!this.isCurrentExport(token)) return false;
     this.currentExportToken = undefined;
     this.update({ exportProgress: { state: ExportState.Idle, fraction: 0 } });
+    return true;
+  }
+
+  /* ------------------------------------------------ format conversion -- */
+
+  /**
+   * Opens the conversion dialog.
+   *
+   * `preferredTarget` is the source format when that format can be written.
+   * Every other field starts empty — in particular the unit, which is never
+   * carried over from a previous session, a previous model or a default.
+   */
+  public openConversion(preferredTarget: string | undefined): void {
+    this.currentConversionToken = undefined;
+    this.update({
+      conversion: {
+        ...CONVERSION_CLOSED,
+        state: ConversionState.Reviewing,
+        target: preferredTarget,
+      },
+    });
+  }
+
+  public closeConversion(): void {
+    this.currentConversionToken = undefined;
+    this.update({ conversion: CONVERSION_CLOSED });
+  }
+
+  /**
+   * Chooses a target.
+   *
+   * THE UNIT CHOICE SURVIVES A TARGET CHANGE, because it is a statement about
+   * the MODEL rather than about the target: someone who has said "these numbers
+   * are inches" has not unsaid it by looking at what OBJ would do. Any finished
+   * result does not survive, because it described a different format.
+   */
+  public setConversionTarget(target: string): void {
+    const previous = this.state.conversion;
+    if (previous.state === ConversionState.Working) return;
+    this.update({
+      conversion: {
+        ...previous,
+        state: ConversionState.Reviewing,
+        target,
+        fraction: 0,
+        phase: undefined,
+        failure: undefined,
+        result: undefined,
+      },
+    });
+  }
+
+  /** States what the model's numbers mean, for the export only. */
+  public setConversionUnit(unit: string | undefined): void {
+    const previous = this.state.conversion;
+    if (previous.state === ConversionState.Working) return;
+    this.update({
+      conversion: {
+        ...previous,
+        state: ConversionState.Reviewing,
+        unitAssertion: unit,
+        failure: undefined,
+        result: undefined,
+      },
+    });
+  }
+
+  public beginConversion(): ConversionToken {
+    const token = this.nextConversionToken as ConversionToken;
+    this.nextConversionToken += 1;
+    this.currentConversionToken = token;
+    this.update({
+      conversion: {
+        ...this.state.conversion,
+        state: ConversionState.Working,
+        fraction: 0,
+        phase: undefined,
+        failure: undefined,
+        result: undefined,
+      },
+    });
+    return token;
+  }
+
+  public isCurrentConversion(token: ConversionToken): boolean {
+    return this.currentConversionToken === token;
+  }
+
+  public reportConversionProgress(
+    token: ConversionToken,
+    fraction: number,
+    phase: string | undefined,
+  ): void {
+    if (!this.isCurrentConversion(token)) return;
+    this.update({
+      conversion: { ...this.state.conversion, state: ConversionState.Working, fraction, phase },
+    });
+  }
+
+  /**
+   * Records that a file was written, validated and handed to the browser.
+   *
+   * Returns false for a superseded attempt, so a result from a cancelled or
+   * replaced conversion cannot report success over the top of a later one.
+   */
+  public completeConversion(token: ConversionToken, result: ConversionResult): boolean {
+    if (!this.isCurrentConversion(token)) return false;
+    this.currentConversionToken = undefined;
+    this.update({
+      conversion: {
+        ...this.state.conversion,
+        state: ConversionState.Saved,
+        fraction: 1,
+        phase: undefined,
+        failure: undefined,
+        result,
+      },
+    });
+    return true;
+  }
+
+  /**
+   * Records that a conversion did not produce a file.
+   *
+   * THE DIALOG STAYS OPEN AND USABLE. A refusal is a decision the user can act
+   * on — choose a unit, choose another format, try again — and closing the
+   * dialog would take the explanation away with it. The chosen target and unit
+   * are kept for exactly that reason.
+   */
+  public failConversion(token: ConversionToken, failure: ConversionFailure): boolean {
+    if (!this.isCurrentConversion(token)) return false;
+    this.currentConversionToken = undefined;
+    this.update({
+      conversion: {
+        ...this.state.conversion,
+        state: ConversionState.Failed,
+        fraction: 0,
+        phase: undefined,
+        failure,
+        result: undefined,
+      },
+    });
     return true;
   }
 

@@ -33,7 +33,7 @@ and no analytics.
 | Workflow | Purpose                                            | Status                                      |
 | -------- | -------------------------------------------------- | ------------------------------------------- |
 | Repair   | Repair and prepare meshes for printing             | **Conservative subset implemented** (below) |
-| Convert  | Translate between STL, OBJ, and 3MF                | Not implemented                             |
+| Convert  | Translate between STL, OBJ, and 3MF                | **Implemented** (below)                     |
 | Split    | Cut oversized models into parts and add connectors | Not implemented                             |
 | Texture  | Apply surface displacement patterns                | Not implemented                             |
 | Hollow   | Hollow solid models and place drainage holes       | Not implemented                             |
@@ -53,6 +53,27 @@ and no analytics.
 | Determine printability                 | No          | Wall thickness is not measured.                                        |
 
 Target formats: **STL, OBJ, 3MF**.
+
+### What each format can carry
+
+CAD Fixer reads and writes all three. What survives a conversion depends on the
+target, and the app tells you which of these apply to **your** model before it
+writes anything.
+
+|                              | STL                                       | OBJ                        | 3MF                            |
+| ---------------------------- | ----------------------------------------- | -------------------------- | ------------------------------ |
+| Triangle geometry            | yes                                       | yes                        | yes                            |
+| Physical unit                | not stored by the format                  | not stored                 | stored, one of six             |
+| Separate parts               | merged into one mesh                      | kept                       | kept                           |
+| Part placements              | applied to the coordinates                | applied to the coordinates | kept as placements             |
+| Repeated shapes              | written out in full                       | written out in full        | stored once, placed many times |
+| Part names                   | dropped                                   | kept                       | kept                           |
+| Face groups                  | dropped                                   | kept                       | dropped                        |
+| Materials, textures, colours | never written by CAD Fixer, in any format |                            |                                |
+
+Coordinates are never rescaled in any direction. Exporting a model that states
+inches as OBJ writes the same numbers and drops the label — the app says exactly
+that before you press the button, rather than claiming the scale was "preserved".
 
 ## Getting started
 
@@ -148,9 +169,30 @@ running first.
 - **Undo of the most recent repair**, restoring the previous geometry from an
   inverse patch held in the worker and revalidating it. See
   [ADR 0011](docs/adr/0011-repair-undo-revisions.md).
-- **STL export**, binary and ASCII, written locally with no network involvement
-  and no gating. Both writers round-trip exactly through our own parser, which
-  is asserted in tests.
+- **STL, OBJ and 3MF import.** The format is decided from the BYTES, never from
+  the extension: a `.stl` holding an OBJ is refused as a mismatch rather than
+  guessed at. OBJ refuses a polygon instead of fanning it; 3MF supports build
+  items, component instances and all six units. No `mtllib` is ever opened and
+  no texture, material or external reference is ever resolved. Archive and XML
+  resources are bounded during inflation, not after. See
+  [ADR 0015](docs/adr/0015-production-obj-and-3mf-import.md).
+- **Format conversion to STL, OBJ or 3MF**, through one `Export / Convert`
+  action that writes the WHOLE document. Before anything is written it reports
+  what the chosen format will keep and what it cannot — derived from your actual
+  model, so a one-part file is not warned about merged parts and a file with no
+  names is not warned about dropped names.
+- **Validated output.** Every exported file is read back with the same parser a
+  re-import uses and compared against what it was written from. If the two
+  disagree the export is refused rather than saved. There is no way to skip it.
+- **An export-time unit choice for 3MF.** 3MF has to state what its numbers
+  mean; a model from an STL or an OBJ does not know, and CAD Fixer will not
+  guess. You pick one of the six units, nothing is preselected, and the choice
+  LABELS the numbers — it never resizes anything and never touches the model.
+- **Single-part STL export**, binary and ASCII, for pulling one part out of a
+  multi-part document. Named apart from the whole-document conversion, because
+  they are different operations.
+- All of it local: files are written from bytes already in memory and handed to
+  the browser's own download, with no network involvement and no gating.
 - Filename screening at the UI boundary — extension and declared size. **This is
   a usability filter, not a security control, and it reads no file contents.**
 - The canonical mesh contract (`packages/mesh-core`) and structural mesh
@@ -167,12 +209,19 @@ running first.
 
 ### Not implemented
 
-- **No OBJ or 3MF parser or writer.** Only STL is implemented. Dropping an
-  `.obj` or `.3mf` file says so plainly instead of starting an import that
-  cannot finish, and a test asserts the declared capabilities match the codecs
-  that actually register.
-- **No format conversion.** STL in, STL out is re-export, not conversion, and
-  the Convert workflow stays disabled until a second format exists.
+- **No unit CONVERSION.** The 3MF unit chooser states what existing numbers
+  mean; nothing anywhere rescales geometry. Inches to millimetres, "normalise
+  for printer" and automatic size correction do not exist.
+- **No materials, textures or colours, in or out.** An `mtllib` is recorded as
+  text and never opened; a 3MF texture is reported as unimported and never
+  fetched; no material library is ever written, so exported `usemtl` names point
+  at nothing. Exported files carry no normals and no texture coordinates.
+- **No reconstruction of an imported 3MF's component nesting.** Every placement
+  is imported in the right position, but the hierarchy above it is not retained
+  and cannot be rebuilt on export. The conversion report says so when it applies.
+- **No conversion is lossless in general.** Each report says what THIS document
+  loses to THIS format; STL keeps no parts, placements, names or units, and OBJ
+  keeps no units and bakes placements into coordinates.
 - **No boolean operations, splitting, connectors, displacement, hollowing, or
   drainage holes.** Import deliberately does not weld vertices, drop degenerate
   triangles, deduplicate facets, reorient winding, or rescale anything — see
