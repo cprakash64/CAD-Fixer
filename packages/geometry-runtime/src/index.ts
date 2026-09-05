@@ -19,6 +19,8 @@ export type {
   ModelAnalyzeResult,
   SendForDiagnosticPayload,
   SendForDiagnosticResult,
+  SendForExportPayload,
+  SendForExportResult,
   ModelExportPayload,
   ModelImportResult,
   ModelReleasePayload,

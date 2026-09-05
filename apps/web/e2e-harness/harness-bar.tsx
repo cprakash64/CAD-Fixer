@@ -30,6 +30,8 @@ const FIXTURES: readonly { readonly id: FixtureId; readonly label: string }[] = 
   { id: HarnessFixtureId.Shared100, label: '100 shared placements' },
   { id: HarnessFixtureId.Shared1000, label: '1000 shared placements' },
   { id: HarnessFixtureId.SinglePart, label: 'Single part' },
+  { id: HarnessFixtureId.MillimetreTwoParts, label: 'Two parts (mm)' },
+  { id: HarnessFixtureId.MillimetreShared1000, label: '1000 shared (mm)' },
 ];
 
 /**

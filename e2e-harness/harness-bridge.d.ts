@@ -18,6 +18,28 @@ interface HarnessPartDigest {
   readonly indexDigest: string;
 }
 
+/**
+ * What an export attempt reports back.
+ *
+ * A LENGTH AND A HEAD, never the file. The bytes are the user's artifact and
+ * belong in a download; a test needs to know how big it was, what format it
+ * looks like, and what the writer observed about the conversion.
+ */
+interface HarnessExportResult {
+  readonly status: string;
+  readonly reason?: string;
+  readonly message?: string;
+  readonly byteLength?: number;
+  readonly fileName?: string;
+  readonly observations?: readonly string[];
+  readonly triangleCount?: number;
+  readonly partCount?: number;
+  readonly meshResourceCount?: number;
+  readonly durationMs: number;
+  readonly head?: string;
+  readonly progressUpdates: number;
+}
+
 declare global {
   interface Window {
     readonly cadfixerHarness?: {
@@ -29,6 +51,16 @@ declare global {
         distinctMeshes?: number;
         parts: readonly HarnessPartDigest[];
       }>;
+      exportDocument(
+        documentId: string,
+        revision: number,
+        target: 'obj' | '3mf',
+        sourceName: string,
+        options?: { readonly download?: boolean; readonly cancelAfterMs?: number },
+      ): Promise<HarnessExportResult>;
+      cancelExport(): void;
+      exportLiveWorkers(): number;
+      exportLiveChannels(): number;
     };
   }
 }

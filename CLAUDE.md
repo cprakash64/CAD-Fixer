@@ -13,8 +13,8 @@ matter more than moving fast.
 Five workflows are planned: **Repair, Convert, Split, Texture, Hollow**. Target
 formats: **STL, OBJ, 3MF**.
 
-**Current stage: Stage 4A-2B1 (+R1) complete — production OBJ and 3MF IMPORT with
-bounded import resources, on top of the multi-part geometry document foundation
+**Current stage: Stage 4A-2B2 complete — a validated OBJ and 3MF EXPORT ENGINE,
+on top of production OBJ/3MF import, the multi-part geometry document foundation
 and conservative deterministic repair.** The engine, the transaction and the user workflow are all
 production. Implemented: structural STL encoding detection, hand-written binary
 and ASCII STL parsers with resource budgets, worker-based parsing with progress
@@ -47,10 +47,19 @@ wall-thickness analysis, inter-part overlap detection, redo, multi-step undo,
 transform editing, and any repair that is not one of the four conservative
 operations.
 
-**CAD Fixer READS STL, OBJ and 3MF. It WRITES STL and nothing else.** There is
-no OBJ writer, no 3MF writer and no conversion workflow. No interface may
-suggest otherwise: Convert stays disabled, and the Model panel states that STL
-is the only format that can be written before the user reaches Export.
+Stage 4A-2B2 added a validated OBJ and 3MF export ENGINE: `exportDocument`
+serialises a document snapshot, reads the bytes back with the PRODUCTION reader,
+and returns an artifact only if the two agree. See
+`docs/adr/0016-validated-document-export.md`.
+
+**THE EXPORT ENGINE EXISTS; THE USER-FACING WORKFLOW DOES NOT.** The only caller
+is the end-to-end harness bridge, which is not in the application build. There
+is deliberately no production URL, query parameter or hidden control that reaches
+it. Until Stage 4A-2B3 wires the conversion workflow, the shipped product still
+writes STL and nothing else: Convert stays disabled, and the Model panel states
+that STL is the only format that can be written before the user reaches Export.
+Do not add a Save-as-OBJ or Save-as-3MF control to the application in the
+meantime.
 
 **Topology diagnoses; it never repairs.** Connectivity is recovered from exact
 stored coordinates with no tolerance, and analysis leaves the canonical buffers
@@ -126,7 +135,8 @@ apps/web/                   React application shell
 packages/shared/            typed errors, units, ids, cancellation
 packages/mesh-core/         canonical mesh + multi-part document + validation
 packages/file-formats/      format descriptors, screening, budgets, identification,
-                            STL codec, OBJ + 3MF readers, bounded ZIP and XML
+                            STL codec, OBJ + 3MF readers, bounded ZIP and XML,
+                            validated OBJ + 3MF document writers (src/export/)
 packages/mesh-topology/     read-only topology analysis (no mutation, no welding)
 packages/mesh-repair/       conservative deterministic repair (kernel-free)
 packages/geometry-runtime/  worker protocol, coordinator, worker host
@@ -165,6 +175,7 @@ npm run bench:topology # small topology benchmark (NOT in CI)
 npm run bench:pipeline # whole-pipeline benchmark, 1/10/50/100 MiB (NOT in CI)
 npm run bench:document # document-wrapper cost + part-count scaling (NOT in CI)
 npm run bench:formats  # OBJ + 3MF import at 1/10/50 MiB (NOT in CI)
+npm run bench:export   # OBJ + 3MF export, sizes and placement counts (NOT in CI)
 npm run bench:repair-browser # repair workflow timings in a real browser (NOT in CI)
 npm run check:node     # runtime version guard; also runs before test/build/verify
 ```
@@ -188,7 +199,9 @@ evidence when Stage 4A-2A first landed. `playwright.harness.config.ts` serves
 the end-to-end harness build instead: the same application, store, worker
 handlers and viewport, with a synthetic multi-part document put in front of
 them. Run it whenever you touch the document model, the viewport, part
-selection, or anything a multi-part document reaches.
+selection, or anything a multi-part document reaches. Since Stage 4A-2B2 it is
+also the ONLY caller of the document export engine, so run it whenever you touch
+a writer, the export worker or the export controller.
 
 THE HARNESS MUST NEVER SHIP, and five boundary tests enforce that: no import
 edge from `apps/web/src`, one application build input, no `createWorker` in the
@@ -321,6 +334,60 @@ believing it.
   names, material references and file names render as text. No
   `dangerouslySetInnerHTML`, and no error message may carry archive, XML or OBJ
   content into markup.
+
+## Export invariants (Stage 4A-2B2)
+
+- **VALIDATION IS MANDATORY AND HAS NO SWITCH.** Every successful OBJ or 3MF
+  export has been read back by the PRODUCTION reader, under production limits,
+  and compared with what it was written from. A serialiser returning bytes is not
+  proof of a valid artifact. Never add "skip validation for faster export".
+- **THE PAGE NEVER HOLDS GEOMETRY; IT DOES HOLD THE ARTIFACT.** The snapshot
+  travels worker to worker over a `MessageChannel`; the finished FILE comes back
+  to the page, because that is what the user asked to save and it cannot be
+  edited back into the model.
+- **THE SNAPSHOT IS A COPY, ONE PER DISTINCT MESH.** Transferring the
+  authoritative arrays would detach them and let a terminated export worker take
+  the user's model with it. A thousand placements copy one mesh, not a thousand.
+- **CANCELLATION IS TERMINATION.** `CompressionStream` polls no flag of ours, so
+  a cooperative token alone would be a lie for part of the work. The export
+  worker is disposable and Cancel kills it. One export at a time.
+- **A STALE ARTIFACT IS DISCARDED, NEVER DOWNLOADED.** The snapshot carries the
+  revision it was built from, and the controller re-checks it against the handle
+  the caller asked for. Bytes from a revision the user has moved off describe
+  geometry they are no longer looking at.
+- **OUTPUT CEILINGS ARE DERIVED AND ENFORCED INCREMENTALLY.**
+  `maxSerialisedBytes` (512 MiB) is the reader's own intake ceiling — an export
+  our reader would refuse could never be validated. `maxOutputBytes` (256 MiB) is
+  half of it, because the artifact, the snapshot and the parsed-back document are
+  live at once. Both are checked BEFORE a chunk is retained.
+- **OBJ BAKES TRANSFORMS; 3MF PRESERVES THEM.** Baking is Float64
+  `applyPartTransform`, then `Math.fround`, then nine significant digits — the
+  same single narrowing the reader performs. Never `toFixed(6)`: it fails 50.7%
+  of Float32 values. Negative zero is written explicitly, and `isIdentity` uses
+  `Object.is` for the same reason.
+- **A 3MF NEEDS A UNIT AND CAD FIXER WILL NOT INVENT ONE.** Unknown unit is
+  `BLOCKED_UNIT_REQUIRED`, never `millimeter`. The reader's millimetre default is
+  the SPECIFICATION saying what an absent attribute means; an STL-derived
+  document has asserted nothing. Coordinates are never rescaled to hide a lost
+  unit either.
+- **3MF GROUPS OBJECTS BY (MESH, NAME, MATERIAL REFERENCE)**, because all three
+  live on the `<object>`. Parts that agree share one object; parts that disagree
+  get their own, and the split is recorded. The imported component hierarchy is
+  NOT reconstructed.
+- **ARCHIVE PATHS ARE A FIXED LIST THE WRITER DECIDES.** No entry path is derived
+  from a document name, a part name or a material reference. Untrusted strings
+  are XML DATA: escaped with all five predefined entities, control characters
+  dropped because XML cannot carry them.
+- **THE WRITER'S OUTPUT MUST SATISFY THE READER'S SECURITY CONTRACT.** No
+  DOCTYPE, no entities, no external identifiers, no remote references — a file
+  our own reader would refuse is a file the user cannot open.
+- **OBSERVATIONS ARE MACHINE-READABLE FACTS, NOT SENTENCES.** `ExportObservation`
+  records what a writer did; Stage 4A-2B3 decides the wording. Two copies of that
+  copy would drift.
+- **INDEPENDENT ORACLES SIT BESIDE PARSE-BACK.** Our reader agreeing with our
+  writer proves only that they agree. `obj-oracle.ts` and `threemf-oracle.ts` are
+  test-only structural checkers that share no code with production, and a
+  boundary test keeps them out of it.
 
 ## Repair invariants (Stage 3B-1)
 

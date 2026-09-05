@@ -118,3 +118,48 @@ export { stlReader, stlWriter } from './stl/codec';
 export { StlWarningCode } from './stl/warnings';
 
 export { registerBuiltInFormats } from './register';
+
+/* ------------------------------------------------------ document export -- */
+
+export {
+  DEFAULT_EXPORT_LIMITS,
+  ExportObservation,
+  ExportStatus,
+  expectedObjRoundTrip,
+  exportSnapshotOf,
+  snapshotTransferables,
+  snapshotTriangleCount,
+} from './export/export-contract';
+export type {
+  ExportDocumentSnapshot,
+  ExportLimits,
+  ExportMeshResource,
+  ExportMetadata,
+  ExportPartSnapshot,
+  ExportProgressReporter,
+  FormatWriteDocumentContext,
+  WrittenDocument,
+} from './export/export-contract';
+
+export {
+  EXPORT_REASON_KEY,
+  ExportRefusal,
+  exportBlocked,
+  exportInternal,
+  exportRefusalOf,
+  exportTooLarge,
+} from './export/export-errors';
+
+export { writeFloat32Text, writeFloat64Text } from './export/numeric';
+export { exportDocument } from './export/export-document';
+export type { ExportDocumentOptions } from './export/export-document';
+export { writeObjDocument } from './export/obj-writer';
+export { write3mfDocument } from './export/threemf-writer';
+export { buildZipArchive } from './export/zip-writer';
+export type { ZipWriteEntry, ZipWriteOptions } from './export/zip-writer';
+export {
+  assertExportSnapshot,
+  validate3mfRoundTrip,
+  validateObjRoundTrip,
+} from './export/validate';
+export { escapeXml } from './threemf/xml-scan';

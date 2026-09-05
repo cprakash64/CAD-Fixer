@@ -165,9 +165,13 @@ describe('the geometry engines stay in the worker', () => {
     const productionFiles = [
       ...sourceFilesUnder(join(REPO_ROOT, 'apps', 'web', 'src')),
       ...sourceFilesUnder(join(REPO_ROOT, 'packages')),
-      // Tests may import fixtures; so, obviously, may the fixture modules.
+      // Tests may import fixtures; so, obviously, may the fixture and
+      // test-context modules themselves.
     ].filter(
-      (file) => !/\.(test|bench-suite)\.(ts|tsx)$/.test(file) && !file.endsWith('fixtures.ts'),
+      (file) =>
+        !/\.(test|bench-suite)\.(ts|tsx)$/.test(file) &&
+        !file.endsWith('fixtures.ts') &&
+        !file.endsWith('test-context.ts'),
     );
 
     for (const file of productionFiles) {
@@ -182,6 +186,78 @@ describe('the geometry engines stay in the worker', () => {
     }
 
     expect(offenders, 'a test-only fixture module became reachable from production').toEqual([]);
+  });
+
+  it('keeps the WRITER ORACLES out of production code', () => {
+    /*
+     * `obj-oracle.ts` and `threemf-oracle.ts` are structural checkers that share
+     * no code with the production readers ON PURPOSE: parse-back validation runs
+     * our reader over our writer, which proves the two agree and nothing more,
+     * so the oracles exist to catch a shared misunderstanding. Production
+     * importing one would make them a second parser — the exact thing they must
+     * not become.
+     */
+    const ORACLES = ['obj-oracle', 'threemf-oracle'];
+    const offenders: string[] = [];
+    const productionFiles = [
+      ...sourceFilesUnder(join(REPO_ROOT, 'apps', 'web', 'src')),
+      ...sourceFilesUnder(join(REPO_ROOT, 'packages')),
+    ].filter((file) => !/\.(test|bench-suite)\.(ts|tsx)$/.test(file));
+
+    for (const file of productionFiles) {
+      const contents = readFileSync(file, 'utf8');
+      const importBlocks = contents.match(/(?:import|export)[\s\S]*?from\s+['"][^'"]+['"]/g) ?? [];
+      for (const block of importBlocks) {
+        for (const oracle of ORACLES) {
+          if (block.includes(oracle)) offenders.push(`${relative(REPO_ROOT, file)}: ${oracle}`);
+        }
+      }
+    }
+
+    expect(offenders, 'a test oracle became reachable from production').toEqual([]);
+  });
+
+  it('keeps the document EXPORT ENGINE out of the shipped application', () => {
+    /*
+     * STAGE 4A-2B2 BUILDS THE ENGINE AND NOT THE WORKFLOW. The writers, the
+     * export worker and the export controller are complete and tested, and the
+     * only thing that calls them is the harness bridge — which is not an input
+     * to the application build.
+     *
+     * This is what stops the product quietly acquiring a half-designed feature:
+     * a Save-as-OBJ button, a `?export=` parameter, or a component reaching for
+     * `DocumentExportService` would all show up here. Stage 4A-2B3 deletes this
+     * test when it wires the real workflow.
+     */
+    const applicationFiles = sourceFilesUnder(join(REPO_ROOT, 'apps', 'web', 'src')).filter(
+      (file) =>
+        !/\.test\.(ts|tsx)$/.test(file) &&
+        !file.endsWith(join('runtime', 'document-export-service.ts')) &&
+        !file.endsWith(join('workers', 'export.worker.ts')),
+    );
+
+    const callers: string[] = [];
+    for (const file of applicationFiles) {
+      const contents = readFileSync(file, 'utf8');
+      if (/\bDocumentExportService\b/.test(contents)) callers.push(relative(REPO_ROOT, file));
+    }
+
+    expect(callers, 'nothing in the application may reach the export engine yet').toEqual([]);
+
+    // And the writers themselves are worker-side only.
+    const offenders = mainThreadFiles()
+      .filter((file) => {
+        const contents = readFileSync(file, 'utf8');
+        const blocks = contents.match(/import[\s\S]*?from\s+['"][^'"]+['"]/g) ?? [];
+        return blocks.some(
+          (block) =>
+            block.includes('@cadfixer/file-formats') &&
+            /\b(writeObjDocument|write3mfDocument|exportDocument|buildZipArchive)\b/.test(block),
+        );
+      })
+      .map((file) => relative(REPO_ROOT, file));
+
+    expect(offenders, 'a document writer became reachable from the application bundle').toEqual([]);
   });
 
   it('keeps the 3MF expansion counters out of production code', () => {
@@ -263,9 +339,10 @@ describe('the geometry engines stay in the worker', () => {
      * geometry worker.
      *
      * The same seam already existed for the diagnostic worker
-     * (`SelfIntersectionService`), which is why the allowed list has two entries
-     * rather than one: both are worker-factory declarations, and neither is a
-     * call site outside its own module.
+     * (`SelfIntersectionService`) and, since Stage 4A-2B2, for the export worker
+     * (`DocumentExportService`). All three are worker-factory DECLARATIONS, each
+     * inside its own module, and none is a call site anywhere else. The list is
+     * exact rather than a maximum so that a fourth one has to be argued for.
      */
     const entry = readFileSync(join(REPO_ROOT, 'apps', 'web', 'src', 'main.tsx'), 'utf8');
     expect(entry).not.toContain('createWorker');
@@ -277,6 +354,7 @@ describe('the geometry engines stay in the worker', () => {
 
     expect(injectors).toEqual(
       [
+        join('apps', 'web', 'src', 'runtime', 'document-export-service.ts'),
         join('apps', 'web', 'src', 'runtime', 'geometry-client.ts'),
         join('apps', 'web', 'src', 'runtime', 'self-intersection-service.ts'),
       ].sort(),

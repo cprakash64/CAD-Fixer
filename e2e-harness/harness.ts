@@ -22,6 +22,8 @@ export const Fixture = {
   Shared100: 'shared-100',
   Shared1000: 'shared-1000',
   SinglePart: 'single-part',
+  MillimetreTwoParts: 'millimetre-two-parts',
+  MillimetreShared1000: 'millimetre-shared-1000',
 } as const;
 
 export type Fixture = (typeof Fixture)[keyof typeof Fixture];
