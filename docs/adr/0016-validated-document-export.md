@@ -208,3 +208,71 @@ Import in every respect, the document layer, repair, topology,
 self-intersection, STL export, the absence of any network call, and the rule
 that raw geometry stays local. The artifact is created as a `Blob` on the user's
 own machine and handed to the browser's own download mechanism.
+
+---
+
+# R1 — browser responsiveness evidence (2026-09-05)
+
+Stage 4A-2B2 shipped Node benchmarks and a browser suite that proved
+correctness, cancellation and lifecycle, but not §56's question: does the page
+stay usable while a large export runs. That is closed here. No exporter
+behaviour was redesigned.
+
+## What the evidence shows
+
+Through the real path — authoritative worker, `MessageChannel`, disposable
+export worker, serialise, parse-back, bytes — with nothing mocked and validation
+never disabled:
+
+- The worst main-thread gap during a 320,000-triangle export is **19 ms for
+  both formats**, indistinguishable from the idle baseline and from a frame
+  budget. Chromium reported **no long task**.
+- A real click on a production control completes in **167–177 ms** while an
+  export of 582–1235 ms is still running.
+- Cancelling a quarter of the way in stops the operation at about a quarter of
+  its uncancelled duration, publishes no bytes and releases everything.
+- The 1,000-placement 3MF case writes **one** resource: 1,152,000 placed
+  triangles in 13.6 KiB and 53 ms. The same document as OBJ is 12.7 MiB and
+  672 ms at 400 placements — a 1,140× expansion, asserted as a ratio between the
+  two formats rather than as a byte count.
+
+Full numbers in `docs/PERFORMANCE_BASELINE.md`.
+
+## The phase timeline is asserted, not assumed
+
+Parse-back is 26–45% of an export, so a responsiveness window that ended when
+the bytes existed would exclude the second-largest phase. The harness bridge now
+records each progress report with the moment it arrived, and every measurement
+asserts its window reached `validating` and then `complete`, with a non-zero gap
+between them. A window that stopped early fails rather than reporting a better
+number.
+
+## One production fix, found by this evidence
+
+`DocumentExportService.cancel()` reported `durationMs: 0` for every cancelled
+export. `dispose()` settles a pending operation with a zeroed record, and cancel
+disposed BEFORE settling — so the promise had already resolved with zero by the
+time the real outcome arrived, and a promise settles once.
+
+Nothing user-visible depended on the number, which is why it survived review:
+the first version of the browser test compared a cancelled export's duration
+against an uncancelled one and was comparing against zero, passing for the wrong
+reason. The resolver is now taken before the teardown, and a unit test pins it.
+
+That is the argument for this kind of evidence in one paragraph — a vacuous
+assertion looks exactly like a passing one until something measures the number
+it depends on.
+
+## Fixtures
+
+The existing harness fixtures are small by design: they exist to make a
+placement or a defect unmistakable. An export that finishes in twelve
+milliseconds has no window to be unresponsive in, so three larger ones were
+added — a 320,000-triangle plate, and 400 and 1,000 placements of a
+1,152-triangle mesh. Grid meshes rather than repeated tetrahedra, because a
+serialiser's cost is per vertex and per triangle.
+
+400 placements for the OBJ case rather than 1,000, and the number is measured
+rather than guessed: a thousand placements of that mesh is about 109 MiB of OBJ
+text — inside the 256 MiB ceiling but slow enough to make the suite impractical
+to run often.

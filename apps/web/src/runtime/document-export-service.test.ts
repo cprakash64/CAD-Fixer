@@ -205,6 +205,30 @@ describe('cancellation', () => {
     expect(service.liveChannelCount).toBe(0);
   });
 
+  it('reports the elapsed time, not zero', async () => {
+    /*
+     * THE REGRESSION THIS PINS. `dispose` settles a pending operation with a
+     * zeroed record, and `cancel` used to dispose BEFORE settling — so the
+     * promise had already resolved with `durationMs: 0` by the time the real
+     * outcome arrived, and a promise settles once.
+     *
+     * Nothing user-visible depended on the number, which is why it survived: a
+     * browser test comparing a cancelled export's duration against an
+     * uncancelled one was comparing against zero and passing for the wrong
+     * reason. A duration that is always zero cannot distinguish a cancel that
+     * interrupted work from one that did not.
+     */
+    const { service } = harness();
+    const session = service.run({ handle, target: ExportTarget.Obj });
+
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    session.cancel();
+
+    const outcome = await session.promise;
+    expect(outcome.status).toBe(ExportStatus.Cancelled);
+    expect(outcome.durationMs).toBeGreaterThan(0);
+  });
+
   it('is idempotent, and a late result after it changes nothing', async () => {
     const { service, workers } = harness();
     const session = service.run({ handle, target: ExportTarget.Obj });

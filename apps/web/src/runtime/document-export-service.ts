@@ -240,8 +240,22 @@ export class DocumentExportService {
           message: 'Export was cancelled.',
           durationMs: Date.now() - startedAt,
         };
+        /*
+         * THE RESOLVER IS TAKEN BEFORE THE TEARDOWN, and the order is the whole
+         * fix. `dispose` settles whatever is still pending with a zeroed
+         * record, so disposing first meant the promise had ALREADY resolved
+         * with `durationMs: 0` by the time the real outcome arrived — and a
+         * promise settles once, so the second call did nothing.
+         *
+         * Nothing user-visible depended on the number, which is exactly why it
+         * went unnoticed: a test comparing a cancelled export's duration
+         * against an uncancelled one was comparing against zero and passing for
+         * the wrong reason.
+         */
+        const settle = this.settleCurrent;
+        this.settleCurrent = undefined;
         this.dispose();
-        resolve(cancelled);
+        settle?.(cancelled);
       };
     });
 

@@ -75,6 +75,24 @@ export const HarnessFixtureId = {
    */
   MillimetreTwoParts: 'millimetre-two-parts',
   MillimetreShared1000: 'millimetre-shared-1000',
+  /*
+   * LARGE, FOR EXPORT RESPONSIVENESS. Stage 4A-2B2-R1.
+   *
+   * The fixtures above are small on purpose — they exist to make a placement or
+   * a defect unmistakable, and a browser test of RENDERING does not need
+   * megabytes. Measuring whether a page stays usable while a document is
+   * serialised does: an export that finishes in twelve milliseconds has no
+   * window to be unresponsive in.
+   *
+   * Grid meshes rather than repeated tetrahedra, because a serialiser's cost is
+   * per vertex and per triangle and a four-triangle mesh repeated a thousand
+   * times measures the placement loop instead of the geometry loop.
+   */
+  MillimetreLargeSinglePart: 'millimetre-large-single-part',
+  /** 400 placements of a 1,152-triangle mesh: 460,800 triangles once baked. */
+  MillimetreSharedMedium400: 'millimetre-shared-medium-400',
+  /** 1,000 placements of the same mesh. One resource; a million triangles placed. */
+  MillimetreSharedMedium1000: 'millimetre-shared-medium-1000',
 } as const;
 
 export type HarnessFixtureId = (typeof HarnessFixtureId)[keyof typeof HarnessFixtureId];
@@ -116,6 +134,55 @@ function crossingAndOverlappingClean(): GeometryDocument {
       // so any flattening would manufacture crossings between the two.
       named('b', tetrahedronMesh(2), 'Clean overlapping', translation(1, 1, 0)),
     ],
+  };
+}
+
+/**
+ * A `side x side` quad grid: `side * side * 2` triangles over shared corners.
+ *
+ * Deterministic and cheap to build, and every coordinate is a small exact
+ * Float32 — so a round trip that loses one is a mismatch a test can point at,
+ * not a rounding argument.
+ */
+function gridMesh(side: number): CanonicalMesh {
+  const positions = new Float32Array((side + 1) * (side + 1) * 3);
+  let at = 0;
+  for (let row = 0; row <= side; row += 1) {
+    for (let column = 0; column <= side; column += 1) {
+      positions[at] = column;
+      positions[at + 1] = row;
+      positions[at + 2] = ((column * 7 + row * 13) % 17) * 0.25;
+      at += 3;
+    }
+  }
+
+  const indices = new Uint32Array(side * side * 6);
+  let out = 0;
+  for (let row = 0; row < side; row += 1) {
+    for (let column = 0; column < side; column += 1) {
+      const base = row * (side + 1) + column;
+      indices[out] = base;
+      indices[out + 1] = base + 1;
+      indices[out + 2] = base + side + 1;
+      indices[out + 3] = base + 1;
+      indices[out + 4] = base + side + 2;
+      indices[out + 5] = base + side + 1;
+      out += 6;
+    }
+  }
+  return { positions, indices, metadata: {} };
+}
+
+/** `count` placements of ONE grid mesh, spread along X. Shared, never copied. */
+function sharedGridPlacements(side: number, count: number): GeometryDocument {
+  const mesh = gridMesh(side);
+  return {
+    unit: LengthUnit.Millimeter,
+    parts: Array.from({ length: count }, (_part, index) =>
+      makePart(`p${String(index)}`, mesh, {
+        transform: translation(index * (side + 4), 0, 0),
+      }),
+    ),
   };
 }
 
@@ -198,5 +265,20 @@ export function buildHarnessDocument(id: HarnessFixtureId): GeometryDocument {
 
     case HarnessFixtureId.MillimetreShared1000:
       return { unit: LengthUnit.Millimeter, ...mp08SharedPlacements(1000) };
+
+    case HarnessFixtureId.MillimetreLargeSinglePart:
+      // 400 x 400 quads = 320,000 triangles. Roughly 30 MiB of OBJ text and
+      // 2.5 MiB of 3MF, which is a serialisation window long enough to be
+      // unresponsive in if the work were on the wrong thread.
+      return {
+        unit: LengthUnit.Millimeter,
+        parts: [makePart('large', gridMesh(400), { name: 'Large plate' })],
+      };
+
+    case HarnessFixtureId.MillimetreSharedMedium400:
+      return sharedGridPlacements(24, 400);
+
+    case HarnessFixtureId.MillimetreSharedMedium1000:
+      return sharedGridPlacements(24, 1000);
   }
 }

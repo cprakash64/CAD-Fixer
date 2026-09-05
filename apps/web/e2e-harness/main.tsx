@@ -116,6 +116,21 @@ function requestDigest(documentId: string, revision: number): Promise<HarnessDig
  */
 const exportService = new DocumentExportService(geometryClient);
 
+/**
+ * One progress report, with the moment it arrived.
+ *
+ * The TIMELINE is what makes a responsiveness measurement checkable. A busy
+ * window that ends when the bytes exist would exclude parse-back validation —
+ * which Stage 4A-2B2 measured at 37–45% of an export — so a test has to be able
+ * to see that the window it sampled reached `validating` and then `complete`.
+ */
+interface HarnessExportPhase {
+  readonly fraction: number;
+  readonly note?: string;
+  /** Milliseconds since the export was requested. */
+  readonly at: number;
+}
+
 interface HarnessExportResult {
   readonly status: string;
   readonly reason?: string;
@@ -130,9 +145,118 @@ interface HarnessExportResult {
   /** First bytes, so a test can identify the format without holding the file. */
   readonly head?: string;
   readonly progressUpdates: number;
+  readonly phases: readonly HarnessExportPhase[];
+  /** Milliseconds from the cancel request to the terminal outcome. */
+  readonly cancelLatencyMs?: number;
 }
 
-let activeExport: { cancel(): void } | undefined;
+interface PendingExport {
+  readonly session: { cancel(): void };
+  readonly result: Promise<HarnessExportResult>;
+  readonly cancelAt: { requestedAt?: number };
+}
+
+let activeExport: PendingExport | undefined;
+
+function beginExport(
+  documentId: string,
+  revision: number,
+  target: ExportTarget,
+  sourceName: string,
+  options: { readonly download?: boolean; readonly cancelAfterMs?: number } = {},
+): void {
+  const startedAt = performance.now();
+  const phases: HarnessExportPhase[] = [];
+  let progressUpdates = 0;
+
+  const session = exportService.run({
+    handle: { documentId, revision } as never,
+    target,
+    onProgress: (fraction, note) => {
+      progressUpdates += 1;
+      /*
+       * CAPPED. This array is read once at the end and never rendered, but an
+       * unbounded push per progress report would make the probe a participant
+       * in the thing it measures. The writers report every 32,768 triangles, so
+       * a few hundred entries covers any document that fits the ceilings.
+       */
+      if (phases.length < 512) {
+        phases.push({
+          fraction,
+          ...(note === undefined ? {} : { note }),
+          at: performance.now() - startedAt,
+        });
+      }
+    },
+  });
+
+  /*
+   * The cancel timestamp lives in its own holder rather than on `pending`,
+   * because the async body below closes over it BEFORE `pending` is assigned.
+   * A closure that reads a `const` declared after it is a temporal-dead-zone
+   * error at run time, not a style preference.
+   */
+  const cancelAt: { requestedAt?: number } = {};
+
+  const pending: PendingExport = {
+    session,
+    cancelAt,
+    result: (async (): Promise<HarnessExportResult> => {
+      const outcome: DocumentExportOutcome = await session.promise;
+      const cancelLatency =
+        cancelAt.requestedAt === undefined ? undefined : performance.now() - cancelAt.requestedAt;
+
+      if (outcome.status !== 'SUCCESS') {
+        return {
+          status: outcome.status,
+          ...(outcome.reason === undefined ? {} : { reason: outcome.reason }),
+          message: outcome.message,
+          durationMs: outcome.durationMs,
+          progressUpdates,
+          phases,
+          ...(cancelLatency === undefined ? {} : { cancelLatencyMs: cancelLatency }),
+        };
+      }
+
+      const fileName = deriveDocumentExportName(sourceName, target);
+      if (options.download === true) {
+        downloadBytes(outcome.bytes, fileName, 'application/octet-stream');
+      }
+
+      const head = new TextDecoder('utf-8', { fatal: false }).decode(outcome.bytes.subarray(0, 24));
+      return {
+        status: outcome.status,
+        byteLength: outcome.bytes.byteLength,
+        fileName,
+        observations: outcome.metadata.observations,
+        triangleCount: outcome.metadata.triangleCount,
+        partCount: outcome.metadata.partCount,
+        meshResourceCount: outcome.metadata.meshResourceCount,
+        durationMs: outcome.durationMs,
+        head,
+        progressUpdates,
+        phases,
+        ...(cancelLatency === undefined ? {} : { cancelLatencyMs: cancelLatency }),
+      };
+    })(),
+  };
+  activeExport = pending;
+
+  if (options.cancelAfterMs !== undefined) {
+    setTimeout(() => {
+      cancelAt.requestedAt = performance.now();
+      session.cancel();
+    }, options.cancelAfterMs);
+  }
+}
+
+async function awaitExport(): Promise<HarnessExportResult> {
+  const pending = activeExport;
+  if (pending === undefined) throw new Error('no export is running');
+  const result = await pending.result;
+  activeExport = undefined;
+  return result;
+}
 
 async function runExport(
   documentId: string,
@@ -141,51 +265,8 @@ async function runExport(
   sourceName: string,
   options: { readonly download?: boolean; readonly cancelAfterMs?: number } = {},
 ): Promise<HarnessExportResult> {
-  let progressUpdates = 0;
-  const session = exportService.run({
-    handle: { documentId, revision } as never,
-    target,
-    onProgress: () => {
-      progressUpdates += 1;
-    },
-  });
-  activeExport = session;
-
-  if (options.cancelAfterMs !== undefined) {
-    setTimeout(() => {
-      session.cancel();
-    }, options.cancelAfterMs);
-  }
-
-  const outcome: DocumentExportOutcome = await session.promise;
-  activeExport = undefined;
-
-  if (outcome.status !== 'SUCCESS') {
-    return {
-      status: outcome.status,
-      ...(outcome.reason === undefined ? {} : { reason: outcome.reason }),
-      message: outcome.message,
-      durationMs: outcome.durationMs,
-      progressUpdates,
-    };
-  }
-
-  const fileName = deriveDocumentExportName(sourceName, target);
-  if (options.download === true) downloadBytes(outcome.bytes, fileName, 'application/octet-stream');
-
-  const head = new TextDecoder('utf-8', { fatal: false }).decode(outcome.bytes.subarray(0, 24));
-  return {
-    status: outcome.status,
-    byteLength: outcome.bytes.byteLength,
-    fileName,
-    observations: outcome.metadata.observations,
-    triangleCount: outcome.metadata.triangleCount,
-    partCount: outcome.metadata.partCount,
-    meshResourceCount: outcome.metadata.meshResourceCount,
-    durationMs: outcome.durationMs,
-    head,
-    progressUpdates,
-  };
+  beginExport(documentId, revision, target, sourceName, options);
+  return awaitExport();
 }
 
 declare global {
@@ -199,7 +280,16 @@ declare global {
         sourceName: string,
         options?: { readonly download?: boolean; readonly cancelAfterMs?: number },
       ): Promise<HarnessExportResult>;
+      beginExport(
+        documentId: string,
+        revision: number,
+        target: ExportTarget,
+        sourceName: string,
+        options?: { readonly download?: boolean; readonly cancelAfterMs?: number },
+      ): void;
+      awaitExport(): Promise<HarnessExportResult>;
       cancelExport(): void;
+      exportActiveOperation(): string | undefined;
       exportLiveWorkers(): number;
       exportLiveChannels(): number;
     };
@@ -209,9 +299,15 @@ declare global {
 window.cadfixerHarness = {
   digest: requestDigest,
   exportDocument: runExport,
+  beginExport,
+  awaitExport,
   cancelExport: (): void => {
-    activeExport?.cancel();
+    const pending = activeExport;
+    if (pending === undefined) return;
+    pending.cancelAt.requestedAt = performance.now();
+    pending.session.cancel();
   },
+  exportActiveOperation: (): string | undefined => exportService.activeOperation,
   exportLiveWorkers: (): number => exportService.liveWorkerCount,
   exportLiveChannels: (): number => exportService.liveChannelCount,
 };
