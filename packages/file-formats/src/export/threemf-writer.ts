@@ -1,0 +1,297 @@
+import { IDENTITY_PART_TRANSFORM, type PartTransform } from '@cadfixer/mesh-core';
+import { throwIfCancelled } from '@cadfixer/shared';
+import { MeshFormatId } from '../formats';
+import { escapeXml } from '../threemf/xml-scan';
+import { THREE_MF_UNITS } from '../threemf/threemf-reader';
+import { createByteSink } from './byte-sink';
+import {
+  ExportObservation,
+  planThreeMfObjects,
+  snapshotTriangleCount,
+  type ExportDocumentSnapshot,
+  type FormatWriteDocumentContext,
+  type WrittenDocument,
+} from './export-contract';
+import { ExportRefusal, exportBlocked, exportInternal, exportTooLarge } from './export-errors';
+import { writeFloat32Text, writeFloat64Text } from './numeric';
+import { buildZipArchive } from './zip-writer';
+
+/**
+ * THE PRODUCTION 3MF WRITER.
+ *
+ * WHAT 3MF CARRIES THAT OBJ CANNOT, and this writer therefore does not lose:
+ *
+ *   - THE UNIT, written as the document's own token. Coordinates are never
+ *     rescaled: the unit says what the numbers mean, not what they are.
+ *   - THE PLACEMENTS, as `<item transform>` in Float64 decimal. Nothing is
+ *     baked into a vertex.
+ *   - THE SHARING. One distinct mesh becomes ONE `<object>`, and every part
+ *     that uses it becomes a `<build><item>` pointing at that object. A
+ *     thousand placements of one mesh serialise its geometry once. The research
+ *     prototype wrote one object per part; production does not, because
+ *     flattening sharing on write would turn a two-megabyte document into a
+ *     two-gigabyte file for no reason.
+ *
+ * WHAT IT DOES NOT ATTEMPT: reconstructing the nested component graph an
+ * imported file may have had. A `GeometryDocument` holds leaf placements and
+ * mesh identity; the hierarchy above them is not retained, and inventing a
+ * plausible one would be describing a structure the user never wrote. Output is
+ * therefore canonical — mesh objects plus build items — and reads back as the
+ * same document.
+ *
+ * ARCHIVE PATHS ARE FIXED. No entry path is derived from a document name, a
+ * part name, a material reference or anything else that came from a file.
+ */
+
+const NS = 'http://schemas.microsoft.com/3dmanufacturing/core/2015/02';
+
+/** Fixed, and the same three entries the reader expects. */
+const CONTENT_TYPES_PATH = '[Content_Types].xml';
+const RELS_PATH = '_rels/.rels';
+const MODEL_PATH = '3D/3dmodel.model';
+
+const CONTENT_TYPES =
+  '<?xml version="1.0" encoding="UTF-8"?>\n' +
+  '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">\n' +
+  ' <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>\n' +
+  ' <Default Extension="model" ContentType="application/vnd.ms-package.3dmanufacturing-3dmodel+xml"/>\n' +
+  '</Types>\n';
+
+/**
+ * The one relationship, pointing INSIDE the package.
+ *
+ * `/3D/3dmodel.model` is a package-relative part name, not a URL. Nothing here
+ * is fetchable and nothing external is referenced — the writer must produce
+ * files that satisfy the same reader security contract imported files face, and
+ * an external target would be refused by our own reader.
+ */
+const RELS =
+  '<?xml version="1.0" encoding="UTF-8"?>\n' +
+  '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">\n' +
+  ' <Relationship Id="rel0" Target="/3D/3dmodel.model" ' +
+  'Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/>\n' +
+  '</Relationships>\n';
+
+const TRIANGLES_PER_BATCH = 32_768;
+
+/**
+ * `Object.is`, NOT `===`.
+ *
+ * `-0 === 0` is true, so a placement whose translation is negative zero would
+ * be judged the identity, no `transform` attribute would be written, and the
+ * sign would be gone. `-0` is observable and is a stored value like any other.
+ */
+function isIdentity(transform: PartTransform): boolean {
+  for (let index = 0; index < 12; index += 1) {
+    if (!Object.is(transform[index], IDENTITY_PART_TRANSFORM[index])) return false;
+  }
+  return true;
+}
+
+/** Serialises the model part, enforcing the pre-compression byte ceiling. */
+async function writeModelXml(
+  snapshot: ExportDocumentSnapshot,
+  unit: string,
+  context: FormatWriteDocumentContext,
+): Promise<Uint8Array> {
+  const sink = createByteSink(
+    context.encodeText,
+    context.limits.maxSerialisedBytes,
+    ExportRefusal.SerialisedTooLarge,
+  );
+
+  sink.write('<?xml version="1.0" encoding="UTF-8"?>\n');
+  sink.write(`<model unit="${escapeXml(unit)}" xml:lang="en-US" xmlns="${NS}">\n`);
+  sink.write(' <resources>\n');
+
+  const totalTriangles = snapshotTriangleCount(snapshot);
+  let written = 0;
+
+  /*
+   * ONE OBJECT PER (MESH, NAME, MATERIAL REFERENCE), because all three live on
+   * the `<object>` in 3MF rather than on the `<item>` that places it. Object
+   * ids are 1-based positions in this plan — ours, generated, never the source
+   * file's ids, which may repeat across imports and are not identity here.
+   */
+  const plans = planThreeMfObjects(snapshot);
+  for (const [index, plan] of plans.entries()) {
+    const mesh = snapshot.meshes[plan.meshResourceIndex];
+    if (mesh === undefined) {
+      throw exportBlocked(
+        ExportRefusal.MissingMeshResource,
+        'A part in this document refers to geometry that is not present.',
+        { objectIndex: index },
+      );
+    }
+    const nameAttr =
+      plan.name === undefined || plan.name === '' ? '' : ` name="${escapeXml(plan.name)}"`;
+    const pidAttr = plan.materialRef === undefined ? '' : ` pid="${escapeXml(plan.materialRef)}"`;
+    sink.write(`  <object id="${String(index + 1)}" type="model"${nameAttr}${pidAttr}>\n`);
+    sink.write('   <mesh>\n    <vertices>\n');
+
+    const { positions, indices } = mesh;
+    for (let at = 0; at < positions.length; at += 3) {
+      sink.write(
+        `     <vertex x="${writeFloat32Text(positions[at] ?? 0)}"` +
+          ` y="${writeFloat32Text(positions[at + 1] ?? 0)}"` +
+          ` z="${writeFloat32Text(positions[at + 2] ?? 0)}"/>\n`,
+      );
+    }
+
+    sink.write('    </vertices>\n    <triangles>\n');
+    for (let at = 0; at < indices.length; at += 3) {
+      sink.write(
+        `     <triangle v1="${String(indices[at] ?? 0)}"` +
+          ` v2="${String(indices[at + 1] ?? 0)}"` +
+          ` v3="${String(indices[at + 2] ?? 0)}"/>\n`,
+      );
+      written += 1;
+      if (written % TRIANGLES_PER_BATCH === 0) {
+        throwIfCancelled(context.cancellation);
+        await context.yieldToEventLoop();
+        throwIfCancelled(context.cancellation);
+        context.progress.report(
+          totalTriangles === 0 ? 0.5 : (written / totalTriangles) * 0.6,
+          'writing model',
+        );
+      }
+    }
+
+    sink.write('    </triangles>\n   </mesh>\n  </object>\n');
+    throwIfCancelled(context.cancellation);
+  }
+
+  sink.write(' </resources>\n <build>\n');
+
+  /*
+   * BUILD ITEMS IN DOCUMENT ORDER, each pointing at the object its part was
+   * grouped into. Order is the DOCUMENT'S, not the plan's: a reader rebuilds
+   * parts from the build, so emitting them grouped would silently reorder the
+   * user's parts.
+   */
+  const objectIdOfPart = new Map<number, number>();
+  for (const [index, plan] of plans.entries()) {
+    for (const partIndex of plan.partIndices) objectIdOfPart.set(partIndex, index + 1);
+  }
+
+  for (const [index, part] of snapshot.parts.entries()) {
+    const objectId = objectIdOfPart.get(index) ?? 1;
+    const transform = isIdentity(part.transform)
+      ? ''
+      : ` transform="${part.transform.map(writeFloat64Text).join(' ')}"`;
+    sink.write(`  <item objectid="${String(objectId)}"${transform}/>\n`);
+  }
+
+  sink.write(' </build>\n</model>\n');
+  return sink.finish();
+}
+
+export async function write3mfDocument(
+  snapshot: ExportDocumentSnapshot,
+  context: FormatWriteDocumentContext,
+): Promise<WrittenDocument> {
+  if (snapshot.parts.length === 0) {
+    throw exportBlocked(
+      ExportRefusal.NoParts,
+      'This document has no parts, so there is nothing to write.',
+    );
+  }
+
+  /*
+   * THE UNIT IS REQUIRED AND IS NEVER INVENTED.
+   *
+   * A 3MF states one unit for everything it contains. A document derived from
+   * an STL or an OBJ states none, and there is no assertion anywhere to base a
+   * guess on — writing `millimeter` would be CAD Fixer claiming a physical fact
+   * about the user's model that nobody established.
+   *
+   * This is NOT in tension with the reader's millimetre default. A 3MF that
+   * omits the attribute HAS stated millimetres, because the specification
+   * defines what an absent attribute means. An unknown-unit document has said
+   * nothing at all. One is reading a fact; the other would be inventing one.
+   */
+  if (snapshot.unit === undefined) {
+    throw exportBlocked(
+      ExportRefusal.UnitRequired,
+      'This model states no unit, and a 3MF file has to declare one. CAD Fixer will not choose a unit on your behalf.',
+    );
+  }
+  if (!THREE_MF_UNITS.includes(snapshot.unit)) {
+    throw exportInternal(
+      ExportRefusal.MalformedSnapshot,
+      'This model states a unit that 3MF cannot express.',
+      { unit: snapshot.unit.slice(0, 32) },
+    );
+  }
+
+  const deflateRaw = context.deflateRaw;
+  if (deflateRaw === undefined) {
+    throw exportInternal(
+      ExportRefusal.MalformedSnapshot,
+      '3MF export needs a compressor, and none was provided.',
+    );
+  }
+
+  context.progress.report(0.02, 'writing model');
+  const model = await writeModelXml(snapshot, snapshot.unit, context);
+  throwIfCancelled(context.cancellation);
+
+  context.progress.report(0.65, 'compressing');
+  const bytes = await buildZipArchive(
+    [
+      { name: CONTENT_TYPES_PATH, content: context.encodeText(CONTENT_TYPES) },
+      { name: RELS_PATH, content: context.encodeText(RELS) },
+      { name: MODEL_PATH, content: model },
+    ],
+    {
+      deflateRaw,
+      maxOutputBytes: context.limits.maxOutputBytes,
+      throwIfCancelled: () => {
+        throwIfCancelled(context.cancellation);
+      },
+    },
+  );
+
+  if (bytes.byteLength > context.limits.maxOutputBytes) {
+    throw exportTooLarge(
+      ExportRefusal.OutputTooLarge,
+      'This export would produce a larger file than CAD Fixer will write.',
+      { produced: bytes.byteLength, limit: context.limits.maxOutputBytes },
+    );
+  }
+
+  const observations: ExportObservation[] = [
+    ExportObservation.UnitPreserved,
+    ExportObservation.TransformsPreserved,
+    ExportObservation.NormalsOmitted,
+    ExportObservation.TextureCoordinatesOmitted,
+    ExportObservation.ComponentHierarchyNotReconstructed,
+  ];
+  const objectPlans = planThreeMfObjects(snapshot);
+  if (objectPlans.length < snapshot.parts.length) {
+    observations.push(ExportObservation.SharingPreserved);
+  }
+  if (objectPlans.length > snapshot.meshes.length) {
+    // Parts shared a mesh and disagreed about its name or material reference,
+    // so the geometry was written more than once to keep both names.
+    observations.push(ExportObservation.SharingSplitByMetadata);
+  }
+  if (snapshot.parts.some((part) => part.name !== undefined && part.name !== '')) {
+    observations.push(ExportObservation.NamesPreserved);
+  }
+  if (snapshot.parts.some((part) => part.materialRef !== undefined)) {
+    observations.push(ExportObservation.MaterialReferencesPreserved);
+  }
+
+  return {
+    bytes,
+    metadata: {
+      formatId: MeshFormatId.ThreeMf,
+      outputBytes: bytes.byteLength,
+      triangleCount: snapshotTriangleCount(snapshot),
+      partCount: snapshot.parts.length,
+      meshResourceCount: objectPlans.length,
+      observations,
+    },
+  };
+}

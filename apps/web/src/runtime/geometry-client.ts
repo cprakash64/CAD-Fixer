@@ -18,6 +18,7 @@ import {
   type RepairPlanOperationResult,
   type RepairUndoResult,
   type SendForDiagnosticResult,
+  type SendForExportResult,
   type StlExportResult,
 } from '@cadfixer/geometry-runtime';
 import { modelUnavailable } from '@cadfixer/shared';
@@ -267,6 +268,31 @@ export class GeometryClient {
         operationId: request.operationId,
         port: request.port,
         limits: request.limits,
+      },
+      { transfer: [request.port] },
+    ).promise;
+  }
+
+  /**
+   * Hands the export worker a disposable snapshot of the whole document.
+   *
+   * The page never sees it: one port goes to the authoritative worker and the
+   * other to the export worker, and the snapshot travels directly between them.
+   * What comes back here is a part count and a triangle count.
+   */
+  public async sendForExport(request: {
+    handle: DocumentHandle;
+    target: string;
+    operationId: string;
+    port: MessagePort;
+  }): Promise<SendForExportResult> {
+    return this.coordinator.dispatch(
+      'document/send-for-export',
+      {
+        handle: request.handle,
+        target: request.target,
+        operationId: request.operationId,
+        port: request.port,
       },
       { transfer: [request.port] },
     ).promise;

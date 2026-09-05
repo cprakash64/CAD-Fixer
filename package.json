@@ -35,7 +35,8 @@
     "bench:repair-browser": "CADFIXER_BROWSER_BENCH=1 playwright test e2e/repair-benchmark.spec.ts --reporter=list",
     "test:e2e:timing": "playwright test --config playwright.timing.config.ts",
     "test:e2e:harness": "playwright test --config playwright.harness.config.ts",
-    "bench:formats": "vitest run --config vitest.bench.config.ts scripts/format-import.bench-suite.ts"
+    "bench:formats": "vitest run --config vitest.bench.config.ts scripts/format-import.bench-suite.ts",
+    "bench:export": "vitest run --config vitest.bench.config.ts scripts/format-export.bench-suite.ts"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

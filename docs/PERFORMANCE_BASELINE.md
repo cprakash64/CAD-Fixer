@@ -620,3 +620,72 @@ whole of the expansion: sixty-one thousand part records not built, and the walk
 that would have built them not taken. Correctness remains the reason the
 ceilings were unified — the reader now refuses on the rule that will actually be
 enforced, and names it — but the saved work is real and measurable.
+
+---
+
+# Performance baseline — Stage 4A-2B2 (validated OBJ and 3MF export)
+
+Reproduce with:
+
+```bash
+npm run bench:export
+```
+
+Sizes are configurable: `CADFIXER_EXPORT_MB=1,10,50 npm run bench:export`.
+
+## Environment
+
+Node v22.22.2 on darwin/arm64, 8 hardware threads. Same machine as the other
+Node baselines. Best of three runs after one warm-up. Measured against the
+production writers and the production readers, with the same platform
+primitives the export worker injects — `TextEncoder`, `CompressionStream` and
+`DecompressionStream`.
+
+## One part, by size
+
+| Triangles | OBJ serialise | OBJ validate | OBJ total | OBJ bytes | 3MF serialise | 3MF validate | 3MF total | 3MF bytes |
+| --------- | ------------- | ------------ | --------- | --------- | ------------- | ------------ | --------- | --------- |
+| 10,952    | 7 ms          | 5 ms         | 12 ms     | 0.3 MiB   | 19 ms         | 11 ms        | 31 ms     | 0.1 MiB   |
+| 110,450   | 70 ms         | 53 ms        | 123 ms    | 3.2 MiB   | 199 ms        | 109 ms       | 309 ms    | 0.8 MiB   |
+| 551,250   | 351 ms        | 287 ms       | 638 ms    | 17.2 MiB  | 897 ms        | 528 ms       | 1425 ms   | 4.2 MiB   |
+
+**Validation is roughly 45% of an OBJ export and 37% of a 3MF one**, and it is
+not optional. It is the only local evidence that the file we just wrote opens
+anywhere, and there is no "skip validation" switch — a serialiser returning
+bytes is not proof of a valid artifact.
+
+**3MF costs about 2.2× OBJ in time and produces about a quarter of the bytes.**
+The extra time is XML markup plus deflate; the smaller file is deflate plus the
+fact that 3MF says each number once where OBJ repeats a vertex per use.
+
+Snapshot preparation does not appear: it is a per-distinct-mesh array copy and
+rounds to zero milliseconds at every size measured.
+
+## Placements of one shared mesh
+
+1,152 triangles, placed `n` times.
+
+| Placements | OBJ total | OBJ bytes | 3MF total | 3MF bytes |
+| ---------- | --------- | --------- | --------- | --------- |
+| 1          | 1 ms      | 0.04 MiB  | 4 ms      | 0.01 MiB  |
+| 10         | 17 ms     | 0.3 MiB   | 4 ms      | 0.01 MiB  |
+| 100        | 150 ms    | 3.4 MiB   | 4 ms      | 0.02 MiB  |
+| 1,000      | 1355 ms   | 37.9 MiB  | 7 ms      | 0.04 MiB  |
+
+**This is the whole argument for preserving shared mesh resources, measured.**
+3MF writes the geometry ONCE and adds one `<item>` per placement, so a
+thousandfold increase in placements costs 3 ms and 30 KiB. OBJ has no
+instancing, so the same document is a thousand copies: 1.4 seconds and 38
+megabytes, growing linearly and without bound.
+
+It is also why the OBJ writer has an output ceiling and a preflight. A document
+that is trivial to hold in memory can be impossible to write as OBJ, and the
+refusal has to come before the bytes exist rather than after.
+
+## Not measured here
+
+Browser wall-clock and process memory. What matters for export in a browser is
+that the main thread keeps rendering and that Cancel works, and those are
+asserted rather than recorded — `e2e-harness/document-export.spec.ts` cancels a
+thousand-placement export of each format in real Chromium and proves the worker
+and its channel are released and that a retry succeeds.

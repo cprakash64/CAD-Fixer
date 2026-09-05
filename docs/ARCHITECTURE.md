@@ -193,12 +193,33 @@ items, component instances and all six units, and never resolves a texture, a
 material library or an external reference. See
 [ADR 0015](adr/0015-production-obj-and-3mf-import.md).
 
-**Only STL can be WRITTEN.** There is no OBJ or 3MF writer and no conversion
-workflow; the Convert workflow is visibly unavailable and the Model panel says
-so before the Export button. Capability is declared in
+**Only STL can be WRITTEN BY THE PRODUCT.** Stage 4A-2B2 built a validated OBJ
+and 3MF export ENGINE — `exportDocument` serialises a document snapshot in a
+disposable worker, reads the bytes back with the production reader, and returns
+an artifact only if the two agree — but nothing in the application calls it. The
+only caller is the end-to-end harness bridge, which is not in the application
+build. Until Stage 4A-2B3 wires the conversion workflow, the Convert workflow
+stays visibly unavailable and the Model panel says STL is the only format that
+can be written. See [ADR 0016](adr/0016-validated-document-export.md). Capability is declared in
 `file-formats/capabilities` rather than read from the registry, because the
 registry is populated inside the worker and is legitimately empty on the main
 thread — a test asserts the declaration matches what actually registers.
+
+### Export runs in a second disposable worker
+
+Since Stage 4A-2B2 a document can be written as OBJ or 3MF bytes. The path has
+two hops and the page is not in the middle: the controller creates a
+`MessageChannel`, hands one port to the authoritative worker and one to a
+disposable export worker, and a document SNAPSHOT — one copy per distinct mesh,
+never one per placement — travels between them. The finished file comes back to
+the page, because that is the artifact the user asked to save.
+
+Cancellation is `terminate()`. Part of the work happens inside
+`CompressionStream`, which polls no flag of ours, so a cooperative token alone
+would be honest for the writer loops and a lie for the compressor.
+
+No export succeeds until its bytes have been read back by the PRODUCTION reader
+and compared against what they were written from. There is no way to skip that.
 
 ### Cancellation requires yielding
 
@@ -416,14 +437,17 @@ reviewable act rather than an accident.
 
 ## 12. What is deliberately not implemented
 
-STL, OBJ and 3MF can be read. Only STL can be written. Nothing else is
-implemented:
+STL, OBJ and 3MF can be read. A validated OBJ and 3MF export engine exists but
+is not reachable from the product; only STL can be written by the application.
+Nothing else is implemented:
 
-No OBJ writer, no 3MF writer, no format conversion, no OBJ polygons, no MTL
-resolution, no 3MF textures or materials, no welding, no booleans, no
-connectors, no splitting, no displacement, no hollowing, no drainage holes, no
-wall-thickness analysis, no auth, no billing, no database, no backend, no
-analytics, no persistence — and no stub that pretends to be any of them.
+No user-facing format conversion, no unit chooser, no conversion-loss report, no
+OBJ polygons, no MTL resolution, no 3MF textures or materials, no exported
+normals or texture coordinates, no reconstruction of an imported 3MF's component
+hierarchy, no welding, no booleans, no connectors, no splitting, no displacement,
+no hollowing, no drainage holes, no wall-thickness analysis, no auth, no billing,
+no database, no backend, no analytics, no persistence — and no stub that pretends
+to be any of them.
 
 Repair is implemented only in its **conservative** form: exact duplicate removal,
 safe degenerate removal, and relative winding unification. It does not weld,

@@ -16,6 +16,7 @@ import {
   residentDocuments,
 } from '../../src/workers/stl-handlers';
 import { modelSendForDiagnosticHandler } from '../../src/workers/self-intersection-handlers';
+import { documentSendForExportHandler } from '../../src/workers/export-handlers';
 import {
   repairCommitHandler,
   repairCreateCandidateHandler,
@@ -125,6 +126,7 @@ host.register('model/export', modelExportHandler);
 host.register('model/release', modelReleaseHandler);
 host.register('model/analyze', modelAnalyzeHandler);
 host.register('model/send-for-diagnostic', modelSendForDiagnosticHandler);
+host.register('document/send-for-export', documentSendForExportHandler);
 
 host.register('repair/plan', repairPlanHandler);
 host.register('repair/create-candidate', repairCreateCandidateHandler);

@@ -68,6 +68,69 @@ function prologOf(text: string): string {
 }
 
 /**
+ * Escapes a string so it is XML DATA and can never be anything else.
+ *
+ * ALL FIVE PREDEFINED ENTITIES, including the two that only matter inside an
+ * attribute value. A writer that escapes `&`, `<` and `>` but not the quotes
+ * produces a document where a name containing `"` closes the attribute and the
+ * rest of the name becomes markup — which is the whole attack, achieved with
+ * one character.
+ *
+ * `&` MUST BE FIRST. Replacing it after the others would re-escape the
+ * ampersands those replacements just introduced, turning `<` into `&amp;lt;`.
+ *
+ * Control characters are DROPPED rather than escaped. XML 1.0 does not permit
+ * most of them at all — not even as numeric references — so a document
+ * containing one is not well formed, and our own reader would refuse the file
+ * we had just written.
+ */
+/**
+ * The characters XML can carry at all, with the rest dropped.
+ *
+ * XML 1.0 does not permit most control characters even as numeric references,
+ * so a writer that "escaped" one would produce a document that is not well
+ * formed — and our own reader would refuse the file we had just written.
+ * Exposed separately because a validator comparing a written name against the
+ * document's has to know that this happened.
+ */
+export function xmlSafeText(value: string): string {
+  let out = '';
+  for (const character of value) {
+    const code = character.codePointAt(0) ?? 0;
+    if (code < 0x20 && code !== 0x09 && code !== 0x0a && code !== 0x0d) continue;
+    if (code === 0x7f) continue;
+    out += character;
+  }
+  return out;
+}
+
+export function escapeXml(value: string): string {
+  let out = '';
+  for (const character of xmlSafeText(value)) {
+    switch (character) {
+      case '&':
+        out += '&amp;';
+        break;
+      case '<':
+        out += '&lt;';
+        break;
+      case '>':
+        out += '&gt;';
+        break;
+      case '"':
+        out += '&quot;';
+        break;
+      case "'":
+        out += '&apos;';
+        break;
+      default:
+        out += character;
+    }
+  }
+  return out;
+}
+
+/**
  * Names the unsafe construct in a document, or `undefined`.
  *
  * Checked against the WHOLE PROLOG for declarations that may only legally

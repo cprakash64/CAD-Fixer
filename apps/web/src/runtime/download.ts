@@ -66,7 +66,7 @@ const MAX_EXPORT_NAME_LENGTH = 100;
  * — `[ -]` reads as two literals but is actually the range from space to
  * hyphen, which silently strips a dozen ordinary characters.
  */
-export function deriveExportName(sourceName: string, suffix: string): string {
+function sanitiseBase(sourceName: string): string {
   const withoutPath = sourceName.split(/[\\/]/).pop() ?? '';
   const withoutExtension = withoutPath.replace(/\.[^.]*$/, '');
 
@@ -85,6 +85,40 @@ export function deriveExportName(sourceName: string, suffix: string): string {
   // A name consisting only of dots (`..`, `....`) is a legal filename but a
   // confusing one, and `..` in particular reads as a directory. Anything with
   // no ordinary character left in it falls back to the generic name.
-  const onlyDots = /^\.*$/.test(trimmed);
-  return `${onlyDots ? 'model' : trimmed}${suffix}.stl`;
+  return /^\.*$/.test(trimmed) ? 'model' : trimmed;
+}
+
+export function deriveExportName(sourceName: string, suffix: string): string {
+  return `${sanitiseBase(sourceName)}${suffix}.stl`;
+}
+
+/**
+ * The extension a written document gets, decided by the WRITER.
+ *
+ * Never taken from the source name, and never from anything inside the
+ * document. What was written decides what the file is called, so a `.3mf`
+ * exported as OBJ is named `.obj` and a model whose name ends in `.exe` cannot
+ * produce a file that ends in `.exe`.
+ */
+const EXPORT_EXTENSIONS: Readonly<Record<string, string>> = {
+  obj: '.obj',
+  '3mf': '.3mf',
+  stl: '.stl',
+};
+
+/**
+ * Derives a document export filename from the source name and the target.
+ *
+ * SAME SANITISATION AS THE STL PATH, and the same reasoning: the source name is
+ * text the user's filesystem supplied, so directory components are dropped,
+ * control and bidi characters are removed, reserved characters are removed, and
+ * the length is bounded. `../../evil.obj` becomes `evil.obj` — a name, in
+ * whatever folder the browser is already saving to.
+ *
+ * Nothing here can affect an archive path: the 3MF writer's entry paths are a
+ * fixed list it decides for itself and no filename reaches them.
+ */
+export function deriveDocumentExportName(sourceName: string, target: string): string {
+  const extension = EXPORT_EXTENSIONS[target] ?? '.bin';
+  return `${sanitiseBase(sourceName)}${extension}`;
 }

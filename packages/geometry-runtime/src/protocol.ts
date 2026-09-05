@@ -102,6 +102,19 @@ export interface OperationMap {
     payload: SendForDiagnosticPayload;
     result: SendForDiagnosticResult;
   };
+  /**
+   * Hands the export worker a DISPOSABLE SNAPSHOT of the whole document over a
+   * MessageChannel.
+   *
+   * The same shape as `model/send-for-diagnostic`, and for the same reason: the
+   * geometry travels worker to worker and the page learns only scalars. The
+   * finished FILE comes back from the export worker directly, because that is
+   * the artifact the user asked for.
+   */
+  'document/send-for-export': {
+    payload: SendForExportPayload;
+    result: SendForExportResult;
+  };
   'repair/plan': {
     payload: RepairPlanPayload;
     result: RepairPlanOperationResult;
@@ -608,6 +621,24 @@ export interface SendForDiagnosticPayload {
     readonly maxTestedPairs: number;
     readonly maxSamples: number;
   };
+}
+
+export interface SendForExportPayload {
+  readonly handle: DocumentHandle;
+  /** `obj` or `3mf`. Validated in the export worker, not trusted here. */
+  readonly target: string;
+  readonly operationId: string;
+  readonly port: ProtocolPort;
+}
+
+export interface SendForExportResult {
+  /** Parts in the snapshot that was sent. Scalar only. */
+  readonly partCount: number;
+  /** DISTINCT meshes copied — one per shared resource, never one per part. */
+  readonly meshResourceCount: number;
+  readonly triangleCount: number;
+  /** The revision the snapshot describes, so a stale result can be rejected. */
+  readonly revision: number;
 }
 
 export interface SendForDiagnosticResult {

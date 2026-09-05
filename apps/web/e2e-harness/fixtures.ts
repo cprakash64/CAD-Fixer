@@ -16,6 +16,7 @@ import {
   tetrahedronMesh,
   translation,
 } from '@cadfixer/mesh-core/fixtures';
+import { LengthUnit } from '@cadfixer/shared';
 
 /**
  * THE DOCUMENTS THE BROWSER HARNESS CAN BUILD.
@@ -64,6 +65,16 @@ export const HarnessFixtureId = {
   Shared1000: 'shared-1000',
   /** A single part, for comparing against the STL-era baseline. */
   SinglePart: 'single-part',
+  /*
+   * WITH A DECLARED UNIT, for export.
+   *
+   * Every fixture above states none — which is correct for a document derived
+   * from an STL, and is exactly why a 3MF export of one is BLOCKED. These two
+   * exist so the browser suite can exercise both sides of that rule against the
+   * same geometry rather than only the refusal.
+   */
+  MillimetreTwoParts: 'millimetre-two-parts',
+  MillimetreShared1000: 'millimetre-shared-1000',
 } as const;
 
 export type HarnessFixtureId = (typeof HarnessFixtureId)[keyof typeof HarnessFixtureId];
@@ -175,5 +186,17 @@ export function buildHarnessDocument(id: HarnessFixtureId): GeometryDocument {
 
     case HarnessFixtureId.SinglePart:
       return { parts: [makePart('only', tetrahedronMesh(), { name: 'Only part' })] };
+
+    case HarnessFixtureId.MillimetreTwoParts:
+      return {
+        unit: LengthUnit.Millimeter,
+        parts: [
+          named('a', tetrahedronMesh(1), 'Alpha'),
+          named('b', tetrahedronMesh(2), 'Beta', translation(PART_B_OFFSET_X, 0, 0)),
+        ],
+      };
+
+    case HarnessFixtureId.MillimetreShared1000:
+      return { unit: LengthUnit.Millimeter, ...mp08SharedPlacements(1000) };
   }
 }

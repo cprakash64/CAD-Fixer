@@ -5,6 +5,12 @@ import { GeometryClientProvider } from '../src/runtime/client-context';
 import { GeometryClient } from '../src/runtime/geometry-client';
 import { WorkspaceProvider } from '../src/state/store-context';
 import { StatusSeverity, WorkspaceStore } from '../src/state/workspace-store';
+import {
+  DocumentExportService,
+  type DocumentExportOutcome,
+  type ExportTarget,
+} from '../src/runtime/document-export-service';
+import { deriveDocumentExportName, downloadBytes } from '../src/runtime/download';
 import { HarnessBar } from './harness-bar';
 import '../src/styles/app.css';
 
@@ -98,15 +104,117 @@ function requestDigest(documentId: string, revision: number): Promise<HarnessDig
   });
 }
 
+/*
+ * THE EXPORT SERVICE, DRIVEN FROM THE HARNESS AND NOWHERE ELSE.
+ *
+ * Stage 4A-2B2 builds the export ENGINE; Stage 4A-2B3 builds the workflow that
+ * lets a user reach it. Until then the only thing that calls it is this bridge,
+ * which is not in the application build — so a browser test can prove the whole
+ * path works without the product claiming a feature it has not finished
+ * designing. There is deliberately no production URL, query parameter or hidden
+ * button that reaches this.
+ */
+const exportService = new DocumentExportService(geometryClient);
+
+interface HarnessExportResult {
+  readonly status: string;
+  readonly reason?: string;
+  readonly message?: string;
+  readonly byteLength?: number;
+  readonly fileName?: string;
+  readonly observations?: readonly string[];
+  readonly triangleCount?: number;
+  readonly partCount?: number;
+  readonly meshResourceCount?: number;
+  readonly durationMs: number;
+  /** First bytes, so a test can identify the format without holding the file. */
+  readonly head?: string;
+  readonly progressUpdates: number;
+}
+
+let activeExport: { cancel(): void } | undefined;
+
+async function runExport(
+  documentId: string,
+  revision: number,
+  target: ExportTarget,
+  sourceName: string,
+  options: { readonly download?: boolean; readonly cancelAfterMs?: number } = {},
+): Promise<HarnessExportResult> {
+  let progressUpdates = 0;
+  const session = exportService.run({
+    handle: { documentId, revision } as never,
+    target,
+    onProgress: () => {
+      progressUpdates += 1;
+    },
+  });
+  activeExport = session;
+
+  if (options.cancelAfterMs !== undefined) {
+    setTimeout(() => {
+      session.cancel();
+    }, options.cancelAfterMs);
+  }
+
+  const outcome: DocumentExportOutcome = await session.promise;
+  activeExport = undefined;
+
+  if (outcome.status !== 'SUCCESS') {
+    return {
+      status: outcome.status,
+      ...(outcome.reason === undefined ? {} : { reason: outcome.reason }),
+      message: outcome.message,
+      durationMs: outcome.durationMs,
+      progressUpdates,
+    };
+  }
+
+  const fileName = deriveDocumentExportName(sourceName, target);
+  if (options.download === true) downloadBytes(outcome.bytes, fileName, 'application/octet-stream');
+
+  const head = new TextDecoder('utf-8', { fatal: false }).decode(outcome.bytes.subarray(0, 24));
+  return {
+    status: outcome.status,
+    byteLength: outcome.bytes.byteLength,
+    fileName,
+    observations: outcome.metadata.observations,
+    triangleCount: outcome.metadata.triangleCount,
+    partCount: outcome.metadata.partCount,
+    meshResourceCount: outcome.metadata.meshResourceCount,
+    durationMs: outcome.durationMs,
+    head,
+    progressUpdates,
+  };
+}
+
 declare global {
   interface Window {
     cadfixerHarness?: {
       digest(documentId: string, revision: number): Promise<HarnessDigest>;
+      exportDocument(
+        documentId: string,
+        revision: number,
+        target: ExportTarget,
+        sourceName: string,
+        options?: { readonly download?: boolean; readonly cancelAfterMs?: number },
+      ): Promise<HarnessExportResult>;
+      cancelExport(): void;
+      exportLiveWorkers(): number;
+      exportLiveChannels(): number;
     };
   }
 }
 
-window.cadfixerHarness = { digest: requestDigest };
+window.cadfixerHarness = {
+  digest: requestDigest,
+  exportDocument: runExport,
+  cancelExport: (): void => {
+    activeExport?.cancel();
+  },
+  exportLiveWorkers: (): number => exportService.liveWorkerCount,
+  exportLiveChannels: (): number => exportService.liveChannelCount,
+};
 
 createRoot(container).render(
   <StrictMode>
