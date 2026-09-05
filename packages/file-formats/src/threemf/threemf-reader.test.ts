@@ -516,12 +516,163 @@ describe('MF-P14/MF-P15: unsupported resources and hostile names', () => {
     expect(result.compatibility.unsupported).toContain(UnsupportedFeature.Materials);
   });
 
-  it('keeps an opaque material reference on the part', async () => {
+  /*
+   * THIS USED TO ASSERT THAT ANY `pid` WAS KEPT AS AN OPAQUE STRING, and that
+   * permissiveness was a real defect rather than a stylistic choice: it let a
+   * reference to a resource that does not exist into the document, from where
+   * the writer reproduced it in CAD Fixer's own output.
+   *
+   * The two cases below are the distinction that replaced it, and they are
+   * genuinely different files: one is VALID and carries materials CAD Fixer
+   * does not interpret; the other is MALFORMED.
+   */
+  it('keeps a property reference that RESOLVES, and reports the materials as unimported', async () => {
     const result = await read3mf(
-      await valid3mf(modelXml({ resources: object('1', ' pid="7"') })),
+      await valid3mf(
+        modelXml({
+          resources:
+            '<basematerials id="7"><base name="Steel" displaycolor="#808080FF"/></basematerials>' +
+            object('1', ' pid="7"'),
+        }),
+      ),
+      testReadContext(),
+    );
+
+    // The geometry imports, the reference is kept, and the loss is reported.
+    expect(result.document.parts[0]?.materialRef).toBe('7');
+    expect((result.document.parts[0]?.mesh.indices.length ?? 0) / 3).toBe(4);
+    expect(result.compatibility.unsupported).toContain(UnsupportedFeature.Materials);
+  });
+
+  it('resolves a property reference declared AFTER the object that uses it', async () => {
+    // Element ORDER must not decide validity: the reference is resolved once the
+    // whole resource id space is known, not at the moment it is read.
+    const result = await read3mf(
+      await valid3mf(
+        modelXml({
+          resources:
+            object('1', ' pid="7"') +
+            '<basematerials id="7"><base name="Steel" displaycolor="#808080FF"/></basematerials>',
+        }),
+      ),
       testReadContext(),
     );
     expect(result.document.parts[0]?.materialRef).toBe('7');
+  });
+
+  it('refuses a property reference that names no resource', async () => {
+    await expectRefusal(
+      async () =>
+        read3mf(
+          await valid3mf(modelXml({ resources: object('1', ' pid="7"') })),
+          testReadContext(),
+        ),
+      AppErrorCode.MalformedFile,
+      ImportRefusal.ThreeMfDanglingPropertyReference,
+    );
+  });
+
+  it('refuses a property reference that points at an OBJECT rather than a property group', async () => {
+    /*
+     * A NAIVE "DOES THIS ID EXIST" CHECK WOULD PASS THIS. `pid` names a property
+     * group specifically, so resolving it against the object id space would
+     * accept a reference that means nothing.
+     */
+    await expectRefusal(
+      async () =>
+        read3mf(
+          await valid3mf(
+            modelXml({
+              resources: object('1') + object('2', ' pid="1"'),
+              build: '<item objectid="1"/><item objectid="2"/>',
+            }),
+          ),
+          testReadContext(),
+        ),
+      AppErrorCode.MalformedFile,
+      ImportRefusal.ThreeMfDanglingPropertyReference,
+    );
+  });
+
+  it('refuses a triangle property reference that names no resource', async () => {
+    const mesh =
+      '<mesh><vertices>' +
+      '<vertex x="0" y="0" z="0"/><vertex x="10" y="0" z="0"/><vertex x="0" y="10" z="0"/>' +
+      '</vertices><triangles>' +
+      '<triangle v1="0" v2="1" v3="2" pid="9"/>' +
+      '</triangles></mesh>';
+    await expectRefusal(
+      async () =>
+        read3mf(
+          await valid3mf(modelXml({ resources: `<object id="1" type="model">${mesh}</object>` })),
+          testReadContext(),
+        ),
+      AppErrorCode.MalformedFile,
+      ImportRefusal.ThreeMfDanglingPropertyReference,
+    );
+  });
+
+  it('refuses an object carrying a property index with no property reference', async () => {
+    await expectRefusal(
+      async () =>
+        read3mf(
+          await valid3mf(modelXml({ resources: object('1', ' pindex="0"') })),
+          testReadContext(),
+        ),
+      AppErrorCode.MalformedFile,
+      ImportRefusal.ThreeMfMalformedStructure,
+    );
+  });
+
+  it.each([
+    ['zero', '0'],
+    ['negative', '-3'],
+    ['decimal', '1.0'],
+    ['alphabetic', 'steel'],
+    ['leading zero', '007'],
+    ['leading whitespace', ' 7'],
+    ['trailing whitespace', '7 '],
+    ['hexadecimal', '0x7'],
+    ['exponent', '1e3'],
+    ['plus sign', '+7'],
+    ['empty', ''],
+    ['above the id range', '2147483648'],
+    ['absurdly long', '9'.repeat(400)],
+  ])('refuses a %s property reference as a malformed resource id', async (_label, pid) => {
+    /*
+     * LEXICAL, NOT COERCED. `Number` accepts most of these — ` 7 `, `0x7`, `1e3`
+     * — and every one of them would then be stored as a resource id and,
+     * before the fix, written back out as one.
+     */
+    await expectRefusal(
+      async () =>
+        read3mf(
+          await valid3mf(
+            modelXml({
+              resources:
+                '<basematerials id="7"><base name="Steel" displaycolor="#808080FF"/></basematerials>' +
+                object('1', ` pid="${pid}"`),
+            }),
+          ),
+          testReadContext(),
+        ),
+      AppErrorCode.MalformedFile,
+      ImportRefusal.ThreeMfMalformedResourceId,
+    );
+  });
+
+  it('accepts the largest valid resource id', async () => {
+    const result = await read3mf(
+      await valid3mf(
+        modelXml({
+          resources:
+            '<basematerials id="2147483647"><base name="Steel" displaycolor="#808080FF"/></basematerials>' +
+            object('1', ' pid="2147483647"'),
+        }),
+      ),
+      testReadContext(),
+    );
+    expect(result.document.parts[0]?.materialRef).toBe('2147483647');
   });
 
   it('MF-P15: carries a hostile object name through as TEXT', async () => {
@@ -1186,20 +1337,49 @@ describe('document-wide ceilings that an expansion can reach', () => {
     }).not.toThrow();
   });
 
-  it('truncates a long material reference for the same reason', async () => {
+  /*
+   * A LONG `pid` IS NO LONGER TRUNCATED, because truncation only makes sense for
+   * free text. This used to cut a 900-character `pid` down to the document's
+   * material-reference cap and keep it — turning a value that was never a
+   * resource id into a shorter value that still was not one. A resource id has a
+   * shape; a value without that shape is refused, and the cap is unreachable
+   * because no valid id is longer than ten digits.
+   */
+  it('refuses a long material reference rather than truncating it into a different one', async () => {
     const pid = 'm'.repeat(900);
+    await expectRefusal(
+      async () =>
+        read3mf(
+          await valid3mf(
+            modelXml({
+              resources: `<object id="1" type="model" pid="${pid}">${TETRAHEDRON_MESH}</object>`,
+            }),
+          ),
+          testReadContext(),
+        ),
+      AppErrorCode.MalformedFile,
+      ImportRefusal.ThreeMfMalformedResourceId,
+    );
+  });
+
+  it('keeps the document material-reference cap unreachable by a valid id', () => {
+    // Ten digits is the longest a resource id can be, so the document's cap
+    // cannot be the thing that constrains one.
+    expect(DEFAULT_DOCUMENT_LIMITS.maxMaterialRefLength).toBeGreaterThan(10);
+  });
+
+  it('still validates the resulting document', async () => {
     const result = await read3mf(
       await valid3mf(
         modelXml({
-          resources: `<object id="1" type="model" pid="${pid}">${TETRAHEDRON_MESH}</object>`,
+          resources:
+            '<basematerials id="7"><base name="Steel" displaycolor="#808080FF"/></basematerials>' +
+            `<object id="1" type="model" pid="7">${TETRAHEDRON_MESH}</object>`,
         }),
       ),
       testReadContext(),
     );
 
-    expect(result.document.parts[0]?.materialRef).toHaveLength(
-      DEFAULT_DOCUMENT_LIMITS.maxMaterialRefLength,
-    );
     expect(() => {
       assertGeometryDocument(result.document, '3MF import');
     }).not.toThrow();

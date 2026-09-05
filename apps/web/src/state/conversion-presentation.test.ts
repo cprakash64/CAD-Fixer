@@ -68,6 +68,8 @@ function everyFactThePolicyCanProduce(): readonly CompatibilityFact[] {
     partMaterialRefCount: 1,
     meshesWithNormals: 1,
     meshesWithUvs: 1,
+    namesUnwritableAsObj: 0,
+    namesUnwritableAsXml: 0,
     sourceUnsupported: [
       'TEXTURES',
       'MATERIALS',
@@ -93,6 +95,8 @@ function everyFactThePolicyCanProduce(): readonly CompatibilityFact[] {
     { meshesWithNormals: 0, meshesWithUvs: 0 },
     { triangleCount: 100_000_000 },
     { sourceUnsupported: [] },
+    // Reaches NAME_CHARACTERS for both name-writing targets.
+    { namesUnwritableAsObj: 2, namesUnwritableAsXml: 1, namedPartCount: 3, unnamedPartCount: 0 },
   ];
 
   for (const overrides of variations) {
@@ -366,6 +370,8 @@ describe('losses are grouped into the two registers the interface shows', () => 
     meshesWithNormals: 0,
     meshesWithUvs: 0,
     sourceUnsupported: [],
+    namesUnwritableAsObj: 0,
+    namesUnwritableAsXml: 0,
   };
 
   it('separates a merged part list from a dropped label', () => {

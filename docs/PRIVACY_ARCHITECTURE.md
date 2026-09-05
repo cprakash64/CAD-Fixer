@@ -94,9 +94,10 @@ it came from. Tests assert this for every writer.
 
 **OBJ and 3MF exports do carry the model's own names, and that is the point.**
 Since Stage 4A-2B3 a document can be written as OBJ or 3MF, and both formats can
-express part names, group names and material references. Those came from the
-user's file and are part of their model: dropping them would be the loss, not the
-protection. What is guaranteed instead is that they are written as DATA and never
+express part and group names. Those came from the user's file and are part of
+their model: dropping them would be the loss, not the protection. (Material
+references are NOT written — see ADR 0017 — so no material name reaches an
+exported file at all.) What is guaranteed instead is that they are written as DATA and never
 as structure —
 
 - OBJ has no escape mechanism at all, so a name's control characters are removed
@@ -288,14 +289,15 @@ outside themselves in a way STL cannot. This section records what was checked.
 
 ### The new references, and what CAD Fixer does with them
 
-| Reference in the file                      | What CAD Fixer does                                      |
-| ------------------------------------------ | -------------------------------------------------------- |
-| OBJ `mtllib path/to/materials.mtl`         | records the name, reports it, opens nothing              |
-| OBJ `usemtl name`                          | kept as an opaque string on the part                     |
-| 3MF `<texture2d path="…">`                 | records that textures exist, reports it, fetches nothing |
-| 3MF material and colour resources          | recorded as unsupported, never resolved                  |
-| 3MF `_rels` relationship targets           | resolved only WITHIN the archive, never off it           |
-| XML `SYSTEM` / `PUBLIC` / DOCTYPE / ENTITY | refused before any element is parsed                     |
+| Reference in the file                      | What CAD Fixer does                                                                                   |
+| ------------------------------------------ | ----------------------------------------------------------------------------------------------------- |
+| OBJ `mtllib path/to/materials.mtl`         | records the name, reports it, opens nothing                                                           |
+| OBJ `usemtl name`                          | kept as an opaque string on the mesh group                                                            |
+| 3MF `<texture2d path="…">`                 | records that textures exist, reports it, fetches nothing                                              |
+| 3MF material and colour resources          | recorded as unsupported; their ids are read so a `pid` can be checked, and nothing else about them is |
+| 3MF `object@pid`                           | required to be a positive integer naming a resource that EXISTS, else refused (Stage 4A-2B3-R1)       |
+| 3MF `_rels` relationship targets           | resolved only WITHIN the archive, never off it                                                        |
+| XML `SYSTEM` / `PUBLIC` / DOCTYPE / ENTITY | refused before any element is parsed                                                                  |
 
 **Nothing in any of these paths is dereferenced.** There is no file-system read
 of a sibling file, no URL resolution, and no network call — which the repo-wide

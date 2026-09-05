@@ -110,12 +110,18 @@ One distinct mesh becomes one `<object>`; every part that uses it becomes a
 `<build><item>`. A thousand placements serialise the geometry once — measured at
 7 ms and 40 KiB, against OBJ's 1,355 ms and 38 MiB for the same document.
 
-The grouping key is (mesh, name, material reference), because all three live on
-the `<object>` in 3MF rather than on the `<item>` that places it. Two placements
-of one mesh under two different names are, in 3MF's own model, two objects: the
-geometry is written twice and both names are kept, because dropping a name the
-user gave is the larger loss. The split is recorded as
+The grouping key is (mesh, name), because both live on the `<object>` in 3MF
+rather than on the `<item>` that places it. Two placements of one mesh under two
+different names are, in 3MF's own model, two objects: the geometry is written
+twice and both names are kept, because dropping a name the user gave is the
+larger loss. The split is recorded as
 `STRUCTURAL_SHARING_SPLIT_BY_METADATA`.
+
+> **Corrected in Stage 4A-2B3-R1.** The key described here originally included
+> the material reference, which was consistent with the writer emitting one.
+> It no longer emits one, so splitting on a value that reaches the file nowhere
+> would duplicate geometry to preserve nothing. See
+> [ADR 0017](0017-format-conversion-workflow.md#3mf-property-references).
 
 The imported nested component graph is NOT reconstructed. A `GeometryDocument`
 holds leaf placements and mesh identity; the hierarchy above them is not
@@ -151,12 +157,20 @@ the file opens somewhere else, and the only evidence obtainable locally is that
 it opens here. It costs roughly 37–45% of an export, measured.
 
 The comparison is on SEMANTICS. For 3MF that is full equality — unit,
-coordinates, indices, transforms, names, material references and the sharing
-between parts — because 3MF loses nothing this layer holds, so any difference is
-a writer bug. For OBJ it is against `expectedObjRoundTrip`, and it compares
-triangle-corner COORDINATES rather than position arrays, because a reader
-renumbers a part's vertices in first-use order and drops any vertex no face
-refers to — both correct, and both change the array without changing the model.
+coordinates, indices, transforms, names and the sharing between parts — so any
+difference is a writer bug.
+
+> **Corrected in Stage 4A-2B3-R1.** This originally included material
+> references, and claimed "3MF loses nothing this layer holds". Both were wrong:
+> the writer expressed a preserved material reference as `object@pid`, which 3MF
+> core defines as naming a property-group resource that must exist — and CAD
+> Fixer writes no property resources. Every such file carried a dangling
+> reference, and parse-back validation passed because our own reader accepted
+> it. The validator now asserts the reference's ABSENCE. See
+> [ADR 0017](0017-format-conversion-workflow.md#3mf-property-references). For OBJ it is against `expectedObjRoundTrip`, and it compares
+> triangle-corner COORDINATES rather than position arrays, because a reader
+> renumbers a part's vertices in first-use order and drops any vertex no face
+> refers to — both correct, and both change the array without changing the model.
 
 ## Independent oracles, because agreement is not correctness
 
@@ -179,7 +193,12 @@ not vacuous.
 `ExportObservation` records what a writer did: transforms baked or preserved,
 unit omitted or preserved, sharing flattened, preserved or split, names
 preserved or generated, normals and texture coordinates omitted, component
-hierarchy not reconstructed, material library omitted.
+hierarchy not reconstructed, material library omitted, material references
+omitted.
+
+> **Corrected in Stage 4A-2B3-R1.** `MATERIAL_REFERENCES_PRESERVED` is no longer
+> emitted by the 3MF writer; it emits `MATERIAL_REFERENCES_OMITTED` instead,
+> because that is what it does.
 
 Stage 4A-2B3 turns these into a compatibility report a user reads before
 deciding. Deciding the wording here would put the same copy in two places and

@@ -373,6 +373,52 @@ export function threeMfHostileName(): Buffer {
   );
 }
 
+/**
+ * A 3MF whose object carries a VALID property reference.
+ *
+ * `<basematerials id="7">` exists, so `pid="7"` resolves: the file is well
+ * formed, CAD Fixer imports the geometry, and the material is reported as
+ * unimported rather than the file being refused. This is the fixture the
+ * property-reference conformance test converts — the document carries a
+ * `materialRef`, and no export may turn it back into a dangling `pid`.
+ */
+export function threeMfWithMaterial(): Buffer {
+  return threeMf(
+    modelXml({
+      resources:
+        '<basematerials id="7"><base name="Steel" displaycolor="#808080FF"/></basematerials>' +
+        `<object id="1" type="model" name="Bracket" pid="7">${tetrahedronMesh()}</object>`,
+    }),
+  );
+}
+
+/**
+ * A 3MF whose object name contains characters a writer must normalise.
+ *
+ * A DOUBLE SPACE, which is completely legal in XML and in a 3MF, and which OBJ
+ * cannot represent: a reader splits on whitespace, so the name comes back
+ * collapsed. Legal input, real loss — which is what the disclosure has to be
+ * about.
+ */
+export function threeMfAwkwardName(): Buffer {
+  /*
+   * TWO PARTS, so the part selector renders and a test can read the name back
+   * off the interface — a one-part document shows no selector at all, which is
+   * deliberate and would leave the name unobservable.
+   *
+   * Only ONE of them is affected, which is also the point: the disclosure has to
+   * report the number of names it actually changes, not the number of parts.
+   */
+  return threeMf(
+    modelXml({
+      resources:
+        `<object id="1" type="model" name="Left  Bracket">${tetrahedronMesh(10)}</object>` +
+        `<object id="2" type="model" name="Right Bracket">${tetrahedronMesh(6)}</object>`,
+      build: '<item objectid="1"/><item objectid="2" transform="1 0 0 0 1 0 0 0 1 40 0 0"/>',
+    }),
+  );
+}
+
 /** A 3MF declaring a texture, which must be reported and never fetched. */
 export function threeMfWithTexture(): Buffer {
   return threeMf(

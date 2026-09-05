@@ -10,7 +10,10 @@ import {
   threeMfSharedPlacements,
   threeMfTwoParts,
   threeMfWithTexture,
+  threeMfWithMaterial,
+  threeMfAwkwardName,
   modelXml,
+  tetrahedronMesh,
 } from './format-fixtures';
 import { readObjArtifact, readStlArtifact, readThreeMfArtifact } from './artifact-oracles';
 
@@ -1064,4 +1067,205 @@ test('the main thread stays responsive while a large conversion runs', async ({ 
   expect(measurement.frames).toBeGreaterThan(5);
   // And no single stall came close to swallowing the export.
   expect(measurement.longestGapMs).toBeLessThan(measurement.durationMs / 3);
+});
+
+/* ------------------------------------------------- PR09: property references -- */
+
+test('PR09: a real 3MF download from a model with a material reference carries no pid', async ({
+  page,
+}) => {
+  /*
+   * THE CONFORMANCE DEFECT, CLOSED THROUGH THE REAL USER-VISIBLE WORKFLOW.
+   *
+   * The source states `<basematerials id="7">` and an object with `pid="7"`, so
+   * the reference RESOLVES and the file is valid — CAD Fixer imports it and
+   * carries the reference on the part. The writer used to reproduce that
+   * reference on the way out, with no property resource behind it, producing a
+   * dangling `pid` in a file CAD Fixer had itself created.
+   */
+  await page.goto('/');
+  await importFile(page, {
+    name: 'materials.3mf',
+    mimeType: 'model/3mf',
+    buffer: threeMfWithMaterial(),
+  });
+
+  await openConvert(page);
+  await chooseTarget(page, '3mf');
+
+  // 3. The loss is stated BEFORE the export, and 3MF is no longer "lossless".
+  await expect(page.getByTestId('convert-metadata')).toContainText('refer to a material by name');
+  await expect(page.getByTestId('convert-metadata')).toContainText('would make the file invalid');
+  /*
+   * TWO DIFFERENT FACTS, SAID ONCE EACH. The source section reports that the
+   * file's material DEFINITIONS were never imported; this reports that the
+   * REFERENCE the part carries is not written out. Neither restates the other.
+   */
+  await expect(page.getByTestId('convert-source-warnings')).toContainText(
+    'colour or material definitions',
+  );
+  await expect(page.getByTestId('convert-verdict')).not.toHaveAttribute(
+    'data-verdict',
+    'LOSSLESS_FOR_SUPPORTED_FEATURES',
+  );
+
+  const { download, bytes } = await exportAndCapture(page);
+  expect(download.suggestedFilename()).toBe('materials.3mf');
+
+  // 6/7. The independent oracle finds no property reference at all.
+  const artifact = readThreeMfArtifact(bytes);
+  expect(artifact.propertyReferences).toEqual([]);
+  expect(artifact.referenceProblems).toEqual([]);
+  expect(artifact.modelXml).not.toContain('pid=');
+  expect(artifact.modelXml).not.toContain('pindex=');
+
+  // 8/9. It re-opens, with geometry, unit, name and placement intact.
+  await reimport(page, 'materials-roundtrip.3mf', bytes);
+  await expect(page.getByTestId('fact-triangles')).toHaveText('4');
+  await expect(page.getByTestId('fact-units')).toHaveText('millimeter');
+});
+
+test('PR09: every target drops the material reference and none writes a pid', async ({ page }) => {
+  await page.goto('/');
+  await importFile(page, {
+    name: 'materials.3mf',
+    mimeType: 'model/3mf',
+    buffer: threeMfWithMaterial(),
+  });
+
+  await openConvert(page);
+  for (const target of ['stl', 'obj', '3mf'] as const) {
+    await chooseTarget(page, target);
+    await expect(page.getByTestId('convert-metadata')).toContainText('refer to a material by name');
+    const { bytes } = await exportAndCapture(page);
+    if (target === '3mf') {
+      expect(readThreeMfArtifact(bytes).propertyReferences).toEqual([]);
+    } else if (target === 'obj') {
+      // OBJ names no material library either, so nothing points at nothing.
+      expect(readObjArtifact(bytes).hasMtllib).toBe(false);
+      expect(readObjArtifact(bytes).materials).toEqual([]);
+    }
+  }
+});
+
+test('a 3MF the reader accepts is one whose property references resolve', async ({ page }) => {
+  /*
+   * THE OTHER HALF OF THE READER CONTRACT, through the real import path: an
+   * UNSUPPORTED property resource is a valid file, and a DANGLING reference is
+   * not. Confusing the two would either refuse legitimate files or keep
+   * accepting the malformed ones.
+   */
+  await page.goto('/');
+
+  // Valid: the resource exists, the geometry imports, the loss is disclosed.
+  await importFile(page, {
+    name: 'materials.3mf',
+    mimeType: 'model/3mf',
+    buffer: threeMfWithMaterial(),
+  });
+  await expect(page.getByTestId('fact-triangles')).toHaveText('4');
+
+  await openConvert(page);
+  await chooseTarget(page, '3mf');
+  await expect(page.getByTestId('convert-source-warnings')).toContainText(
+    'colour or material definitions',
+  );
+  await page.getByTestId('convert-close').click();
+
+  // Malformed: `pid` names nothing, and the import is refused outright.
+  const dangling = threeMf(
+    modelXml({
+      resources: `<object id="1" type="model" pid="7">${tetrahedronMesh()}</object>`,
+    }),
+  );
+  const chooser = page.waitForEvent('filechooser');
+  await page.getByTestId('browse-button').click();
+  await (
+    await chooser
+  ).setFiles({
+    name: 'dangling.3mf',
+    mimeType: 'model/3mf',
+    buffer: dangling,
+  });
+
+  await expect(page.getByTestId('status-list')).toContainText('property resource', {
+    timeout: 20_000,
+  });
+  // AND THE PREVIOUS MODEL SURVIVES. A refused import is transactional.
+  await expect(page.getByTestId('fact-triangles')).toHaveText('4');
+});
+
+/* ------------------------------------------- NS08-NS10: name sanitization -- */
+
+test('NS08-NS10: a name that cannot be written exactly is disclosed before export', async ({
+  page,
+}) => {
+  /*
+   * A DOUBLE SPACE IS LEGAL IN A 3MF AND UNREPRESENTABLE IN AN OBJ: a reader
+   * splits on whitespace, so the name comes back collapsed. Small, real, and
+   * silent until now.
+   */
+  await page.goto('/');
+  await importFile(page, {
+    name: 'awkward.3mf',
+    mimeType: 'model/3mf',
+    buffer: threeMfAwkwardName(),
+  });
+
+  await openConvert(page);
+
+  // NS08: stated before the export, for the target it applies to.
+  await chooseTarget(page, 'obj');
+  await expect(page.getByTestId('convert-transformations')).toContainText(
+    'cannot store exactly, so they will be adjusted',
+  );
+  /*
+   * ASSERTED ON THE SENTENCE, NOT ON THE SECTION. This document also has a
+   * non-identity placement, so STL and OBJ legitimately report a baked
+   * transform — requiring the whole section to be absent would be asserting
+   * that a different, correct fact had gone missing.
+   */
+  const sanitization = 'cannot store exactly';
+
+  // NOT for the target that can carry it — XML keeps a double space.
+  await chooseTarget(page, '3mf');
+  await expect(page.getByTestId('convert-report')).not.toContainText(sanitization);
+
+  // NS05: STL drops names entirely and does not warn twice about it.
+  await chooseTarget(page, 'stl');
+  await expect(page.getByTestId('convert-metadata')).toContainText('nowhere to put a name');
+  await expect(page.getByTestId('convert-report')).not.toContainText(sanitization);
+
+  // NS09: the downloaded OBJ carries the writer's sanitized value.
+  await chooseTarget(page, 'obj');
+
+  // NS06: ONE of the two names is affected, and the count says one.
+  await expect(page.getByTestId('convert-transformations')).toContainText('1 part name');
+
+  const { bytes } = await exportAndCapture(page);
+  const artifact = readObjArtifact(bytes);
+  // NS09: the file carries the writer's sanitized value, and the other name is
+  // untouched.
+  expect(artifact.objects).toEqual(['Left Bracket', 'Right Bracket']);
+
+  // NS07: the panel disclosed a COUNT and never the name itself.
+  const panel = await page.getByTestId('convert-transformations').textContent();
+  expect(panel).not.toContain('Left');
+  expect(panel).not.toContain('Bracket');
+
+  // NS10: the source document still holds the name exactly as it was read.
+  await page.getByTestId('convert-close').click();
+  await expect(page.getByTestId('fact-triangles')).toHaveText('8');
+  await expect(page.getByTestId('part-option-part-1')).toContainText('Left  Bracket');
+});
+
+test('an ordinary name produces no sanitization warning at all', async ({ page }) => {
+  await page.goto('/');
+  await importFile(page, FIXTURES.threeMfSimple());
+
+  await openConvert(page);
+  for (const target of ['obj', '3mf'] as const) {
+    await chooseTarget(page, target);
+    await expect(page.getByTestId('convert-report')).not.toContainText('cannot store exactly');
+  }
 });

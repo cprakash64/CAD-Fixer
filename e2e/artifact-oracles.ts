@@ -200,6 +200,18 @@ export interface ThreeMfArtifact {
   readonly objects: readonly ThreeMfObject[];
   /** Every `<item>`: which object it places and its transform text. */
   readonly items: readonly { readonly objectId: string; readonly transform: string | undefined }[];
+  /**
+   * Every property reference the file makes, and every property resource it
+   * declares.
+   *
+   * CARRIED SO A DOWNLOAD TEST CAN CHECK THE RELATIONSHIP. CAD Fixer shipped a
+   * writer that emitted `pid="5"` with no resource 5, and every structural check
+   * it had — ZIP, CRC, XML well-formedness — passed the file.
+   */
+  readonly propertyReferences: readonly string[];
+  readonly propertyResourceIds: readonly string[];
+  /** Empty when every reference resolves. */
+  readonly referenceProblems: readonly string[];
 }
 
 function attribute(tag: string, name: string): string | undefined {
@@ -244,5 +256,55 @@ export function readThreeMfArtifact(bytes: Buffer): ThreeMfArtifact {
       : { transform: attribute(tag, 'transform') }),
   }));
 
-  return { entryNames: [...entries.keys()], modelXml: xml, unit, objects, items };
+  /*
+   * THE SEMANTIC CHECK THE ORIGINAL ORACLE LACKED.
+   *
+   * A resource id is a positive integer, and a `pid` names a PROPERTY GROUP
+   * that must exist. Both halves matter: CAD Fixer emitted `pid="5"` with no
+   * resource 5, and `pid="steel-brushed"`, which is not an id at all.
+   */
+  const propertyResourceIds: string[] = [];
+  for (const element of [
+    'basematerials',
+    'colorgroup',
+    'texture2dgroup',
+    'multiproperties',
+    'compositematerials',
+  ]) {
+    for (const tag of xml.match(new RegExp(`<${element}\\b[^>]*>`, 'g')) ?? []) {
+      const id = attribute(tag, 'id');
+      if (id !== undefined) propertyResourceIds.push(id);
+    }
+  }
+
+  const propertyReferences: string[] = [];
+  for (const tag of [
+    ...(xml.match(/<object\b[^>]*>/g) ?? []),
+    ...(xml.match(/<triangle\b[^>]*\/>/g) ?? []),
+  ]) {
+    const pid = attribute(tag, 'pid');
+    if (pid !== undefined) propertyReferences.push(pid);
+  }
+
+  const referenceProblems: string[] = [];
+  for (const pid of propertyReferences) {
+    if (!/^[1-9][0-9]*$/.test(pid)) {
+      referenceProblems.push(`pid "${pid}" is not a positive integer resource id`);
+      continue;
+    }
+    if (!propertyResourceIds.includes(pid)) {
+      referenceProblems.push(`pid "${pid}" references no property group resource`);
+    }
+  }
+
+  return {
+    entryNames: [...entries.keys()],
+    modelXml: xml,
+    unit,
+    objects,
+    items,
+    propertyReferences,
+    propertyResourceIds,
+    referenceProblems,
+  };
 }

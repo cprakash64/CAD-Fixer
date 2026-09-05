@@ -205,24 +205,37 @@ registers.
 
 #### What each format carries
 
-|                                | STL                                                | OBJ                                  | 3MF                        |
-| ------------------------------ | -------------------------------------------------- | ------------------------------------ | -------------------------- |
-| triangle geometry              | yes                                                | yes                                  | yes                        |
-| physical unit                  | none — the format has no field                     | none                                 | yes, one of six tokens     |
-| parts                          | none — one implicit object                         | one `o` per part                     | one object per part        |
-| placements                     | baked into coordinates                             | baked into coordinates               | kept as `<item transform>` |
-| shared geometry                | expanded, one copy each                            | expanded, one copy each              | one object, many items     |
-| part names                     | dropped                                            | kept (generated when absent)         | kept                       |
-| face groups                    | dropped                                            | kept as `g` / `usemtl`               | dropped by this writer     |
-| part material reference        | dropped                                            | dropped (OBJ has no per-object slot) | kept as an opaque `pid`    |
-| normals / UVs                  | not written                                        | not written                          | not written                |
-| materials, textures            | never written; `mtllib` is never emitted or opened |                                      |                            |
-| imported 3MF component nesting | not retained on import, so never rebuilt           |                                      |                            |
+|                                | STL                                                                             | OBJ                                      | 3MF                                                           |
+| ------------------------------ | ------------------------------------------------------------------------------- | ---------------------------------------- | ------------------------------------------------------------- |
+| triangle geometry              | yes                                                                             | yes                                      | yes                                                           |
+| physical unit                  | none — the format has no field                                                  | none                                     | yes, one of six tokens                                        |
+| parts                          | none — one implicit object                                                      | one `o` per part                         | one object per part                                           |
+| placements                     | baked into coordinates                                                          | baked into coordinates                   | kept as `<item transform>`                                    |
+| shared geometry                | expanded, one copy each                                                         | expanded, one copy each                  | one object, many items                                        |
+| part names                     | dropped                                                                         | kept (generated when absent)             | kept                                                          |
+| face groups                    | dropped                                                                         | kept as `g` / `usemtl`                   | dropped by this writer                                        |
+| part material reference        | dropped                                                                         | dropped (OBJ has no per-object slot)     | dropped — no property resource is written for a `pid` to name |
+| normals / UVs                  | not written                                                                     | not written                              | not written                                                   |
+| materials, textures            | never written; `mtllib` is never emitted or opened, and no 3MF `pid` is emitted |                                          |                                                               |
+| names with control characters  | n/a — names dropped                                                             | characters removed, disclosed as a count | characters removed, disclosed as a count                      |
+| imported 3MF component nesting | not retained on import, so never rebuilt                                        |                                          |                                                               |
 
 Coordinates are NEVER rescaled in either direction. A unit says what the numbers
 mean, not what they are, so a 3MF stating inches exported as OBJ keeps the same
 numbers and loses the label — and the workflow says exactly that before the
 click.
+
+#### No property reference is ever written
+
+3MF core types `object@pid` as an `ST_ResourceID` naming a property-group
+resource that must exist. CAD Fixer writes no property resources, so it writes
+no `pid` — a reference to a resource that is not there is a malformed file, not
+a preserved material. The document's opaque `materialRef` is therefore reported
+as a loss for every target, before the export. The reader enforces the same
+contract on the way in: a `pid` resolving to an unsupported resource is a VALID
+file whose materials are not imported; a `pid` resolving to nothing, or one that
+is not lexically a positive integer, is refused. See
+[ADR 0017](adr/0017-format-conversion-workflow.md#3mf-property-references).
 
 #### Export-time unit assertion
 

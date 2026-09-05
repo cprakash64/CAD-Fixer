@@ -233,6 +233,96 @@ The +28.5 kB in the main bundle is the dialog, the hook, the policy, the copy
 and the profile builder. The 64 kB of serialisation and parse-back is in the
 export worker's own chunk, loaded when someone exports.
 
+## 3MF property references
+
+**Added in Stage 4A-2B3-R1**, which corrected a conformance defect this stage
+shipped.
+
+The writer emitted `<object pid="…">` carrying the document's opaque
+`materialRef`. 3MF core defines `object@pid` as an `ST_ResourceID` — a positive
+integer naming a property-group resource that must exist in `<resources>` — and
+CAD Fixer writes no property resources at all. So:
+
+```xml
+<resources>
+  <object id="1" type="model" name="Bracket" pid="5">   <!-- resource 5: absent -->
+```
+
+Every such file carried a dangling reference. Worse, a `materialRef` is an
+opaque string, so a reference that did not originate as a number was not even
+lexically an id — `pid="steel-brushed"` was real output.
+
+**It survived every gate this stage had**, which is the part worth remembering.
+The writer's own observations said `MATERIAL_REFERENCES_PRESERVED`. Parse-back
+validation passed, because the reader accepted a dangling `pid` as an opaque
+string and handed it back unchanged — writer and reader sharing one blind spot,
+which is exactly the failure the independent oracles exist to catch, and the
+oracle checked only ZIP structure, CRCs and XML well-formedness.
+
+### The decision: drop it, and say so
+
+Fabricating a `<basematerials>` to make the reference resolve was rejected. A
+`materialRef` is an import-level string, not a material definition, so any
+resource invented for it would state a colour and a name the user never gave —
+substituting one falsehood for another. CAD Fixer has no qualified property
+writer, so the honest MVP behaviour is:
+
+- **no `pid` is emitted, ever** — for any target, from any document;
+- geometry, placement, name and unit are unaffected;
+- the compatibility report states the loss BEFORE the export, for all three
+  targets;
+- the verdict is at least `LOSSY_METADATA`, so a 3MF holding a material
+  reference is no longer reported as lossless as 3MF.
+
+### What now enforces it, at four independent points
+
+1. The **writer** emits no property attribute and records
+   `MATERIAL_REFERENCES_OMITTED`.
+2. **Parse-back validation** asserts the reference's ABSENCE. It previously
+   asserted its presence, which is how a malformed file passed.
+3. The **independent oracle** validates the resource id space: ids are lexically
+   positive integers, unique across the whole space, and every `object@pid`,
+   `triangle@pid`, `item@objectid` and `component@objectid` resolves — a `pid`
+   pointing at an OBJECT is rejected too, which a naive "does this id exist"
+   check would not catch. A deliberately mutated fixture proves it rejects.
+4. The **reader** distinguishes an unsupported property resource from a dangling
+   one. `pid="7"` with a `<basematerials id="7">` is a valid file whose materials
+   are not imported; `pid="7"` with no such resource is
+   `THREEMF_DANGLING_PROPERTY_REFERENCE`, and a `pid` that is not a positive
+   integer is `THREEMF_MALFORMED_RESOURCE_ID`. Both are checked lexically rather
+   than by coercion, because `Number` accepts `7`, `0x7` and `1e3`.
+
+References are resolved AFTER the scan, so declaration order cannot refuse a
+valid file.
+
+### Sharing no longer splits on it
+
+The 3MF object plan keyed on (mesh, name, material reference) — correct while a
+`pid` was written. Now that nothing is written, the key is (mesh, name): the rule
+is exactly "the key holds what the `<object>` element will carry". A thousand
+placements of one mesh under one name remain one object even if every one of
+them names a different material.
+
+## Name sanitization is disclosed
+
+**Added in Stage 4A-2B3-R1.** OBJ has no escape mechanism — a control character
+in a name would end the record and turn the rest into geometry — and XML cannot
+carry most control characters at all. Both writers already removed them
+correctly; neither told the user, and this stage originally recorded that as a
+known limitation because the profile deliberately holds no names.
+
+It is now disclosed as a COUNT. `namesUnwritableAsObj` and
+`namesUnwritableAsXml` are computed with the writers' OWN predicates —
+`objNameChangesOnWrite` and `xmlTextChangesOnWrite`, from leaf modules that
+import nothing — so the disclosure cannot disagree with the file. The
+compatibility fact is `NAME_CHARACTERS`, carrying a number and nothing else: a
+fact holding a name would put untrusted text one render away from markup and
+create a second place display copy lived.
+
+STL is excluded deliberately. It writes no names and already says so; a warning
+that some of them would have been adjusted describes a change to something that
+is not written.
+
 ## Consequences
 
 - The nine source/target combinations are all supported, and the three-format
@@ -246,4 +336,9 @@ export worker's own chunk, loaded when someone exports.
 - Group data is dropped by the 3MF writer as well as by STL, and the report says
   so. That is a fact about this writer rather than about the format, and
   claiming "3MF keeps everything" would be exactly the false lossless claim this
-  report exists to prevent.
+  report exists to prevent. Part material references are the same case, and were
+  the one this stage got wrong before R1.
+- An independent oracle only helps where it looks. The 3MF oracle was thorough
+  about the container and silent about semantics, so it passed a file with a
+  reference to nothing. When a defect gets through, the question worth asking is
+  which oracle should have caught it — not only how to fix the writer.
