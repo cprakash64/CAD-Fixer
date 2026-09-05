@@ -1,5 +1,6 @@
 import { IDENTITY_PART_TRANSFORM } from '@cadfixer/mesh-core';
 import type { PartDescriptor } from '@cadfixer/geometry-runtime';
+import { objNameChangesOnWrite, xmlTextChangesOnWrite } from '@cadfixer/file-formats';
 import type { DocumentFeatureProfile } from '@cadfixer/file-formats';
 import type { LoadedModel } from './model';
 
@@ -55,11 +56,14 @@ function isIdentityTransform(transform: PartDescriptor['transform']): boolean {
 /**
  * How many `<object>` records a 3MF export would write.
  *
- * THE SAME KEY `planThreeMfObjects` USES — (mesh, name, material reference) —
- * because all three live on the `<object>` in 3MF rather than on the `<item>`
- * that places it. Restated here rather than imported because importing the
- * writer's planner would pull the serialiser into the main-thread bundle; two
- * tests keep the mirror honest.
+ * THE SAME KEY `planThreeMfObjects` USES — (mesh, NAME). The material reference
+ * is deliberately NOT part of it: the writer emits no `pid`, so two placements
+ * that differ only in an opaque material reference produce one object, and
+ * splitting on it here would report duplicated geometry that never happens.
+ *
+ * Restated rather than imported because importing the writer's planner would
+ * pull the serialiser into the main-thread bundle; tests keep the mirror honest
+ * against `planThreeMfObjects` itself.
  *
  * Getting this wrong in the optimistic direction is the failure that matters:
  * a report claiming a thousand placements share one copy of the geometry, when
@@ -69,9 +73,7 @@ function isIdentityTransform(transform: PartDescriptor['transform']): boolean {
 function threeMfObjectCount(parts: readonly PartDescriptor[]): number {
   const keys = new Set<string>();
   for (const part of parts) {
-    keys.add(
-      `${String(part.meshResourceIndex)}\u0000${part.name ?? ''}\u0000${part.materialRef ?? ''}`,
-    );
+    keys.add(`${String(part.meshResourceIndex)}\u0000${part.name ?? ''}`);
   }
   return keys.size;
 }
@@ -112,6 +114,27 @@ export function documentFeatureProfile(model: LoadedModel): DocumentFeatureProfi
     if (part.hasUvs) meshesWithUvs += 1;
   }
 
+  /*
+   * NAMES THAT WILL NOT SURVIVE A WRITE UNCHANGED, counted per target.
+   *
+   * COUNTED, NEVER CARRIED. The profile deliberately holds no names — putting
+   * one in a compatibility fact would put untrusted text one render away from
+   * markup — so the disclosure is a number and the names stay here.
+   *
+   * The predicates come from leaf modules that import nothing, so asking this
+   * question on the main thread does not pull a serialiser or the XML scanner
+   * into the bundle. They are the SAME functions the writers use, not a mirror
+   * of them, so the count cannot disagree with what actually happens.
+   */
+  let namesUnwritableAsObj = 0;
+  let namesUnwritableAsXml = 0;
+  for (const part of parts) {
+    const name = part.name;
+    if (name === undefined || name.length === 0) continue;
+    if (objNameChangesOnWrite(name)) namesUnwritableAsObj += 1;
+    if (xmlTextChangesOnWrite(name)) namesUnwritableAsXml += 1;
+  }
+
   return {
     partCount: parts.length,
     meshResourceCount: distinctMeshCount(parts),
@@ -128,5 +151,7 @@ export function documentFeatureProfile(model: LoadedModel): DocumentFeatureProfi
     meshesWithUvs,
     sourceUnsupported: model.source.unsupportedFeatures,
     sourceFormat: model.source.formatId,
+    namesUnwritableAsObj,
+    namesUnwritableAsXml,
   };
 }

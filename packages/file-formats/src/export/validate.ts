@@ -353,8 +353,23 @@ export function validate3mfRoundTrip(
      * bug. What must be true is that everything XML CAN carry came back.
      */
     if (xmlSafeText(part.name ?? '') !== (actual.name ?? '')) fail('name', { partIndex: index });
-    if (xmlSafeText(part.materialRef ?? '') !== (actual.materialRef ?? '')) {
-      fail('material reference', { partIndex: index });
+
+    /*
+     * THE MATERIAL REFERENCE MUST BE GONE, and this asserts its ABSENCE rather
+     * than its survival.
+     *
+     * It used to assert the reference round-tripped, which it did — through an
+     * `object@pid` that pointed at a property resource this writer never emits.
+     * Our reader accepted the dangling reference, so writer and reader agreed
+     * about a file no conforming consumer would accept, and parse-back
+     * validation passed on it.
+     *
+     * The contract is now that CAD Fixer writes no `pid` at all, so a parsed
+     * material reference here would mean one had been written — the exact
+     * regression this check now exists to catch.
+     */
+    if (actual.materialRef !== undefined) {
+      fail('material reference written', { partIndex: index });
     }
   }
 

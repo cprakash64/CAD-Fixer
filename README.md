@@ -60,16 +60,17 @@ CAD Fixer reads and writes all three. What survives a conversion depends on the
 target, and the app tells you which of these apply to **your** model before it
 writes anything.
 
-|                              | STL                                       | OBJ                        | 3MF                            |
-| ---------------------------- | ----------------------------------------- | -------------------------- | ------------------------------ |
-| Triangle geometry            | yes                                       | yes                        | yes                            |
-| Physical unit                | not stored by the format                  | not stored                 | stored, one of six             |
-| Separate parts               | merged into one mesh                      | kept                       | kept                           |
-| Part placements              | applied to the coordinates                | applied to the coordinates | kept as placements             |
-| Repeated shapes              | written out in full                       | written out in full        | stored once, placed many times |
-| Part names                   | dropped                                   | kept                       | kept                           |
-| Face groups                  | dropped                                   | kept                       | dropped                        |
-| Materials, textures, colours | never written by CAD Fixer, in any format |                            |                                |
+|                               | STL                                       | OBJ                                 | 3MF                                 |
+| ----------------------------- | ----------------------------------------- | ----------------------------------- | ----------------------------------- |
+| Triangle geometry             | yes                                       | yes                                 | yes                                 |
+| Physical unit                 | not stored by the format                  | not stored                          | stored, one of six                  |
+| Separate parts                | merged into one mesh                      | kept                                | kept                                |
+| Part placements               | applied to the coordinates                | applied to the coordinates          | kept as placements                  |
+| Repeated shapes               | written out in full                       | written out in full                 | stored once, placed many times      |
+| Part names                    | dropped                                   | kept                                | kept                                |
+| Face groups                   | dropped                                   | kept                                | dropped                             |
+| Materials, textures, colours  | never written by CAD Fixer, in any format |                                     |                                     |
+| Names with unusual characters | n/a — names dropped                       | adjusted, and the app says so first | adjusted, and the app says so first |
 
 Coordinates are never rescaled in any direction. Exporting a model that states
 inches as OBJ writes the same numbers and drops the label — the app says exactly
@@ -214,8 +215,10 @@ running first.
   for printer" and automatic size correction do not exist.
 - **No materials, textures or colours, in or out.** An `mtllib` is recorded as
   text and never opened; a 3MF texture is reported as unimported and never
-  fetched; no material library is ever written, so exported `usemtl` names point
-  at nothing. Exported files carry no normals and no texture coordinates.
+  fetched. Nothing writes a material definition, so a material a model refers to
+  by name is reported as lost rather than written as a reference pointing at
+  something that is not in the file. Exported files carry no normals and no
+  texture coordinates.
 - **No reconstruction of an imported 3MF's component nesting.** Every placement
   is imported in the right position, but the hierarchy above it is not retained
   and cannot be rebuilt on export. The conversion report says so when it applies.

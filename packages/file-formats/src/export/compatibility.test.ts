@@ -50,6 +50,8 @@ const EMPTY_PROFILE: DocumentFeatureProfile = {
   meshesWithNormals: 0,
   meshesWithUvs: 0,
   sourceUnsupported: [],
+  namesUnwritableAsObj: 0,
+  namesUnwritableAsXml: 0,
 };
 
 function profile(overrides: Partial<DocumentFeatureProfile> = {}): DocumentFeatureProfile {
@@ -444,10 +446,13 @@ describe('the report responds to document FEATURES, not to the source format', (
 
   it('tells a PART material reference apart from a GROUP one', () => {
     /*
-     * THE TWO LIVE IN DIFFERENT PLACES IN EACH FORMAT. 3MF puts a material on
-     * the `<object>`, so a part-level reference survives; OBJ's `usemtl` applies
-     * to a run of faces, so a group-level one survives there instead. Reporting
-     * them as one feature would tell half the users the wrong thing.
+     * THE TWO ARE DIFFERENT FEATURES AND MUST NOT BE COLLAPSED. OBJ's `usemtl`
+     * applies to a run of faces, so a GROUP reference survives there; a
+     * PART-level reference has nowhere to go in any target CAD Fixer writes.
+     *
+     * PART REFERENCES USED TO BE REPORTED AS PRESERVED FOR 3MF. That was the
+     * property-reference defect: the writer expressed it as an `object@pid`
+     * pointing at a resource it never emitted. All three targets now drop it.
      */
     const both = profile({
       partMaterialRefCount: 2,
@@ -456,21 +461,53 @@ describe('the report responds to document FEATURES, not to the source format', (
       unit: LengthUnit.Millimeter,
     });
 
+    for (const target of EXPORT_FORMATS) {
+      expect(
+        factFor(
+          analyseConversion({ profile: both, target }),
+          CompatibilityFeature.PartMaterialReferences,
+        )?.disposition,
+        `${target} must drop a part material reference`,
+      ).toBe(CompatibilityDisposition.Dropped);
+    }
+
     const toObj = analyseConversion({ profile: both, target: ExportFormat.Obj });
-    expect(factFor(toObj, CompatibilityFeature.PartMaterialReferences)?.disposition).toBe(
-      CompatibilityDisposition.Dropped,
-    );
     expect(factFor(toObj, CompatibilityFeature.GroupMaterialReferences)?.disposition).toBe(
       CompatibilityDisposition.Preserved,
     );
 
     const toThreeMf = analyseConversion({ profile: both, target: ExportFormat.ThreeMf });
-    expect(factFor(toThreeMf, CompatibilityFeature.PartMaterialReferences)?.disposition).toBe(
-      CompatibilityDisposition.Preserved,
-    );
     expect(factFor(toThreeMf, CompatibilityFeature.GroupMaterialReferences)?.disposition).toBe(
       CompatibilityDisposition.Dropped,
     );
+  });
+
+  it('never claims any target preserves a part material reference', () => {
+    /*
+     * THE REGRESSION GUARD FOR THE PROPERTY-REFERENCE DEFECT. Whatever else a
+     * document contains, no target may report a part material reference as
+     * preserved while CAD Fixer writes no material resources.
+     */
+    for (const overrides of [
+      { partMaterialRefCount: 1 },
+      { partMaterialRefCount: 5, partCount: 5, meshResourceCount: 1, threeMfObjectCount: 1 },
+      { partMaterialRefCount: 2, unit: LengthUnit.Inch, namedPartCount: 2, unnamedPartCount: 0 },
+    ]) {
+      for (const target of EXPORT_FORMATS) {
+        const report = analyseConversion({
+          profile: profile(overrides),
+          target,
+          unitAssertion: LengthUnit.Millimeter,
+        });
+        expect(
+          report.preserved.some(
+            (entry) => entry.feature === CompatibilityFeature.PartMaterialReferences,
+          ),
+          `${target} claimed a part material reference is preserved`,
+        ).toBe(false);
+        expect(featuresIn(report.losses)).toContain(CompatibilityFeature.PartMaterialReferences);
+      }
+    }
   });
 
   it('warns about normals and UVs only when the document actually carries them', () => {

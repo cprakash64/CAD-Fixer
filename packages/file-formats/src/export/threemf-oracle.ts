@@ -247,5 +247,152 @@ export function checkModelXml(xml: string): readonly string[] {
   }
 
   if (!/<model\b[^>]*\bunit="/.test(xml)) problems.push('model element declares no unit');
+
+  problems.push(...checkResourceReferences(xml));
+  return problems;
+}
+
+/* --------------------------------------------- resource reference checks -- */
+
+/**
+ * 3MF resource ids are `ST_ResourceID`: POSITIVE INTEGERS.
+ *
+ * Not "a string that happens to parse as a number" — `01`, `+1`, ` 1 `, `1.0`
+ * and `1e3` are all rejected, because `Number()` would accept most of them and
+ * a consumer using a conforming XML schema would not. The upper bound is the
+ * signed 32-bit maximum, which is the ceiling implementations use for the id
+ * space.
+ */
+const MAX_RESOURCE_ID = 2_147_483_647;
+
+function resourceIdProblem(value: string, where: string): string | undefined {
+  if (!/^[1-9][0-9]*$/.test(value)) {
+    return `${where} is not a positive integer resource id: "${value.slice(0, 40)}"`;
+  }
+  if (Number(value) > MAX_RESOURCE_ID) {
+    return `${where} exceeds the resource id range: "${value.slice(0, 40)}"`;
+  }
+  return undefined;
+}
+
+/** Elements that declare a property-group resource a `pid` may point at. */
+const PROPERTY_GROUP_ELEMENTS: readonly string[] = Object.freeze([
+  'basematerials',
+  'colorgroup',
+  'texture2dgroup',
+  'multiproperties',
+  'compositematerials',
+]);
+
+function attributeOf(tag: string, name: string): string | undefined {
+  const match = new RegExp(`\\s${name}="([^"]*)"`).exec(tag);
+  return match?.[1];
+}
+
+/**
+ * THE SEMANTIC CHECK THIS ORACLE WAS MISSING.
+ *
+ * Everything above answers "is this a well-formed ZIP containing well-formed
+ * XML". A file can pass all of it and still be meaningless: CAD Fixer shipped a
+ * writer that emitted `<object pid="5">` with no resource 5 anywhere, and
+ * `<object pid="steel-brushed">` — not even a lexical resource id. Our reader
+ * accepted both, so writer and reader agreed and parse-back validation passed.
+ *
+ * This is the check that cannot be fooled that way, because it never asks a
+ * parser anything: it reads the id space out of the text and requires every
+ * reference to land in it.
+ *
+ * Exported separately so a test can point it at a deliberately broken document
+ * and prove it REJECTS — an oracle nobody has seen fail is not evidence.
+ */
+export function checkResourceReferences(xml: string): readonly string[] {
+  const problems: string[] = [];
+
+  const objectIds = new Set<string>();
+  const propertyGroupIds = new Set<string>();
+  const allIds = new Set<string>();
+
+  const declare = (id: string, where: string, into: Set<string>): void => {
+    const lexical = resourceIdProblem(id, where);
+    if (lexical !== undefined) problems.push(lexical);
+    // UNIQUE ACROSS THE WHOLE RESOURCE SPACE, not per element type: 3MF ids name
+    // resources, and an object and a material may not share one.
+    if (allIds.has(id)) problems.push(`duplicate resource id "${id.slice(0, 40)}"`);
+    allIds.add(id);
+    into.add(id);
+  };
+
+  for (const match of xml.matchAll(/<object\b[^>]*>/g)) {
+    const id = attributeOf(match[0], 'id');
+    if (id === undefined) {
+      problems.push('object element declares no id');
+      continue;
+    }
+    declare(id, 'object@id', objectIds);
+  }
+
+  for (const element of PROPERTY_GROUP_ELEMENTS) {
+    for (const match of xml.matchAll(new RegExp(`<${element}\\b[^>]*>`, 'g'))) {
+      const id = attributeOf(match[0], 'id');
+      if (id === undefined) {
+        problems.push(`${element} element declares no id`);
+        continue;
+      }
+      declare(id, `${element}@id`, propertyGroupIds);
+    }
+  }
+
+  /*
+   * EVERY `pid` MUST LAND ON A PROPERTY GROUP, not merely on "some resource".
+   * Pointing an object's property reference at another OBJECT's id is a
+   * dangling reference in every sense that matters, and it is exactly what a
+   * naive "does this id exist" check would wave through.
+   */
+  const checkPid = (tag: string, where: string): void => {
+    const pid = attributeOf(tag, 'pid');
+    const pindex = attributeOf(tag, 'pindex');
+
+    if (pid === undefined) {
+      if (pindex !== undefined) {
+        problems.push(`${where} has pindex="${pindex.slice(0, 20)}" but no pid`);
+      }
+      return;
+    }
+    const lexical = resourceIdProblem(pid, `${where}@pid`);
+    if (lexical !== undefined) {
+      problems.push(lexical);
+      return;
+    }
+    if (!propertyGroupIds.has(pid)) {
+      problems.push(
+        `${where}@pid="${pid}" references no property group resource (dangling property reference)`,
+      );
+    }
+  };
+
+  for (const match of xml.matchAll(/<object\b[^>]*>/g)) checkPid(match[0], 'object');
+  for (const match of xml.matchAll(/<triangle\b[^>]*\/>/g)) checkPid(match[0], 'triangle');
+
+  /* --------------------------------------------- object references -- */
+
+  const checkObjectRef = (tag: string, where: string): void => {
+    const objectId = attributeOf(tag, 'objectid');
+    if (objectId === undefined) {
+      problems.push(`${where} names no objectid`);
+      return;
+    }
+    const lexical = resourceIdProblem(objectId, `${where}@objectid`);
+    if (lexical !== undefined) {
+      problems.push(lexical);
+      return;
+    }
+    if (!objectIds.has(objectId)) {
+      problems.push(`${where}@objectid="${objectId}" references no object resource`);
+    }
+  };
+
+  for (const match of xml.matchAll(/<item\b[^>]*\/?>/g)) checkObjectRef(match[0], 'item');
+  for (const match of xml.matchAll(/<component\b[^>]*\/?>/g)) checkObjectRef(match[0], 'component');
+
   return problems;
 }

@@ -32,6 +32,10 @@ import { buildZipArchive } from './zip-writer';
  *     flattening sharing on write would turn a two-megabyte document into a
  *     two-gigabyte file for no reason.
  *
+ * WHAT IT DOES NOT WRITE: any property resource, and therefore any `pid`. See
+ * the object element below — a reference to a resource that does not exist is
+ * not a preserved material, it is a malformed file.
+ *
  * WHAT IT DOES NOT ATTEMPT: reconstructing the nested component graph an
  * imported file may have had. A `GeometryDocument` holds leaf placements and
  * mesh identity; the hierarchy above them is not retained, and inventing a
@@ -125,8 +129,29 @@ async function writeModelXml(
     }
     const nameAttr =
       plan.name === undefined || plan.name === '' ? '' : ` name="${escapeXml(plan.name)}"`;
-    const pidAttr = plan.materialRef === undefined ? '' : ` pid="${escapeXml(plan.materialRef)}"`;
-    sink.write(`  <object id="${String(index + 1)}" type="model"${nameAttr}${pidAttr}>\n`);
+    /*
+     * NO `pid` IS EMITTED, EVER, and that is a conformance requirement rather
+     * than a preference.
+     *
+     * 3MF core defines `object@pid` as an `ST_ResourceID` — a positive integer
+     * naming a property-group resource that must EXIST in `<resources>`. CAD
+     * Fixer has no qualified property writer: it emits no `<basematerials>`, no
+     * `<colorgroup>`, nothing a `pid` could point at. Writing the document's
+     * opaque `materialRef` here therefore produced a DANGLING reference in every
+     * case, and when that reference came from anywhere but a numeric source it
+     * was not even lexically a resource id — `pid="steel-brushed"` was a real
+     * output of this writer.
+     *
+     * Fabricating a `<basematerials>` to make the reference resolve is not the
+     * fix either: a `materialRef` is an opaque import-level string, not a
+     * material definition, so any resource invented for it would describe a
+     * colour and a name the user never specified. The honest answer is to drop
+     * the reference and SAY SO — `MaterialReferencesOmitted` below, surfaced by
+     * the conversion report before the user exports.
+     *
+     * See ADR 0017, "3MF property references".
+     */
+    sink.write(`  <object id="${String(index + 1)}" type="model"${nameAttr}>\n`);
     sink.write('   <mesh>\n    <vertices>\n');
 
     const { positions, indices } = mesh;
@@ -280,7 +305,12 @@ export async function write3mfDocument(
     observations.push(ExportObservation.NamesPreserved);
   }
   if (snapshot.parts.some((part) => part.materialRef !== undefined)) {
-    observations.push(ExportObservation.MaterialReferencesPreserved);
+    /*
+     * OMITTED, NOT PRESERVED. This said `MaterialReferencesPreserved` while the
+     * writer emitted a `pid` no resource backed — the observation and the bytes
+     * described different files. One contract, stated once.
+     */
+    observations.push(ExportObservation.MaterialReferencesOmitted);
   }
   /*
    * RECORDED WHEN THE UNIT CAME FROM A PERSON, not from the document.

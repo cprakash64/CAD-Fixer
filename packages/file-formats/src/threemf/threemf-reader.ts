@@ -139,21 +139,56 @@ const MODEL_PART = '3d/3dmodel.model';
  */
 
 /** Resource elements CAD Fixer knowingly does not model. Recorded, never dropped silently. */
-const UNSUPPORTED_RESOURCE_ELEMENTS: readonly string[] = Object.freeze([
-  'texture2d',
-  'texture2dgroup',
-  'colorgroup',
+/**
+ * Resources a `pid` may legitimately point at.
+ *
+ * CAD Fixer does not INTERPRET any of them — it imports geometry — but it must
+ * know they exist, because "this property reference names a resource I do not
+ * understand" and "this property reference names nothing at all" are a valid
+ * file and a malformed one. Without this set the reader could not tell them
+ * apart, and it accepted both.
+ */
+const PROPERTY_GROUP_ELEMENTS: readonly string[] = Object.freeze([
   'basematerials',
+  'colorgroup',
+  'texture2dgroup',
   'multiproperties',
   'compositematerials',
 ]);
+
+/** Resource elements that are not property groups but still occupy the id space. */
+const OTHER_RESOURCE_ELEMENTS: readonly string[] = Object.freeze(['texture2d']);
+
+const UNSUPPORTED_RESOURCE_ELEMENTS: readonly string[] = Object.freeze([
+  ...OTHER_RESOURCE_ELEMENTS,
+  ...PROPERTY_GROUP_ELEMENTS,
+]);
+
+/**
+ * 3MF resource ids are `ST_ResourceID`: POSITIVE INTEGERS.
+ *
+ * Enforced LEXICALLY rather than by coercion. `Number('0x10')`, `Number(' 7 ')`
+ * and `Number('1e3')` all produce integers, and none of those is a resource id
+ * — accepting them is how a value that is not an id ends up stored as one and,
+ * eventually, written back out. The upper bound is the signed 32-bit maximum,
+ * the ceiling the id space uses.
+ */
+const MAX_RESOURCE_ID = 2_147_483_647;
+
+function isResourceId(value: string): boolean {
+  if (!/^[1-9][0-9]*$/.test(value)) return false;
+  // Length-guarded before `Number`, so a thousand-digit string is rejected on
+  // shape rather than turned into `Infinity` and compared.
+  if (value.length > 10) return false;
+  return Number(value) <= MAX_RESOURCE_ID;
+}
 
 const TEXTURE_ELEMENTS: readonly string[] = Object.freeze(['texture2d', 'texture2dgroup']);
 
 interface ObjectRecord {
   readonly id: string;
   readonly name: string | undefined;
-  readonly materialRef: string | undefined;
+  readonly materialRef?: string;
   readonly positions: number[];
   readonly triangles: number[];
   readonly components: { readonly objectId: string; readonly transform: PartTransform }[];
@@ -246,6 +281,16 @@ export function parseModelXml(
   const objects = new Map<string, ObjectRecord>();
   const build: { objectId: string; transform: PartTransform }[] = [];
   const unsupported = new Set<string>();
+  /*
+   * THE PROPERTY-RESOURCE ID SPACE, and the references into it.
+   *
+   * Resolved AFTER the scan rather than during it, because a reference may
+   * legitimately be read before the resource it names — resolving inline would
+   * refuse a valid file purely for its element order. Collecting is O(1) per
+   * reference and the check is one pass at the end.
+   */
+  const propertyGroupIds = new Set<string>();
+  const propertyReferences: { readonly id: string; readonly where: string }[] = [];
 
   let current: ObjectRecord | undefined;
   let inBuild = false;
@@ -321,10 +366,44 @@ export function parseModelXml(
            * intact and then refused by `assertGeometryDocument`, which made a
            * perfectly good model unimportable for a cosmetic reason.
            */
+          /*
+           * `pid` IS A RESOURCE ID, NOT AN OPAQUE LABEL.
+           *
+           * It used to be sliced to a length cap and stored as a string, which
+           * meant `pid="steel"` and `pid="0"` were carried through the document
+           * and — before the property-reference fix — written straight back out
+           * into a file CAD Fixer produced. The shape is checked here and the
+           * reference is resolved after the scan.
+           */
+          const pid = attrs.pid;
+          if (pid !== undefined) {
+            if (!isResourceId(pid)) {
+              throw importMalformed(
+                ImportRefusal.ThreeMfMalformedResourceId,
+                'This 3MF file contains a property reference that is not a resource id.',
+                { objectId: id.slice(0, 40), pid: pid.slice(0, 40) },
+              );
+            }
+            propertyReferences.push({ id: pid, where: id.slice(0, 40) });
+          }
+          /*
+           * `pindex` SELECTS WITHIN A PROPERTY GROUP, so it means nothing
+           * without one. An object carrying it alone is malformed, and reading
+           * past it would be reading an index into a resource that was never
+           * named.
+           */
+          if (pid === undefined && attrs.pindex !== undefined) {
+            throw importMalformed(
+              ImportRefusal.ThreeMfMalformedStructure,
+              'This 3MF file contains an object with a property index but no property reference.',
+              { objectId: id.slice(0, 40) },
+            );
+          }
+
           const record: ObjectRecord = {
             id,
             name: attrs.name?.slice(0, DEFAULT_DOCUMENT_LIMITS.maxNameLength),
-            materialRef: attrs.pid?.slice(0, DEFAULT_DOCUMENT_LIMITS.maxMaterialRefLength),
+            ...(pid === undefined ? {} : { materialRef: pid }),
             positions: [],
             triangles: [],
             components: [],
@@ -345,6 +424,27 @@ export function parseModelXml(
           // RECORDED, never silently dropped. What CAD Fixer did not import is
           // reported to the user rather than being left for them to discover.
           unsupported.add(local);
+          /*
+           * ITS ID IS STILL READ. The resource is not interpreted, but a `pid`
+           * pointing at it is a VALID reference to something CAD Fixer chose not
+           * to import — which is a completely different fact from a reference to
+           * nothing, and the only way to tell them apart is to know this id
+           * exists.
+           */
+          if (PROPERTY_GROUP_ELEMENTS.includes(local)) {
+            const attrs = readAttrs(attributeText, xmlLimits);
+            const id = attrs.id;
+            if (id !== undefined) {
+              if (!isResourceId(id)) {
+                throw importMalformed(
+                  ImportRefusal.ThreeMfMalformedResourceId,
+                  'This 3MF file declares a property resource whose id is not a resource id.',
+                  { element: local, id: id.slice(0, 40) },
+                );
+              }
+              propertyGroupIds.add(id);
+            }
+          }
           return;
         }
 
@@ -369,6 +469,26 @@ export function parseModelXml(
 
         if (local === 'triangle') {
           const attrs = readAttrs(attributeText, xmlLimits);
+          /*
+           * A TRIANGLE MAY CARRY ITS OWN PROPERTY REFERENCE, and CAD Fixer does
+           * not import per-triangle properties — but it must still refuse a
+           * reference to a resource that does not exist, for the same reason it
+           * refuses one on an object. The attributes are already parsed here, so
+           * checking costs a property read on a path that is otherwise
+           * untouched.
+           */
+          const trianglePid = attrs.pid;
+          if (trianglePid !== undefined) {
+            if (!isResourceId(trianglePid)) {
+              throw importMalformed(
+                ImportRefusal.ThreeMfMalformedResourceId,
+                'This 3MF file contains a triangle property reference that is not a resource id.',
+                { objectId: current.id.slice(0, 40), pid: trianglePid.slice(0, 40) },
+              );
+            }
+            propertyReferences.push({ id: trianglePid, where: current.id.slice(0, 40) });
+          }
+
           current.triangles.push(
             readIndex(attrs.v1, current.id),
             readIndex(attrs.v2, current.id),
@@ -455,6 +575,28 @@ export function parseModelXml(
       ImportRefusal.ThreeMfNoBuildItems,
       'This 3MF file contains no build items, so there is nothing to show.',
     );
+  }
+
+  /*
+   * EVERY PROPERTY REFERENCE MUST LAND, and this is where that is decided.
+   *
+   * Deferred to here rather than checked inline so declaration ORDER cannot
+   * refuse a valid file. What it catches is the case CAD Fixer used to accept
+   * silently — and then reproduce in its own output: `pid="5"` with no resource
+   * 5 anywhere.
+   *
+   * A reference to a property group CAD Fixer does not interpret is NOT an
+   * error: the id exists, the file is valid, and the unsupported-feature record
+   * above reports that its contents were not imported.
+   */
+  for (const reference of propertyReferences) {
+    if (!propertyGroupIds.has(reference.id)) {
+      throw importMalformed(
+        ImportRefusal.ThreeMfDanglingPropertyReference,
+        'This 3MF file refers to a property resource which does not exist.',
+        { pid: reference.id.slice(0, 40), objectId: reference.where },
+      );
+    }
   }
 
   return { unit, objects, build, unsupported };

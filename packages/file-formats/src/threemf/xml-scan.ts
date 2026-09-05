@@ -1,4 +1,16 @@
 import { ImportRefusal, importMalformed, importTooLarge } from '../import-errors';
+/*
+ * `xmlSafeText` LIVES IN A LEAF MODULE, not here.
+ *
+ * The conversion policy runs on the MAIN THREAD and needs to know whether a
+ * name will survive being written; importing it from this file would invite a
+ * bundler to follow this file's own imports — the scanner, the limits, the
+ * whole intake path — into the application bundle. Re-exported so every
+ * existing caller is unaffected.
+ */
+import { xmlSafeText } from './xml-text';
+
+export { xmlSafeText, xmlTextChangesOnWrite } from './xml-text';
 
 /**
  * A BOUNDED XML ELEMENT SCANNER, fail-closed before it parses anything.
@@ -84,26 +96,6 @@ function prologOf(text: string): string {
  * containing one is not well formed, and our own reader would refuse the file
  * we had just written.
  */
-/**
- * The characters XML can carry at all, with the rest dropped.
- *
- * XML 1.0 does not permit most control characters even as numeric references,
- * so a writer that "escaped" one would produce a document that is not well
- * formed — and our own reader would refuse the file we had just written.
- * Exposed separately because a validator comparing a written name against the
- * document's has to know that this happened.
- */
-export function xmlSafeText(value: string): string {
-  let out = '';
-  for (const character of value) {
-    const code = character.codePointAt(0) ?? 0;
-    if (code < 0x20 && code !== 0x09 && code !== 0x0a && code !== 0x0d) continue;
-    if (code === 0x7f) continue;
-    out += character;
-  }
-  return out;
-}
-
 export function escapeXml(value: string): string {
   let out = '';
   for (const character of xmlSafeText(value)) {

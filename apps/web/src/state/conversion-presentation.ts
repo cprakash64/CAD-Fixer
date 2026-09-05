@@ -262,14 +262,21 @@ export function describeFact(fact: CompatibilityFact): string {
 
     case CompatibilityFeature.PartMaterialReferences:
       /*
-       * THE QUALIFIER IS NOT OPTIONAL. CAD Fixer writes no material resource for
-       * the reference to point at, in any format — so "keeps the material" would
-       * promise a colour that will not appear. The name survives; the material
-       * does not exist.
+       * DROPPED BY EVERY TARGET, AND THE SENTENCE SAYS WHY IT IS OURS RATHER
+       * THAN THE FORMAT'S.
+       *
+       * The earlier wording claimed 3MF kept these. It did not: the writer
+       * expressed "keeping" as a `pid` pointing at a property resource CAD Fixer
+       * never writes, which is a dangling reference rather than a preserved
+       * material. Saying "this format has nowhere to record it" would be equally
+       * untrue of 3MF, which does — CAD Fixer is what cannot write one yet. The
+       * copy attributes the limitation correctly.
        */
-      return fact.disposition === CompatibilityDisposition.Preserved
-        ? `${count.toLocaleString()} part${plural} keep the material name they refer to. CAD Fixer writes no material definitions, so the name is carried without anything to define it.`
-        : `${count.toLocaleString()} part${plural} refer to a material by name, and this format has nowhere to record that on a part.`;
+      return (
+        `${count.toLocaleString()} part${plural} refer to a material by name. The reference itself ` +
+        'is not written: there would be nothing in the file for it to point at, and a reference to ' +
+        'something that is not there would make the file invalid.'
+      );
 
     case CompatibilityFeature.GroupMaterialReferences:
       return fact.disposition === CompatibilityDisposition.Preserved
@@ -288,6 +295,17 @@ export function describeFact(fact: CompatibilityFact): string {
       return fact.disposition === CompatibilityDisposition.Preserved
         ? `${count.toLocaleString()} repeated placement${plural} reuse one copy of the geometry in the file.`
         : `${count.toLocaleString()} repeated shape${plural} are written out in full, one copy each. The file will be larger, and it will not record that they were the same shape.`;
+
+    case CompatibilityFeature.NameCharacters:
+      /*
+       * NO NAMES IN THE SENTENCE, EVER. A count is enough to act on, and the
+       * names are untrusted text the report deliberately does not carry: one
+       * render away from markup, and a second place display copy would live.
+       */
+      return (
+        `${count.toLocaleString()} part name${plural} contain characters this format cannot ` +
+        'store exactly, so they will be adjusted slightly. The shape is unaffected.'
+      );
 
     case CompatibilityFeature.Normals:
       return `${count.toLocaleString()} mesh${count === 1 ? '' : 'es'} carry stored vertex normals. CAD Fixer does not write them; shading is recalculated from the triangles.`;

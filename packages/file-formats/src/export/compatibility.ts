@@ -77,10 +77,11 @@ export interface DocumentFeatureProfile {
   /**
    * How many `<object>` records a 3MF export would write.
    *
-   * MIRRORS `planThreeMfObjects`, which groups by (mesh, name, material
-   * reference) because all three live on the `<object>` in 3MF rather than on
-   * the `<item>` that places it. Two placements of one mesh under two different
-   * names are, in 3MF's own model, two objects.
+   * MIRRORS `planThreeMfObjects`, which groups by (mesh, NAME) — the metadata
+   * the `<object>` element actually carries. Two placements of one mesh under
+   * two different names are, in 3MF's own model, two objects; two under two
+   * different MATERIAL references are one, because no material reference is
+   * written.
    *
    * WHY THE POLICY NEEDS IT. Without this the report could only say "sharing is
    * preserved" and hope — and for parts that disagree about their name it would
@@ -105,6 +106,22 @@ export interface DocumentFeatureProfile {
   readonly meshesWithNormals: number;
   /** Distinct meshes carrying stored per-vertex texture coordinates. */
   readonly meshesWithUvs: number;
+  /**
+   * Part names that OBJ cannot spell as written.
+   *
+   * OBJ has no escape mechanism: a control character in a name would end the
+   * record and turn the rest into geometry, and runs of whitespace cannot be
+   * distinguished from a single space. Both are small, real losses, and until
+   * this stage they happened silently — Stage 4A-2B3 recorded them as a known
+   * limitation because the profile deliberately holds no names.
+   *
+   * A COUNT IS ENOUGH, and a count is all this may ever hold. Putting the names
+   * themselves in a compatibility fact would put untrusted text one render away
+   * from markup, and would create a second place display copy lived.
+   */
+  readonly namesUnwritableAsObj: number;
+  /** Part names containing characters XML cannot carry at all. See above. */
+  readonly namesUnwritableAsXml: number;
   /**
    * What the source file contained and the import did not carry across.
    *
@@ -141,6 +158,14 @@ export const CompatibilityFeature = {
   PartMaterialReferences: 'PART_MATERIAL_REFERENCES',
   GroupMaterialReferences: 'GROUP_MATERIAL_REFERENCES',
   MeshSharing: 'MESH_SHARING',
+  /**
+   * Names that cannot be written exactly as the document holds them.
+   *
+   * SEPARATE FROM `PartNames`, which is about a name being kept or dropped.
+   * This is about a name being kept in a CHANGED form, which is a different
+   * thing to tell someone and applies only to targets that write names at all.
+   */
+  NameCharacters: 'NAME_CHARACTERS',
   Normals: 'NORMALS',
   TextureCoordinates: 'TEXTURE_COORDINATES',
   /*
@@ -521,6 +546,25 @@ export function analyseConversion(request: ConversionRequest): ConversionCompati
       );
     }
   }
+  /*
+   * NAMES THAT CANNOT BE WRITTEN AS THEY STAND.
+   *
+   * ONLY FOR TARGETS THAT WRITE NAMES. STL drops every name, and it already
+   * says so — adding "and some of them would have been adjusted" to a name that
+   * is not written at all would be noise about a loss inside a larger loss.
+   */
+  if (target !== ExportFormat.Stl) {
+    const affected =
+      target === ExportFormat.Obj ? profile.namesUnwritableAsObj : profile.namesUnwritableAsXml;
+    if (affected > 0) {
+      transformations.push(
+        fact(CompatibilityFeature.NameCharacters, CompatibilityDisposition.Canonicalized, {
+          count: affected,
+        }),
+      );
+    }
+  }
+
   if (target === ExportFormat.Obj && profile.unnamedPartCount > 0) {
     /*
      * AN ADDITION, NOT A LOSS, and that is why it is an ASSUMPTION.
@@ -569,21 +613,31 @@ export function analyseConversion(request: ConversionRequest): ConversionCompati
   /* -------------------------------------------------- material references -- */
 
   if (profile.partMaterialRefCount > 0) {
-    if (target === ExportFormat.ThreeMf) {
-      preserved.push(
-        fact(CompatibilityFeature.PartMaterialReferences, CompatibilityDisposition.Preserved, {
-          count: profile.partMaterialRefCount,
-        }),
-      );
-    } else {
-      // OBJ's `usemtl` applies to a run of faces, not to an object, so a
-      // PART-level reference has nowhere to go. STL has nowhere for either.
-      losses.push(
-        fact(CompatibilityFeature.PartMaterialReferences, CompatibilityDisposition.Dropped, {
-          count: profile.partMaterialRefCount,
-        }),
-      );
-    }
+    /*
+     * DROPPED BY EVERY TARGET, INCLUDING 3MF.
+     *
+     * This said `Preserved` for 3MF, and it was wrong in the way that matters
+     * most: the writer expressed "preservation" as `object@pid`, which 3MF core
+     * defines as a reference to a property-group resource that must exist —
+     * and CAD Fixer emits no property resources at all. The reference was
+     * dangling in every file, and for a reference that did not originate as a
+     * number it was not even a lexical resource id.
+     *
+     * Fabricating a `<basematerials>` to make it resolve is not available
+     * either: a `materialRef` is an opaque string carried through import, not a
+     * material definition, so any resource invented for it would state a colour
+     * and a name the user never gave. So all three targets drop it, and the
+     * report says so before the user exports.
+     *
+     * OBJ's `usemtl` applies to a run of faces rather than to an object, so a
+     * PART-level reference has nowhere to go there either. STL has nowhere for
+     * anything.
+     */
+    losses.push(
+      fact(CompatibilityFeature.PartMaterialReferences, CompatibilityDisposition.Dropped, {
+        count: profile.partMaterialRefCount,
+      }),
+    );
   }
   if (profile.groupMaterialRefCount > 0) {
     if (target === ExportFormat.Obj) {

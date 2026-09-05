@@ -340,13 +340,33 @@ describe('MF-W08/MF-W09/MF-W10: names, materials and hostile strings', () => {
     expect(written.metadata.observations).toContain(ExportObservation.SharingPreserved);
   });
 
-  it('MF-W09: preserves material references as opaque strings', async () => {
+  /*
+   * MF-W09 ASSERTED THE OPPOSITE UNTIL THE PROPERTY-REFERENCE FIX, and the
+   * change is a correction rather than a relaxation.
+   *
+   * It used to require that a material reference round-tripped. It did — through
+   * an `object@pid` pointing at a property-group resource this writer never
+   * emits. Our reader accepted the dangling reference, so the round trip
+   * "passed" on a file no conforming consumer would accept. 3MF core defines
+   * `object@pid` as an `ST_ResourceID` naming a resource that must exist.
+   *
+   * The contract is now: geometry, placement and name are written; the opaque
+   * material reference is DROPPED and reported. See PR01–PR03 below.
+   */
+  it('MF-W09: drops a material reference rather than writing a dangling pid', async () => {
     const written = await export3mf(
       documentOf([{ mesh: TRIANGLE, materialRef: 'mat-7' }], LengthUnit.Millimeter),
     );
     const parsed = await read3mf(written.bytes, testExportReadContext());
-    expect(parsed.document.parts[0]?.materialRef).toBe('mat-7');
-    expect(written.metadata.observations).toContain(ExportObservation.MaterialReferencesPreserved);
+    const inspected = await inspect3mf(written.bytes);
+
+    expect(parsed.document.parts[0]?.materialRef).toBeUndefined();
+    expect(inspected.modelXml).not.toContain('pid=');
+    expect(inspected.problems).toEqual([]);
+    expect(written.metadata.observations).toContain(ExportObservation.MaterialReferencesOmitted);
+    expect(written.metadata.observations).not.toContain(
+      ExportObservation.MaterialReferencesPreserved,
+    );
   });
 
   it.each([
@@ -374,7 +394,13 @@ describe('MF-W08/MF-W09/MF-W10: names, materials and hostile strings', () => {
       '3D/3dmodel.model',
     ]);
     expect(parsed.document.parts[0]?.name).toBe(name);
-    expect(parsed.document.parts[0]?.materialRef).toBe(name);
+    /*
+     * THE MATERIAL REFERENCE IS NOT WRITTEN AT ALL, so a hostile one cannot
+     * reach the file in any form. The NAME is what this case is really about —
+     * it IS written, and has to survive escaping intact.
+     */
+    expect(parsed.document.parts[0]?.materialRef).toBeUndefined();
+    expect(inspected.modelXml).not.toContain('pid=');
   });
 
   it('drops control characters rather than writing XML that is not well formed', async () => {

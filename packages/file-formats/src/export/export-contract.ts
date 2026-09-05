@@ -13,6 +13,7 @@ import {
 } from '@cadfixer/mesh-core';
 import type { CancellationToken } from '@cadfixer/shared';
 import { MeshFormatId } from '../formats';
+import { normaliseObjName } from './obj-name';
 
 /**
  * WHAT A WRITER IS GIVEN, AND WHAT IT PROMISES BACK.
@@ -161,13 +162,17 @@ export const ExportObservation = {
   SharingPreserved: 'STRUCTURAL_SHARING_PRESERVED',
   /**
    * Parts sharing one mesh were written as separate objects because their
-   * metadata differs.
+   * NAMES differ.
    *
-   * 3MF puts a name and a material reference on the `<object>`, not on the
-   * `<item>` that places it — so two placements of one mesh under two different
-   * names are, in 3MF's own model, two objects. Sharing survives whenever the
-   * sharing parts agree; where they do not, the name is kept and the geometry
-   * is written twice, because dropping a name the user gave is the larger loss.
+   * 3MF puts the name on the `<object>`, not on the `<item>` that places it —
+   * so two placements of one mesh under two different names are, in 3MF's own
+   * model, two objects. Sharing survives whenever the sharing parts agree;
+   * where they do not, the name is kept and the geometry is written twice,
+   * because dropping a name the user gave is the larger loss.
+   *
+   * A DIFFERING MATERIAL REFERENCE NO LONGER SPLITS ANYTHING. The writer emits
+   * no `pid`, so the distinction reaches the file nowhere and duplicating
+   * geometry for it would cost megabytes to preserve nothing.
    */
   SharingSplitByMetadata: 'STRUCTURAL_SHARING_SPLIT_BY_METADATA',
   /** Placements were written as placements, not baked. */
@@ -367,17 +372,15 @@ export function objRoundTripName(
   name: string,
   maxLength = DEFAULT_DOCUMENT_LIMITS.maxNameLength,
 ): string {
-  let stripped = '';
-  for (const character of name) {
-    const code = character.codePointAt(0) ?? 0;
-    if (code < 0x20 || code === 0x7f) continue;
-    stripped += character;
-  }
-  const collapsed = stripped
-    .split(/[ \t]+/)
-    .filter((token) => token.length > 0)
-    .join(' ');
-  return collapsed.slice(0, maxLength);
+  /*
+   * THE CHARACTER RULES LIVE IN `obj-name.ts`, a leaf module with no imports.
+   *
+   * The conversion policy runs on the MAIN THREAD and has to be able to ask
+   * "would writing this name change it?" so the user can be told before they
+   * export. Asking it here would pull this module — and the document layer it
+   * imports — along with the answer.
+   */
+  return normaliseObjName(name).slice(0, maxLength);
 }
 
 const IDENTITY = IDENTITY_PART_TRANSFORM;
@@ -558,7 +561,6 @@ export function expectedStlRoundTrip(snapshot: ExportDocumentSnapshot): Geometry
 export interface ThreeMfObjectPlan {
   readonly meshResourceIndex: number;
   readonly name: string | undefined;
-  readonly materialRef: string | undefined;
   /** Indices into `snapshot.parts`, in document order. */
   readonly partIndices: readonly number[];
 }
@@ -570,16 +572,27 @@ export interface ThreeMfObjectPlan {
  * expected number of distinct meshes after a round trip is derived from the
  * same rule that produced them rather than restated beside it.
  *
- * The grouping key is (mesh, name, material reference) because all three live
- * on the `<object>` in 3MF. A thousand unnamed placements of one mesh are one
- * object; two placements under two names are two.
+ * THE KEY IS (MESH, NAME) — and, since the property-reference fix, NOT the
+ * material reference.
+ *
+ * It used to include one. That was correct while the writer emitted
+ * `object@pid`: two placements of one mesh under two different material
+ * references were two objects in 3MF's own model, so keeping both meant writing
+ * the geometry twice. The writer no longer emits `pid` at all — it has no
+ * property resource to point at — so splitting on a value that reaches the file
+ * NOWHERE would duplicate megabytes of geometry to preserve a distinction the
+ * output cannot express.
+ *
+ * The rule is now exactly: the key contains what the `<object>` element will
+ * actually carry. A thousand unnamed placements of one mesh are one object;
+ * two placements under two NAMES are two, because a name is written.
  */
 export function planThreeMfObjects(snapshot: ExportDocumentSnapshot): readonly ThreeMfObjectPlan[] {
   const byKey = new Map<string, { plan: ThreeMfObjectPlan; parts: number[] }>();
   const order: string[] = [];
 
   for (const [index, part] of snapshot.parts.entries()) {
-    const key = `${String(part.meshResourceIndex)}\u0000${part.name ?? ''}\u0000${part.materialRef ?? ''}`;
+    const key = `${String(part.meshResourceIndex)}\u0000${part.name ?? ''}`;
     const existing = byKey.get(key);
     if (existing === undefined) {
       const parts: number[] = [index];
@@ -587,7 +600,6 @@ export function planThreeMfObjects(snapshot: ExportDocumentSnapshot): readonly T
         plan: {
           meshResourceIndex: part.meshResourceIndex,
           name: part.name,
-          materialRef: part.materialRef,
           partIndices: parts,
         },
         parts,

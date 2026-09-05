@@ -108,6 +108,26 @@ export const ImportRefusal = {
   ThreeMfTooManyVertices: 'THREEMF_TOO_MANY_VERTICES',
   ThreeMfNoBuildItems: 'THREEMF_NO_BUILD_ITEMS',
   ThreeMfMalformedStructure: 'THREEMF_MALFORMED_STRUCTURE',
+  /**
+   * A resource id that is not one.
+   *
+   * 3MF core types resource ids as positive integers. `pid="0"`, `pid="-3"`,
+   * `pid="1.0"` and `pid="steel"` are not ids at all, and treating them as
+   * opaque strings is how CAD Fixer came to WRITE `pid="steel-brushed"` into a
+   * file of its own. The reader now refuses the shape rather than carrying it.
+   */
+  ThreeMfMalformedResourceId: 'THREEMF_MALFORMED_RESOURCE_ID',
+  /**
+   * A property reference that names no property resource.
+   *
+   * DISTINCT FROM AN UNSUPPORTED ONE, and the distinction is the whole point. A
+   * `pid` resolving to a `<basematerials>` CAD Fixer does not interpret is a
+   * VALID file whose materials are not imported — geometry loads and the loss is
+   * reported. A `pid` resolving to nothing is a MALFORMED file, and silently
+   * keeping the dangling string is what let a bad reference survive a round
+   * trip.
+   */
+  ThreeMfDanglingPropertyReference: 'THREEMF_DANGLING_PROPERTY_REFERENCE',
 
   /* ---------------------------------------------------------------- shared -- */
   InputTooLarge: 'INPUT_TOO_LARGE',

@@ -171,6 +171,16 @@ export {
   binaryStlByteLength as stlContainerByteLength,
   MAX_BINARY_STL_TRIANGLES,
 } from './export/stl-layout';
+/*
+ * NAME-SAFETY PREDICATES, from leaf modules that import nothing.
+ *
+ * The conversion policy runs on the MAIN THREAD and must be able to tell a user
+ * that a name will be adjusted before they export. These are the SAME functions
+ * the writers use — not a mirror — so the disclosure cannot disagree with what
+ * the file ends up containing.
+ */
+export { normaliseObjName, objNameChangesOnWrite } from './export/obj-name';
+export { xmlTextChangesOnWrite } from './threemf/xml-text';
 
 export {
   EXPORT_REASON_KEY,

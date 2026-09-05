@@ -370,9 +370,10 @@ believing it.
   the SPECIFICATION saying what an absent attribute means; an STL-derived
   document has asserted nothing. Coordinates are never rescaled to hide a lost
   unit either.
-- **3MF GROUPS OBJECTS BY (MESH, NAME, MATERIAL REFERENCE)**, because all three
-  live on the `<object>`. Parts that agree share one object; parts that disagree
-  get their own, and the split is recorded. The imported component hierarchy is
+- **3MF GROUPS OBJECTS BY (MESH, NAME)** — the metadata the `<object>` element
+  actually carries. Parts that agree share one object; parts that disagree get
+  their own, and the split is recorded. A differing MATERIAL REFERENCE does not
+  split anything, because none is written. The imported component hierarchy is
   NOT reconstructed.
 - **ARCHIVE PATHS ARE A FIXED LIST THE WRITER DECIDES.** No entry path is derived
   from a document name, a part name or a material reference. Untrusted strings
@@ -388,6 +389,53 @@ believing it.
   writer proves only that they agree. `obj-oracle.ts` and `threemf-oracle.ts` are
   test-only structural checkers that share no code with production, and a
   boundary test keeps them out of it.
+
+## 3MF property-reference invariants (Stage 4A-2B3-R1)
+
+- **NO `pid` IS EVER EMITTED, FOR ANY TARGET, FROM ANY DOCUMENT.** 3MF core
+  types `object@pid` as an `ST_ResourceID` naming a property-group resource that
+  must EXIST. CAD Fixer writes no property resources, so a `pid` it wrote would
+  be dangling by construction — and for a `materialRef` that did not originate
+  as a number it was not even a lexical id: `pid="steel-brushed"` was real
+  output. Never emit `pindex` either.
+- **NEVER FABRICATE A PROPERTY RESOURCE TO MAKE A REFERENCE RESOLVE.** A
+  `materialRef` is an opaque import-level string, not a material definition; a
+  `<basematerials>` invented for it would state a colour and a name the user
+  never gave. Dropping it and SAYING SO is the honest MVP answer. Building a real
+  material system is a separate, explicit decision.
+- **A PART MATERIAL REFERENCE IS A LOSS IN ALL THREE TARGETS**, and the report
+  says so before the export. Nothing may report it as preserved.
+- **THE READER DISTINGUISHES UNSUPPORTED FROM DANGLING.** `pid` naming a
+  `<basematerials>` CAD Fixer does not interpret is a VALID file: geometry
+  imports and the loss is reported. `pid` naming nothing is
+  `THREEMF_DANGLING_PROPERTY_REFERENCE`; a `pid` that is not a positive integer
+  is `THREEMF_MALFORMED_RESOURCE_ID`. Validate LEXICALLY — `Number` accepts
+  `7`, `0x7`, `1e3` and `+7`, none of which is a resource id.
+- **REFERENCES RESOLVE AFTER THE SCAN, not inline.** A resource may legitimately
+  be declared after the reference to it, and refusing on element order would
+  reject valid files.
+- **THE INDEPENDENT ORACLE VALIDATES THE ID SPACE**, and a mutated fixture proves
+  it rejects. This defect passed ZIP, CRC and XML checks and passed parse-back,
+  because writer and reader shared the blind spot — the oracle is the only layer
+  that could have caught it, and it was not looking. When a defect gets through,
+  ask which oracle should have seen it.
+- **PARSE-BACK ASSERTS THE REFERENCE'S ABSENCE.** It used to assert its presence,
+  which is how a malformed file passed validation.
+
+## Name-sanitization invariants (Stage 4A-2B3-R1)
+
+- **A NAME THAT CANNOT BE WRITTEN EXACTLY IS DISCLOSED BEFORE THE EXPORT**, as a
+  COUNT. `NAME_CHARACTERS` carries a number and nothing else: a fact holding a
+  name would put untrusted text one render away from markup and create a second
+  place display copy lived. The profile holds no names either.
+- **THE PREDICATES ARE THE WRITERS' OWN** — `objNameChangesOnWrite` and
+  `xmlTextChangesOnWrite`, from leaf modules that import nothing. Not a mirror:
+  the disclosure cannot disagree with the file.
+- **STL IS EXCLUDED.** It drops every name and already says so; a warning that
+  some would have been adjusted describes a change to something not written.
+- **DO NOT WARN ABOUT PERFECTLY REPRESENTABLE UNICODE.** Accents, CJK, emoji and
+  RTL scripts survive both writers intact. Warning about them is the noise that
+  teaches people to stop reading the panel.
 
 ## Conversion workflow invariants (Stage 4A-2B3)
 
