@@ -25,6 +25,14 @@ interface HarnessPartDigest {
  * belong in a download; a test needs to know how big it was, what format it
  * looks like, and what the writer observed about the conversion.
  */
+/** One progress report, with the moment it arrived. */
+interface HarnessExportPhase {
+  readonly fraction: number;
+  readonly note?: string;
+  /** Milliseconds since the export was requested. */
+  readonly at: number;
+}
+
 interface HarnessExportResult {
   readonly status: string;
   readonly reason?: string;
@@ -38,6 +46,15 @@ interface HarnessExportResult {
   readonly durationMs: number;
   readonly head?: string;
   readonly progressUpdates: number;
+  /**
+   * The progress timeline.
+   *
+   * What makes a responsiveness window checkable: a test can see that the
+   * period it sampled reached `validating` and then `complete`, rather than
+   * ending when the bytes happened to exist.
+   */
+  readonly phases: readonly HarnessExportPhase[];
+  readonly cancelLatencyMs?: number;
 }
 
 declare global {
@@ -58,7 +75,17 @@ declare global {
         sourceName: string,
         options?: { readonly download?: boolean; readonly cancelAfterMs?: number },
       ): Promise<HarnessExportResult>;
+      /** Starts an export and returns immediately, so a probe can run beside it. */
+      beginExport(
+        documentId: string,
+        revision: number,
+        target: 'obj' | '3mf',
+        sourceName: string,
+        options?: { readonly download?: boolean; readonly cancelAfterMs?: number },
+      ): void;
+      awaitExport(): Promise<HarnessExportResult>;
       cancelExport(): void;
+      exportActiveOperation(): string | undefined;
       exportLiveWorkers(): number;
       exportLiveChannels(): number;
     };

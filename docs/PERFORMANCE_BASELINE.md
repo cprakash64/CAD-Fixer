@@ -689,3 +689,92 @@ that the main thread keeps rendering and that Cancel works, and those are
 asserted rather than recorded — `e2e-harness/document-export.spec.ts` cancels a
 thousand-placement export of each format in real Chromium and proves the worker
 and its channel are released and that a retry succeeds.
+
+## R1 — browser responsiveness during export (2026-09-05)
+
+The Node numbers above answer "how long does this take". They cannot answer the
+question Stage 4A-2B2 §56 asks, which is whether the PAGE STAYS USABLE while it
+happens — and those come apart exactly when work lands on the wrong thread. A
+serialiser that is fast in Node and synchronous on the main thread would look
+excellent in one measurement and freeze the tab in the other.
+
+Measured by `e2e-harness/export-responsiveness.spec.ts`, in the harness project
+(one Playwright worker, no parallelism), through the real production path:
+authoritative worker → `MessageChannel` → disposable export worker →
+serialise → parse-back validate → bytes. Nothing is mocked and validation is
+never disabled.
+
+Instruments: the frame-gap probe every Stage 3 and Stage 4 responsiveness proof
+uses, plus a `PerformanceObserver` on `longtask`. Chromium supports `longtask`
+and the suite records whether it did rather than reading silence as a pass.
+
+| Case                         | Triangles | Parts | Resources | Artifact | Total   | Idle gap | Busy gap | Long tasks |
+| ---------------------------- | --------- | ----- | --------- | -------- | ------- | -------- | -------- | ---------- |
+| OBJ, one part                | 320,000   | 1     | 1         | 8.4 MiB  | 469 ms  | 56 ms    | 19 ms    | 0          |
+| 3MF, one part                | 320,000   | 1     | 1         | 2.09 MiB | 1135 ms | 56 ms    | 19 ms    | 0          |
+| 3MF, 1,000 shared placements | 1,152,000 | 1,000 | 1         | 13.6 KiB | 53 ms   | 26 ms    | 17 ms    | 0          |
+| OBJ, 400 shared placements   | 460,800   | 400   | 1         | 12.7 MiB | 672 ms  | 19 ms    | 18 ms    | 0          |
+
+**The busy gap is indistinguishable from the idle gap** — 17–19 ms against a
+~16 ms frame budget — in every case, and Chromium reported **no long task at
+all**. Twenty-nine to ninety-seven frames were delivered during each export.
+
+The idle baselines are sometimes HIGHER than the busy ones (56 ms against 19 ms
+on the single-part cases). That is the page still settling after a
+320,000-triangle document was uploaded and framed, and it is reported rather
+than tidied away: it means these numbers understate rather than overstate how
+quiet the export itself is.
+
+### Interaction, not just frames
+
+A frame loop can keep ticking while input queues behind work, so each format is
+also measured by hovering and clicking a real production control — the
+viewport's Fit view — while the export runs.
+
+| Case | Interaction | Export duration |
+| ---- | ----------- | --------------- |
+| OBJ  | 177 ms      | 582 ms          |
+| 3MF  | 167 ms      | 1235 ms         |
+
+The interaction completes long before the export does, which is the claim that
+matters: the page answered while the work was still going.
+
+### Cancellation
+
+| Case | Request → terminal | Cancelled operation | Uncancelled |
+| ---- | ------------------ | ------------------- | ----------- |
+| OBJ  | 0 ms               | 165 ms              | 652 ms      |
+| 3MF  | 0 ms               | 315 ms              | 1255 ms     |
+
+Cancel is requested a quarter of the way into the work, so this is termination
+reaching a serialiser that is already running rather than one that has not
+started. Request-to-terminal is 0 ms because `terminate()` is synchronous. The
+operation stops at about a quarter of its uncancelled duration, no bytes are
+published, the worker and channel return to zero, and a retry succeeds.
+
+### Validation is inside every window
+
+Every measurement above spans the complete export. The phase timeline is
+asserted, not assumed — a window that stopped when the bytes existed fails the
+test rather than quietly reporting a better number. For the single-part 3MF:
+
+| Phase                          | Duration |
+| ------------------------------ | -------- |
+| XML generation                 | 268 ms   |
+| deflate + archive              | 300 ms   |
+| parse-back (inflate + compare) | 299 ms   |
+
+Parse-back is 26% of that export and is measured with everything else.
+
+### The sharing advantage, in a browser
+
+The same 400-placement document: **12.7 MiB of OBJ in 672 ms against 11.4 KiB of
+3MF in 25 ms — a 1,140× expansion.** OBJ has no instancing, so four hundred
+placements are four hundred copies; 3MF writes the geometry once. The assertion
+is on the RATIO between the two formats rather than on a byte count, so it says
+the same thing on any machine.
+
+### These do not replace the Node benchmarks
+
+They answer a different question. `npm run bench:export` measures throughput and
+scaling; this measures whether the interface survives it. Both are kept.
