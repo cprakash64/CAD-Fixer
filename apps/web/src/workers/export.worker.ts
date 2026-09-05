@@ -5,9 +5,9 @@ import {
   DEFAULT_IMPORT_BUDGET,
   exportDocument,
   exportRefusalOf,
-  MeshFormatId,
 } from '@cadfixer/file-formats';
 import { toAppError, uncancellable } from '@cadfixer/shared';
+import { resolveExportTarget } from './export-protocol';
 import type {
   ExportPortMessage,
   ExportSnapshotMessage,
@@ -30,11 +30,6 @@ import type {
  * directly from it over a `MessageChannel`, so killing this thread can take
  * nothing authoritative with it — and the page never holds a coordinate.
  */
-
-const TARGETS: Readonly<Record<string, MeshFormatId>> = {
-  obj: MeshFormatId.Obj,
-  '3mf': MeshFormatId.ThreeMf,
-};
 
 function post(message: ExportWorkerOutbound, transfer?: Transferable[]): void {
   if (transfer === undefined) self.postMessage(message);
@@ -121,7 +116,7 @@ async function* inflateRaw(compressed: Uint8Array): AsyncIterable<Uint8Array> {
 const decoder = new TextDecoder('utf-8', { fatal: false });
 
 async function run(message: ExportSnapshotMessage): Promise<void> {
-  const target = TARGETS[message.target];
+  const target = resolveExportTarget(message.target);
   if (target === undefined) {
     post({
       kind: 'failed',

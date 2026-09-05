@@ -80,6 +80,10 @@ function partDescriptor(): PartDescriptor {
     vertexCount: 12,
     bounds: undefined,
     meshResourceIndex: 0,
+    groupCount: 0,
+    groupMaterialRefCount: 0,
+    hasNormals: false,
+    hasUvs: false,
   };
 }
 
@@ -106,6 +110,8 @@ function loadModel(store: WorkspaceStore): DocumentHandle {
       formatId: 'stl',
       encoding: 'binary',
       unit: undefined,
+      unsupportedFeatures: [],
+      externalReferences: [],
       importedAt: 0,
     },
     bounds: undefined,

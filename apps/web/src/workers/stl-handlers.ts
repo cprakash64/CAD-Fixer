@@ -293,6 +293,21 @@ export function describeParts(document: GeometryDocument): readonly PartDescript
       index = resourceIndex.size;
       resourceIndex.set(part.mesh, index);
     }
+    /*
+     * CONVERSION FEATURES, COUNTED PER PART FROM THE PART'S OWN MESH.
+     *
+     * Cheap by construction: a group list is a handful of entries and
+     * `normals`/`uvs` are presence checks, so this touches no coordinate and
+     * costs the same whether the mesh has ten triangles or ten million. Two
+     * parts sharing one mesh report the same numbers, which is correct — they
+     * are describing the same geometry.
+     */
+    const groups = part.mesh.groups ?? [];
+    let groupMaterialRefCount = 0;
+    for (const group of groups) {
+      if (group.materialRef !== undefined) groupMaterialRefCount += 1;
+    }
+
     descriptors.push({
       partId: part.id,
       ...(part.name === undefined ? {} : { name: part.name }),
@@ -301,6 +316,11 @@ export function describeParts(document: GeometryDocument): readonly PartDescript
       vertexCount: vertexCount(part.mesh),
       bounds: localBounds.get(part.mesh),
       meshResourceIndex: index,
+      ...(part.materialRef === undefined ? {} : { materialRef: part.materialRef }),
+      groupCount: groups.length,
+      groupMaterialRefCount,
+      hasNormals: part.mesh.normals !== undefined,
+      hasUvs: part.mesh.uvs !== undefined,
     });
   }
 
@@ -579,6 +599,7 @@ export function commitImportedDocument(
     formatId: input.formatId,
     encoding: input.encoding,
     unsupportedFeatures: input.compatibility.unsupported,
+    externalReferences: input.compatibility.externalReferences,
     unit: document.unit,
     bounds,
     triangleCount: documentTriangles,

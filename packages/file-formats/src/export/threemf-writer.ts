@@ -282,6 +282,15 @@ export async function write3mfDocument(
   if (snapshot.parts.some((part) => part.materialRef !== undefined)) {
     observations.push(ExportObservation.MaterialReferencesPreserved);
   }
+  /*
+   * RECORDED WHEN THE UNIT CAME FROM A PERSON, not from the document.
+   *
+   * The file now states something the model never did. That is the one fact in
+   * this list whose source is a user rather than geometry, and it belongs in
+   * the artifact's own record of what happened rather than only in the dialog
+   * that asked the question.
+   */
+  if (snapshot.unitAsserted) observations.push(ExportObservation.UnitAssertedByUser);
 
   return {
     bytes,

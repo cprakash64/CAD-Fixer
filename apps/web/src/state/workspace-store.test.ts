@@ -23,6 +23,10 @@ function sampleModel(fileName: string): Omit<LoadedModel, 'revision'> {
         vertexCount: 3,
         bounds: undefined,
         meshResourceIndex: 0,
+        groupCount: 0,
+        groupMaterialRefCount: 0,
+        hasNormals: false,
+        hasUvs: false,
       },
     ],
     render: {
@@ -54,6 +58,8 @@ function sampleModel(fileName: string): Omit<LoadedModel, 'revision'> {
       formatId: 'stl',
       encoding: 'binary',
       unit: undefined,
+      unsupportedFeatures: [],
+      externalReferences: [],
       importedAt: 0,
     },
   };

@@ -193,22 +193,52 @@ items, component instances and all six units, and never resolves a texture, a
 material library or an external reference. See
 [ADR 0015](adr/0015-production-obj-and-3mf-import.md).
 
-**Only STL can be WRITTEN BY THE PRODUCT.** Stage 4A-2B2 built a validated OBJ
-and 3MF export ENGINE — `exportDocument` serialises a document snapshot in a
-disposable worker, reads the bytes back with the production reader, and returns
-an artifact only if the two agree — but nothing in the application calls it. The
-only caller is the end-to-end harness bridge, which is not in the application
-build. Until Stage 4A-2B3 wires the conversion workflow, the Convert workflow
-stays visibly unavailable and the Model panel says STL is the only format that
-can be written. See [ADR 0016](adr/0016-validated-document-export.md). Capability is declared in
-`file-formats/capabilities` rather than read from the registry, because the
-registry is populated inside the worker and is legitimately empty on the main
-thread — a test asserts the declaration matches what actually registers.
+**Since Stage 4A-2B3, all three can also be WRITTEN.** `exportDocument`
+serialises a document snapshot in a disposable worker, reads the bytes back with
+the PRODUCTION reader, and returns an artifact only if the two agree — for STL,
+OBJ and 3MF alike. The user reaches it through one primary `Export / Convert`
+action. See [ADR 0017](adr/0017-format-conversion-workflow.md). Capability is
+declared in `file-formats/capabilities` rather than read from the registry,
+because the registry is populated inside the worker and is legitimately empty on
+the main thread — a test asserts the declaration matches what actually
+registers.
+
+#### What each format carries
+
+|                                | STL                                                | OBJ                                  | 3MF                        |
+| ------------------------------ | -------------------------------------------------- | ------------------------------------ | -------------------------- |
+| triangle geometry              | yes                                                | yes                                  | yes                        |
+| physical unit                  | none — the format has no field                     | none                                 | yes, one of six tokens     |
+| parts                          | none — one implicit object                         | one `o` per part                     | one object per part        |
+| placements                     | baked into coordinates                             | baked into coordinates               | kept as `<item transform>` |
+| shared geometry                | expanded, one copy each                            | expanded, one copy each              | one object, many items     |
+| part names                     | dropped                                            | kept (generated when absent)         | kept                       |
+| face groups                    | dropped                                            | kept as `g` / `usemtl`               | dropped by this writer     |
+| part material reference        | dropped                                            | dropped (OBJ has no per-object slot) | kept as an opaque `pid`    |
+| normals / UVs                  | not written                                        | not written                          | not written                |
+| materials, textures            | never written; `mtllib` is never emitted or opened |                                      |                            |
+| imported 3MF component nesting | not retained on import, so never rebuilt           |                                      |                            |
+
+Coordinates are NEVER rescaled in either direction. A unit says what the numbers
+mean, not what they are, so a 3MF stating inches exported as OBJ keeps the same
+numbers and loses the label — and the workflow says exactly that before the
+click.
+
+#### Export-time unit assertion
+
+3MF must declare a unit and CAD Fixer will not invent one. A document that
+states none is BLOCKED for 3MF until the user picks one of the six; there is no
+default, no preselection and no inference from filename, dimensions, extension
+or printer convention. The choice labels the numbers and resizes nothing, it
+applies to that export only, and the authoritative document keeps saying it does
+not know. The 3MF writer stays fail-closed independently of the interface. See
+[ADR 0017](adr/0017-format-conversion-workflow.md).
 
 ### Export runs in a second disposable worker
 
-Since Stage 4A-2B2 a document can be written as OBJ or 3MF bytes. The path has
-two hops and the page is not in the middle: the controller creates a
+Since Stage 4A-2B2 a document can be written as OBJ or 3MF bytes, and since
+Stage 4A-2B3 as whole-document STL as well. The path has two hops and the page
+is not in the middle: the controller creates a
 `MessageChannel`, hands one port to the authoritative worker and one to a
 disposable export worker, and a document SNAPSHOT — one copy per distinct mesh,
 never one per placement — travels between them. The finished file comes back to
@@ -220,6 +250,19 @@ would be honest for the writer loops and a lie for the compressor.
 
 No export succeeds until its bytes have been read back by the PRODUCTION reader
 and compared against what they were written from. There is no way to skip that.
+
+The serialisers stay in that worker's own chunk. Nothing on the main thread
+imports a writer or a reader by name, and the two constants the page genuinely
+needs — the binary STL container's arithmetic and the six 3MF unit tokens — live
+in leaf modules that import nothing, so reading a compatibility summary cannot
+drag a codec into the initial bundle. Boundary tests assert both halves.
+
+**There are two STL exports and they are different operations.**
+`model/export` writes the ACTIVE PART and reports what it left out;
+`writeStlDocument` writes the WHOLE document flattened into one triangle stream.
+The interface names them apart — `Export / Convert…` and `Export active part as
+binary STL` — because two controls both called "Export STL", one writing three
+parts and one writing a third of them, is a silent loss waiting to happen.
 
 ### Cancellation requires yielding
 
@@ -417,9 +460,21 @@ know which kernel is in use. Requirements already established for it:
 
 ## 9. Serialization and export
 
-Writers implement `MeshWriter` and run in a worker. Export produces a `Blob`
-saved through the browser's own download or File System Access path. No export
-path may transmit data.
+Writers run in a worker. Export produces a `Blob` saved through the browser's
+own download path. No export path may transmit data.
+
+Two writer contracts exist, and the difference is the unit of work.
+`MeshWriter` takes one `CanonicalMesh` and backs the active-part STL export.
+The DOCUMENT writers take an `ExportDocumentSnapshot` and back the conversion
+workflow; every one of them goes through `exportDocument`, which validates by
+parse-back. A conversion is not finished when bytes exist — it is finished when
+those bytes have been read back as the same model.
+
+The compatibility report a user reads before deciding is a PURE function of
+scalar document facts, a target and an optional unit assertion. It is derived on
+every render rather than stored, so a report can never describe a revision the
+user has moved off. Its output is machine-readable facts;
+`state/conversion-presentation.ts` is the one place a fact becomes a sentence.
 
 ## 10. Persistence
 
@@ -437,15 +492,15 @@ reviewable act rather than an accident.
 
 ## 12. What is deliberately not implemented
 
-STL, OBJ and 3MF can be read. A validated OBJ and 3MF export engine exists but
-is not reachable from the product; only STL can be written by the application.
-Nothing else is implemented:
+STL, OBJ and 3MF can be read, and all three can be written through a validated
+whole-document conversion workflow. Nothing else is implemented:
 
-No user-facing format conversion, no unit chooser, no conversion-loss report, no
-OBJ polygons, no MTL resolution, no 3MF textures or materials, no exported
-normals or texture coordinates, no reconstruction of an imported 3MF's component
-hierarchy, no welding, no booleans, no connectors, no splitting, no displacement,
-no hollowing, no drainage holes, no wall-thickness analysis, no auth, no billing,
+No unit CONVERSION of any kind — the unit chooser labels numbers and never
+rescales them — no OBJ polygons, no MTL resolution, no 3MF textures or
+materials, no exported normals or texture coordinates, no exported 3MF group or
+property resources, no reconstruction of an imported 3MF's component hierarchy,
+no welding, no booleans, no connectors, no splitting, no displacement, no
+hollowing, no drainage holes, no wall-thickness analysis, no auth, no billing,
 no database, no backend, no analytics, no persistence — and no stub that pretends
 to be any of them.
 
@@ -459,8 +514,14 @@ stored coordinates alone is refused with a stated reason rather than guessed. Se
 Two distinctions the interface is careful about, because both are easy to
 overstate:
 
-- **STL in, STL out is re-export, not conversion.** The Convert workflow stays
-  disabled until a second codec exists.
+- **A conversion is lossless only for what CAD Fixer holds.** Every report says
+  "for supported features", because the claim is about this document and this
+  build — not about the file the user originally had. A 3MF whose textures were
+  never imported still cannot get them back.
+- **Numbers unchanged is not scale preserved.** Exporting a known-unit model as
+  STL or OBJ writes the same coordinates and drops the label. Saying "scale
+  preserved" would imply the file still records how big the model is; both
+  phrases are banned by test.
 - **Structurally valid is not printable.** Validation checks buffer and index
   integrity. It says nothing about whether a model is watertight, manifold, or
   manufacturable.

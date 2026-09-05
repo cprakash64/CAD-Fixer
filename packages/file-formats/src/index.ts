@@ -126,7 +126,9 @@ export {
   ExportObservation,
   ExportStatus,
   expectedObjRoundTrip,
+  expectedStlRoundTrip,
   exportSnapshotOf,
+  planThreeMfObjects,
   snapshotTransferables,
   snapshotTriangleCount,
 } from './export/export-contract';
@@ -137,9 +139,38 @@ export type {
   ExportMetadata,
   ExportPartSnapshot,
   ExportProgressReporter,
+  ExportSnapshotOptions,
   FormatWriteDocumentContext,
   WrittenDocument,
 } from './export/export-contract';
+
+export {
+  analyseConversion,
+  CompatibilityDisposition,
+  CompatibilityFeature,
+  ConversionVerdict,
+  EXPORT_FORMATS,
+  ExportFormat,
+  isExportFormat,
+  sharedPlacementCount,
+  strongerVerdict,
+} from './export/compatibility';
+export type {
+  CompatibilityFact,
+  ConversionCompatibilityReport,
+  ConversionRequest,
+  DocumentFeatureProfile,
+} from './export/compatibility';
+
+export {
+  maxStlDocumentTriangles,
+  stlDocumentByteLength,
+  writeStlDocument,
+} from './export/stl-document-writer';
+export {
+  binaryStlByteLength as stlContainerByteLength,
+  MAX_BINARY_STL_TRIANGLES,
+} from './export/stl-layout';
 
 export {
   EXPORT_REASON_KEY,
@@ -161,5 +192,6 @@ export {
   assertExportSnapshot,
   validate3mfRoundTrip,
   validateObjRoundTrip,
+  validateStlRoundTrip,
 } from './export/validate';
 export { escapeXml } from './threemf/xml-scan';

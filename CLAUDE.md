@@ -13,9 +13,10 @@ matter more than moving fast.
 Five workflows are planned: **Repair, Convert, Split, Texture, Hollow**. Target
 formats: **STL, OBJ, 3MF**.
 
-**Current stage: Stage 4A-2B2 complete — a validated OBJ and 3MF EXPORT ENGINE,
-on top of production OBJ/3MF import, the multi-part geometry document foundation
-and conservative deterministic repair.** The engine, the transaction and the user workflow are all
+**Current stage: Stage 4A-2B3 complete — a USER-FACING FORMAT CONVERSION
+WORKFLOW over the validated export engine, on top of production STL/OBJ/3MF
+import, the multi-part geometry document foundation and conservative
+deterministic repair.** The engine, the transaction and the user workflow are all
 production. Implemented: structural STL encoding detection, hand-written binary
 and ASCII STL parsers with resource budgets, worker-based parsing with progress
 and working cancellation, a real Three.js viewport with camera controls, model
@@ -40,11 +41,13 @@ returns that format's reader, every reader produces a `GeometryDocument`, and
 `docs/adr/0015-production-obj-and-3mf-import.md`.
 
 NOT implemented, and not to be implemented unless a task explicitly asks:
-tolerance welding, hole filling, booleans, remeshing, an OBJ writer, a 3MF
-writer, format conversion, OBJ polygons, MTL resolution, 3MF textures or
-materials, splitting, connectors, texturing, hollowing, drainage holes,
-wall-thickness analysis, inter-part overlap detection, redo, multi-step undo,
-transform editing, and any repair that is not one of the four conservative
+tolerance welding, hole filling, booleans, remeshing, UNIT CONVERSION of any
+kind, OBJ polygons, MTL resolution, 3MF textures or materials, exported normals
+or texture coordinates, exported 3MF group or property resources, reconstruction
+of an imported 3MF's component hierarchy, splitting, connectors, texturing,
+hollowing, drainage holes, wall-thickness analysis, inter-part overlap
+detection, redo, multi-step undo, transform editing, a persistent "set model
+units" document edit, and any repair that is not one of the four conservative
 operations.
 
 Stage 4A-2B2 added a validated OBJ and 3MF export ENGINE: `exportDocument`
@@ -52,14 +55,10 @@ serialises a document snapshot, reads the bytes back with the PRODUCTION reader,
 and returns an artifact only if the two agree. See
 `docs/adr/0016-validated-document-export.md`.
 
-**THE EXPORT ENGINE EXISTS; THE USER-FACING WORKFLOW DOES NOT.** The only caller
-is the end-to-end harness bridge, which is not in the application build. There
-is deliberately no production URL, query parameter or hidden control that reaches
-it. Until Stage 4A-2B3 wires the conversion workflow, the shipped product still
-writes STL and nothing else: Convert stays disabled, and the Model panel states
-that STL is the only format that can be written before the user reaches Export.
-Do not add a Save-as-OBJ or Save-as-3MF control to the application in the
-meantime.
+Stage 4A-2B3 made all three formats writable and put a workflow in front of the
+engine: a whole-document STL writer, a deterministic conversion compatibility
+report, and an export-local unit assertion for 3MF. See
+`docs/adr/0017-format-conversion-workflow.md`.
 
 **Topology diagnoses; it never repairs.** Connectivity is recovered from exact
 stored coordinates with no tolerance, and analysis leaves the canonical buffers
@@ -136,7 +135,8 @@ packages/shared/            typed errors, units, ids, cancellation
 packages/mesh-core/         canonical mesh + multi-part document + validation
 packages/file-formats/      format descriptors, screening, budgets, identification,
                             STL codec, OBJ + 3MF readers, bounded ZIP and XML,
-                            validated OBJ + 3MF document writers (src/export/)
+                            validated STL + OBJ + 3MF document writers, and the
+                            conversion compatibility policy (src/export/)
 packages/mesh-topology/     read-only topology analysis (no mutation, no welding)
 packages/mesh-repair/       conservative deterministic repair (kernel-free)
 packages/geometry-runtime/  worker protocol, coordinator, worker host
@@ -389,6 +389,78 @@ believing it.
   test-only structural checkers that share no code with production, and a
   boundary test keeps them out of it.
 
+## Conversion workflow invariants (Stage 4A-2B3)
+
+- **THE REPORT DESCRIBES THE DOCUMENT, NEVER THE TARGET'S NAME.** "OBJ loses
+  units" is a fact about OBJ; whether THIS conversion loses one depends on
+  whether this document has one. Never warn about a feature the current document
+  does not contain — a panel that warns about everything is a panel nobody
+  reads.
+- **`analyseConversion` IS PURE AND IS THE ONLY JUDGE.** Scalars in, facts out.
+  Everything the workflow shows, enables and disables comes from it; nothing
+  recomputes any part of it independently. Policy correctness is established in
+  `compatibility.test.ts`, not end to end.
+- **THE REPORT IS DERIVED ON EVERY RENDER, NEVER STORED.** That is the whole
+  stale-dialog answer: there is no saved report, so none can authorise an export
+  at a revision it was not built from. Never add a `report` field to the store.
+- **VERDICT PRECEDENCE IS FROZEN**: `BLOCKED > UNSUPPORTED_INPUT_FEATURE >
+LOSSY_STRUCTURE > LOSSY_METADATA > LOSSLESS_FOR_SUPPORTED_FEATURES`. A
+  SOURCE-IMPORT WARNING NEVER TOUCHES THE VERDICT — a texture that was never
+  imported is not something this conversion is doing.
+- **`UNSUPPORTED_INPUT_FEATURE` IS FOR PER-VERTEX ATTRIBUTES THE DOCUMENT
+  ACTUALLY CARRIES.** Do not put import warnings there.
+- **SOURCE IMPORT WARNINGS LIVE ON `ModelSource` FOR THE LIFE OF THE MODEL.**
+  They are file metadata, not geometry identity: no handle or revision compares
+  them, a repair does not change them, and the next import replaces them
+  wholesale. Shown in their own section, and they do not move when the target
+  changes.
+- **NO UNIT DEFAULT, ANYWHERE.** `document.unit === undefined` + 3MF is
+  `BLOCKED`. Six choices, nothing preselected, an empty `<select>` value and a
+  disabled placeholder option — a select with no explicit value reports its
+  first option, which would be CAD Fixer asserting microns for the user.
+- **A UNIT ASSERTION IS EXPORT-LOCAL AND NEVER RESCALES.** It rides on the
+  disposable snapshot; the authoritative document keeps `unit: undefined` and
+  its revision does not move. `exportSnapshotOf` applies it ONLY when the
+  document states none, and the AUTHORITATIVE WORKER decides that — not the
+  page, which holds a mirror. The 3MF writer stays fail-closed regardless.
+- **EXPORTING IS A READ.** No revision, no undo entry, no change to geometry,
+  transforms, part order, sharing or unit — for every target.
+- **WHOLE DOCUMENT MEANS WHOLE DOCUMENT.** Every target in this workflow writes
+  every part. `activePartId` must not reach it. The active-part STL export is a
+  DIFFERENT operation (`model/export`) and both are labelled with which they
+  are; never let two controls both read "Export STL".
+- **STL FLATTENS INTO THE OUTPUT BUFFER AND NOWHERE ELSE.** There is no
+  flattened `CanonicalMesh`, authoritative or otherwise, and exporting twice
+  from one snapshot must produce identical bytes.
+- **STL FACET NORMALS COME FROM THE TRANSFORMED TRIANGLE.** A reflection
+  reverses orientation, so a copied normal points into the solid. A degenerate
+  triangle gets a ZERO normal — never an invented direction, never `NaN`.
+- **THE STL PREFLIGHT IS EXACT**: `84 + n * 50`, checked before the single
+  allocation, ceiling `min(floor((maxOutputBytes - 84) / 50), 2^32 - 1)`. OBJ
+  keeps a genuine LOWER bound; 3MF gets no preflight, because its size depends
+  on compression and a made-up bound would lie in one direction or the other.
+- **CONVERSION COPY LIVES IN `apps/web/src/state/conversion-presentation.ts`,
+  all of it.** The switch is exhaustive with no `default` on purpose. Banned by
+  test: `scale preserved`, `units converted`, `lossless conversion`, `nothing is
+lost`, `printable`, `watertight`, and the rest. **"The numbers are unchanged"
+  and "the scale is preserved" are not the same statement** — the approved
+  sentence says both halves.
+- **SEVERITY IS PROPORTIONATE.** Only a blocker gets the strongest register.
+  Every section states its meaning in words, so nothing depends on colour.
+- **THE SERIALISERS STAY OFF THE MAIN THREAD.** No main-thread file may import a
+  writer or reader by name, and the two constants the page needs live in leaf
+  modules that import nothing — `export/stl-layout.ts` and `threemf/units.ts`.
+  This was got wrong once: the policy imported `84 + n * 50` from the STL writer
+  and arrived carrying `stl/detect.ts`'s module-scope keyword tables. Two
+  boundary tests hold the line.
+- **THE EXPORT WORKER IS BUILT ONLY WHEN AN EXPORT STARTS.** Opening the dialog,
+  choosing a target and picking a unit must construct nothing.
+- **`ExportRefusal.UnsupportedTarget` LIVES AT `resolveExportTarget`**, which is
+  where an untrusted target STRING arrives. It was removed from `exportDocument`
+  because every `MeshFormatId` is now writable and the guard had become
+  type-dead. The lookup uses `hasOwnProperty`, so `constructor` and `__proto__`
+  are not formats.
+
 ## Repair invariants (Stage 3B-1)
 
 - **ONE GEOMETRY KERNEL IN PRODUCTION, CONFINED TO ONE WORKER.** As of Stage
@@ -563,13 +635,14 @@ believing it.
   remaining difference was predicted before the rebuild and confirmed after it —
   including a boundary-edge count that rose because a duplicate that was hiding
   an opening has been removed. Never label one of those an error.
-- **Never register a stub codec.** All three READERS are real, and STL is the
-  only real WRITER — so `requireWriter('obj')` and `requireWriter('3mf')` must
-  keep failing loudly rather than returning a placeholder. Two tests hold this
-  line: `registry.test.ts` asserts an unimplemented direction throws, and
-  `capabilities.test.ts` asserts the capability list the UI reads matches
-  exactly what actually registers, so the interface cannot advertise something
-  that does not work.
+- **Never register a stub codec.** All three READERS are real. The `MeshWriter`
+  registry still holds only STL, because it is the single-MESH contract the
+  active-part export uses — `requireWriter('obj')` and `requireWriter('3mf')`
+  must keep failing loudly rather than returning a placeholder. DOCUMENT writing
+  is a different contract (`exportDocument`) and covers all three. Two tests
+  hold this line: `registry.test.ts` asserts an unimplemented direction throws,
+  and `capabilities.test.ts` asserts the capability list the UI reads matches
+  exactly what actually registers.
 
 ## Out of scope right now
 

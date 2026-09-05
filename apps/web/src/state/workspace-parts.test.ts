@@ -33,6 +33,10 @@ function descriptor(partId: string, triangleCount: number, name?: string): PartD
     vertexCount: triangleCount * 3,
     bounds: undefined,
     meshResourceIndex: 0,
+    groupCount: 0,
+    groupMaterialRefCount: 0,
+    hasNormals: false,
+    hasUvs: false,
   };
 }
 
@@ -61,6 +65,8 @@ function modelWith(parts: readonly PartDescriptor[]): Omit<LoadedModel, 'revisio
       formatId: 'stl',
       encoding: 'binary',
       unit: undefined,
+      unsupportedFeatures: [],
+      externalReferences: [],
       importedAt: 0,
     },
     bounds: undefined,

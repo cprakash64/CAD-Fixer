@@ -245,6 +245,39 @@ export function validateObjRoundTrip(expected: GeometryDocument, parsed: Geometr
   }
 }
 
+/* ------------------------------------------------------------------ STL -- */
+
+/**
+ * Compares an STL read-back against what a whole-document STL export becomes.
+ *
+ * THE STRUCTURAL LOSSES ARE ASSERTED, not tolerated. A file that came back with
+ * two parts, a non-identity placement or a unit would mean the writer had done
+ * something this format cannot express — so each of those is checked explicitly
+ * rather than left out of the comparison because "STL cannot have one anyway".
+ */
+export function validateStlRoundTrip(expected: GeometryDocument, parsed: GeometryDocument): void {
+  if (parsed.unit !== undefined) {
+    fail('unit', { expected: 'undefined', actual: parsed.unit });
+  }
+  if (parsed.parts.length !== 1) {
+    fail('part count', { expected: 1, actual: parsed.parts.length });
+  }
+
+  const expectedPart = expected.parts[0];
+  const actual = parsed.parts[0];
+  if (expectedPart === undefined || actual === undefined) fail('missing part', { partIndex: 0 });
+
+  compareCorners(expectedPart.mesh, actual.mesh, 0);
+
+  // A NON-IDENTITY PLACEMENT HERE WOULD MEAN A BAKE THAT DID NOT HAPPEN. STL
+  // states no transform, so the reader can only ever produce the identity —
+  // which is exactly why a difference would be evidence of a defect elsewhere.
+  for (const value of actual.transform) {
+    if (value !== 0 && value !== 1) fail('transform not identity', { partIndex: 0 });
+  }
+  if (actual.name !== undefined) fail('name', { partIndex: 0 });
+}
+
 /* ------------------------------------------------------------------ 3MF -- */
 
 /**

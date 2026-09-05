@@ -32,7 +32,11 @@ import {
 import { ExportRefusal, exportRefusalOf } from './export-errors';
 import { exportDocument } from './export-document';
 import { writeObjDocument } from './obj-writer';
-import { testExportReadContext, testWriteContext } from './test-context';
+import {
+  testExportReadContext,
+  testWriteContext,
+  testWriteContextWithDeflate,
+} from './test-context';
 import { checkObjStructure, inspectObj } from './obj-oracle';
 
 /**
@@ -602,18 +606,34 @@ describe('OBJ-W18 and malformed requests', () => {
     );
   });
 
-  it('refuses a target CAD Fixer cannot write', async () => {
-    await expectRefusal(
-      async () =>
-        exportDocument({
-          snapshot: exportSnapshotOf(documentOf([{ mesh: TRIANGLE }]), 'doc-1', 1),
-          target: MeshFormatId.Stl,
-          write: testWriteContext(),
-          read: testExportReadContext(),
-        }),
-      AppErrorCode.InvalidState,
-      ExportRefusal.UnsupportedTarget,
-    );
+  /*
+   * STL USED TO BE REFUSED HERE, and Stage 4A-2B3 made it a target.
+   *
+   * The old assertion said `exportDocument` refused `MeshFormatId.Stl` with
+   * `EXPORT_UNSUPPORTED_TARGET`, which was true while whole-document STL did
+   * not exist. It now does, so the assertion is replaced by the statement that
+   * took its place rather than deleted: every format CAD Fixer can identify is
+   * a format it can write a document to, and each one goes through the same
+   * validated transaction.
+   *
+   * The refusal itself has not gone away — it moved to the boundary an
+   * untrusted target STRING arrives through, which is the export worker, and is
+   * asserted in `apps/web/src/workers/export-target.test.ts`.
+   */
+  it('writes every format the document layer knows, through the one transaction', async () => {
+    const snapshotFor = (): ExportDocumentSnapshot =>
+      exportSnapshotOf(documentOf([{ mesh: TRIANGLE }], LengthUnit.Millimeter), 'doc-1', 1);
+
+    for (const target of [MeshFormatId.Stl, MeshFormatId.Obj, MeshFormatId.ThreeMf]) {
+      const written = await exportDocument({
+        snapshot: snapshotFor(),
+        target,
+        write: testWriteContextWithDeflate(),
+        read: testExportReadContext(),
+      });
+      expect(written.metadata.formatId, `${target} produced the wrong format id`).toBe(target);
+      expect(written.bytes.byteLength).toBeGreaterThan(0);
+    }
   });
 });
 

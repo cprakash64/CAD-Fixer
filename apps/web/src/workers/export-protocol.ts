@@ -1,4 +1,8 @@
-import type { ExportDocumentSnapshot, ExportMetadata } from '@cadfixer/file-formats';
+import {
+  MeshFormatId,
+  type ExportDocumentSnapshot,
+  type ExportMetadata,
+} from '@cadfixer/file-formats';
 
 /**
  * THE EXPORT CHANNEL PROTOCOL.
@@ -65,3 +69,30 @@ export type ExportWorkerOutbound =
       readonly reason: string | undefined;
       readonly message: string;
     };
+
+/**
+ * THE TARGETS THIS BUILD WILL WRITE, and the only place a target STRING becomes
+ * a format.
+ *
+ * The boundary matters more than the table. `target` arrives as text on a
+ * message, and `exportDocument` takes a `MeshFormatId` — so this lookup is
+ * where an unrecognised target has to be refused. A missing entry returns
+ * `undefined` rather than a plausible default, because defaulting an unknown
+ * target would write one format while the caller asked for another.
+ *
+ * `stl` HERE MEANS THE WHOLE DOCUMENT, flattened into one triangle stream. It
+ * is NOT `model/export`, which writes the active part and reports what it left
+ * out. Two questions, two operations.
+ */
+export const EXPORT_TARGETS: Readonly<Record<string, MeshFormatId>> = Object.freeze({
+  stl: MeshFormatId.Stl,
+  obj: MeshFormatId.Obj,
+  '3mf': MeshFormatId.ThreeMf,
+});
+
+/** Resolves an untrusted target string, or `undefined` when it is not one. */
+export function resolveExportTarget(target: string): MeshFormatId | undefined {
+  return Object.prototype.hasOwnProperty.call(EXPORT_TARGETS, target)
+    ? EXPORT_TARGETS[target]
+    : undefined;
+}

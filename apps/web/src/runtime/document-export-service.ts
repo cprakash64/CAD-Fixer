@@ -27,6 +27,8 @@ import type { ExportWorkerOutbound } from '../workers/export-protocol';
  */
 
 export const ExportTarget = {
+  /** The WHOLE document, flattened. Not `model/export`, which writes one part. */
+  Stl: 'stl',
   Obj: 'obj',
   ThreeMf: '3mf',
 } as const;
@@ -36,6 +38,15 @@ export type ExportTarget = (typeof ExportTarget)[keyof typeof ExportTarget];
 export interface DocumentExportRequest {
   readonly handle: DocumentHandle;
   readonly target: ExportTarget;
+  /**
+   * What the user stated this document's numbers mean, for this export only.
+   *
+   * Sent as given; the AUTHORITATIVE worker decides whether it applies, and it
+   * applies only to a document that states no unit of its own. The page is not
+   * the guard here — it cannot be, because it holds a mirror of the document
+   * rather than the document.
+   */
+  readonly unitAssertion?: string;
   /** Bounded scalar progress. Never geometry. */
   readonly onProgress?: (fraction: number, note: string | undefined) => void;
 }
@@ -269,6 +280,7 @@ export class DocumentExportService {
         target: request.target,
         operationId,
         port: channel.port1,
+        ...(request.unitAssertion === undefined ? {} : { unitAssertion: request.unitAssertion }),
       })
       .catch((cause: unknown) => {
         if (this.activeOperationId !== operationId) return;

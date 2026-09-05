@@ -133,6 +133,7 @@ describe('worker result path', () => {
           formatId: 'stl',
           encoding: 'binary',
           unsupportedFeatures: [],
+          externalReferences: [],
           unit: undefined,
           bounds: undefined,
           triangleCount: 4,

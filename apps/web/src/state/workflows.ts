@@ -39,10 +39,21 @@ export const WORKFLOWS: readonly WorkflowDescriptor[] = Object.freeze([
     implemented: true,
   },
   {
+    /*
+     * FLIPPED IN STAGE 4A-2B3, and the summary was rewritten with it for the
+     * same reason Repair's was: the old line promised translation between three
+     * formats while the product could write exactly one of them.
+     *
+     * It says WHOLE DOCUMENT because that is the distinguishing fact — the
+     * active-part STL export in the Model panel is a different, smaller thing —
+     * and it promises a report rather than fidelity, because what survives
+     * depends on the model and on the target and is answered per conversion.
+     */
     id: WorkflowId.Convert,
     label: 'Convert',
-    summary: 'Translate between STL, OBJ, and 3MF.',
-    implemented: false,
+    summary:
+      'Save the whole document as STL, OBJ or 3MF, after reading what the chosen format keeps and what it cannot.',
+    implemented: true,
   },
   {
     id: WorkflowId.Split,
