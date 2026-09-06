@@ -21,6 +21,11 @@ import {
   holeFillListLoopsHandler,
   holeFillSendForFillHandler,
 } from '../../src/workers/hole-fill-handlers';
+import {
+  holeFillBoundaryPreviewHandler,
+  holeFillCommitHandler,
+  holeFillPatchPreviewHandler,
+} from '../../src/workers/hole-fill-workflow-handlers';
 import { documentSendForExportHandler } from '../../src/workers/export-handlers';
 import {
   repairCommitHandler,
@@ -134,6 +139,9 @@ host.register('model/send-for-diagnostic', modelSendForDiagnosticHandler);
 host.register('holefill/list-loops', holeFillListLoopsHandler);
 host.register('holefill/send-for-fill', holeFillSendForFillHandler);
 host.register('holefill/discard', holeFillDiscardHandler);
+host.register('holefill/boundary-preview', holeFillBoundaryPreviewHandler);
+host.register('holefill/patch-preview', holeFillPatchPreviewHandler);
+host.register('holefill/commit', holeFillCommitHandler);
 host.register('document/send-for-export', documentSendForExportHandler);
 
 host.register('repair/plan', repairPlanHandler);

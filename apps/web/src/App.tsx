@@ -4,6 +4,7 @@ import { ConvertDialog } from './components/ConvertDialog';
 import { ImportDropZone } from './components/ImportDropZone';
 import { MeshHealthPanel } from './components/MeshHealthPanel';
 import { ModelPanel } from './components/ModelPanel';
+import { OpenBoundaryPanel } from './components/OpenBoundaryPanel';
 import { PartSelector } from './components/PartSelector';
 import { RepairPanel } from './components/RepairPanel';
 import { RuntimePanel } from './components/RuntimePanel';
@@ -44,6 +45,11 @@ export function App(): ReactNode {
             area at every width. */}
         <aside className="app__diagnostics">
           <RepairPanel />
+          {/* Beneath conservative repair, and that order is deliberate: several
+              openings are only fillable AFTER neighbouring triangles have been
+              made to agree on their winding, so the workflow that can unblock
+              this one comes first. */}
+          <OpenBoundaryPanel />
           <MeshHealthPanel />
         </aside>
       </div>

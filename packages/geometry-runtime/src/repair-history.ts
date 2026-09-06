@@ -22,11 +22,65 @@ import type { DocumentHandle, DocumentId } from './resident-documents';
  *
  * REDO IS NOT IMPLEMENTED. Undoing retains no forward patch, and nothing here
  * pretends otherwise. See docs/adr/0011.
+ *
+ * ONE STACK FOR EVERY DOCUMENT MUTATION — Stage 4B-1B2. A hole fill is recorded
+ * here too, and reversed by the same `repair/undo` transaction. A second,
+ * hole-specific history would be a second answer to "what does Undo do next",
+ * and the two would eventually disagree about which change is the most recent
+ * one. What differs between the two kinds of change is only HOW the previous
+ * geometry is reconstructed, so that is the only thing the record varies: the
+ * inverse is a discriminated union and everything else — the guards, the
+ * supersession rule, the one-per-document cap, the descriptor trail — is shared.
  */
 
-/** What a committed repair did. Never carries geometry. */
+/**
+ * How a recorded change is reversed.
+ *
+ * TWO SHAPES, BECAUSE THE TWO OPERATIONS ARE GENUINELY DIFFERENT, not because
+ * the union looked tidy:
+ *
+ *   - a conservative repair REMOVES faces and reorders corners within a face,
+ *     so reversing it needs the removed triangles' coordinates back;
+ *   - a hole fill is APPEND-ONLY. The authoritative preservation gate proves the
+ *     candidate's positions are the source's bytes and its index prefix is the
+ *     source's index bytes, so the exact inverse is a single number: the face
+ *     count to truncate back to. Retaining coordinates for it would be storing a
+ *     copy of data that demonstrably has not changed.
+ */
+export const UndoableChangeKind = {
+  ConservativeRepair: 'conservative-repair',
+  HoleFill: 'hole-fill',
+} as const;
+
+export type UndoableChangeKind = (typeof UndoableChangeKind)[keyof typeof UndoableChangeKind];
+
+export type UndoableInverse =
+  | {
+      readonly kind: typeof UndoableChangeKind.ConservativeRepair;
+      readonly patch: RepairInversePatch;
+      readonly byteLength: number;
+    }
+  | {
+      readonly kind: typeof UndoableChangeKind.HoleFill;
+      /** Faces the part had before the patch was appended. The whole inverse. */
+      readonly sourceFaceCount: number;
+      /** Index entries the part had before the patch. Truncation is exact on these. */
+      readonly sourceIndexCount: number;
+      readonly byteLength: number;
+    };
+
+/** What a committed change did. Never carries geometry. */
 export interface RepairHistoryEntry {
   readonly recordId: string;
+  /**
+   * Which kind of change this was.
+   *
+   * The interface needs it to say what Undo would reverse, and the undo handler
+   * needs it to choose a reconstruction. Never inferred from the presence or
+   * absence of a field — an inference is a guess, and this decides which
+   * geometry replaces the user's model.
+   */
+  readonly kind: UndoableChangeKind;
   readonly documentId: DocumentId;
   /**
    * The part whose mesh this repair replaced.
@@ -41,9 +95,12 @@ export interface RepairHistoryEntry {
   readonly parentRevision: number;
   /** Revision the repair produced. */
   readonly resultRevision: number;
+  /** Empty for a hole fill: filling an opening is not one of the four operations. */
   readonly appliedOperations: readonly RepairOperation[];
   readonly planHash: string;
-  /** Bytes the inverse patch occupies while it is still retained. */
+  /** The opening that was filled. Present only for a hole fill. */
+  readonly boundaryLoopId?: string;
+  /** Bytes the inverse occupies while it is still retained. Zero for a hole fill. */
   readonly inverseBytes: number;
   /**
    * Whether this record can still be reversed.
@@ -56,7 +113,7 @@ export interface RepairHistoryEntry {
 
 interface HistoryRecord {
   entry: RepairHistoryEntry;
-  patch: RepairInversePatch | undefined;
+  inverse: UndoableInverse | undefined;
   undone: boolean;
   superseded: boolean;
 }
@@ -68,7 +125,7 @@ export interface RepairHistoryStats {
 }
 
 export interface RepairUndoPreparation {
-  readonly patch: RepairInversePatch;
+  readonly inverse: UndoableInverse;
   readonly entry: RepairHistoryEntry;
 }
 
@@ -97,31 +154,35 @@ export class RepairHistoryStore {
    */
   public record(input: {
     readonly recordId: string;
+    readonly kind: UndoableChangeKind;
     readonly source: DocumentHandle;
     readonly part: PartId;
     readonly result: DocumentHandle;
     readonly appliedOperations: readonly RepairOperation[];
     readonly planHash: string;
-    readonly inverse: RepairInversePatch | undefined;
+    readonly boundaryLoopId?: string;
+    readonly inverse: UndoableInverse | undefined;
   }): RepairHistoryEntry {
     const previous = this.undoableByDocument.get(input.source.documentId);
     if (previous !== undefined) this.release(previous, 'superseded');
 
     const entry: RepairHistoryEntry = {
       recordId: input.recordId,
+      kind: input.kind,
       documentId: input.source.documentId,
       partId: input.part,
       parentRevision: input.source.revision,
       resultRevision: input.result.revision,
       appliedOperations: [...input.appliedOperations],
       planHash: input.planHash,
+      ...(input.boundaryLoopId === undefined ? {} : { boundaryLoopId: input.boundaryLoopId }),
       inverseBytes: input.inverse?.byteLength ?? 0,
       undoable: input.inverse !== undefined,
     };
 
     this.records.set(input.recordId, {
       entry,
-      patch: input.inverse,
+      inverse: input.inverse,
       undone: false,
       superseded: false,
     });
@@ -159,18 +220,18 @@ export class RepairHistoryStore {
   ): RepairUndoPreparation | AppError {
     const record = this.records.get(recordId);
     if (record === undefined) {
-      return modelUnavailable('That repair is no longer available to undo.', { recordId });
+      return modelUnavailable('That change is no longer available to undo.', { recordId });
     }
     if (record.undone) {
-      return invalidState('That repair has already been undone.', { recordId });
+      return invalidState('That change has already been undone.', { recordId });
     }
     if (record.superseded) {
-      return invalidState('A later repair replaced that one, so it can no longer be undone.', {
+      return invalidState('A later change replaced that one, so it can no longer be undone.', {
         recordId,
       });
     }
     if (record.entry.documentId !== expected.documentId) {
-      return invalidState('That repair belongs to a different model.', {
+      return invalidState('That change belongs to a different model.', {
         recordId,
         recordDocumentId: record.entry.documentId,
         requestedDocumentId: expected.documentId,
@@ -186,20 +247,20 @@ export class RepairHistoryStore {
       record.entry.resultRevision !== expected.revision ||
       currentRevision !== record.entry.resultRevision
     ) {
-      return modelUnavailable('The model changed since that repair was applied.', {
+      return modelUnavailable('The model changed since that change was applied.', {
         recordId,
         resultRevision: record.entry.resultRevision,
         requestedRevision: expected.revision,
         currentRevision: currentRevision ?? -1,
       });
     }
-    const patch = record.patch;
-    if (patch === undefined) {
-      return modelUnavailable('The information needed to undo that repair is no longer held.', {
+    const inverse = record.inverse;
+    if (inverse === undefined) {
+      return modelUnavailable('The information needed to undo that change is no longer held.', {
         recordId,
       });
     }
-    return { patch, entry: record.entry };
+    return { inverse, entry: record.entry };
   }
 
   /**
@@ -226,7 +287,7 @@ export class RepairHistoryStore {
 
   /** Releases everything. Worker teardown; Policy A applies. */
   public releaseAll(): void {
-    for (const record of this.records.values()) record.patch = undefined;
+    for (const record of this.records.values()) record.inverse = undefined;
     this.records.clear();
     this.undoableByDocument.clear();
     this.order.length = 0;
@@ -236,7 +297,7 @@ export class RepairHistoryStore {
     let retainedBytes = 0;
     let undoableCount = 0;
     for (const record of this.records.values()) {
-      if (record.patch === undefined) continue;
+      if (record.inverse === undefined) continue;
       undoableCount += 1;
       retainedBytes += record.entry.inverseBytes;
     }
@@ -246,7 +307,7 @@ export class RepairHistoryStore {
   private release(recordId: string, cause: 'undone' | 'superseded'): void {
     const record = this.records.get(recordId);
     if (record === undefined) return;
-    record.patch = undefined;
+    record.inverse = undefined;
     if (cause === 'undone') record.undone = true;
     else record.superseded = true;
     record.entry = { ...record.entry, undoable: false };

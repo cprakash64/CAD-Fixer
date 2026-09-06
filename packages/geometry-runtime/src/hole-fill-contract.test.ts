@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import * as engine from '@cadfixer/mesh-hole-fill';
+import * as topology from '@cadfixer/mesh-topology';
 import * as mirror from './hole-fill';
 
 /**
@@ -52,7 +53,27 @@ describe('the restated hole-fill contract', () => {
     );
   });
 
+  /*
+   * STAGE 4B-1B2. The boundary refusals are restated for the same reason and
+   * carry the same risk: the interface lists and EXPLAINS a refused opening
+   * without any worker running, so a drifted code shows a user a blank
+   * explanation for a refusal the engine can produce every day.
+   */
+  it('has the same boundary refusals as the topology engine', () => {
+    expect(valuesOf(mirror.BoundaryLoopRefusal)).toEqual(valuesOf(topology.BoundaryLoopRefusal));
+    expect(Object.keys(mirror.BoundaryLoopRefusal).sort()).toEqual(
+      Object.keys(topology.BoundaryLoopRefusal).sort(),
+    );
+  });
+
+  it('maps every boundary refusal key to the same value', () => {
+    const original: Record<string, string> = topology.BoundaryLoopRefusal;
+    for (const [key, value] of Object.entries(mirror.BoundaryLoopRefusal)) {
+      expect(original[key], `key ${key} drifted`).toBe(value);
+    }
+  });
+
   it('is compile-time checked in both directions', () => {
-    expect(mirror.HOLE_FILL_CONTRACT_CHECKED).toEqual([true]);
+    expect(mirror.HOLE_FILL_CONTRACT_CHECKED).toEqual([true, true]);
   });
 });

@@ -861,7 +861,6 @@ in under two seconds, leaving zero live workers and zero live channels.
 
 ## Not measured here
 
-Preview and Apply, which do not exist: Stage 4B-1B1 produces candidates only.
 Non-planar filling, batch filling, and PMP, none of which is implemented.
 
 ## R1 — what the closure checks cost (2026-09-06)
@@ -885,3 +884,122 @@ run-to-run noise: 1,286 ms before the closure, 1,267 ms after.
 buffers that already exist — a `memcmp` in all but name, with no second copy of
 the source — and the differential's edge, group and incidence arrays are
 released with the call.
+
+# The hole-fill WORKFLOW (Stage 4B-1B2, 2026-09-06)
+
+What Stage 4B-1B1 could not measure, because it had no user-facing control: the
+cost of the workflow that sits on top of the engine. The engine's own numbers
+above are unchanged — nothing about it was altered.
+
+## Where the time goes, and what each part is
+
+| step                     | what it costs                                     |
+| ------------------------ | ------------------------------------------------- |
+| listing openings         | one `extractBoundaryLoops` pass over the part     |
+| drawing the selected rim | one more such pass, then 6 floats per rim edge    |
+| generating the candidate | the whole engine — measured above, unchanged      |
+| drawing the patch        | reading `n − 2` faces out of the stored candidate |
+| applying                 | guards, one `withPartMesh`, one map-entry swap    |
+| undoing                  | an index truncation and a render-snapshot rebuild |
+
+**The listing is a topology pass, and that is the honest description.** It is the
+same order of work `model/analyze` already does on import, and it is why the
+inventory is fetched once per (revision, part) and cached by nothing else: a
+re-list on every render would be a whole-part walk for a status message.
+
+**The rim is fetched per SELECTION, never per listing.** A model with 20,165
+openings would otherwise move megabytes of line geometry to draw one. What
+crosses is 6 floats per rim edge — at most 3,072 floats for a 512-vertex rim.
+
+**The patch preview is a read, not a computation.** It walks
+`[sourceFaceCount, candidateFaceCount)` and copies nine floats per face: at most
+510 faces for the largest rim the policy allows, so a few kilobytes regardless of
+whether the part has 100 triangles or 250,000. Sending the whole candidate would
+have been the part's own size, a second time, on the page.
+
+**Apply does no geometry work at all.** Identity checks, a structural assertion,
+one `withPartMesh` — which allocates one part record and an array of references —
+and one map-entry swap. The render snapshot for the changed part is rebuilt and
+transferred; every other part's buffers are untouched, which is what keeps a
+thousand-placement document from re-uploading anything.
+
+This is asserted rather than assumed, in two ways. A boundary test checks the
+commit path reaches no engine symbol — no `runHoleFill`, no `earClip`, no
+`assessPlanarity`, no `FaceBvh`, no narrowphase, and no import of
+`@cadfixer/mesh-hole-fill`. And the harness suite measures Apply in a real
+browser against a ceiling far below what a second fill would take. A timing test
+alone would not do: it would pass on a fast machine with the re-run present.
+
+## Measured, in a real browser (2026-09-06)
+
+`npm run test:e2e:harness`, `e2e-harness/hole-fill-workflow.spec.ts`, on the
+WORST CASE THE POLICY ALLOWS: a 512-vertex rim on roughly 100,000 faces. A
+measurement on a cube would say nothing about either ceiling.
+
+| step                       | latency    | what it is                                      |
+| -------------------------- | ---------- | ----------------------------------------------- |
+| boundary inventory         | 936 ms     | import, analysis and the listing, end to end    |
+| selected-rim overlay       | 232 ms     | one loop extraction, then 6 floats per rim edge |
+| candidate generation       | 2,003 ms   | the whole engine, in the disposable worker      |
+| patch snapshot             | 9 ms       | 510 faces read out of the stored candidate      |
+| **apply**                  | **650 ms** | guards, one document update, one swap, redraw   |
+| re-analysis and re-listing | 234 ms     | the new revision, from scratch                  |
+| undo                       | 60 ms      | an index truncation and a snapshot rebuild      |
+
+**These are WALL-CLOCK latencies from the page's point of view** — control
+pressed to result visible — so they include the round trip, the render and the
+test's own polling granularity. They are not a substitute for the engine's phase
+timings above, which are measured in-process and which this stage did not change.
+
+**Apply is 32% of generation, and that ratio is the assertion.** The test
+compares the two on the same machine in the same run rather than against a fixed
+number, because the claim is about the WORK: a commit that re-ran the fill would
+land in the same order as generation. Most of the 650 ms is the render-snapshot
+rebuild and re-upload for a 100,000-face part, not the transaction.
+
+**Undo is 60 ms** because reversing an append is a truncation: one index array
+allocation and a copy, with the position buffer shared rather than rebuilt.
+
+## Browser evidence
+
+`npm run test:e2e:harness`, `e2e-harness/hole-fill-workflow.spec.ts`, on
+documents no shipped importer can produce:
+
+- the production panel paints a progress state during a 512-vertex fill and the
+  Cancel control stays actionable, on the same fixture the engine's own
+  responsiveness proof uses;
+- Cancel terminates the worker, leaves no candidate, no patch, no overlay and no
+  revision movement, and a retry then succeeds on a fresh worker;
+- five preview/discard cycles leave exactly the rim on the GPU, with every patch
+  released — measured from cumulative create and dispose counters the viewport
+  publishes, because a leak that grows and shrinks in step is invisible without
+  them;
+- three apply/undo cycles keep the scene bounded and the revisions monotonic, and
+  each undo restores the part's bytes exactly.
+
+## Bundle
+
+The hole-fill worker was not emitted before this stage, because nothing could
+reach it. It is now its own chunk, and it is constructed only when Preview Fill
+is pressed — opening the app, opening the panel, listing openings and selecting
+one build no `Worker` at all.
+
+| artifact                 | before     | after      | delta    |
+| ------------------------ | ---------- | ---------- | -------- |
+| main JS                  | 897.3 kB   | 931.7 kB   | +34.4 kB |
+| CSS                      | 18.4 kB    | 20.1 kB    | +1.6 kB  |
+| geometry.worker          | 137.5 kB   | 143.8 kB   | +6.4 kB  |
+| hole-fill.worker         | —          | 82.8 kB    | new      |
+| self-intersection.worker | 50.9 kB    | 50.9 kB    | 0        |
+| export.worker            | 65.3 kB    | 65.3 kB    | 0        |
+| Geogram wasm             | 1,272.7 kB | 1,272.7 kB | 0        |
+
+The 34.4 kB of main JS is the panel, the store slice, the hook and the
+presentation module. No engine code is in it: the production boundary scan lists
+every importer of `@cadfixer/mesh-hole-fill`, and none of them is on the main
+thread.
+
+## Not measured here
+
+Non-planar filling, batch filling, seam repair and PMP, none of which is
+implemented.

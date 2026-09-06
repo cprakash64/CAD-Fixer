@@ -4,7 +4,6 @@ import { extractBoundaryLoops } from '@cadfixer/mesh-topology';
 import {
   HOLE_FILL_MAX_BOUNDARY_VERTICES,
   HOLE_FILL_MAX_PART_FACES,
-  HoleFillCandidateStore,
   HoleFillStatus,
   type BoundaryLoopSummary,
   type HoleFillLimits,
@@ -13,7 +12,7 @@ import {
   type ProtocolPort,
 } from '@cadfixer/geometry-runtime';
 import { internalError, invalidState, isAppError, operationCancelled } from '@cadfixer/shared';
-import { residentDocuments } from './stl-handlers';
+import { holeFillCandidates, residentDocuments } from './stl-handlers';
 import type { HoleFillWorkerReply } from './hole-fill-protocol';
 
 /**
@@ -47,8 +46,13 @@ const DEFAULT_LOOP_LIMIT = 256;
  * A module-level singleton exactly as `residentDocuments` is, and for the same
  * reason: there is one authoritative worker, it owns the geometry, and a store
  * created per call would lose a candidate the moment the call returned.
+ *
+ * DECLARED IN `stl-handlers.ts` since Stage 4B-1B2 and re-exported here, so that
+ * `model/release` can release it without this module and that one importing each
+ * other. The re-export keeps every existing caller — and every test — naming it
+ * where the hole-fill code lives.
  */
-export const holeFillCandidates = new HoleFillCandidateStore();
+export { holeFillCandidates };
 
 /**
  * Lists a part's boundary components as ORDERED, TARGETABLE loops.
@@ -105,6 +109,13 @@ export const holeFillListLoopsHandler: OperationHandler<'holefill/list-loops'> =
         loopCount: set.loops.length,
         loops,
         truncated: set.loops.length > loops.length,
+        /*
+         * REPORTED SO A REFUSAL CAN BE STATED BEFORE ANYTHING IS STARTED. A
+         * part above the face ceiling will be refused whichever opening is
+         * chosen; the interface can say so from this number instead of
+         * building a worker and copying the part to be told the same thing.
+         */
+        partFaceCount: triangleCount(part.mesh),
       },
     });
   } catch (cause) {
@@ -271,9 +282,26 @@ export const holeFillSendForFillHandler: OperationHandler<'holefill/send-for-fil
     };
   }
 
+  /*
+   * THE CANDIDATE CARRIES THE SOURCE'S GROUPS FORWARD — Stage 4B-1B2.
+   *
+   * A group is a contiguous run of triangles that came from an OBJ `g` or a 3MF
+   * object, and the exporters write them back. The patch is APPENDED, so every
+   * existing group range still describes exactly the faces it always described
+   * and stays inside the longer index buffer, which is all
+   * `assertMeshStructure` requires of a group. Dropping them would have made
+   * Apply a silent metadata loss: fill one hole and the OBJ you export
+   * afterwards has lost its object structure.
+   *
+   * THE PATCH FACES JOIN NO GROUP, and that is the truthful answer rather than
+   * a gap. They are new geometry the file never carried, so assigning them to
+   * whichever group happened to end last would be CAD Fixer inventing a
+   * membership the user never stated.
+   */
   const candidateMesh: CanonicalMesh = {
     positions: reply.positions,
     indices: reply.indices,
+    ...(part.mesh.groups === undefined ? {} : { groups: part.mesh.groups }),
     metadata: part.mesh.metadata,
   };
   const candidate = holeFillCandidates.create(
@@ -281,6 +309,10 @@ export const holeFillSendForFillHandler: OperationHandler<'holefill/send-for-fil
     part.id,
     payload.boundaryLoopId,
     candidateMesh,
+    // WHERE THE PATCH BEGINS, taken from the SOURCE this candidate was built
+    // from rather than derived from the candidate later. Faces below it are the
+    // user's; faces at or above it are the patch. Frozen here, once.
+    faceCount,
   );
 
   return {

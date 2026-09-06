@@ -1,0 +1,510 @@
+import { expect, test, type Locator, type Page } from '@playwright/test';
+import { Fixture, digest, loadFixture, openHarness, readScene, readState } from './harness';
+
+/**
+ * THE OPEN-BOUNDARY WORKFLOW ON DOCUMENTS NO IMPORTER CAN PRODUCE.
+ *
+ * WHY THIS SUITE EXISTS SEPARATELY FROM `e2e/hole-fill-workflow.spec.ts`. The
+ * shipped application imports STL, OBJ and 3MF, and none of those can hand the
+ * product two parts that SHARE one `CanonicalMesh` object, or a part placed by a
+ * mirrored non-uniform transform, or a 512-vertex rim on a hundred thousand
+ * faces. Those are precisely the cases where filling one part could silently
+ * change another, where a part-local overlay could be drawn at the document
+ * origin, and where a fill takes long enough for responsiveness and
+ * cancellation to mean anything.
+ *
+ * WHAT IS PRODUCTION HERE: the panel, the store, the hook, the service, the
+ * authoritative worker, the disposable fill worker, the kernel and the viewport.
+ * The harness supplies a document and a button to load it, and nothing else.
+ *
+ * THE DIGEST IS THE EVIDENCE FOR ISOLATION. Canonical arrays never leave the
+ * worker; a digest and a byte length come back. Comparing part B's digest before
+ * and after filling part A is a byte-level statement about geometry the page has
+ * never held.
+ */
+
+function opening(page: Page, index: number): Locator {
+  return page.getByTestId(`opening-${String(index)}`);
+}
+
+/**
+ * Points the workflow at one part.
+ *
+ * A NO-OP FOR A SINGLE-PART DOCUMENT, deliberately: `PartSelector` renders
+ * nothing at all when there is only one part — there is nothing to choose — so
+ * the part is already active and waiting for a control that does not exist would
+ * be waiting forever.
+ */
+async function selectPart(page: Page, partId: string): Promise<void> {
+  if ((await readState(page)).activePartId !== partId) {
+    await page.getByTestId(`part-option-${partId}`).click();
+  }
+  await expect.poll(async () => (await readState(page)).activePartId).toBe(partId);
+}
+
+/** Waits until the panel has listed the active part's openings. */
+async function awaitListing(page: Page): Promise<void> {
+  await expect(page.getByTestId('hole-fill-count')).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByTestId('hole-fill-listing')).toHaveCount(0, { timeout: 60_000 });
+}
+
+async function requestPreview(page: Page): Promise<'ready' | 'refused'> {
+  await page.getByTestId('preview-fill').click();
+  await expect(async () => {
+    const ready = await page.getByTestId('hole-fill-candidate').isVisible();
+    const refused = await page.getByTestId('hole-fill-refusal').isVisible();
+    expect(ready || refused).toBe(true);
+  }).toPass({ timeout: 180_000 });
+  return (await page.getByTestId('hole-fill-candidate').isVisible()) ? 'ready' : 'refused';
+}
+
+async function applyFill(page: Page): Promise<void> {
+  await page.getByTestId('apply-fill').click();
+  await expect(page.getByTestId('hole-fill-applied')).toBeVisible({ timeout: 60_000 });
+}
+
+/* --------------------------------------------- HFUX21: shared geometry -- */
+
+test('HFUX21: filling one part of a shared pair leaves the other byte-identical', async ({
+  page,
+}) => {
+  test.setTimeout(300_000);
+  await openHarness(page);
+  const loaded = await loadFixture(page, Fixture.HoleFillSharedPair);
+
+  // ONE MESH RESOURCE FOR TWO PARTS, as the document was built.
+  expect(loaded.partCount).toBe(2);
+  expect(loaded.distinctMeshResources).toBe(1);
+  const before = await digest(page, loaded);
+  const partA = loaded.partIds[0] ?? '';
+  const partB = loaded.partIds[1] ?? '';
+  const digestBBefore = before.parts.find((part) => part.partId === partB);
+  expect(digestBBefore).toBeDefined();
+
+  await selectPart(page, partA);
+  await awaitListing(page);
+  await opening(page, 1).getByRole('radio').check();
+  expect(await requestPreview(page)).toBe('ready');
+  await applyFill(page);
+
+  const after = await readState(page);
+  const afterDigest = await digest(page, after);
+  const digestA = afterDigest.parts.find((part) => part.partId === partA);
+  const digestB = afterDigest.parts.find((part) => part.partId === partB);
+
+  /*
+   * THE HARD GATE (§30). Part A received the candidate; part B is exactly what
+   * it was, byte for byte, and is no longer sharing a resource with A.
+   */
+  expect(digestB?.positionDigest).toBe(digestBBefore?.positionDigest);
+  expect(digestB?.indexDigest).toBe(digestBBefore?.indexDigest);
+  expect(digestB?.positionBytes).toBe(digestBBefore?.positionBytes);
+  expect(digestB?.indexBytes).toBe(digestBBefore?.indexBytes);
+  expect(digestB?.transform).toEqual(digestBBefore?.transform);
+
+  // A genuinely changed: more index bytes, same positions — the fill is
+  // append-only and adds no vertex.
+  const digestABefore = before.parts.find((part) => part.partId === partA);
+  expect(digestA?.indexBytes).toBeGreaterThan(digestABefore?.indexBytes ?? 0);
+  expect(digestA?.positionDigest).toBe(digestABefore?.positionDigest);
+
+  // THE SHARING BROKE WHERE IT HAD TO AND NOWHERE ELSE: two resources now,
+  // because A's geometry genuinely differs from B's.
+  expect(afterDigest.distinctMeshes).toBe(2);
+  expect(after.partCount).toBe(2);
+
+  /*
+   * AND PART B STILL HAS ITS OPENING. The whole failure this case exists to
+   * catch is a fill that silently closes both.
+   */
+  await selectPart(page, partB);
+  await awaitListing(page);
+  await expect(page.getByTestId('hole-fill-count')).toContainText('open bound');
+
+  /*
+   * UNDO RESTORES THE GEOMETRY EXACTLY. Every part's positions and indices come
+   * back byte for byte.
+   *
+   * IT DOES NOT RESTORE OBJECT SHARING, and that is a real, stated limitation
+   * rather than an oversight. Undo is patch-based by design — ADR 0011 chose a
+   * patch over a copy so a 100 MiB import does not cost 100 MiB per undo step —
+   * so the restored part is a NEW mesh object holding the same bytes, not the
+   * object its sibling still holds. The sharing was already broken by the Apply;
+   * the undo does not put it back, so a document that shared one mesh before a
+   * fill holds two equal ones afterwards.
+   *
+   * Asserted rather than glossed, so the day someone makes undo re-share it,
+   * this test tells them the behaviour changed.
+   */
+  await selectPart(page, partA);
+  await awaitListing(page);
+  await page.getByTestId('undo-fill').click();
+  await expect
+    .poll(async () => (await readState(page)).revision ?? 0, { timeout: 60_000 })
+    .toBeGreaterThan(after.revision ?? 0);
+
+  const restored = await digest(page, await readState(page));
+  for (const part of restored.parts) {
+    const original = before.parts.find((entry) => entry.partId === part.partId);
+    expect(part.positionDigest, `${part.partId} positions`).toBe(original?.positionDigest);
+    expect(part.indexDigest, `${part.partId} indices`).toBe(original?.indexDigest);
+    expect(part.positionBytes, `${part.partId} position bytes`).toBe(original?.positionBytes);
+    expect(part.indexBytes, `${part.partId} index bytes`).toBe(original?.indexBytes);
+    expect(part.transform, `${part.partId} placement`).toEqual(original?.transform);
+  }
+  // Equal bytes, separate objects. The documented cost of a patch-based undo.
+  expect(restored.distinctMeshes).toBe(2);
+});
+
+/* ---------------------------------------- HFUX19: switching active part -- */
+
+test('HFUX19: switching parts discards the preview and offers no Apply for the old one', async ({
+  page,
+}) => {
+  test.setTimeout(300_000);
+  await openHarness(page);
+  const loaded = await loadFixture(page, Fixture.HoleFillSharedPair);
+  const partA = loaded.partIds[0] ?? '';
+  const partB = loaded.partIds[1] ?? '';
+
+  await selectPart(page, partA);
+  await awaitListing(page);
+  await opening(page, 1).getByRole('radio').check();
+  expect(await requestPreview(page)).toBe('ready');
+  await expect(page.getByTestId('apply-fill')).toBeVisible();
+
+  await selectPart(page, partB);
+
+  /*
+   * §52. AN ACCIDENTAL CROSS-PART APPLY IS MADE IMPOSSIBLE BEFORE THE ENGINE
+   * WOULD REFUSE ONE. The guard in the worker still exists and still fires; the
+   * point is that the interface never offers the button that would trip it.
+   */
+  await expect(page.getByTestId('apply-fill')).toHaveCount(0);
+  await expect(page.getByTestId('hole-fill-candidate')).toHaveCount(0);
+  await expect(page.getByTestId('patch-preview-banner')).toHaveCount(0);
+  await awaitListing(page);
+
+  // And the document never moved.
+  const state = await readState(page);
+  expect(state.revision).toBe(loaded.revision);
+});
+
+/* ------------------------------- HFUX27, HFUX28: placement and overlays -- */
+
+test('HFUX27, HFUX28: a mirrored, non-uniformly scaled part fills in LOCAL coordinates', async ({
+  page,
+}) => {
+  test.setTimeout(300_000);
+  await openHarness(page);
+  const loaded = await loadFixture(page, Fixture.HoleFillTransformed);
+  const part = loaded.partIds[0] ?? '';
+  const before = await digest(page, loaded);
+  const transformBefore = before.parts[0]?.transform;
+
+  await selectPart(page, part);
+  await awaitListing(page);
+  await opening(page, 1).getByRole('radio').check();
+
+  // The rim overlay exists and rides on the ACTIVE PART's frame. The viewport
+  // publishes its object counts for exactly this kind of check.
+  await expect
+    .poll(async () => (await readScene(page)).holeFillOverlayObjects, { timeout: 30_000 })
+    .toBeGreaterThan(0);
+
+  expect(await requestPreview(page)).toBe('ready');
+  // Rim AND patch are now drawn, both in the same frame.
+  await expect
+    .poll(async () => (await readScene(page)).holeFillOverlayObjects, { timeout: 30_000 })
+    .toBe(2);
+
+  await applyFill(page);
+
+  const after = await digest(page, await readState(page));
+  /*
+   * §58. THE PLACEMENT IS UNTOUCHED AND WAS NEVER BAKED IN. Hole filling is
+   * intra-part and works in part-local coordinates: a reflection and a
+   * non-uniform scale change how the part is DRAWN and change nothing the engine
+   * looks at.
+   */
+  expect(after.parts[0]?.transform).toEqual(transformBefore);
+  expect(after.parts[0]?.positionDigest).toBe(before.parts[0]?.positionDigest);
+  expect(after.parts[0]?.indexBytes).toBeGreaterThan(before.parts[0]?.indexBytes ?? 0);
+
+  // The overlays are gone: the patch is ordinary source geometry now.
+  await expect
+    .poll(async () => (await readScene(page)).holeFillOverlayObjects, { timeout: 30_000 })
+    .toBe(0);
+});
+
+/* ------------------------------------------- HFUX10, HFUX11: cancelling -- */
+
+test('HFUX10, HFUX11: Cancel stops a large fill and a retry then succeeds', async ({ page }) => {
+  test.setTimeout(600_000);
+  await openHarness(page);
+  const loaded = await loadFixture(page, Fixture.HoleFillLarge);
+  const part = loaded.partIds[0] ?? '';
+  const before = await digest(page, loaded);
+
+  await selectPart(page, part);
+  await awaitListing(page);
+
+  // The 512-vertex rim is the one worth cancelling: it is the worst case the
+  // policy allows and takes long enough to have something to interrupt.
+  const rows = page.locator('[data-testid^="opening-"]');
+  await expect(rows.first()).toBeVisible({ timeout: 60_000 });
+  await rows.first().getByRole('radio').check();
+
+  await page.getByTestId('preview-fill').click();
+  await expect(page.getByTestId('cancel-fill')).toBeVisible({ timeout: 30_000 });
+  await page.getByTestId('cancel-fill').click();
+
+  await expect(page.getByTestId('hole-fill-cancelled')).toBeVisible({ timeout: 60_000 });
+
+  /*
+   * NOTHING WAS BUILT AND NOTHING IS RESIDENT. No candidate, no patch, no
+   * overlay, and the document has not moved a revision.
+   */
+  await expect(page.getByTestId('hole-fill-candidate')).toHaveCount(0);
+  await expect(page.getByTestId('apply-fill')).toHaveCount(0);
+  await expect(page.getByTestId('patch-preview-banner')).toHaveCount(0);
+
+  const afterCancel = await readState(page);
+  expect(afterCancel.revision).toBe(loaded.revision);
+  const cancelledDigest = await digest(page, afterCancel);
+  expect(cancelledDigest.parts[0]?.positionDigest).toBe(before.parts[0]?.positionDigest);
+  expect(cancelledDigest.parts[0]?.indexDigest).toBe(before.parts[0]?.indexDigest);
+
+  // HFUX11. THE USER IS NOT STUCK: the opening is still selected and Preview is
+  // back, on a fresh worker.
+  await expect(page.getByTestId('preview-fill')).toBeVisible();
+  expect(await requestPreview(page)).toBe('ready');
+  await expect(page.getByTestId('apply-fill')).toBeEnabled();
+});
+
+/* ------------------------------------ HFUX32: candidate and GPU lifecycle -- */
+
+test('HFUX32: repeated preview and discard cycles leak no GPU resource', async ({ page }) => {
+  test.setTimeout(600_000);
+  await openHarness(page);
+  const loaded = await loadFixture(page, Fixture.HoleFillSharedPair);
+  const part = loaded.partIds[0] ?? '';
+
+  await selectPart(page, part);
+  await awaitListing(page);
+  await opening(page, 1).getByRole('radio').check();
+
+  const baseline = await readScene(page);
+
+  for (let cycle = 0; cycle < 5; cycle += 1) {
+    expect(await requestPreview(page)).toBe('ready');
+    await page.getByTestId('discard-fill').click();
+    await expect(page.getByTestId('hole-fill-candidate')).toHaveCount(0);
+  }
+
+  const after = await readScene(page);
+  /*
+   * BOUNDED, NOT MERELY "SMALL". Five cycles built and released five patches;
+   * what remains is the rim, exactly as before the first cycle. A growing count
+   * would be a leak per preview, proportional to the patch, invisible until a
+   * long session ran the tab out of GPU memory.
+   */
+  expect(after.holeFillOverlayObjects).toBe(1);
+  expect(after.modelObjects).toBe(baseline.modelObjects);
+  expect(after.sharedGeometries).toBe(baseline.sharedGeometries);
+
+  // Every rim and patch that was created has been released.
+  expect(after.holeFillOverlaysDisposed).toBe(after.holeFillOverlaysCreated - 1);
+
+  // AND THE DOCUMENT NEVER MOVED. Five previews and five discards mutate
+  // nothing.
+  expect((await readState(page)).revision).toBe(loaded.revision);
+});
+
+test('HFUX32: apply and undo cycles keep the scene and the revisions bounded', async ({ page }) => {
+  test.setTimeout(600_000);
+  await openHarness(page);
+  const loaded = await loadFixture(page, Fixture.HoleFillSharedPair);
+  const part = loaded.partIds[0] ?? '';
+  const before = await digest(page, loaded);
+
+  let revision = loaded.revision ?? 0;
+  for (let cycle = 0; cycle < 3; cycle += 1) {
+    await selectPart(page, part);
+    await awaitListing(page);
+    await opening(page, 1).getByRole('radio').check();
+    expect(await requestPreview(page)).toBe('ready');
+    await applyFill(page);
+
+    const applied = await readState(page);
+    // MONOTONIC, ALWAYS FORWARD. Undo produces a NEW higher revision rather
+    // than reviving an old one — ADR 0011 — so the number only ever climbs.
+    expect(applied.revision ?? 0).toBeGreaterThan(revision);
+    revision = applied.revision ?? 0;
+
+    await page.getByTestId('undo-fill').click();
+    await expect
+      .poll(async () => (await readState(page)).revision ?? 0, { timeout: 60_000 })
+      .toBeGreaterThan(revision);
+    revision = (await readState(page)).revision ?? 0;
+
+    // And each undo really did restore the bytes — every cycle, not just the
+    // first, which is what rules out a drift that only shows up on repetition.
+    const restored = await digest(page, await readState(page));
+    for (const part of restored.parts) {
+      const original = before.parts.find((entry) => entry.partId === part.partId);
+      expect(part.positionDigest, `cycle ${String(cycle)} ${part.partId}`).toBe(
+        original?.positionDigest,
+      );
+      expect(part.indexDigest, `cycle ${String(cycle)} ${part.partId}`).toBe(original?.indexDigest);
+    }
+  }
+
+  const scene = await readScene(page);
+  expect(scene.modelObjects).toBe(2);
+  expect(scene.holeFillOverlayObjects).toBe(0);
+});
+
+/* ------------------------------------------- §66: real-UI responsiveness -- */
+
+test('§66: the production panel stays responsive through a large fill', async ({ page }) => {
+  test.setTimeout(600_000);
+  await openHarness(page);
+  const loaded = await loadFixture(page, Fixture.HoleFillLarge);
+  const part = loaded.partIds[0] ?? '';
+
+  await selectPart(page, part);
+  await awaitListing(page);
+  const rows = page.locator('[data-testid^="opening-"]');
+  await expect(rows.first()).toBeVisible({ timeout: 60_000 });
+  await rows.first().getByRole('radio').check();
+
+  await page.getByTestId('preview-fill').click();
+
+  /*
+   * THE PROGRESS STATE PAINTS AND CANCEL IS ACTIONABLE. Stage 4B-1B1 proved the
+   * work is off-thread at the SERVICE level; what only the product can show is
+   * that the panel actually renders a state while it happens and that the
+   * control the user would reach for responds.
+   */
+  await expect(page.getByTestId('hole-fill-phase')).toBeVisible({ timeout: 30_000 });
+  const cancel = page.getByTestId('cancel-fill');
+  await expect(cancel).toBeEnabled();
+
+  const startedAt = Date.now();
+  await cancel.hover();
+  const hoverMs = Date.now() - startedAt;
+  expect(hoverMs, `hovering a control took ${String(hoverMs)}ms during a fill`).toBeLessThan(2_000);
+
+  await expect(async () => {
+    const ready = await page.getByTestId('hole-fill-candidate').isVisible();
+    const refused = await page.getByTestId('hole-fill-refusal').isVisible();
+    expect(ready || refused).toBe(true);
+  }).toPass({ timeout: 300_000 });
+
+  await expect(page.getByTestId('hole-fill-candidate')).toBeVisible();
+  // §68. Apply is identity checks and a reference swap, never a second fill.
+  const applyStarted = Date.now();
+  await applyFill(page);
+  const applyMs = Date.now() - applyStarted;
+  expect(
+    applyMs,
+    `applying a stored candidate took ${String(applyMs)}ms; a re-run would take seconds`,
+  ).toBeLessThan(10_000);
+});
+
+/* ------------------------------------------------------ §108: latencies -- */
+
+test('§108: every phase of the workflow is measured, on the worst in-policy part', async ({
+  page,
+}) => {
+  /*
+   * WHAT EACH NUMBER IS, so the report cannot be read as more than it is.
+   *
+   * These are WALL-CLOCK latencies from the page's point of view: the moment a
+   * control is pressed to the moment the interface shows the result. They
+   * therefore include the round trip, the render and Playwright's own polling
+   * granularity, and they are not a substitute for the engine's own phase
+   * timings — `npm run bench:hole-fill` measures those, in-process, and this
+   * stage did not change them.
+   *
+   * The fixture is the worst case the policy allows: a 512-vertex rim on roughly
+   * 100,000 faces. A measurement on a cube would say nothing about either
+   * ceiling.
+   */
+  test.setTimeout(600_000);
+  await openHarness(page);
+
+  const listingStarted = Date.now();
+  const loaded = await loadFixture(page, Fixture.HoleFillLarge);
+  const part = loaded.partIds[0] ?? '';
+  await selectPart(page, part);
+  await awaitListing(page);
+  const inventoryMs = Date.now() - listingStarted;
+
+  const rows = page.locator('[data-testid^="opening-"]');
+  await expect(rows.first()).toBeVisible({ timeout: 60_000 });
+
+  const rimStarted = Date.now();
+  await rows.first().getByRole('radio').check();
+  await expect
+    .poll(async () => (await readScene(page)).holeFillOverlayObjects, { timeout: 60_000 })
+    .toBeGreaterThan(0);
+  const rimMs = Date.now() - rimStarted;
+
+  const generationStarted = Date.now();
+  expect(await requestPreview(page)).toBe('ready');
+  const generationMs = Date.now() - generationStarted;
+
+  // The patch snapshot arrives after the candidate, so it is measured from the
+  // candidate appearing to the patch being drawn.
+  const patchStarted = Date.now();
+  await expect
+    .poll(async () => (await readScene(page)).holeFillOverlayObjects, { timeout: 60_000 })
+    .toBe(2);
+  const patchMs = Date.now() - patchStarted;
+
+  const applyStarted = Date.now();
+  await applyFill(page);
+  const applyMs = Date.now() - applyStarted;
+
+  // Re-analysis and re-listing follow the new revision automatically; this is
+  // the time until the panel again reports the openings of what the user now has.
+  const reanalysisStarted = Date.now();
+  await awaitListing(page);
+  const reanalysisMs = Date.now() - reanalysisStarted;
+
+  const undoStarted = Date.now();
+  await page.getByTestId('undo-fill').click();
+  await expect
+    .poll(async () => (await readState(page)).revision ?? 0, { timeout: 60_000 })
+    .toBeGreaterThan(0);
+  await awaitListing(page);
+  const undoMs = Date.now() - undoStarted;
+
+  // Reported the way every other measured harness spec reports: straight to
+  // stdout, so the numbers land in the run log beside the export and
+  // responsiveness ones rather than in a console the reporter filters.
+  process.stdout.write(
+    `[hole-fill workflow] 512-vertex rim on ~100k faces: ` +
+      `inventory ${String(inventoryMs)}ms, rim ${String(rimMs)}ms, ` +
+      `generation ${String(generationMs)}ms, patch snapshot ${String(patchMs)}ms, ` +
+      `apply ${String(applyMs)}ms, re-analysis ${String(reanalysisMs)}ms, ` +
+      `undo ${String(undoMs)}ms\n`,
+  );
+
+  /*
+   * THE ONE ASSERTION THAT IS A CLAIM RATHER THAN A RECORD.
+   *
+   * Apply must be far cheaper than generation, because it does no geometry work
+   * — identity checks, one immutable document update and one reference swap. A
+   * re-run would put it in the same order as generation. Stated as a RATIO
+   * against the generation measured on the SAME machine in the SAME run, so it
+   * is a statement about the work rather than about the hardware.
+   */
+  expect(
+    applyMs,
+    `apply took ${String(applyMs)}ms against a ${String(generationMs)}ms generation; ` +
+      `a second fill during commit would show here`,
+  ).toBeLessThan(Math.max(generationMs / 2, 2_000));
+});

@@ -19,6 +19,7 @@ import {
   RepairCancelled,
 } from '@cadfixer/mesh-repair';
 import {
+  UndoableChangeKind,
   documentByteLength,
   isDocument,
   isPart,
@@ -35,9 +36,11 @@ import {
   type CancellationToken,
   type resourceLimitExceeded,
 } from '@cadfixer/shared';
+import { truncatePatch } from './hole-fill-workflow-handlers';
 import {
   buildRenderSnapshot,
   describeParts,
+  holeFillCandidates,
   repairCandidates,
   repairHistory,
   residentDocuments,
@@ -463,13 +466,30 @@ export const repairCommitHandler: OperationHandler<'repair/commit'> = (payload, 
 
   const entry = repairHistory.record({
     recordId: repairRecordId,
+    kind: UndoableChangeKind.ConservativeRepair,
     source: payload.expectedSource,
     part: repairedPart,
     result: next,
     appliedOperations: validation?.applied ?? [],
     planHash: payload.planHash,
-    inverse,
+    inverse:
+      inverse === undefined
+        ? undefined
+        : {
+            kind: UndoableChangeKind.ConservativeRepair,
+            patch: inverse,
+            byteLength: inverse.byteLength,
+          },
   });
+
+  /*
+   * A HOLE-FILL PREVIEW DOES NOT SURVIVE A REPAIR — Stage 4B-1B2. The commit
+   * above moved the revision, so any candidate for this document was built from
+   * geometry that is no longer authoritative and every guard in `prepareCommit`
+   * would refuse it. Releasing it here frees a whole part's geometry rather than
+   * leaving it resident until something happens to notice.
+   */
+  holeFillCandidates.releaseDocument(next.documentId);
 
   const render = buildRenderSnapshot(prepared);
   context.reportProgress(1, 'applied');
@@ -500,17 +520,34 @@ export const repairDiscardHandler: OperationHandler<'repair/discard'> = (payload
 };
 
 /**
- * UNDO — the inverse transaction.
+ * UNDO — the inverse transaction, for whichever change was the most recent one.
  *
- * A NEW MONOTONIC REVISION, not a revival of the old one. Reactivating revision
- * N after N+1 existed would make "is this handle stale?" unanswerable: two
- * different meshes would have worn the same revision number, and every guard in
- * the runtime is built on that number only ever moving forwards. See ADR 0011.
+ * ONE UNDO, TWO KINDS OF CHANGE — Stage 4B-1B2. A conservative repair and a hole
+ * fill are both recorded in `repairHistory`, and this reverses whichever of them
+ * the document's single undoable record names. A separate hole-fill undo would
+ * have been a second answer to "what does Undo do next", and two answers to that
+ * question is how a user ends up undoing a change they did not make last.
  *
- * The result is validated like any other geometry output. `restoreFromInverse`
- * promises byte-identical coordinates, original face order, original groups and
- * original metadata — but a promise is not a check, and rule 11 says a returned
- * mesh is not success.
+ * THE TWO RECONSTRUCTIONS ARE GENUINELY DIFFERENT, which is why the inverse is a
+ * discriminated union rather than one shape stretched to cover both:
+ *
+ *   - a REPAIR removed faces and reordered corners, so `restoreFromInverse`
+ *     rebuilds the original face ordering from the retained coordinates;
+ *   - a HOLE FILL only appended, so `truncatePatch` drops the suffix. That is
+ *     exact for any representation, and it is exact precisely because the
+ *     authoritative preservation gate proved the prefix and the positions
+ *     unchanged. Running a repair's reconstruction over a fill would rebuild a
+ *     non-indexed mesh and silently change an indexed model's bytes.
+ *
+ * A NEW MONOTONIC REVISION, not a revival of the old one, for either kind.
+ * Reactivating revision N after N+1 existed would make "is this handle stale?"
+ * unanswerable: two different meshes would have worn the same revision number,
+ * and every guard in the runtime is built on that number only ever moving
+ * forwards. See ADR 0011.
+ *
+ * The result is validated like any other geometry output. Both reconstructions
+ * promise byte-identical coordinates and original ordering — but a promise is
+ * not a check, and rule 11 says a returned mesh is not success.
  */
 export const repairUndoHandler: OperationHandler<'repair/undo'> = (payload, context) => {
   const current = residentDocuments.resolve(payload.handle);
@@ -531,15 +568,23 @@ export const repairUndoHandler: OperationHandler<'repair/undo'> = (payload, cont
   if (!isPart(currentPart)) throw currentPart;
 
   context.reportProgress(0.1, 'restoring previous version');
-  const restored = restoreFromInverse(currentPart.mesh, preparation.patch);
+  const inverse = preparation.inverse;
+  const restored =
+    inverse.kind === UndoableChangeKind.HoleFill
+      ? truncatePatch(currentPart.mesh, inverse.sourceFaceCount, inverse.sourceIndexCount)
+      : restoreFromInverse(currentPart.mesh, inverse.patch);
+  const expectedFaceCount =
+    inverse.kind === UndoableChangeKind.HoleFill
+      ? inverse.sourceFaceCount
+      : inverse.patch.sourceFaceCount;
 
   // Rule 11: the output of a geometry operation is validated before it is
   // accepted, no matter how confident the operation is.
   assertMeshStructure(restored, 'repair/undo');
 
-  if (triangleCount(restored) !== preparation.patch.sourceFaceCount) {
+  if (triangleCount(restored) !== expectedFaceCount) {
     throw invalidState('The restored model does not have the expected number of triangles.', {
-      expected: preparation.patch.sourceFaceCount,
+      expected: expectedFaceCount,
       actual: triangleCount(restored),
     });
   }
@@ -548,6 +593,8 @@ export const repairUndoHandler: OperationHandler<'repair/undo'> = (payload, cont
   const next = residentDocuments.replace(payload.handle, successor);
   if (isAppError(next)) throw next;
   repairHistory.markUndone(payload.recordId);
+  // The revision moved, so any hole-fill candidate for this document is stale.
+  holeFillCandidates.releaseDocument(next.documentId);
 
   const render = buildRenderSnapshot(restored);
   context.reportProgress(1, 'restored');
@@ -558,6 +605,7 @@ export const repairUndoHandler: OperationHandler<'repair/undo'> = (payload, cont
       revertedRevision: payload.handle.revision,
       restoredRevision: preparation.entry.parentRevision,
       recordId: payload.recordId,
+      kind: preparation.entry.kind,
       partId: repairedPart,
       appliedOperations: preparation.entry.appliedOperations,
       render,

@@ -47,10 +47,35 @@ and no analytics.
 | Remove exact zero-area triangles       | Yes         | Exactly collinear corners. No "nearly flat" judgement, no tolerance.   |
 | Unify relative face winding            | Yes         | RELATIVE to neighbours. CAD Fixer never decides which side is outside. |
 | Weld nearby vertices                   | No          | Would need a tolerance. See the policy document.                       |
-| Close openings in a surface            | No          | An opening may be exactly what the model is meant to have.             |
+| Close openings in a surface            | Partly      | ONE flat opening at a time, chosen by you. See below.                  |
 | Resolve non-manifold edges or vertices | No          | Reported, and they can block winding unification. Never rewritten.     |
 | Detect or resolve self-intersections   | No          | Not checked at all.                                                    |
 | Determine printability                 | No          | Wall thickness is not measured.                                        |
+
+### What "automatic filling" covers
+
+CAD Fixer can close ONE open boundary you select, and validates the result
+against the part it came from before offering it. What it will not do is as
+important as what it will:
+
+| Capability                                  | Supported | Note                                                                        |
+| ------------------------------------------- | --------- | --------------------------------------------------------------------------- |
+| Close one selected flat opening             | Yes       | You choose it. Nothing is ever closed automatically.                        |
+| Preview before applying                     | Yes       | The exact surface that Apply commits, drawn beside your model.              |
+| Undo                                        | Yes       | Restores the part's triangles exactly, byte for byte.                       |
+| Close a rim that curves out of a plane      | No        | Refused with a reason. A curved rim needs a shaped surface.                 |
+| Close every opening at once                 | No        | There is no fill-all, and there is not going to be one by accident.         |
+| Openings above 512 rim points               | No        | The proven ceiling. Stated before anything runs.                            |
+| Parts above 250,000 triangles               | No        | So filling stays responsive in a browser tab. Nothing else is affected.     |
+| Add or move any of your existing points     | No        | The new surface reuses your rim points and adds none. Your triangles stand. |
+| Check whether parts collide with each other | No        | Filling is intra-part, exactly as the self-intersection check is.           |
+| Establish that the model is printable       | No        | Filling one opening establishes nothing about the rest of the model.        |
+
+Some flat openings are still refused — a rim where more than two surfaces meet,
+or where the surrounding triangles disagree about which way they face, has no
+single side for a new surface to join, and CAD Fixer will not guess. When the
+generated surface would pass through the model, it is discarded rather than
+applied, and the panel says so.
 
 Target formats: **STL, OBJ, 3MF**.
 
@@ -189,6 +214,14 @@ running first.
   mean; a model from an STL or an OBJ does not know, and CAD Fixer will not
   guess. You pick one of the six units, nothing is preselected, and the choice
   LABELS the numbers — it never resizes anything and never touches the model.
+- **Automatic filling of one selected flat opening.** The Open boundaries panel
+  lists every rim where the active part's surface stops, says which ones CAD
+  Fixer will attempt and explains the rest, highlights the one you choose, and
+  builds a candidate surface you can look at before deciding. Applying it is a
+  separate, explicit act; undoing it restores the part exactly. Planar rims only,
+  one at a time, up to 512 rim points on a part of up to 250,000 triangles — and
+  the generated surface is checked against the part with exact arithmetic and
+  discarded if it would pass through it.
 - **Single-part STL export**, binary and ASCII, for pulling one part out of a
   multi-part document. Named apart from the whole-document conversion, because
   they are different operations.
@@ -225,6 +258,12 @@ running first.
 - **No conversion is lossless in general.** Each report says what THIS document
   loses to THIS format; STL keeps no parts, placements, names or units, and OBJ
   keeps no units and bakes placements into coordinates.
+- **No batch or automatic filling.** Openings are closed one at a time, only
+  when you select one and apply it. There is no fill-all and nothing is closed
+  on import, on analysis or on repair.
+- **No filling of a rim that is not flat.** A rim that curves out of its own
+  plane needs a shaped surface, which this version does not build. It is refused
+  with a reason rather than approximated.
 - **No boolean operations, splitting, connectors, displacement, hollowing, or
   drainage holes.** Import deliberately does not weld vertices, drop degenerate
   triangles, deduplicate facets, reorient winding, or rescale anything — see
@@ -239,7 +278,8 @@ running first.
   and the interface says so on every report rather than in a footnote.
 - **No wall-thickness analysis**, and therefore **no printability verdict**. The
   report's printability status is never "printable"; the most it says is "not
-  yet determined".
+  yet determined". Filling an opening does not change this: the most CAD Fixer
+  says afterwards is that the selected opening was filled and validated.
 - **No tolerance welding.** Two corners one float apart are two vertices, and
   the edge between them is reported as a boundary. That is what the file says.
   There is no epsilon, weld distance or proximity threshold anywhere in the

@@ -612,3 +612,211 @@ vertices, patch provenance by face suffix, the disposable worker, the Geogram
 narrowphase, streamed bounded candidate pairs, no PMP, no non-planar filling, no
 batch filling, and no inter-part collision checking. Still no user-facing
 control, and still candidates only.
+
+---
+
+# Production workflow addendum — Stage 4B-1B2
+
+**Status: implemented.** Stage 4B-1B1 shipped the engine and deliberately no
+user-facing control. This stage puts a workflow in front of it: an inventory of
+open boundaries, selection of ONE of them, a patch preview, an explicit Apply and
+an Undo. The engine is unchanged — not extended, not relaxed, not re-tuned — and
+every ceiling, refusal and validator it enforces is exactly what it enforced
+before.
+
+## What the workflow is, in one line
+
+Select one open boundary, generate a validated candidate, look at the exact
+surface that would be committed, and choose to commit it.
+
+## The three separations the design turns on
+
+### 1. Listing answers a TOPOLOGICAL question; the engine answers a GEOMETRIC one
+
+`holefill/list-loops` walks the same connectivity `analyseTopology` walks and
+reports, per boundary component, whether it is one ordered, closed, simple,
+manifold cycle. That is exactly decidable from the stored coordinates and it is
+all the listing claims.
+
+**Planarity is not in it, and must not be.** The relative-planarity policy lives
+in `@cadfixer/mesh-hole-fill`, which is confined to the disposable worker; asking
+the geometry worker to answer it would put the triangulator, the broadphase and
+every validator in the geometry-worker chunk, which the production boundary scan
+forbids.
+
+So a perfectly simple rim that curves out of its own plane is listed as
+attemptable and refused when the engine looks at it. The interface says so before
+the button is pressed — `OPENING_ELIGIBLE` reads "CAD Fixer can attempt this
+opening", never "can be filled" — because a row that promised a fill the listing
+has no way to deliver would be CAD Fixer breaking its word once per curved rim.
+This wording is asserted by test.
+
+### 2. The display index is a LABEL; the `BoundaryLoopId` is the IDENTITY
+
+A row reads "Opening 3" because it is third in the deterministic order
+`extractBoundaryLoops` produces — components keyed by their smallest welded
+vertex id and sorted by it, so the same geometry always yields the same order.
+Every request carries the id the worker produced. The index is never sent
+anywhere, never compared and never resolved against anything, so a renumbering
+can produce a wrong label and cannot produce a wrong operation.
+
+### 3. The preview is READ FROM the stored candidate, never recomputed
+
+`holefill/patch-preview` reads faces `[sourceFaceCount, candidateFaceCount)` out
+of the mesh `HoleFillCandidateStore` is holding — the same object `prepareCommit`
+returns and `withPartMesh` installs. There is no second triangulation and no
+reconstruction from the summary, so "what you previewed is what Apply commits" is
+a structural fact rather than an intention. A boundary test asserts the commit
+path reaches no engine symbol at all.
+
+Only the patch travels: a few kilobytes for a 512-vertex rim, whatever the part's
+size. Sending the whole candidate would put a second copy of a 250,000-face mesh
+on the page to draw at most 510 triangles.
+
+## Apply is one transaction, and every guard is in the worker
+
+`holefill/commit` takes four identifiers and no geometry. In order:
+
+1. resolve the document the caller named;
+2. `HoleFillCandidateStore.prepareCommit` checks that the candidate EXISTS, is
+   neither committed nor discarded, belongs to THIS document, THIS part and THIS
+   opening, and was built from the revision the store actually holds — the
+   caller's belief and the store's reading are compared independently, because a
+   stale caller would otherwise pass its own stale belief as evidence;
+3. `assertMeshStructure` — rule 11, every time;
+4. `withPartMesh` builds the successor, sharing every other part BY REFERENCE,
+   and `assertGeometryDocument` checks what only a document can be asked;
+5. `residentDocuments.replace` re-checks the revision and swaps ONE map entry.
+   That swap is the atomic step: there is no moment where the revision has moved
+   and the part has not;
+6. only then is the candidate consumed and the undo record written.
+
+**A refusal at any step leaves the candidate RESOLVED and retryable.** Consuming
+it before the swap succeeded would destroy a validated fill because of a
+transient race.
+
+`expectedPart` and `expectedLoopId` are STATED by the caller and never read off
+the candidate — the Stage 4A-2A invariant, written down after getting it wrong
+once: a guard that compares the candidate with itself is vacuous.
+
+## Shared geometry is isolated by the swap, and that is the hard gate
+
+Two parts may hold the same `CanonicalMesh` object. Filling one gives that part
+the candidate and leaves the other holding the ORIGINAL object — reference
+identity, not value equality, because a copy would satisfy a byte comparison and
+would still mean the document had silently stopped sharing.
+
+Proven twice: at the contract level in `hole-fill-commit.test.ts` (HC09, HC10),
+and in a real browser in `e2e-harness/hole-fill-workflow.spec.ts`, where the
+worker-side digest shows part B's positions, indices, transform and byte lengths
+unchanged while part A's index buffer grows. No shipped importer can produce a
+shared pair, which is why the second proof needs the harness.
+
+## Undo: ONE history, TWO reconstructions
+
+A hole fill is recorded in `RepairHistoryStore` beside conservative repairs and
+reversed by the same `repair/undo` transaction. A second, hole-specific history
+would be a second answer to "what does Undo do next", and two answers to that
+question is how a user ends up undoing a change they did not make last. There is
+still exactly ONE undoable change per document, and applying either kind
+supersedes whatever was there — which the interface reflects by dropping the
+other panel's Undo rather than leaving a button that the worker would refuse.
+
+What differs is only HOW the previous geometry is rebuilt, so that is the only
+thing the record varies — `UndoableInverse` is a discriminated union:
+
+- a **repair** removed faces and reordered corners, so `restoreFromInverse`
+  rebuilds the original ordering from retained coordinates;
+- a **hole fill** only appended, so `truncatePatch` drops the suffix.
+
+**Truncation is exact, and it is exact BECAUSE of the Stage 4B-1B1-R1 gate.** The
+authoritative preservation check proved, byte for byte across a thread boundary,
+that the candidate's positions ARE the source's positions and its index buffer
+BEGINS with the source's index bytes. So dropping the suffix reproduces the
+source's bytes — every position, every index, in the original order.
+
+**Running the repair reconstruction over a fill would have been wrong, silently.**
+`restoreFromInverse` rebuilds a NON-INDEXED mesh; for an indexed model — every
+OBJ and 3MF import — an undo would have round-tripped the part into a different
+representation with different bytes while appearing to succeed. The inverse
+retains two integers and no coordinates, because there is nothing to keep a copy
+of.
+
+### What undo does NOT restore: object sharing
+
+Undo reproduces the part's GEOMETRY exactly — every position, every index, the
+placement, the name, the groups. It does not restore the `CanonicalMesh` OBJECT
+that two parts were sharing before the fill.
+
+The reason is the patch design itself. ADR 0011 chose an inverse patch over a
+copy so that a 100 MiB import does not cost 100 MiB per undo step, and the
+consequence is that the restored part is a NEW object holding the same bytes
+rather than the object its sibling still holds. The sharing was already broken by
+the Apply — that is what isolating the filled part MEANS — and the undo does not
+put it back. A document that held one mesh for two parts before a fill holds two
+equal ones after a fill and an undo.
+
+**Not fixed, and the alternatives were considered and rejected.** Retaining the
+pre-fill mesh in the undo record would restore sharing and would retain a whole
+part's geometry for every fill, which is the exact cost the patch design exists
+to avoid. Comparing the restored mesh against every sibling and re-sharing on a
+byte match would be a whole-document scan on every undo — a thousand comparisons
+for a thousand-placement document — and a form of implicit deduplication this
+codebase deliberately does not do anywhere else.
+
+The cost is bounded and visible: one extra mesh resource, reported by
+`documentByteLength` and by the part descriptors, for a document that had a
+shared mesh and has had one of its parts filled and unfilled. It is asserted in
+`e2e-harness/hole-fill-workflow.spec.ts` so that a future change to it is
+noticed rather than discovered.
+
+## Groups are carried onto the candidate
+
+The Stage 4B-1B1 candidate mesh was built with positions, indices and metadata
+and no `groups`. Appending a patch does not invalidate a group range — every
+existing range still describes exactly the faces it described and stays inside
+the longer index buffer, which is all `assertMeshStructure` asks — so the source's
+groups are now carried across. Without this, filling one opening would have been
+a silent metadata loss: the OBJ exported afterwards would have lost its object
+structure.
+
+The patch faces join no group. They are new geometry the file never carried, and
+assigning them to whichever group happened to end last would be CAD Fixer
+inventing a membership the user never stated.
+
+## The inventory is bounded, and the count is not
+
+A mesh of loose triangles has one boundary component per face; the research
+corpus reached 20,165. The list is capped at 256 rows and the COUNT is exact,
+because a truncated list must never become a smaller number of openings — the
+same rule the topology report's component summary follows. The cap is disclosed
+in words, with both numbers.
+
+Only the SELECTED opening's geometry ever crosses to the page, as a disposable
+line buffer. Listing every rim for a model with twenty thousand openings would
+move megabytes to draw one.
+
+## Lazy loading, and what the workflow costs
+
+The hole-fill worker is now reachable, so it is now emitted: `hole-fill.worker`
+is its own 82.8 kB chunk and is constructed only when Preview Fill is pressed.
+Opening the app, opening the panel, listing openings and selecting one construct
+no `Worker` at all. The Geogram artifact is unchanged and still loads only inside
+a disposable worker.
+
+| artifact          | before            | after     | delta    |
+| ----------------- | ----------------- | --------- | -------- |
+| main JS           | 897.3 kB          | 931.7 kB  | +34.4 kB |
+| CSS               | 18.4 kB           | 20.1 kB   | +1.6 kB  |
+| geometry.worker   | 137.5 kB          | 143.8 kB  | +6.4 kB  |
+| hole-fill.worker  | —                 | 82.8 kB   | new      |
+| self-intersection | 1,272.7 kB (wasm) | unchanged | 0        |
+
+## What is still out of scope
+
+Everything Stage 4B-1B1 excluded, unchanged: non-planar filling, batch or
+"fill all" filling, tolerance welding, seam snapping, fairing, smoothing,
+surrounding remeshing, inter-part collision analysis, PMP, redo and a multi-step
+undo history. `Filled` still means ONE named opening was closed and validated
+against the part it came from — not watertight, not printable, not free of other
+openings, and not free of pre-existing crossings.

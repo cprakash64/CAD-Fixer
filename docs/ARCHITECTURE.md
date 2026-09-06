@@ -526,14 +526,59 @@ decide which side of a surface is outside. Everything it cannot decide from the
 stored coordinates alone is refused with a stated reason rather than guessed. See
 [docs/repair/REPAIR_POLICY.md](repair/REPAIR_POLICY.md).
 
-### Hole filling is a production ENGINE with no workflow yet
+### Filling one selected opening
 
 Stage 4B-1B1 added `packages/mesh-hole-fill`: a validated planar hole-fill
-engine, reachable through the worker protocol (`holefill/list-loops`,
-`holefill/send-for-fill`, `holefill/discard`) and through no user-facing
-control. **There is no Fill Hole button, no boundary picker and no patch
-preview, and a boundary test asserts there is none** — selection, preview and
-Apply are Stage 4B-1B2.
+engine. Stage 4B-1B2 put a workflow in front of it — an inventory of open
+boundaries, selection of ONE, a patch preview, an explicit Apply and an Undo —
+reachable through six protocol operations (`holefill/list-loops`,
+`holefill/boundary-preview`, `holefill/send-for-fill`,
+`holefill/patch-preview`, `holefill/commit`, `holefill/discard`). The engine
+itself is unchanged: every ceiling, refusal and validator it enforced before it
+had a user is exactly what it enforces now.
+
+**Three separations carry the design, and each is load-bearing.**
+
+_Listing answers a topological question; the engine answers a geometric one._
+`holefill/list-loops` reports whether a boundary component is one ordered,
+closed, simple, manifold cycle — exactly decidable from the stored coordinates.
+Planarity is not in it, because the planarity policy lives in the fill engine
+and the fill engine stays out of the geometry worker. So a perfectly simple rim
+that curves out of its plane is listed as ATTEMPTABLE and refused when the engine
+looks at it, and the interface says "CAD Fixer can attempt this opening" rather
+than "can be filled" — a promise the listing has no way to keep would be a
+promise broken once per curved rim.
+
+_The display index is a label; the `BoundaryLoopId` is the identity._ A row reads
+"Opening 3" because it is third in the deterministic order `extractBoundaryLoops`
+produces. Every request carries the id the worker produced; the index is never
+sent anywhere. A renumbering can therefore produce a wrong label and cannot
+produce a wrong operation.
+
+_The preview is READ FROM the stored candidate._ `holefill/patch-preview` reads
+the patch faces out of the mesh the candidate store is holding — the same object
+Apply installs. Nothing is re-triangulated, so "what you previewed is what was
+applied" is structural rather than intended, and a boundary test asserts the
+commit path reaches no engine symbol.
+
+**Apply is one transaction and every guard is worker-side.** `holefill/commit`
+carries four identifiers and no geometry. `prepareCommit` checks existence,
+lifecycle, document, part, opening and revision — the caller's belief and the
+store's own reading compared independently — then `withPartMesh` builds the
+successor sharing every other part BY REFERENCE and `residentDocuments.replace`
+swaps one map entry. That swap is the atomic step. A refusal at any point leaves
+the candidate resolved and retryable, because consuming it on a transient race
+would destroy a validated fill.
+
+**Undo is the existing one-step history, with two reconstructions.** A fill is
+recorded in `RepairHistoryStore` beside conservative repairs and reversed by the
+same `repair/undo`; there is still exactly one undoable change per document, and
+either kind supersedes the other. A repair is rebuilt from retained coordinates;
+a fill is APPEND-ONLY, so its inverse is two integers and the reconstruction is a
+truncation — exact for any representation precisely because the authoritative
+preservation gate proved the positions and the index prefix unchanged. Running a
+repair's reconstruction over a fill would have rebuilt an indexed model as soup
+while appearing to succeed.
 
 What the engine does, and only this: it fills ONE selected boundary loop, which
 must be a topologically simple manifold cycle under exact stored-coordinate
@@ -549,9 +594,10 @@ PATCH-ATTRIBUTED intersection check against the qualified Geogram narrowphase.
 What it does NOT do: non-planar loops, batch or "fill all", tolerance welding,
 seam snapping, fairing, smoothing, surrounding remeshing, and any use of PMP —
 which ADR 0018 qualified and rejected because it traps uncatchably, loses
-append-only provenance and refines heavily. It also produces CANDIDATES only:
-Stage 4B-1B1 never replaces the resident document, never moves its revision and
-writes no undo record, whatever the outcome.
+append-only provenance and refines heavily. Only `holefill/commit` ever
+replaces the resident document. Listing openings, drawing a rim, running the
+engine, drawing a patch, cancelling and discarding all leave it byte-identical
+and its revision exactly where it was.
 
 Two limits it states rather than implies. **Filling a hole is not repairing a
 model** — another opening, a self-intersection, duplicate faces or non-manifold
@@ -583,4 +629,10 @@ overstate:
   ONE named opening was closed and the patch was independently validated
   against the part it was built from. It does not mean the model is watertight,
   that other openings are gone, that pre-existing crossings were fixed, or that
-  the patch clears geometry in another part.
+  the patch clears geometry in another part. The strongest sentence the
+  interface may show after an applied fill is `Selected opening filled and
+validated`, and the qualifier naming what was NOT examined travels with it —
+  both asserted by test.
+- **An eligible opening is not a fillable one.** The listing states what it
+  knows: the rim is one closed loop. Whether it is flat enough, and whether the
+  new surface would cross the model, are decided when the fill runs.

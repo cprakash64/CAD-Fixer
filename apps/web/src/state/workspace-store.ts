@@ -12,6 +12,9 @@ import type {
   RepairValidation,
   TopologyDetail,
   TopologyReport,
+  HoleFillCandidateHandle,
+  HoleFillValidationSummary,
+  BoundaryLoopRefusal,
 } from '@cadfixer/geometry-runtime';
 import type { ExportStatus } from '@cadfixer/file-formats';
 import type { WorkflowId } from './workflows';
@@ -363,6 +366,226 @@ const OVERLAYS_HIDDEN: OverlayVisibility = {
   degenerateFaces: false,
 };
 
+/* ------------------------------------------------------- hole filling -- */
+
+/**
+ * THE HOLE-FILL WORKFLOW SLICE — Stage 4B-1B2.
+ *
+ * FIVE THINGS LIVE HERE and nothing else: the inventory of openings for the
+ * active part, which opening is selected, the rim to draw, the candidate and
+ * its patch, and what has been applied. Every one of them is scalar, a
+ * disposable render buffer, or a handle. NO `CanonicalMesh` and no
+ * `GeometryDocument`: the page has never held either and this stage does not
+ * change that.
+ *
+ * THE DISPLAY INDEX IS PRESENTATION AND THE `boundaryLoopId` IS IDENTITY. A row
+ * reads "Opening 3" because it is third in a deterministic order; every request
+ * carries the id the worker produced. If the two ever disagreed, the label would
+ * be wrong and the operation would still be right — which is the only direction
+ * that error is allowed to run.
+ */
+
+export const HoleFillInventoryState = {
+  /** No model, no part, or a part whose openings have not been listed. */
+  Unavailable: 'unavailable',
+  Listing: 'listing',
+  Ready: 'ready',
+  Failed: 'failed',
+} as const;
+
+export type HoleFillInventoryState =
+  (typeof HoleFillInventoryState)[keyof typeof HoleFillInventoryState];
+
+export const HoleFillWorkState = {
+  Idle: 'idle',
+  /** The disposable worker is building and validating a patch. */
+  Generating: 'generating',
+  /**
+   * The worker is being terminated and the operation cancelled.
+   *
+   * A REAL STATE. Cancellation here is TERMINATION, which is not instantaneous
+   * from the page's point of view: the promise has not settled yet. Saying
+   * "Cancelled" before it does would claim the work had stopped while it
+   * demonstrably had not — the same distinction the repair panel draws.
+   */
+  Cancelling: 'cancelling',
+  /** A validated candidate exists and its patch may be previewed. */
+  Ready: 'ready',
+  /** The engine refused, the validators rejected, or something failed. */
+  Failed: 'failed',
+  /** The user cancelled. Nothing was built and nothing is resident. */
+  Cancelled: 'cancelled',
+} as const;
+
+export type HoleFillWorkState = (typeof HoleFillWorkState)[keyof typeof HoleFillWorkState];
+
+export const HoleFillCommitState = {
+  Idle: 'idle',
+  Applying: 'applying',
+  Undoing: 'undoing',
+} as const;
+
+export type HoleFillCommitState = (typeof HoleFillCommitState)[keyof typeof HoleFillCommitState];
+
+declare const holeFillTokenBrand: unique symbol;
+
+/** Identifies one hole-fill attempt, for the same reason imports have tokens. */
+export type HoleFillToken = number & { readonly [holeFillTokenBrand]: true };
+
+export interface HoleFillFailure {
+  readonly message: string;
+  /** The machine-readable outcome. The sentence is presentation's. */
+  readonly code: string;
+  /** Whether trying the same opening again could plausibly help. */
+  readonly retryable: boolean;
+}
+
+/**
+ * One opening, as the interface lists it.
+ *
+ * SCALARS AND ONE IDENTITY. No coordinates: the ring of points is fetched only
+ * for the opening the user actually selects, and even then only as a disposable
+ * line buffer.
+ */
+export interface HoleBoundaryRow {
+  readonly boundaryLoopId: string;
+  /**
+   * 1-based position in the deterministic order. PRESENTATION ONLY.
+   *
+   * Never sent to the worker, never compared, never used to resolve anything.
+   * It exists so a person can say "the second one" instead of reading a
+   * 64-bit hash aloud.
+   */
+  readonly displayIndex: number;
+  readonly vertexCount: number;
+  readonly edgeCount: number;
+  /** True when the qualified automatic filler can attempt this opening. */
+  readonly fillable: boolean;
+  /**
+   * Why not, when `fillable` is false. A CODE; the sentence is presentation's.
+   *
+   * TYPED rather than `string`, so the wording layer's switch stays exhaustive.
+   * A refusal the engine can produce and the interface has no sentence for then
+   * fails to compile, instead of reaching a user as a blank explanation beside a
+   * disabled control.
+   */
+  readonly refusal: BoundaryLoopRefusal | undefined;
+}
+
+/**
+ * The openings of the active part.
+ *
+ * BOUNDED BY CONSTRUCTION, and the bound is disclosed. A mesh of loose
+ * triangles has one boundary component per face, so `loopCount` and
+ * `rows.length` are deliberately separate numbers: a truncated list must never
+ * become a smaller number of openings.
+ */
+export interface HoleFillInventory {
+  readonly state: HoleFillInventoryState;
+  /** Exact number of boundary components, even when the list was capped. */
+  readonly loopCount: number;
+  readonly rows: readonly HoleBoundaryRow[];
+  readonly truncated: boolean;
+  /** Triangles in the active part, so a size refusal can be stated up front. */
+  readonly partFaceCount: number;
+  readonly error: HoleFillFailure | undefined;
+}
+
+const EMPTY_INVENTORY: HoleFillInventory = {
+  state: HoleFillInventoryState.Unavailable,
+  loopCount: 0,
+  rows: [],
+  truncated: false,
+  partFaceCount: 0,
+  error: undefined,
+};
+
+/**
+ * The selected opening's rim, ready to draw.
+ *
+ * A DISPOSABLE RENDER BUFFER in part-local coordinates. It carries the identity
+ * it was built for so a snapshot arriving after the user has moved on can be
+ * discarded rather than drawn over geometry it does not describe.
+ */
+export interface BoundaryRimPreview {
+  readonly boundaryLoopId: string;
+  readonly partId: string;
+  readonly source: DocumentHandle;
+  readonly positions: Float32Array;
+  readonly edgeCount: number;
+}
+
+/**
+ * A validated candidate, as the workspace holds it.
+ *
+ * WHAT IS DELIBERATELY ABSENT: the candidate's `CanonicalMesh`. It stays
+ * worker-resident exactly as the authoritative model's does. `patch` is a
+ * display-only snapshot of the patch faces, and `candidate` is a handle the UI
+ * can name but cannot export — `HoleFillCandidateHandle` is a distinct type
+ * from `DocumentHandle`, so the compiler refuses to let it reach an operation
+ * that takes a model.
+ */
+export interface HoleFillPreview {
+  readonly candidate: HoleFillCandidateHandle;
+  readonly source: DocumentHandle;
+  /** The part this candidate replaces. Bound at creation, never inferred later. */
+  readonly partId: string;
+  /** The opening it closes. Bound at creation for the same reason. */
+  readonly boundaryLoopId: string;
+  readonly summary: HoleFillValidationSummary;
+  /** Patch triangles for display. `undefined` until the snapshot arrives. */
+  readonly patchPositions: Float32Array | undefined;
+  readonly patchNormals: Float32Array | undefined;
+  readonly patchTriangleCount: number;
+}
+
+/** A fill that has actually been applied, and what it takes to reverse it. */
+export interface AppliedHoleFill {
+  readonly recordId: string;
+  /** The revision the fill produced. */
+  readonly handle: DocumentHandle;
+  readonly partId: string;
+  readonly boundaryLoopId: string;
+  readonly parentRevision: number;
+  readonly patchFaceCount: number;
+  readonly undoable: boolean;
+}
+
+export interface HoleFillSnapshot {
+  /** The document this slice describes. Checked on every write. */
+  readonly handle: DocumentHandle | undefined;
+  /** The PART this slice describes. Checked on every write. */
+  readonly partId: string | undefined;
+  readonly inventory: HoleFillInventory;
+  /** The opening the user has chosen, by IDENTITY. */
+  readonly selectedLoopId: string | undefined;
+  readonly rim: BoundaryRimPreview | undefined;
+  readonly workState: HoleFillWorkState;
+  readonly candidate: HoleFillPreview | undefined;
+  readonly candidateError: HoleFillFailure | undefined;
+  /** A phase name while generating. Never a fabricated percentage. */
+  readonly phase: string | undefined;
+  readonly commitState: HoleFillCommitState;
+  readonly commitError: HoleFillFailure | undefined;
+  /** The most recent applied fill for the loaded model, if any. */
+  readonly lastApplied: AppliedHoleFill | undefined;
+}
+
+const EMPTY_HOLE_FILL: HoleFillSnapshot = {
+  handle: undefined,
+  partId: undefined,
+  inventory: EMPTY_INVENTORY,
+  selectedLoopId: undefined,
+  rim: undefined,
+  workState: HoleFillWorkState.Idle,
+  candidate: undefined,
+  candidateError: undefined,
+  phase: undefined,
+  commitState: HoleFillCommitState.Idle,
+  commitError: undefined,
+  lastApplied: undefined,
+};
+
 /* ------------------------------------------------ conservative repair -- */
 
 export const RepairPlanState = {
@@ -600,6 +823,14 @@ export interface WorkspaceState {
   readonly selfIntersection: SelfIntersectionSnapshot;
   /** Conservative repair for `model`, or the unavailable state when empty. */
   readonly repair: RepairSnapshot;
+  /**
+   * The hole-fill workflow for the ACTIVE PART of `model`.
+   *
+   * Per part, exactly as analysis and repair are: openings are a property of one
+   * mesh, and listing part A's beside part B's geometry would be the same
+   * diagnostic dishonesty a carried-over boundary-edge count would be.
+   */
+  readonly holeFill: HoleFillSnapshot;
   readonly overlays: OverlayVisibility;
   readonly status: readonly StatusEntry[];
   readonly runtime: RuntimeState;
@@ -636,6 +867,7 @@ const INITIAL_STATE: WorkspaceState = {
   analysis: EMPTY_ANALYSIS,
   selfIntersection: EMPTY_SELF_INTERSECTION,
   repair: EMPTY_REPAIR,
+  holeFill: EMPTY_HOLE_FILL,
   overlays: OVERLAYS_HIDDEN,
   status: [],
   runtime: { selfTest: SelfTestState.Idle, progress: 0 },
@@ -688,6 +920,8 @@ export class WorkspaceStore {
   private currentAnalysisToken: AnalysisToken | undefined;
   private nextRepairToken = 1;
   private currentRepairToken: RepairToken | undefined;
+  private nextHoleFillToken = 1;
+  private currentHoleFillToken: HoleFillToken | undefined;
 
   public getSnapshot = (): WorkspaceState => this.state;
 
@@ -823,6 +1057,14 @@ export class WorkspaceStore {
         partId: activePart?.partId,
       },
       repair: { ...EMPTY_REPAIR, handle: model.handle, partId: activePart?.partId },
+      /*
+       * A NEW FILE HAS ITS OWN OPENINGS. The inventory, the selection, the rim,
+       * the candidate and the applied record all named the previous document;
+       * none of them survives. The candidate's worker-side release is the
+       * caller's responsibility — see `useHoleFillWorkflow` — exactly as the
+       * repair candidate's is.
+       */
+      holeFill: { ...EMPTY_HOLE_FILL, handle: model.handle, partId: activePart?.partId },
       conversion: CONVERSION_CLOSED,
       /*
        * The ACTIVE PART's size decides its own policy — not the document total.
@@ -897,6 +1139,24 @@ export class WorkspaceStore {
         // The user's operation choices are a preference about repair, not about
         // a particular part, so they survive a selection change.
         selection: this.state.repair.selection,
+      },
+      /*
+       * SWITCHING PARTS ABANDONS THE FILL WORKFLOW, DELIBERATELY.
+       *
+       * Openings belong to one mesh, so part A's inventory says nothing about
+       * part B — and a candidate that stayed alive across the switch would put
+       * an Apply button for part A on screen beside part B's geometry. The
+       * engine would refuse such an Apply, but the interface must not offer it
+       * in the first place: a guard that fires is a bug the user sees.
+       *
+       * `lastApplied` SURVIVES, because it describes a change that really
+       * happened to this document and is still what Undo would reverse.
+       */
+      holeFill: {
+        ...EMPTY_HOLE_FILL,
+        handle: model.handle,
+        partId,
+        lastApplied: this.state.holeFill.lastApplied,
       },
       overlays: OVERLAYS_HIDDEN,
     });
@@ -1544,6 +1804,19 @@ export class WorkspaceStore {
         band: bandForFaceCount(repairedPart?.triangleCount ?? result.triangleCount),
       },
       overlays: OVERLAYS_HIDDEN,
+      /*
+       * A REPAIR SUPERSEDES A FILL IN THE ONE UNDO HISTORY.
+       *
+       * `lastApplied` is dropped rather than kept, because the worker's history
+       * store has just marked that record un-undoable: there is exactly one
+       * reversible change per document. Keeping the button would offer to
+       * reverse something the worker will refuse.
+       */
+      holeFill: {
+        ...EMPTY_HOLE_FILL,
+        handle: result.handle,
+        partId: this.state.activePartId,
+      },
       repair: {
         ...EMPTY_REPAIR,
         handle: result.handle,
@@ -1650,6 +1923,17 @@ export class WorkspaceStore {
         band: bandForFaceCount(restoredPart?.triangleCount ?? result.triangleCount),
       },
       overlays: OVERLAYS_HIDDEN,
+      /*
+       * AN UNDO IS A FORWARD REVISION LIKE ANY OTHER, so the fill workflow is
+       * re-bound to it and re-listed from scratch. `lastApplied` goes because
+       * the change it named has now been reversed — for a hole fill this IS the
+       * record being reversed, and for a repair it was already superseded.
+       */
+      holeFill: {
+        ...EMPTY_HOLE_FILL,
+        handle: result.handle,
+        partId: this.state.activePartId,
+      },
       repair: {
         ...EMPTY_REPAIR,
         handle: result.handle,
@@ -1658,6 +1942,461 @@ export class WorkspaceStore {
       },
     });
     return true;
+  }
+
+  /* ------------------------------------------------------ hole filling -- */
+
+  /**
+   * Claims the hole-fill slot for one part and returns this attempt's token.
+   *
+   * One token stream covers listing, previewing and generating, because they are
+   * one user-visible workflow: a listing that lands after the user switched
+   * parts must not install itself, and neither must a candidate built for an
+   * opening they have since deselected.
+   */
+  public beginHoleFillListing(handle: DocumentHandle, partId: string): HoleFillToken {
+    const token = this.nextHoleFillToken as HoleFillToken;
+    this.nextHoleFillToken += 1;
+    this.currentHoleFillToken = token;
+    this.update({
+      holeFill: {
+        ...this.state.holeFill,
+        handle,
+        partId,
+        inventory: { ...EMPTY_INVENTORY, state: HoleFillInventoryState.Listing },
+        selectedLoopId: undefined,
+        rim: undefined,
+      },
+    });
+    return token;
+  }
+
+  public isCurrentHoleFill(token: HoleFillToken): boolean {
+    return this.currentHoleFillToken === token;
+  }
+
+  public commitHoleFillListing(
+    token: HoleFillToken,
+    listing: {
+      readonly handle: DocumentHandle;
+      readonly partId: string;
+      readonly loopCount: number;
+      readonly rows: readonly HoleBoundaryRow[];
+      readonly truncated: boolean;
+      readonly partFaceCount: number;
+    },
+  ): boolean {
+    if (!this.isCurrentHoleFill(token)) return false;
+    this.currentHoleFillToken = undefined;
+    this.update({
+      holeFill: {
+        ...this.state.holeFill,
+        handle: listing.handle,
+        partId: listing.partId,
+        inventory: {
+          state: HoleFillInventoryState.Ready,
+          loopCount: listing.loopCount,
+          rows: listing.rows,
+          truncated: listing.truncated,
+          partFaceCount: listing.partFaceCount,
+          error: undefined,
+        },
+      },
+    });
+    return true;
+  }
+
+  public failHoleFillListing(token: HoleFillToken, error: HoleFillFailure): boolean {
+    if (!this.isCurrentHoleFill(token)) return false;
+    this.currentHoleFillToken = undefined;
+    this.update({
+      holeFill: {
+        ...this.state.holeFill,
+        inventory: { ...EMPTY_INVENTORY, state: HoleFillInventoryState.Failed, error },
+      },
+    });
+    return true;
+  }
+
+  /**
+   * Marks the hole-fill workflow unavailable and re-binds it to `handle`.
+   *
+   * The counterpart of `setRepairUnavailable`: used when there is no model, no
+   * active part, or no live worker. Anything retained would describe geometry
+   * nothing can address.
+   */
+  public setHoleFillUnavailable(handle: DocumentHandle | undefined, partId?: string): void {
+    this.currentHoleFillToken = undefined;
+    this.update({
+      holeFill: {
+        ...EMPTY_HOLE_FILL,
+        handle,
+        partId,
+        // Survives, because it describes a change that really happened to this
+        // model and is still the thing Undo would reverse.
+        lastApplied: this.state.holeFill.lastApplied,
+      },
+    });
+  }
+
+  /**
+   * Selects one opening BY IDENTITY.
+   *
+   * The rim is cleared rather than carried: it is a buffer for a different
+   * opening. Any existing candidate is cleared too — a candidate closes ONE
+   * named opening, so leaving it visible beside a different selection would
+   * offer an Apply for something other than what is highlighted. Its worker-side
+   * release is the caller's responsibility, exactly as a repair candidate's is.
+   *
+   * Returns the candidate that must now be released, or `undefined`.
+   */
+  public selectBoundaryLoop(boundaryLoopId: string | undefined): HoleFillPreview | undefined {
+    const holeFill = this.state.holeFill;
+    if (holeFill.selectedLoopId === boundaryLoopId) return undefined;
+    const dropped = holeFill.candidate;
+    this.currentHoleFillToken = undefined;
+    this.update({
+      holeFill: {
+        ...holeFill,
+        selectedLoopId: boundaryLoopId,
+        rim: undefined,
+        workState: HoleFillWorkState.Idle,
+        candidate: undefined,
+        candidateError: undefined,
+        phase: undefined,
+        commitError: undefined,
+      },
+    });
+    return dropped;
+  }
+
+  /**
+   * Installs the rim buffer for the selected opening.
+   *
+   * REFUSED WHEN ANYTHING HAS MOVED. A rim that arrives for a revision, a part
+   * or an opening the workspace has left is dropped rather than drawn — the
+   * page cannot rely on arrival order, and a rim in the wrong frame marks an
+   * opening where there is none.
+   */
+  public installBoundaryRim(rim: BoundaryRimPreview): boolean {
+    const { model, activePartId, holeFill } = this.state;
+    if (model === undefined) return false;
+    if (rim.source.documentId !== model.handle.documentId) return false;
+    if (rim.source.revision !== model.handle.revision) return false;
+    if (rim.partId !== activePartId) return false;
+    if (rim.boundaryLoopId !== holeFill.selectedLoopId) return false;
+    this.update({ holeFill: { ...holeFill, rim } });
+    return true;
+  }
+
+  /** Claims the generation slot. False when the workflow has moved on. */
+  public beginHoleFillCandidate(
+    handle: DocumentHandle,
+    partId: string,
+    boundaryLoopId: string,
+  ): HoleFillToken | undefined {
+    const holeFill = this.state.holeFill;
+    if (holeFill.selectedLoopId !== boundaryLoopId) return undefined;
+    if (holeFill.commitState !== HoleFillCommitState.Idle) return undefined;
+    const token = this.nextHoleFillToken as HoleFillToken;
+    this.nextHoleFillToken += 1;
+    this.currentHoleFillToken = token;
+    this.update({
+      holeFill: {
+        ...holeFill,
+        handle,
+        partId,
+        workState: HoleFillWorkState.Generating,
+        candidate: undefined,
+        candidateError: undefined,
+        commitError: undefined,
+        phase: 'Preparing',
+      },
+    });
+    return token;
+  }
+
+  /**
+   * Reports which phase the fill has reached.
+   *
+   * A NAME, NEVER A PERCENTAGE. The engine reports when it has started and when
+   * it has finished; the phases in between are not instrumented as a fraction,
+   * and inventing one would be a progress bar that means nothing. See
+   * `hole-fill-presentation.ts` for the wording.
+   */
+  public reportHoleFillPhase(token: HoleFillToken, phase: string): void {
+    if (!this.isCurrentHoleFill(token)) return;
+    const holeFill = this.state.holeFill;
+    if (holeFill.workState !== HoleFillWorkState.Generating) return;
+    if (holeFill.phase === phase) return;
+    this.update({ holeFill: { ...holeFill, phase } });
+  }
+
+  /** Moves into the transitional cancelling state for the RIGHT attempt. */
+  public beginHoleFillCancellation(token: HoleFillToken): boolean {
+    if (!this.isCurrentHoleFill(token)) return false;
+    const holeFill = this.state.holeFill;
+    if (holeFill.workState !== HoleFillWorkState.Generating) return false;
+    this.update({
+      holeFill: { ...holeFill, workState: HoleFillWorkState.Cancelling, phase: undefined },
+    });
+    return true;
+  }
+
+  public cancelHoleFillCandidate(token: HoleFillToken): boolean {
+    if (!this.isCurrentHoleFill(token)) return false;
+    this.currentHoleFillToken = undefined;
+    this.update({
+      holeFill: {
+        ...this.state.holeFill,
+        workState: HoleFillWorkState.Cancelled,
+        candidate: undefined,
+        candidateError: undefined,
+        phase: undefined,
+      },
+    });
+    return true;
+  }
+
+  public commitHoleFillCandidate(token: HoleFillToken, preview: HoleFillPreview): boolean {
+    if (!this.isCurrentHoleFill(token)) return false;
+    const { model, activePartId, holeFill } = this.state;
+    if (model === undefined) return false;
+    // THE CANDIDATE MUST STILL DESCRIBE WHAT IS ON SCREEN. Document, revision,
+    // part and opening — all four, because two parts share a revision and one
+    // part has many openings.
+    if (preview.source.documentId !== model.handle.documentId) return false;
+    if (preview.source.revision !== model.handle.revision) return false;
+    if (preview.partId !== activePartId) return false;
+    if (preview.boundaryLoopId !== holeFill.selectedLoopId) return false;
+
+    this.currentHoleFillToken = undefined;
+    this.update({
+      holeFill: {
+        ...holeFill,
+        workState: HoleFillWorkState.Ready,
+        candidate: preview,
+        candidateError: undefined,
+        phase: undefined,
+      },
+    });
+    return true;
+  }
+
+  public failHoleFillCandidate(token: HoleFillToken, error: HoleFillFailure): boolean {
+    if (!this.isCurrentHoleFill(token)) return false;
+    this.currentHoleFillToken = undefined;
+    this.update({
+      holeFill: {
+        ...this.state.holeFill,
+        workState: HoleFillWorkState.Failed,
+        candidate: undefined,
+        candidateError: error,
+        phase: undefined,
+      },
+    });
+    return true;
+  }
+
+  /**
+   * Attaches the patch snapshot to the candidate it was built from.
+   *
+   * Refused when the candidate on screen is not the one this describes, so a
+   * snapshot that arrives after a discard or a supersession cannot decorate its
+   * replacement with the wrong triangles.
+   */
+  public installPatchPreview(
+    candidateId: string,
+    patch: {
+      readonly positions: Float32Array;
+      readonly normals: Float32Array;
+      readonly triangleCount: number;
+    },
+  ): boolean {
+    const holeFill = this.state.holeFill;
+    const candidate = holeFill.candidate;
+    if (candidate === undefined) return false;
+    if (candidate.candidate.candidateId !== candidateId) return false;
+    this.update({
+      holeFill: {
+        ...holeFill,
+        candidate: {
+          ...candidate,
+          patchPositions: patch.positions,
+          patchNormals: patch.normals,
+          patchTriangleCount: patch.triangleCount,
+        },
+      },
+    });
+    return true;
+  }
+
+  /**
+   * Drops the candidate and returns it, so the caller can release the worker's
+   * copy. The selection and the rim survive: discarding a preview is not
+   * deselecting an opening.
+   */
+  public clearHoleFillCandidate(): HoleFillPreview | undefined {
+    const holeFill = this.state.holeFill;
+    const dropped = holeFill.candidate;
+    if (dropped === undefined && holeFill.workState === HoleFillWorkState.Idle) return undefined;
+    this.currentHoleFillToken = undefined;
+    this.update({
+      holeFill: {
+        ...holeFill,
+        workState: HoleFillWorkState.Idle,
+        candidate: undefined,
+        candidateError: undefined,
+        phase: undefined,
+      },
+    });
+    return dropped;
+  }
+
+  /** Claims the apply slot. False when a commit or undo is already running. */
+  public beginHoleFillCommit(): boolean {
+    const holeFill = this.state.holeFill;
+    if (holeFill.commitState !== HoleFillCommitState.Idle) return false;
+    if (holeFill.workState !== HoleFillWorkState.Ready) return false;
+    if (holeFill.candidate === undefined) return false;
+    // ONE MUTATION AT A TIME across the whole workspace: a repair commit and a
+    // fill commit would race for the same revision, and the loser's typed
+    // refusal would look like a defect to the user.
+    if (this.state.repair.commitState !== RepairCommitState.Idle) return false;
+    this.update({
+      holeFill: {
+        ...holeFill,
+        commitState: HoleFillCommitState.Applying,
+        commitError: undefined,
+      },
+    });
+    return true;
+  }
+
+  public failHoleFillCommit(error: HoleFillFailure): void {
+    this.update({
+      holeFill: {
+        ...this.state.holeFill,
+        commitState: HoleFillCommitState.Idle,
+        commitError: error,
+      },
+    });
+  }
+
+  /**
+   * Installs the filled geometry as the loaded model.
+   *
+   * A NEW WORKSPACE REVISION, and every per-part diagnostic slice is cleared for
+   * exactly the reason `applyRepairResult` clears them: the previous reports
+   * describe geometry that no longer exists, and carrying one forward — even for
+   * the instant before a fresh analysis starts — would put a count beside a
+   * model nothing has examined.
+   *
+   * THE REPAIR SLICE IS CLEARED TOO, including its `lastApplied`. There is ONE
+   * undo history and this fill has just superseded whatever was in it, so
+   * leaving a repair's Undo button enabled would offer to reverse something the
+   * worker will refuse.
+   */
+  public applyHoleFillResult(result: {
+    readonly handle: DocumentHandle;
+    readonly parentRevision: number;
+    readonly recordId: string;
+    readonly partId: string;
+    readonly boundaryLoopId: string;
+    readonly patchFaceCount: number;
+    readonly undoable: boolean;
+    readonly render: RenderSnapshot;
+    readonly parts: readonly PartDescriptor[];
+    readonly bounds: MeshBounds | undefined;
+    readonly triangleCount: number;
+    readonly vertexCount: number;
+    readonly residentBytes: number;
+  }): boolean {
+    const model = this.state.model;
+    if (model === undefined) return false;
+    if (model.handle.documentId !== result.handle.documentId) return false;
+
+    const revision = this.nextModelRevision;
+    this.nextModelRevision += 1;
+    this.currentAnalysisToken = undefined;
+    this.currentRepairToken = undefined;
+    this.currentSelfIntersectionToken = undefined;
+    this.currentHoleFillToken = undefined;
+
+    const filledPart = result.parts.find((part) => part.partId === result.partId);
+
+    this.update({
+      model: {
+        ...model,
+        handle: result.handle,
+        parts: result.parts,
+        // Only the filled part's buffers change. The rest of the scene is
+        // already correct and is not re-uploaded — which is also what keeps a
+        // sibling that SHARED the old mesh drawing the geometry it still has.
+        render: withPartRender(model.render, result.partId, result.render),
+        bounds: result.bounds,
+        triangleCount: result.triangleCount,
+        vertexCount: result.vertexCount,
+        residentBytes: result.residentBytes,
+        revision,
+      },
+      analysis: {
+        ...EMPTY_ANALYSIS,
+        state: AnalysisState.Idle,
+        handle: result.handle,
+        partId: this.state.activePartId,
+      },
+      selfIntersection: {
+        ...EMPTY_SELF_INTERSECTION,
+        handle: result.handle,
+        partId: this.state.activePartId,
+        band: bandForFaceCount(filledPart?.triangleCount ?? result.triangleCount),
+      },
+      overlays: OVERLAYS_HIDDEN,
+      repair: {
+        ...EMPTY_REPAIR,
+        handle: result.handle,
+        partId: this.state.activePartId,
+        selection: this.state.repair.selection,
+      },
+      holeFill: {
+        ...EMPTY_HOLE_FILL,
+        handle: result.handle,
+        partId: this.state.activePartId,
+        lastApplied: {
+          recordId: result.recordId,
+          handle: result.handle,
+          partId: result.partId,
+          boundaryLoopId: result.boundaryLoopId,
+          parentRevision: result.parentRevision,
+          patchFaceCount: result.patchFaceCount,
+          undoable: result.undoable,
+        },
+      },
+    });
+    return true;
+  }
+
+  /** Claims the undo slot for a hole fill. */
+  public beginHoleFillUndo(): boolean {
+    const holeFill = this.state.holeFill;
+    if (holeFill.commitState !== HoleFillCommitState.Idle) return false;
+    if (holeFill.lastApplied?.undoable !== true) return false;
+    if (this.state.repair.commitState !== RepairCommitState.Idle) return false;
+    this.update({
+      holeFill: { ...holeFill, commitState: HoleFillCommitState.Undoing, commitError: undefined },
+    });
+    return true;
+  }
+
+  public failHoleFillUndo(error: HoleFillFailure): void {
+    this.update({
+      holeFill: {
+        ...this.state.holeFill,
+        commitState: HoleFillCommitState.Idle,
+        commitError: error,
+      },
+    });
   }
 
   /**
@@ -1857,6 +2596,8 @@ export class WorkspaceStore {
     this.currentAnalysisToken = undefined;
     this.currentRepairToken = undefined;
     this.currentConversionToken = undefined;
+    this.currentHoleFillToken = undefined;
+    this.currentSelfIntersectionToken = undefined;
     this.update({
       model: undefined,
       geometrySessionLost: reason,
@@ -1872,6 +2613,11 @@ export class WorkspaceStore {
       // Apply button pointing at a dead candidate would be worse than showing
       // nothing, because pressing it could only fail.
       repair: EMPTY_REPAIR,
+      // And so did the fill workflow: the openings were listed from geometry
+      // that is gone, the candidate died with the worker that held it, and the
+      // applied record names an undo nothing can perform. Policy A applies to
+      // all of it.
+      holeFill: EMPTY_HOLE_FILL,
       // The document the dialog described is gone with the worker that held it.
       conversion: CONVERSION_CLOSED,
       overlays: OVERLAYS_HIDDEN,

@@ -1,7 +1,12 @@
 import { useEffect, useRef, type ReactNode } from 'react';
 import { createViewport, type ViewportHandle } from '../viewport/create-viewport';
 import { useWorkspaceState, useWorkspaceStore } from '../state/store-context';
-import { RepairCandidateState, RepairPreviewMode, StatusSeverity } from '../state/workspace-store';
+import {
+  HoleFillWorkState,
+  RepairCandidateState,
+  RepairPreviewMode,
+  StatusSeverity,
+} from '../state/workspace-store';
 
 /**
  * React owns the container element; `createViewport` owns everything inside it.
@@ -14,7 +19,8 @@ export function ViewportPanel(): ReactNode {
   const containerRef = useRef<HTMLDivElement>(null);
   const viewportRef = useRef<ViewportHandle | undefined>(undefined);
   const store = useWorkspaceStore();
-  const { viewportFailure, model, activePartId, analysis, overlays, repair } = useWorkspaceState();
+  const { viewportFailure, model, activePartId, analysis, overlays, repair, holeFill } =
+    useWorkspaceState();
 
   /**
    * The candidate the viewport may legitimately draw.
@@ -227,8 +233,78 @@ export function ViewportPanel(): ReactNode {
     });
   }, [model, previewable, repair.changeOverlays, repair.previewMode]);
 
+  /**
+   * Pushes the selected opening's rim and the proposed patch.
+   *
+   * THE SAME FOUR CONDITIONS THE REPAIR PREVIEW USES, and for the same reasons.
+   * Both buffers are part-local and describe ONE revision of ONE part, so a rim
+   * from a document the user has replaced, from a revision they have moved off,
+   * or from a part they are no longer looking at would mark an opening where
+   * there is none. The viewport repeats the revision check, so neither layer
+   * relies on the other.
+   *
+   * THE PATCH IS SHOWN ONLY WHILE A CANDIDATE IS READY. Once Apply commits, the
+   * patch is ordinary source geometry drawn by the model itself — the overlay
+   * would be a second copy of triangles already on screen — and the store has
+   * cleared the candidate by then, so this clears with it.
+   */
+  useEffect(() => {
+    const viewport = viewportRef.current;
+    if (viewport === undefined) return;
+
+    if (model === undefined || activePartId === undefined) {
+      viewport.setHoleFillOverlays(undefined);
+      return;
+    }
+
+    const rim = holeFill.rim;
+    const rimBelongs =
+      rim?.source.documentId === model.handle.documentId &&
+      rim.source.revision === model.handle.revision &&
+      rim.partId === activePartId &&
+      rim.boundaryLoopId === holeFill.selectedLoopId;
+
+    const candidate = holeFill.candidate;
+    const patchBelongs =
+      holeFill.workState === HoleFillWorkState.Ready &&
+      candidate?.source.documentId === model.handle.documentId &&
+      candidate.source.revision === model.handle.revision &&
+      candidate.partId === activePartId;
+
+    if (!rimBelongs && !patchBelongs) {
+      viewport.setHoleFillOverlays(undefined);
+      return;
+    }
+
+    viewport.setHoleFillOverlays({
+      boundaryPositions: rimBelongs ? rim.positions : undefined,
+      patchPositions: patchBelongs ? candidate.patchPositions : undefined,
+      patchNormals: patchBelongs ? candidate.patchNormals : undefined,
+      revision: model.revision,
+      generation: patchBelongs ? candidate.candidate.generation : 0,
+    });
+  }, [
+    activePartId,
+    holeFill.candidate,
+    holeFill.rim,
+    holeFill.selectedLoopId,
+    holeFill.workState,
+    model,
+  ]);
+
   const showingPreview =
     previewable !== undefined && repair.previewMode === RepairPreviewMode.After;
+
+  /**
+   * A patch on screen that has NOT been applied.
+   *
+   * The same rule the repair preview banner enforces: never let proposed
+   * geometry be mistaken for the model. Text with a role, not a colour, so a
+   * user who cannot see the green tint still learns nothing has changed.
+   */
+  const showingPatch =
+    holeFill.workState === HoleFillWorkState.Ready &&
+    holeFill.candidate?.patchPositions !== undefined;
 
   return (
     <section className="viewport" aria-label="3D workspace">
@@ -240,6 +316,12 @@ export function ViewportPanel(): ReactNode {
       {showingPreview ? (
         <p className="viewport__preview-banner" role="status" data-testid="preview-banner">
           Preview — not applied
+        </p>
+      ) : null}
+
+      {showingPatch && !showingPreview ? (
+        <p className="viewport__preview-banner" role="status" data-testid="patch-preview-banner">
+          Fill preview — not applied
         </p>
       ) : null}
 

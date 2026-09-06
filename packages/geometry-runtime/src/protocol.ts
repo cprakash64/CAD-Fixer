@@ -15,10 +15,11 @@ import type {
 import type { DocumentHandle } from './resident-documents';
 import type { RepairCandidateHandle } from './repair-candidates';
 import type { HoleFillCandidateHandle } from './hole-fill-candidates';
+import type { UndoableChangeKind } from './repair-history';
 // Type-only, exactly as the topology and repair contracts are, so no engine
 // code is pulled into the main-thread bundle. The VALUES the interface compares
 // against are restated in `hole-fill.ts`.
-import type { HoleFillStatus, HoleFillValidationSummary } from './hole-fill';
+import type { BoundaryLoopRefusal, HoleFillStatus, HoleFillValidationSummary } from './hole-fill';
 
 /**
  * Wire protocol between the main thread and geometry workers.
@@ -170,6 +171,44 @@ export interface OperationMap {
     payload: HoleFillDiscardPayload;
     result: HoleFillDiscardResult;
   };
+  /**
+   * Draws one boundary component as a DISPOSABLE line-segment snapshot.
+   *
+   * A RENDER SNAPSHOT, not geometry. It exists so a user can see which opening
+   * they have selected, it is built from authoritative geometry in the worker,
+   * and it can never travel back: no operation accepts it, and nothing in the
+   * document model can be constructed from it. The page may hold it for exactly
+   * the reason it may hold the model's render buffers.
+   */
+  'holefill/boundary-preview': {
+    payload: BoundaryPreviewPayload;
+    result: BoundaryPreviewResult;
+  };
+  /**
+   * Draws the PATCH of a stored candidate as a disposable triangle snapshot.
+   *
+   * THE PATCH ONLY, and read from the candidate the store already holds. It does
+   * not re-triangulate, does not re-run the engine, and does not send the
+   * candidate mesh — so what the user previews is, by construction, the suffix
+   * of exactly the geometry Apply will commit.
+   */
+  'holefill/patch-preview': {
+    payload: PatchPreviewPayload;
+    result: PatchPreviewResult;
+  };
+  /**
+   * Applies one stored, validated candidate. THE ONLY HOLE-FILL MUTATION.
+   *
+   * No geometry arrives from the page: the payload is four identifiers and the
+   * worker resolves the candidate it already owns. Nothing is triangulated,
+   * classified or validated for shape here — that happened when the candidate
+   * was built, and re-running it would mean committing something other than what
+   * was previewed.
+   */
+  'holefill/commit': {
+    payload: HoleFillCommitPayload;
+    result: HoleFillCommitResult;
+  };
 }
 
 /* --------------------------------------------------------------- hole fill -- */
@@ -195,7 +234,7 @@ export interface BoundaryLoopSummary {
   /** True when this component is one ordered, fillable cycle. */
   readonly fillable: boolean;
   /** Why not, when `fillable` is false. A code, never a sentence. */
-  readonly refusal?: string;
+  readonly refusal?: BoundaryLoopRefusal;
 }
 
 export interface ListBoundaryLoopsResult {
@@ -205,6 +244,105 @@ export interface ListBoundaryLoopsResult {
   readonly loopCount: number;
   readonly loops: readonly BoundaryLoopSummary[];
   readonly truncated: boolean;
+  /**
+   * Triangles in this part.
+   *
+   * Reported so the interface can state a resource refusal BEFORE it starts
+   * anything. A part above `HOLE_FILL_MAX_PART_FACES` will be refused by the
+   * engine no matter which opening is chosen, and spinning up a worker and
+   * copying tens of megabytes to learn a scalar the worker already knows is
+   * work nobody needs done.
+   */
+  readonly partFaceCount: number;
+}
+
+/* ------------------------------------------------- hole fill: previews -- */
+
+export interface BoundaryPreviewPayload {
+  readonly handle: DocumentHandle;
+  readonly partId: string;
+  /** From `holefill/list-loops`. Never an index, never a described boundary. */
+  readonly boundaryLoopId: string;
+}
+
+/**
+ * A boundary rim, ready to draw.
+ *
+ * PART-LOCAL COORDINATES, exactly as the render snapshot is. The part's
+ * `PartTransform` is applied by the viewport to the object that holds this, for
+ * the same reason it is applied to the model: baking a placement into
+ * coordinates is a display concern rewriting geometry.
+ */
+export interface BoundaryPreviewResult {
+  readonly handle: DocumentHandle;
+  readonly partId: string;
+  readonly boundaryLoopId: string;
+  /**
+   * Flattened line-segment endpoints: six floats per rim edge.
+   *
+   * `LineSegments` order — a pair per edge rather than a strip — so the rim
+   * draws as one buffer and one draw call regardless of how many edges it has.
+   */
+  readonly positions: Float32Array;
+  readonly vertexCount: number;
+  readonly edgeCount: number;
+}
+
+export interface PatchPreviewPayload {
+  readonly candidate: HoleFillCandidateHandle;
+}
+
+/**
+ * The generated patch, ready to draw.
+ *
+ * NON-INDEXED TRIANGLES, nine floats per face, plus flat normals. Only the patch
+ * faces — `[sourceFaceCount, candidateFaceCount)` — travel, so a fill on a
+ * 250,000-face part sends a few kilobytes rather than the whole candidate.
+ *
+ * THE CANDIDATE'S IDENTITY IS ECHOED so a snapshot that arrives after the user
+ * has moved on can be discarded rather than drawn over geometry it does not
+ * describe.
+ */
+export interface PatchPreviewResult {
+  readonly candidate: HoleFillCandidateHandle;
+  readonly positions: Float32Array;
+  readonly normals: Float32Array;
+  readonly triangleCount: number;
+  /** Patch bounds, so frustum culling never walks the buffer on the UI thread. */
+  readonly bounds: MeshBounds | undefined;
+}
+
+/* --------------------------------------------------- hole fill: commit -- */
+
+export interface HoleFillCommitPayload {
+  readonly candidate: HoleFillCandidateHandle;
+  /** The revision the caller believes is authoritative. Re-checked. */
+  readonly expectedSource: DocumentHandle;
+  /** The part the caller believes it is replacing. Re-checked against the candidate. */
+  readonly expectedPart: string;
+  /** The opening the caller believes it is closing. Re-checked too. */
+  readonly expectedLoopId: string;
+}
+
+export interface HoleFillCommitResult {
+  /** The NEW revision. Same document id, same part id, same lineage. */
+  readonly handle: DocumentHandle;
+  readonly parentRevision: number;
+  /** Identity of this change in the ONE undo history. */
+  readonly recordId: string;
+  readonly partId: string;
+  readonly boundaryLoopId: string;
+  /** Faces the patch added. Never a claim about the model's health. */
+  readonly patchFaceCount: number;
+  /** Drawable buffers for the FILLED PART ONLY. See `RepairCommitResult.render`. */
+  readonly render: RenderSnapshot;
+  /** Part metadata for the whole successor document. See `RepairCommitResult.parts`. */
+  readonly parts: readonly PartDescriptor[];
+  readonly residentBytes: number;
+  readonly triangleCount: number;
+  readonly vertexCount: number;
+  readonly bounds: MeshBounds | undefined;
+  readonly undoable: boolean;
 }
 
 export interface SendForFillPayload {
@@ -426,8 +564,17 @@ export interface RepairUndoResult {
   /** The revision whose geometry has been reproduced. */
   readonly restoredRevision: number;
   readonly recordId: string;
+  /**
+   * Which kind of change was reversed.
+   *
+   * Reported so the interface can say what actually happened rather than
+   * guessing from an empty operation list. A hole fill and a repair that
+   * happened to apply no operations would otherwise be indistinguishable.
+   */
+  readonly kind: UndoableChangeKind;
   /** The part whose geometry was restored. */
   readonly partId: string;
+  /** Empty for a hole fill. */
   readonly appliedOperations: readonly RepairOperation[];
   /** Drawable buffers for the RESTORED PART ONLY. See `RepairCommitResult.render`. */
   readonly render: RenderSnapshot;
@@ -742,10 +889,15 @@ export interface ModelReleasePayload {
  *   repair/create-candidate     — PART-targeted
  *   repair/commit               — PART-targeted; commits a DOCUMENT revision
  *   repair/discard              — candidate-scoped (the candidate names its part)
- *   repair/undo                 — DOCUMENT-level transaction restoring one part
+ *   repair/undo                 — DOCUMENT-level transaction restoring one part,
+ *                                 for a conservative repair OR a hole fill: one
+ *                                 history, one Undo, one most-recent change
  *   holefill/list-loops         — PART-targeted; read-only
  *   holefill/send-for-fill      — PART-targeted; produces a CANDIDATE only
  *   holefill/discard            — candidate-scoped (the candidate names its part)
+ *   holefill/boundary-preview   — PART-targeted; read-only, disposable snapshot
+ *   holefill/patch-preview      — candidate-scoped; read-only, disposable snapshot
+ *   holefill/commit             — PART-targeted; commits a DOCUMENT revision
  *
  * Every part-targeted request carries its `partId` EXPLICITLY. The authoritative
  * worker never infers a target from UI selection state: a request is executable

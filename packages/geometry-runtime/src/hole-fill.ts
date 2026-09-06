@@ -3,6 +3,7 @@ import type {
   HoleFillLimits as EngineHoleFillLimits,
   HoleFillValidationSummary as EngineHoleFillValidationSummary,
 } from '@cadfixer/mesh-hole-fill';
+import type { BoundaryLoopRefusal as EngineBoundaryLoopRefusal } from '@cadfixer/mesh-topology';
 
 /**
  * The hole-fill contract's VALUES, restated here so the application can compare
@@ -52,6 +53,34 @@ export const HoleFillStatus = {
 export type HoleFillStatus = (typeof HoleFillStatus)[keyof typeof HoleFillStatus];
 
 /**
+ * Why a boundary component is not one ordered, fillable cycle.
+ *
+ * RESTATED FOR THE SAME REASON THE STATUSES ARE. The interface has to give each
+ * of these a sentence BEFORE any operation runs — a refused opening is listed
+ * and explained without a worker ever being built — and importing the value from
+ * `@cadfixer/mesh-topology` would put the whole topology engine in the
+ * main-thread bundle to compare nine strings.
+ *
+ * TYPED RATHER THAN `string`, so the wording layer's switch over it stays
+ * exhaustive: a refusal the engine can produce and the interface has no sentence
+ * for then fails to compile, instead of reaching a user as a blank explanation.
+ */
+export const BoundaryLoopRefusal = {
+  BranchedBoundary: 'BRANCHED_BOUNDARY',
+  ConvergentBoundary: 'CONVERGENT_BOUNDARY',
+  NotClosed: 'NOT_CLOSED',
+  RepeatedVertex: 'REPEATED_VERTEX',
+  TooFewVertices: 'TOO_FEW_VERTICES',
+  TooManyVertices: 'TOO_MANY_VERTICES',
+  DegenerateSegment: 'DEGENERATE_SEGMENT',
+  NonFinite: 'NON_FINITE',
+  NonManifoldAdjacency: 'NON_MANIFOLD_ADJACENCY',
+  AmbiguousOrientation: 'AMBIGUOUS_ORIENTATION',
+} as const;
+
+export type BoundaryLoopRefusal = (typeof BoundaryLoopRefusal)[keyof typeof BoundaryLoopRefusal];
+
+/**
  * The production ceilings, restated.
  *
  * The application needs these to say what it will and will not attempt BEFORE
@@ -83,5 +112,6 @@ export type HoleFillLimits = EngineHoleFillLimits;
 type Exactly<A, B> = [A] extends [B] ? ([B] extends [A] ? true : never) : never;
 
 const _statusMatches: Exactly<HoleFillStatus, EngineHoleFillStatus> = true;
+const _refusalMatches: Exactly<BoundaryLoopRefusal, EngineBoundaryLoopRefusal> = true;
 
-export const HOLE_FILL_CONTRACT_CHECKED = [_statusMatches] as const;
+export const HOLE_FILL_CONTRACT_CHECKED = [_statusMatches, _refusalMatches] as const;
