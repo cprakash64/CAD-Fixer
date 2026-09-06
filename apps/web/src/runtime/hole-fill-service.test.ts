@@ -74,6 +74,7 @@ function summary(): SendForFillResult['summary'] {
     boundaryLoopsBefore: 2,
     boundaryLoopsAfter: 1,
     selectedLoopRemoved: true,
+    newNonManifoldDefectCount: 0,
     degeneratePatchFaces: 0,
     duplicatePatchFaces: 0,
     foreignPatchCorners: 0,

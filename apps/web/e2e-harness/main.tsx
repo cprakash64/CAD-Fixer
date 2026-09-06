@@ -303,6 +303,9 @@ interface HarnessHoleFillResult {
   readonly candidateRevision?: number;
   readonly candidateLoopId?: string;
   readonly summary?: Record<string, unknown>;
+  /** The authoritative worker's byte-preservation verdict. Stage 4B-1B1-R1. */
+  readonly sourcePositionsPreserved?: boolean;
+  readonly sourceFacePrefixPreserved?: boolean;
   readonly durationMs: number;
   /** Milliseconds from the cancel request to the terminal outcome. */
   readonly cancelLatencyMs?: number;
@@ -354,6 +357,12 @@ function beginHoleFill(
                 candidateLoopId: outcome.candidate.boundaryLoopId,
               }),
           summary: outcome.summary as unknown as Record<string, unknown>,
+          ...(outcome.sourcePositionsPreserved === undefined
+            ? {}
+            : { sourcePositionsPreserved: outcome.sourcePositionsPreserved }),
+          ...(outcome.sourceFacePrefixPreserved === undefined
+            ? {}
+            : { sourceFacePrefixPreserved: outcome.sourceFacePrefixPreserved }),
           durationMs: performance.now() - startedAt,
           ...(cancelAt.requestedAt === undefined
             ? {}

@@ -216,6 +216,61 @@ export const holeFillSendForFillHandler: OperationHandler<'holefill/send-for-fil
     };
   }
 
+  /*
+   * THE AUTHORITATIVE PRESERVATION GATE — Stage 4B-1B1-R1.
+   *
+   * WHY THE ENGINE'S OWN CHECK WAS NOT ENOUGH. Inside the fill worker the
+   * candidate SHARES the source's position buffer, because the triangulator
+   * adds no vertex and moves none. Comparing one view of that buffer with
+   * another view of the same buffer is trivially true: it proves the two
+   * variables alias, not that nothing was rewritten. If the worker had modified
+   * a source position, both sides of that comparison would have moved together
+   * and the check would still have passed.
+   *
+   * HERE THE TWO SIDES ARE GENUINELY INDEPENDENT. `part.mesh` is the resident
+   * geometry this worker has owned the whole time and never handed out; the
+   * candidate has crossed a MessageChannel from a separate thread. Nothing they
+   * hold is shared, so a byte comparison between them is a real measurement.
+   *
+   * BYTES, NOT NUMBERS AND NOT A HASH. A numeric comparison would call `NaN`
+   * unequal to itself and `-0` equal to `+0` — the first invents a difference,
+   * the second hides one. A hash would answer "probably", and this gate decides
+   * whether geometry may later replace the user's model.
+   *
+   * RE-RESOLVED AFTER THE REVISION GUARD, so the comparison is against what is
+   * authoritative NOW rather than against a reference captured before the fill.
+   */
+  const authoritative = residentDocuments.resolvePart(payload.handle, payload.partId as PartId);
+  if (isAppError(authoritative)) throw authoritative;
+
+  const sourcePositionsPreserved = bytesEqual(authoritative.mesh.positions, reply.positions);
+  const sourceFacePrefixPreserved = prefixBytesEqual(authoritative.mesh.indices, reply.indices);
+
+  if (!sourcePositionsPreserved || !sourceFacePrefixPreserved) {
+    /*
+     * NO CANDIDATE, AND NOT REPORTED AS A REFUSAL EITHER.
+     *
+     * A refusal says "this geometry is outside what the operation supports".
+     * This says something else: a candidate came back whose ORIGINAL bytes do
+     * not match the model it was built from, which is only possible if CAD
+     * Fixer's own append-only contract was violated. That is a defect, and
+     * `INTERNAL_FAILURE` is the status that says so. Silently downgrading it to
+     * a success — or to a refusal the user might retry past — would be exactly
+     * the false success this gate exists to prevent.
+     */
+    return {
+      value: {
+        status: HoleFillStatus.InternalFailure,
+        summary,
+        sourcePositionsPreserved,
+        sourceFacePrefixPreserved,
+        intersectionSamples: reply.intersectionSamples,
+        samplesTruncated: reply.samplesTruncated,
+      },
+      transfer: [reply.intersectionSamples.buffer],
+    };
+  }
+
   const candidateMesh: CanonicalMesh = {
     positions: reply.positions,
     indices: reply.indices,
@@ -233,6 +288,8 @@ export const holeFillSendForFillHandler: OperationHandler<'holefill/send-for-fil
       status: reply.status,
       summary,
       candidate,
+      sourcePositionsPreserved,
+      sourceFacePrefixPreserved,
       intersectionSamples: reply.intersectionSamples,
       samplesTruncated: reply.samplesTruncated,
     },
@@ -262,6 +319,41 @@ function copyMesh(mesh: CanonicalMesh): { positions: Float32Array; indices: Uint
   const indices = createIndexArray(mesh.indices.length);
   indices.set(mesh.indices);
   return { positions, indices };
+}
+
+/**
+ * Byte equality of two typed-array views, compared as RAW BYTES.
+ *
+ * `Uint8Array` views over the underlying buffers, so `NaN` payloads and the two
+ * spellings of zero compare exactly as they are stored. A numeric loop would
+ * get both of those wrong, in opposite directions.
+ */
+function bytesEqual(left: ArrayBufferView, right: ArrayBufferView): boolean {
+  if (left.byteLength !== right.byteLength) return false;
+  const a = new Uint8Array(left.buffer, left.byteOffset, left.byteLength);
+  const b = new Uint8Array(right.buffer, right.byteOffset, right.byteLength);
+  for (let index = 0; index < a.length; index += 1) {
+    if (a[index] !== b[index]) return false;
+  }
+  return true;
+}
+
+/**
+ * The candidate's index buffer must BEGIN with the source's index bytes.
+ *
+ * Face order is the index prefix — face `f` occupies indices `[3f, 3f+3)` in
+ * both — so an identical prefix is an identical face ordering as well as
+ * identical face content. The suffix is the patch and is deliberately not
+ * compared here; the engine already fixed its length and provenance.
+ */
+function prefixBytesEqual(source: ArrayBufferView, candidate: ArrayBufferView): boolean {
+  if (candidate.byteLength < source.byteLength) return false;
+  const a = new Uint8Array(source.buffer, source.byteOffset, source.byteLength);
+  const b = new Uint8Array(candidate.buffer, candidate.byteOffset, source.byteLength);
+  for (let index = 0; index < a.length; index += 1) {
+    if (a[index] !== b[index]) return false;
+  }
+  return true;
 }
 
 /** A message may only make the engine MORE cautious, never less. */

@@ -69,7 +69,8 @@ vertex; the candidate is validated independently, including a PATCH-ATTRIBUTED
 intersection check against the qualified Geogram narrowphase. **There is no Fill
 Hole control and a boundary test asserts there is none** — selection, patch
 preview, Apply and Undo are Stage 4B-1B2. See
-`docs/adr/0018-hole-filling-qualification.md` and its production addendum.
+`docs/adr/0018-hole-filling-qualification.md`, its production addendum and its
+Stage 4B-1B1-R1 closure addendum.
 
 **Topology diagnoses; it never repairs.** Connectivity is recovered from exact
 stored coordinates with no tolerance, and analysis leaves the canonical buffers
@@ -565,6 +566,24 @@ lost`, `printable`, `watertight`, and the rest. **"The numbers are unchanged"
   user's; the rest is the patch. Candidate positions are the source's bytes and
   the candidate's index prefix is the source's index bytes, compared as BYTES —
   a numeric comparison would call `NaN` unequal to itself and `-0` equal to `+0`.
+- **THE PRESERVATION GATE THAT COUNTS IS THE AUTHORITATIVE ONE.** Inside the
+  fill worker the candidate SHARES the source's position buffer, so the engine's
+  own comparison proves the two variables alias — not that nothing was
+  rewritten. The load-bearing check runs in the authoritative worker, comparing
+  the returned candidate against its OWN resident part immediately before
+  registration; those two crossed a thread boundary and are genuinely
+  independent. A mismatch is `INTERNAL_FAILURE`, never a refusal and never a
+  success. Do not move it, and do not add a second registration path — there is
+  exactly one, and a boundary test asserts it.
+- **NEW NON-MANIFOLD TOPOLOGY IS DETECTED BY IDENTITY, NEVER BY KIND OR COUNT.**
+  A source with defect X and a candidate with `{X, Y}` have identical defect
+  KINDS, so the kind comparison this replaced accepted a manufactured
+  non-manifold edge. Defects are collected as welded edge pairs and welded vertex
+  ids and compared as sets; the rule is `candidateDefects ⊆ sourceDefects`, so
+  removing one is never a regression and introducing one always is.
+  `newNonManifoldDefectCount` must be zero. **The narrowphase cannot see this**:
+  a patch landing on an edge a closed shell already owns is a legitimate shared
+  edge to every intersection test and a new non-manifold edge to topology.
 - **TRIANGULATION SUCCESS IS NEVER ENGINE SUCCESS.** Structural validity,
   topology postconditions, patch winding against the source's own directed
   edges, patch connectivity, Euler as corroboration, and patch-attributed

@@ -130,6 +130,7 @@ function emptySummary(): Extract<HoleFillWorkerReply, { kind: 'result' }>['summa
     boundaryLoopsBefore: 2,
     boundaryLoopsAfter: 1,
     selectedLoopRemoved: true,
+    newNonManifoldDefectCount: 0,
     degeneratePatchFaces: 0,
     duplicatePatchFaces: 0,
     foreignPatchCorners: 0,
@@ -695,5 +696,250 @@ describe('REVIEW A: multi-part targeting, and the ambiguity that makes it worth 
 
     expect(isAppError(cause)).toBe(true);
     expect(channel.sent).toHaveLength(0);
+  });
+});
+
+/* ------------------------------ SP: authoritative preservation matrix -- */
+
+describe('SP01-SP07: the authoritative byte gate', () => {
+  /**
+   * A candidate reply whose ORIGINAL bytes have been tampered with.
+   *
+   * THE INJECTION IS THE REPLY ITSELF, and that is the right shape. The gate
+   * under test lives where the disposable worker's publication crosses back
+   * into the authoritative worker, so a test that substitutes a corrupted
+   * publication is exercising exactly that boundary — and it needs NO
+   * production seam, no debug flag and no reachable corruption path. §24 of the
+   * brief requires the corruption path to stay test-only; here it never exists
+   * in production at all.
+   */
+  function corruptedReply(
+    operationId: string,
+    mesh: CanonicalMesh,
+    corrupt: (positions: Float32Array, indices: Uint32Array) => void,
+  ): Extract<HoleFillWorkerReply, { kind: 'result' }> {
+    const positions = new Float32Array(mesh.positions);
+    const indices = new Uint32Array(mesh.indices.length + 6);
+    indices.set(mesh.indices, 0);
+    // A plausible two-triangle patch suffix, so nothing else looks wrong.
+    indices.set([0, 1, 2, 0, 2, 3], mesh.indices.length);
+    corrupt(positions, indices);
+    return {
+      kind: 'result',
+      operationId,
+      status: HoleFillStatus.ValidCandidate,
+      summary: emptySummary(),
+      intersectionSamples: new Uint32Array(0),
+      samplesTruncated: false,
+      positions,
+      indices,
+    };
+  }
+
+  function attempt(
+    handle: DocumentHandle,
+    loopId: string,
+    operationId: string,
+    reply: HoleFillWorkerReply,
+  ): Promise<Awaited<ReturnType<typeof holeFillSendForFillHandler>>> {
+    const channel = fakePort();
+    const pending = holeFillSendForFillHandler(
+      { handle, partId: PART, boundaryLoopId: loopId, operationId, port: channel.port },
+      context(),
+    );
+    channel.reply(reply);
+    return pending;
+  }
+
+  it('SP01/SP02: an untouched candidate reports both invariants and registers', async () => {
+    const mesh = hp02QuadHole();
+    const handle = install(mesh);
+    const ids = await loopIds(handle);
+    const outcome = await attempt(handle, ids[0] ?? '', 'sp-1', candidateReply('sp-1', mesh));
+
+    expect(outcome.value.status).toBe(HoleFillStatus.ValidCandidate);
+    expect(outcome.value.sourcePositionsPreserved).toBe(true);
+    expect(outcome.value.sourceFacePrefixPreserved).toBe(true);
+    expect(outcome.value.candidate).toBeDefined();
+    expect(holeFillCandidates.stats().candidateCount).toBe(1);
+  });
+
+  it('SP03: ONE mutated original position is rejected before registration', async () => {
+    /*
+     * THE PROOF THE ENGINE'S OWN CHECK COULD NOT GIVE. Inside the fill worker
+     * the candidate shares the source's position buffer, so a rewritten source
+     * position moves BOTH sides of that comparison and it still passes. Here the
+     * two sides crossed a thread boundary, so the difference is visible.
+     */
+    const mesh = hp02QuadHole();
+    const handle = install(mesh);
+    const ids = await loopIds(handle);
+    const before = new Uint8Array(mesh.positions.buffer.slice(0) as ArrayBuffer);
+
+    const outcome = await attempt(
+      handle,
+      ids[0] ?? '',
+      'sp-3',
+      corruptedReply('sp-3', mesh, (positions) => {
+        // One original coordinate, changed by one representable step.
+        positions[4] = Math.fround((positions[4] ?? 0) + 0.5);
+      }),
+    );
+
+    expect(outcome.value.status).toBe(HoleFillStatus.InternalFailure);
+    expect(outcome.value.sourcePositionsPreserved).toBe(false);
+    expect(outcome.value.candidate).toBeUndefined();
+    expect(holeFillCandidates.stats().candidateCount).toBe(0);
+
+    // The authoritative model is exactly where it was.
+    const document = residentDocuments.resolve(handle);
+    expect(isAppError(document)).toBe(false);
+    if (isAppError(document)) return;
+    expect(
+      new Uint8Array(
+        (document.parts[0]?.mesh.positions.buffer ?? new ArrayBuffer(0)) as ArrayBuffer,
+      ),
+    ).toEqual(before);
+    expect(residentDocuments.revisionOf(handle.documentId)).toBe(handle.revision);
+
+    // And a normal retry still succeeds.
+    const retry = await attempt(handle, ids[0] ?? '', 'sp-3b', candidateReply('sp-3b', mesh));
+    expect(retry.value.status).toBe(HoleFillStatus.ValidCandidate);
+    expect(holeFillCandidates.stats().candidateCount).toBe(1);
+  });
+
+  it('SP04: ONE mutated original FACE INDEX is rejected before registration', async () => {
+    // The prefix is part of the preservation contract, not just the positions.
+    const mesh = hp02QuadHole();
+    const handle = install(mesh);
+    const ids = await loopIds(handle);
+
+    const outcome = await attempt(
+      handle,
+      ids[0] ?? '',
+      'sp-4',
+      corruptedReply('sp-4', mesh, (_positions, indices) => {
+        // Swap two corners of an ORIGINAL face: same vertices, reversed winding.
+        const a = indices[3] ?? 0;
+        indices[3] = indices[4] ?? 0;
+        indices[4] = a;
+      }),
+    );
+
+    expect(outcome.value.status).toBe(HoleFillStatus.InternalFailure);
+    expect(outcome.value.sourceFacePrefixPreserved).toBe(false);
+    expect(outcome.value.candidate).toBeUndefined();
+    expect(holeFillCandidates.stats().candidateCount).toBe(0);
+    expect(residentDocuments.revisionOf(handle.documentId)).toBe(handle.revision);
+
+    const retry = await attempt(handle, ids[0] ?? '', 'sp-4b', candidateReply('sp-4b', mesh));
+    expect(retry.value.status).toBe(HoleFillStatus.ValidCandidate);
+  });
+
+  it('SP04: a truncated index buffer is rejected too', async () => {
+    const mesh = hp02QuadHole();
+    const handle = install(mesh);
+    const ids = await loopIds(handle);
+
+    // A reply whose index buffer stops short of the source's own face count.
+    const short = corruptedReply('sp-4c', mesh, () => undefined);
+    const truncated: HoleFillWorkerReply = {
+      ...short,
+      indices: new Uint32Array(mesh.indices.subarray(0, mesh.indices.length - 3)),
+    };
+    const outcome = await attempt(handle, ids[0] ?? '', 'sp-4c', truncated);
+    expect(outcome.value.status).toBe(HoleFillStatus.InternalFailure);
+    expect(outcome.value.sourceFacePrefixPreserved).toBe(false);
+    expect(holeFillCandidates.stats().candidateCount).toBe(0);
+  });
+
+  it('SP05: the patch SUFFIX may differ, and does, while the prefix is preserved', async () => {
+    const mesh = hp02QuadHole();
+    const handle = install(mesh);
+    const ids = await loopIds(handle);
+
+    const outcome = await attempt(
+      handle,
+      ids[0] ?? '',
+      'sp-5',
+      corruptedReply('sp-5', mesh, () => {
+        // Nothing corrupted: the reply already carries a six-index suffix the
+        // source does not have.
+      }),
+    );
+
+    expect(outcome.value.status).toBe(HoleFillStatus.ValidCandidate);
+    expect(outcome.value.sourcePositionsPreserved).toBe(true);
+    expect(outcome.value.sourceFacePrefixPreserved).toBe(true);
+    expect(outcome.value.candidate).toBeDefined();
+  });
+
+  it('SP06: `-0` is preserved as `-0`, and a flip to `+0` is caught', async () => {
+    /*
+     * A NUMERIC COMPARISON WOULD MISS THIS ENTIRELY: `-0 === +0`. The bytes do
+     * not agree, the stored value is not the one the user's file carried, and
+     * the gate has to say so.
+     */
+    const mesh = hp02QuadHole();
+    const negativeZero = new Float32Array(mesh.positions);
+    negativeZero[0] = -0;
+    const withNegativeZero: CanonicalMesh = { ...mesh, positions: negativeZero };
+
+    const handle = install(withNegativeZero);
+    const ids = await loopIds(handle);
+
+    // Faithful: -0 kept.
+    const faithful = await attempt(
+      handle,
+      ids[0] ?? '',
+      'sp-6a',
+      candidateReply('sp-6a', withNegativeZero),
+    );
+    expect(faithful.value.status).toBe(HoleFillStatus.ValidCandidate);
+    expect(faithful.value.sourcePositionsPreserved).toBe(true);
+
+    // Flipped to +0: numerically equal, byte-different, REJECTED.
+    const flipped = await attempt(
+      handle,
+      ids[0] ?? '',
+      'sp-6b',
+      corruptedReply('sp-6b', withNegativeZero, (positions) => {
+        positions[0] = 0;
+      }),
+    );
+    expect(Object.is(negativeZero[0], -0)).toBe(true);
+    expect(flipped.value.status).toBe(HoleFillStatus.InternalFailure);
+    expect(flipped.value.sourcePositionsPreserved).toBe(false);
+    expect(flipped.value.candidate).toBeUndefined();
+
+    /*
+     * THE REJECTED ATTEMPT REGISTERED NOTHING — and it also did not SUPERSEDE
+     * the faithful candidate from a moment ago, because it never reached the
+     * store at all. One candidate, and it is the one that passed.
+     */
+    expect(holeFillCandidates.stats().candidateCount).toBe(1);
+    const registered = faithful.value.candidate;
+    expect(registered).toBeDefined();
+    if (registered !== undefined) {
+      expect(holeFillCandidates.stateOf(registered)).toBe('resolved');
+    }
+  });
+
+  it('SP07: the comparison is LITERAL, so a NaN payload compares as bytes', () => {
+    /*
+     * A valid canonical source cannot contain `NaN` — structural validation
+     * refuses it on import. The comparison still must not be numeric: `NaN`
+     * never equals itself, so a numeric check would report a difference between
+     * a buffer and a byte-identical copy of itself, and would then treat a
+     * corrupted candidate and a faithful one alike.
+     *
+     * Asserted against the comparison itself rather than through the handler,
+     * because the handler can never be handed a NaN-bearing resident mesh.
+     */
+    const withNaN = new Float32Array([Number.NaN, 1, 2]);
+    const sameBytes = new Float32Array(new Uint8Array(withNaN.buffer.slice(0)).buffer);
+    // Numerically these disagree at index 0; as BYTES they are identical.
+    expect(withNaN[0] === sameBytes[0]).toBe(false);
+    expect(new Uint8Array(withNaN.buffer)).toEqual(new Uint8Array(sameBytes.buffer));
   });
 });

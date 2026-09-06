@@ -449,3 +449,166 @@ scope quietly grows: non-planar loops, PMP, batch filling, tolerance welding,
 seam snapping, fairing, smoothing, surrounding remeshing, inter-part collision.
 Also out of scope for 4B-1B1 specifically: preview, Apply, Undo, and any
 user-facing control.
+
+---
+
+# Closure addendum — Stage 4B-1B1-R1
+
+Three gaps in the Stage 4B-1B1 addendum above were closed. Recorded here rather
+than by editing that text, so what was believed and what was found stay
+distinguishable.
+
+## 1. Source preservation is now checked where the two sides are independent
+
+**The gap.** The engine's `validateSourcePreservation` compares the candidate's
+positions with the source's — but inside the fill worker the candidate SHARES
+the source's position buffer, because the triangulator adds no vertex and moves
+none. Comparing one view of a buffer with another view of the same buffer is
+trivially true: it proves the variables alias, not that nothing was rewritten.
+A worker that modified a source position would have moved BOTH sides of that
+comparison together, and the check would still have passed. The Stage 4B-1B1
+report named this as a weakness; it is now closed rather than noted.
+
+**The closure.** The authoritative geometry worker compares the returned
+candidate against its OWN resident part, byte for byte, immediately before
+registration. Those two are genuinely independent: `part.mesh` never left this
+worker, and the candidate crossed a MessageChannel from another thread.
+
+The order of acceptance is now:
+
+```
+worker returned VALID_CANDIDATE
+  → document still exists
+  → revision still matches
+  → part still resolves
+  → candidate positions BYTE-EQUAL the authoritative source
+  → candidate index PREFIX BYTE-EQUAL the authoritative source
+  → register
+```
+
+Either comparison failing returns `INTERNAL_FAILURE` and registers nothing — not
+a refusal, because a refusal says "this geometry is outside what the operation
+supports" and this says "a candidate came back whose original bytes do not match
+the model it was built from", which is only possible if CAD Fixer's own
+append-only contract was violated.
+
+**Bytes, not numbers, and not a hash.** A numeric comparison calls `NaN` unequal
+to itself and `-0` equal to `+0` — the first invents a difference, the second
+hides one. A hash would answer "probably", and this gate decides whether
+geometry may later replace the user's model.
+
+**Proven by injection, not by inspection.** `hole-fill-handlers.test.ts`
+substitutes a corrupted publication at the channel boundary — one original
+position changed by one representable step, one original face index swapped, a
+truncated index buffer, and a `-0` flipped to `+0`. Each is rejected, registers
+nothing, leaves the resident bytes and the revision untouched, and a normal retry
+succeeds. **The corruption path exists only in that test**: no production seam,
+no debug flag, and a boundary test scans for one.
+
+## 2. New non-manifold topology is detected by IDENTITY, not by kind
+
+**The gap.** The postcondition compared the SET OF REFUSAL KINDS present before
+and after. That is defeated by the commonest real case:
+
+```
+source    non-manifold edges = { X }      kinds = { NON_MANIFOLD }
+candidate non-manifold edges = { X, Y }   kinds = { NON_MANIFOLD }
+```
+
+The kind sets are equal, so the check reported no regression while the patch had
+manufactured a new non-manifold edge Y. A COUNT would have caught that example
+and would still have missed a candidate that removed X and added Y.
+
+**The closure.** `collectNonManifoldDefects` returns the defects themselves:
+non-manifold edges by welded endpoint pair (`min:max` — the undirected identity
+`groupEdges` already produces), non-manifold vertices by welded id, and
+winding-conflicted edges by the same edge identity. Vertices are included
+because edge manifoldness does not imply vertex manifoldness — the bow-tie has
+every edge at exactly two faces and is still pinched.
+
+The contract is a SUBSET, deliberately one-directional:
+
+```
+candidateDefects ⊆ sourceDefects
+```
+
+A fill legitimately removes a boundary condition and may incidentally remove a
+defect; neither is a regression. What it may never do is introduce one.
+`newNonManifoldDefectCount` reports the size of the difference in the direction
+that matters, and success requires zero. Pre-existing defects are not this
+operation's to fix, exactly as a pre-existing self-intersection is not.
+
+The differential runs on the FINAL canonical candidate — the one that would be
+registered — and the identities are directly comparable because an append-only
+candidate shares the source's position buffer and therefore its first-appearance
+vertex numbering, which the byte gate above independently confirms.
+
+**The regression fixture.** `tp03ChordCollisionWithExistingDefect` is a tube
+whose rim ear-clips to the single internal diagonal `(2,0,0)–(0,2,0)`, plus a
+CLOSED tetrahedron that already owns that edge with exactly two faces, plus an
+unrelated three-triangle non-manifold cluster far away. The tetrahedron adds no
+boundary, so the rim stays eligible; it shares only topology the patch is
+entitled to share, so the exact narrowphase classifies every contact as a
+legitimate shared edge and reports **zero** invalid pairs. Adding the patch takes
+that edge to FOUR incident faces.
+
+Every defect kind is identical before and after. The old check accepted it; the
+new one reports `newNonManifoldDefectCount: 1` and `NON_MANIFOLD_CREATED`. The
+negative control confirms it directly: restoring the kind comparison makes that
+test fail.
+
+## 3. The rebuilt Geogram artifact is proven semantically identical
+
+**The gap.** Adding `cf_hf_*` changed the shipped `.wasm`, so it is no longer
+the byte-identical artifact Stage 3C-1A-R1 qualified. Three facts were already
+established — the unchanged source rebuilt byte-identically before the addition,
+`si_core.h` and `si_bvh.h` are still byte-identical to the research copies, and
+the Stage 3C suites are green. None of them is the same claim as "the diagnostic
+answers the same thing": a changed link order, a different heap layout or a new
+global with a constructor could in principle move a result without moving a
+header.
+
+**The closure.** `kernel-differential.test.ts` extracts the pre-B1B1 artifact
+from git at `34efd8b` — read-only, into a temporary directory, no history
+touched — and runs the **whole frozen Stage 3C corpus** through both artifacts:
+the 24 hand-authored adversarial fixtures and the three regenerated Stage 3A
+shells, 27 in total. Every deterministic field is compared: terminal status,
+failure flag, candidate and tested pair counts, intersecting pairs, affected
+faces, all seven taxonomy counters, skipped faces and pairs, unclassified pairs,
+sample count, truncation flag, and the sample array itself. Timings are excluded
+because they are not deterministic.
+
+Compared at the default ceilings, at three tight ceiling settings chosen to fire
+mid-traversal, and over the degenerate/PARTIAL subset specifically — because
+PARTIAL is the one verdict a rebuild could silently upgrade to CHECKED and make
+a lost diagnosis look like a clean bill of health.
+
+**Result: zero semantic differences.** The hashes differ, as expected; behaviour
+does not. The negative control perturbs one reading by one and confirms the
+comparison fails.
+
+## What the closure cost
+
+Measured with `npm run bench:hole-fill`, median of three after a warm-up:
+
+| part faces | byte comparison | defect differential | topology phase | total      | share of total |
+| ---------- | --------------- | ------------------- | -------------- | ---------- | -------------- |
+| 10,000     | 0.54 ms         | 5.78 ms             | 24.2 ms        | 31.0 ms    | 20.4%          |
+| 100,000    | 5.41 ms         | 38.9 ms             | 316.5 ms       | 384.2 ms   | 11.5%          |
+| 249,000    | 13.4 ms         | 95.1 ms             | 1,077.6 ms     | 1,267.1 ms | 8.6%           |
+
+Both checks are linear and both shrink as a share of the whole. End-to-end the
+249,000-face case is unchanged within run-to-run noise (1,286 ms before, 1,267 ms
+after). No persistent memory is added: the byte comparison is `Uint8Array` views
+over buffers that already exist, and the differential's arrays are released with
+the call.
+
+## What did not change
+
+Everything the Stage 4B-1B1 addendum settled: the 512-vertex and 250,000-face
+ceilings, one selected loop, exact stored-coordinate identity, the relative
+planarity policy at 1e-4, deterministic ear clipping with zero generated
+vertices, patch provenance by face suffix, the disposable worker, the Geogram
+narrowphase, streamed bounded candidate pairs, no PMP, no non-planar filling, no
+batch filling, and no inter-part collision checking. Still no user-facing
+control, and still candidates only.

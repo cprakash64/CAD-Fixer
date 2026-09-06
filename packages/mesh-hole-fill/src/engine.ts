@@ -23,6 +23,8 @@ import {
   analysePatchConnectivity,
   analysePatchFaces,
   analysePatchOrientation,
+  collectNonManifoldDefects,
+  diffNonManifoldDefects,
   eulerCharacteristicOf,
   validateSourcePreservation,
 } from './validate';
@@ -282,6 +284,20 @@ export function runHoleFill(input: HoleFillEngineInput): HoleFillEngineResult {
     loop.vertices,
   );
 
+  /*
+   * THE NON-MANIFOLD DIFFERENTIAL, BY DEFECT IDENTITY.
+   *
+   * Not by kind, and not by count. A source that already contains one
+   * non-manifold edge and a candidate that contains that edge PLUS a new one
+   * have identical defect KINDS, so a kind comparison reports no regression
+   * while the patch has manufactured a defect. The sets are compared instead,
+   * and the number below is how many defects the candidate has that the source
+   * did not.
+   */
+  const sourceDefects = collectNonManifoldDefects(source, identity);
+  const candidateDefects = collectNonManifoldDefects(candidate, candidateIdentity);
+  const defectDifference = diffNonManifoldDefects(sourceDefects, candidateDefects);
+
   const eulerBefore = eulerCharacteristicOf(source, identity.cornerToVertex);
   const eulerAfter = eulerCharacteristicOf(candidate, candidateIdentity.cornerToVertex);
   timings.topologyValidation = now() - topologyStart;
@@ -292,6 +308,7 @@ export function runHoleFill(input: HoleFillEngineInput): HoleFillEngineResult {
     ...shape,
     boundaryLoopsAfter: afterLoops.loops.length,
     selectedLoopRemoved,
+    newNonManifoldDefectCount: defectDifference.total,
     degeneratePatchFaces: patchFaces.degenerateFaces,
     duplicatePatchFaces: patchFaces.duplicateFaces,
     foreignPatchCorners: connectivity.foreignCorners,
@@ -311,7 +328,7 @@ export function runHoleFill(input: HoleFillEngineInput): HoleFillEngineResult {
   if (afterLoops.loops.length !== loopSet.loops.length - 1) {
     return fail(HoleFillStatus.ValidationFailed, topology);
   }
-  if (introducedRefusal(loopSet.loops, afterLoops.loops)) {
+  if (defectDifference.total > 0) {
     return fail(HoleFillStatus.NonManifoldCreated, topology);
   }
   if (orientation.agreeing > 0 || orientation.inconsistentInteriorEdges > 0) {
@@ -458,29 +475,6 @@ function assembleCandidate(
     ...(source.groups === undefined ? {} : { groups: source.groups }),
     metadata: source.metadata,
   };
-}
-
-/**
- * True when the candidate carries a boundary refusal kind the source did not.
- *
- * The extractor refuses on non-manifold adjacency and on a folded rim, so a
- * candidate that introduced either shows up as a refusal reason that was not
- * present before. Comparing KINDS rather than counts is deliberate: a source
- * with an unrelated branched boundary elsewhere must not make every fill on it
- * look like it created one.
- */
-function introducedRefusal(
-  before: readonly BoundaryLoop[],
-  after: readonly BoundaryLoop[],
-): boolean {
-  const known = new Set<string>();
-  for (const loop of before) {
-    if (loop.refusal !== undefined) known.add(loop.refusal);
-  }
-  for (const loop of after) {
-    if (loop.refusal !== undefined && !known.has(loop.refusal)) return true;
-  }
-  return false;
 }
 
 /* -------------------------------------------------- intersection check -- */
@@ -696,6 +690,7 @@ function summaryOf(
     boundaryLoopsBefore: partial.boundaryLoopsBefore ?? 0,
     boundaryLoopsAfter: partial.boundaryLoopsAfter ?? 0,
     selectedLoopRemoved: partial.selectedLoopRemoved ?? false,
+    newNonManifoldDefectCount: partial.newNonManifoldDefectCount ?? 0,
     degeneratePatchFaces: partial.degeneratePatchFaces ?? 0,
     duplicatePatchFaces: partial.duplicatePatchFaces ?? 0,
     foreignPatchCorners: partial.foreignPatchCorners ?? 0,
