@@ -30,6 +30,8 @@ export const Fixture = {
   HoleFillSmall: 'hole-fill-small',
   HoleFillLarge: 'hole-fill-large',
   HoleFillPierced: 'hole-fill-pierced',
+  HoleFillSharedPair: 'hole-fill-shared-pair',
+  HoleFillTransformed: 'hole-fill-transformed',
 } as const;
 
 export type Fixture = (typeof Fixture)[keyof typeof Fixture];
@@ -78,6 +80,11 @@ export interface SceneStats {
   readonly geometriesDisposed: number;
   readonly previewObjects: number;
   readonly overlayObjects: number;
+  /** Rim and patch objects currently drawn. Stage 4B-1B2. */
+  readonly holeFillOverlayObjects: number;
+  /** Cumulative rim/patch uploads and releases, so a leak is visible. */
+  readonly holeFillOverlaysCreated: number;
+  readonly holeFillOverlaysDisposed: number;
   /** The workspace model revision the viewport has actually drawn. */
   readonly modelRevision: number;
   /** `partId:x,y,z` per part, from `matrixWorld`. World placement, as drawn. */
@@ -118,6 +125,9 @@ export async function readScene(page: Page): Promise<SceneStats> {
       geometriesDisposed: read('geometriesDisposed'),
       previewObjects: read('previewObjects'),
       overlayObjects: read('overlayObjects'),
+      holeFillOverlayObjects: read('holeFillOverlayObjects'),
+      holeFillOverlaysCreated: read('holeFillOverlaysCreated'),
+      holeFillOverlaysDisposed: read('holeFillOverlaysDisposed'),
       modelRevision: read('modelRevision'),
       partTransforms: canvas?.dataset.partTransforms ?? '',
     };

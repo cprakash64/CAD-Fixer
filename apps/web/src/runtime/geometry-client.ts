@@ -22,6 +22,9 @@ import {
   type HoleFillDiscardResult,
   type HoleFillLimits,
   type ListBoundaryLoopsResult,
+  type BoundaryPreviewResult,
+  type PatchPreviewResult,
+  type HoleFillCommitResult,
   type SendForFillResult,
   type SendForExportResult,
   type StlExportResult,
@@ -366,6 +369,67 @@ export class GeometryClient {
     candidate: HoleFillCandidateHandle,
   ): OperationHandle<HoleFillDiscardResult> {
     return this.coordinator.dispatch('holefill/discard', { candidate }, {});
+  }
+
+  /**
+   * Asks for a disposable line snapshot of ONE boundary component.
+   *
+   * A RENDER SNAPSHOT, so the page may hold it for the same reason it holds the
+   * model's render buffers. It names the loop by an identity `listBoundaryLoops`
+   * produced, and the worker resolves that identity against the geometry it
+   * holds now — a rim for an opening that has since changed is refused rather
+   * than approximated.
+   */
+  public previewBoundaryLoop(
+    handle: DocumentHandle,
+    partId: string,
+    boundaryLoopId: string,
+  ): OperationHandle<BoundaryPreviewResult> {
+    return this.coordinator.dispatch(
+      'holefill/boundary-preview',
+      { handle, partId, boundaryLoopId },
+      {},
+    );
+  }
+
+  /**
+   * Asks for a disposable triangle snapshot of a stored candidate's PATCH.
+   *
+   * Only the patch faces travel — a few kilobytes whatever the part's size — and
+   * they are read out of the candidate the worker already holds. Nothing is
+   * re-triangulated, so what the user sees is the suffix of exactly the geometry
+   * `commitHoleFill` will install.
+   */
+  public previewHoleFillPatch(
+    candidate: HoleFillCandidateHandle,
+  ): OperationHandle<PatchPreviewResult> {
+    return this.coordinator.dispatch('holefill/patch-preview', { candidate }, {});
+  }
+
+  /**
+   * Applies one stored, validated candidate. THE ONLY HOLE-FILL MUTATION.
+   *
+   * Four identifiers cross, and no geometry: the page has never held any. Every
+   * guard that decides whether the fill may become the user's model runs in the
+   * worker, and this method cannot reach past them.
+   */
+  public commitHoleFill(request: {
+    candidate: HoleFillCandidateHandle;
+    expectedSource: DocumentHandle;
+    expectedPart: string;
+    expectedLoopId: string;
+    onProgress?: (update: ProgressUpdate) => void;
+  }): OperationHandle<HoleFillCommitResult> {
+    return this.coordinator.dispatch(
+      'holefill/commit',
+      {
+        candidate: request.candidate,
+        expectedSource: request.expectedSource,
+        expectedPart: request.expectedPart,
+        expectedLoopId: request.expectedLoopId,
+      },
+      request.onProgress === undefined ? {} : { onProgress: request.onProgress },
+    );
   }
 
   /**

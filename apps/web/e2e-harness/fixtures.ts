@@ -116,6 +116,24 @@ export const HarnessFixtureId = {
   HoleFillLarge: 'hole-fill-large',
   /** HP23: topologically perfect, and the patch runs through an opposing surface. */
   HoleFillPierced: 'hole-fill-pierced',
+  /**
+   * TWO PARTS SHARING ONE FILLABLE MESH. The hard gate of Stage 4B-1B2.
+   *
+   * Filling A must give A the candidate and leave B holding the ORIGINAL mesh
+   * object, still open, byte-identical. A fill that mutated in place would
+   * silently close both, and no shipped importer can produce this document for
+   * a browser test to try it on.
+   */
+  HoleFillSharedPair: 'hole-fill-shared-pair',
+  /**
+   * ONE FILLABLE PART, PLACED SOMEWHERE OTHER THAN THE ORIGIN AND MIRRORED.
+   *
+   * The rim and the patch are part-LOCAL, so the viewport has to compose the
+   * placement to draw them where the opening actually is. A reflection is
+   * included because it reverses orientation, which is exactly the case a
+   * transform-aware overlay is most likely to get wrong.
+   */
+  HoleFillTransformed: 'hole-fill-transformed',
 } as const;
 
 export type HarnessFixtureId = (typeof HarnessFixtureId)[keyof typeof HarnessFixtureId];
@@ -326,6 +344,40 @@ export function buildHarnessDocument(id: HarnessFixtureId): GeometryDocument {
 
     case HarnessFixtureId.HoleFillPierced:
       return { parts: [named('a', hp23PatchPiercesOppositeShell(), 'Pierced by its own patch')] };
+
+    case HarnessFixtureId.HoleFillSharedPair: {
+      // ONE MESH OBJECT, TWO PARTS. Not two equal meshes — the same reference,
+      // which is what makes the isolation question meaningful at all.
+      const shared = hp02QuadHole();
+      return {
+        parts: [
+          named('a', shared, 'Shared A'),
+          named('b', shared, 'Shared B', translation(PART_B_OFFSET_X, 0, 0)),
+        ],
+      };
+    }
+
+    case HarnessFixtureId.HoleFillTransformed:
+      return {
+        parts: [
+          named('a', hp02QuadHole(), 'Placed and mirrored', [
+            // Non-uniform scale on X and Y, a mirror on Z, and a translation.
+            // Row-major 3x4: the linear block then the translation.
+            2,
+            0,
+            0,
+            0,
+            3,
+            0,
+            0,
+            0,
+            -1,
+            PART_B_OFFSET_X,
+            PART_C_OFFSET_Y,
+            4,
+          ]),
+        ],
+      };
   }
 }
 

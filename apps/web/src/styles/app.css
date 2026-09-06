@@ -1311,3 +1311,117 @@ button:disabled {
   color: var(--severity-success);
   overflow-wrap: anywhere;
 }
+
+/* -------------------------------------------------- open boundaries -- */
+
+/*
+ * THE HOLE-FILL WORKFLOW — Stage 4B-1B2.
+ *
+ * Reuses the repair panel's vocabulary wherever the meaning is the same
+ * (`panel__note`, `repair__blocked`, `repair__headline`, `repair__exclusions`),
+ * so the two workflows read as one product rather than two. Only what is
+ * genuinely new gets a class here.
+ *
+ * COLOUR IS NEVER THE ONLY SIGNAL, exactly as in the repair operation list.
+ * Every row carries a verdict sentence, and the tint on its leading edge is an
+ * aid on top of that. A refused opening is NOT tinted as an error: refusing an
+ * opening outside the proven scope is the engine working correctly, and styling
+ * it red would teach users that a careful tool is a broken one.
+ */
+
+.holefill__openings {
+  margin: var(--space-3) 0 0;
+  padding: 0;
+  border: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  /* Bounded height so a part with many openings scrolls INSIDE the panel rather
+     than pushing Preview, Apply and Cancel below the fold. The list is already
+     capped in the store; this keeps even the capped list from dominating. */
+  max-height: 22rem;
+  overflow-y: auto;
+}
+
+.holefill__opening {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0 var(--space-2);
+  align-items: baseline;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border-subtle);
+  border-left-width: 3px;
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+  cursor: pointer;
+}
+
+.holefill__opening[data-fillable='true'] {
+  border-left-color: var(--severity-success);
+}
+
+.holefill__opening[data-fillable='false'] {
+  border-left-color: var(--severity-warning);
+}
+
+.holefill__opening:has(input:checked) {
+  border-color: var(--border-strong);
+  border-left-color: var(--severity-success);
+  background: var(--surface-sunken, var(--surface-raised));
+}
+
+.holefill__opening:has(input:focus-visible) {
+  outline: 2px solid var(--focus-ring, currentColor);
+  outline-offset: 2px;
+}
+
+.holefill__opening:has(input:disabled) {
+  cursor: default;
+  opacity: 0.7;
+}
+
+.holefill__opening-name {
+  grid-column: 2;
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+
+.holefill__opening-size,
+.holefill__opening-verdict {
+  grid-column: 2;
+  font-size: 0.7rem;
+  color: var(--text-secondary);
+}
+
+.holefill__opening-size {
+  font-variant-numeric: tabular-nums;
+}
+
+.holefill__selection,
+.holefill__candidate,
+.holefill__applied {
+  margin-top: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+}
+
+.holefill__progress {
+  margin-top: var(--space-3);
+}
+
+/*
+ * The live region has no box of its own: it is a container for whichever of the
+ * outcome blocks applies, and an empty bordered panel between the list and the
+ * limits would be a permanent hole in the layout.
+ */
+.holefill__status:focus {
+  outline: none;
+}
+
+.holefill__status:focus-visible {
+  outline: 2px solid var(--focus-ring, currentColor);
+  outline-offset: 4px;
+  border-radius: var(--radius);
+}

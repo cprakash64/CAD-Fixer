@@ -13,8 +13,8 @@ matter more than moving fast.
 Five workflows are planned: **Repair, Convert, Split, Texture, Hollow**. Target
 formats: **STL, OBJ, 3MF**.
 
-**Current stage: Stage 4B-1B1 complete — a PRODUCTION VALIDATED PLANAR
-HOLE-FILL ENGINE with no user-facing workflow, on top of the user-facing format
+**Current stage: Stage 4B-1B2 complete — a PRODUCTION USER-FACING PLANAR
+HOLE-FILL WORKFLOW on top of the qualified engine, the user-facing format
 conversion workflow, the validated export engine, production STL/OBJ/3MF import,
 the multi-part geometry document foundation and conservative deterministic
 repair.** The engine, the transaction and the user workflow are all
@@ -42,9 +42,8 @@ returns that format's reader, every reader produces a `GeometryDocument`, and
 `docs/adr/0015-production-obj-and-3mf-import.md`.
 
 NOT implemented, and not to be implemented unless a task explicitly asks:
-tolerance welding, NON-PLANAR hole filling, batch or "fill all" hole filling, a
-user-facing hole-fill workflow of any kind, booleans, remeshing, UNIT CONVERSION of any
-kind, OBJ polygons, MTL resolution, 3MF textures or materials, exported normals
+tolerance welding, NON-PLANAR hole filling, batch or "fill all" hole filling,
+booleans, remeshing, UNIT CONVERSION of any kind, OBJ polygons, MTL resolution, 3MF textures or materials, exported normals
 or texture coordinates, exported 3MF group or property resources, reconstruction
 of an imported 3MF's component hierarchy, splitting, connectors, texturing,
 hollowing, drainage holes, wall-thickness analysis, inter-part overlap
@@ -66,11 +65,13 @@ Stage 4B-1B1 added a validated planar hole-fill ENGINE and NO workflow.
 `packages/mesh-hole-fill` fills ONE selected boundary loop, proven simple,
 manifold and planar, with in-house deterministic ear clipping that adds no
 vertex; the candidate is validated independently, including a PATCH-ATTRIBUTED
-intersection check against the qualified Geogram narrowphase. **There is no Fill
-Hole control and a boundary test asserts there is none** — selection, patch
-preview, Apply and Undo are Stage 4B-1B2. See
-`docs/adr/0018-hole-filling-qualification.md`, its production addendum and its
-Stage 4B-1B1-R1 closure addendum.
+intersection check against the qualified Geogram narrowphase.
+
+Stage 4B-1B2 put a WORKFLOW in front of that engine and changed the engine not
+at all: an inventory of open boundaries, selection of ONE by identity, a patch
+preview read from the stored candidate, an explicit Apply and an Undo. See
+`docs/adr/0018-hole-filling-qualification.md`, its production addendum, its
+Stage 4B-1B1-R1 closure addendum and its Stage 4B-1B2 workflow addendum.
 
 **Topology diagnoses; it never repairs.** Connectivity is recovered from exact
 stored coordinates with no tolerance, and analysis leaves the canonical buffers
@@ -527,16 +528,15 @@ lost`, `printable`, `watertight`, and the rest. **"The numbers are unchanged"
   type-dead. The lookup uses `hasOwnProperty`, so `constructor` and `__proto__`
   are not formats.
 
-## Hole-fill invariants (Stage 4B-1B1)
+## Hole-fill invariants (Stage 4B-1B1 engine, 4B-1B2 workflow)
 
-- **THE ENGINE SHIPS; THE WORKFLOW DOES NOT.** There is no Fill Hole button, no
-  boundary picker, no patch preview and no Apply, and a boundary test asserts
-  those strings are absent from `components/` and `state/`. They are Stage
-  4B-1B2. Do not add one "while we are here".
-- **STAGE 4B-1B1 PRODUCES CANDIDATES ONLY.** The resident document is never
-  replaced, its revision never moves and no undo record is written — for
-  success, refusal, cancellation, or a crash of the worker that ran it. There is
-  no commit path, and adding one is a stage rather than a patch.
+- **THE ENGINE IS UNCHANGED BY THE WORKFLOW.** Stage 4B-1B2 added selection,
+  previews, Apply and Undo and did not relax, extend or re-tune a single ceiling,
+  refusal or validator. `holefill/send-for-fill` still produces CANDIDATES ONLY.
+- **BATCH FILLING IS STILL FORBIDDEN**, and a boundary test asserts the strings
+  `Fill All`, `Fill Holes`, `fill every` and `Close All` appear nowhere in
+  `components/` or `state/`. Closing every opening in a model from one click
+  would close the intentional ones too. Do not add one "while we are here".
 - **ONE SELECTED LOOP PER OPERATION, NAMED BY AN IDENTITY THE WORKER PRODUCED.**
   `holefill/list-loops` is the only source of a `boundaryLoopId`. Never an
   index, never a position in a UI list, never a boundary the caller describes.
@@ -627,7 +627,78 @@ lost`, `printable`, `watertight`, and the rest. **"The numbers are unchanged"
   checked at all — exactly as self-intersection is not.
 - **`Filled` IS NOT `Repaired`.** A validated candidate means ONE named opening
   was closed and validated against the part it came from. Not watertight, not
-  printable, not free of other openings, not free of pre-existing crossings.
+  printable, not free of other openings, not free of pre-existing crossings. The
+  strongest sentence allowed after Apply is `Selected opening filled and
+validated`, and the qualifier naming what was NOT examined travels with it.
+
+## Hole-fill workflow invariants (Stage 4B-1B2)
+
+- **LISTING IS TOPOLOGICAL; PLANARITY IS THE ENGINE'S.** `holefill/list-loops`
+  says whether a component is one ordered, closed, simple, manifold cycle, and
+  nothing more — the planarity policy lives in `mesh-hole-fill`, which must stay
+  out of the geometry worker. So a simple rim that curves out of its plane is
+  listed as ATTEMPTABLE and refused when the engine looks at it, and the row
+  reads `CAD Fixer can attempt this opening`, NEVER `can be filled`. A promise
+  the listing cannot keep is broken once per curved rim. Asserted by test.
+- **THE DISPLAY INDEX IS A LABEL; THE `BoundaryLoopId` IS THE IDENTITY.**
+  "Opening 3" is a position in the deterministic order `extractBoundaryLoops`
+  produces. The index is never sent, compared or resolved, so a renumbering can
+  produce a wrong label and can never produce a wrong operation.
+- **THE PREVIEW IS READ FROM THE STORED CANDIDATE, NEVER RECOMPUTED.**
+  `holefill/patch-preview` reads faces `[sourceFaceCount, candidateFaceCount)`
+  out of the mesh the store holds — the same object Apply installs. A boundary
+  test asserts the commit path reaches no engine symbol: no `runHoleFill`, no
+  `earClip`, no `assessPlanarity`, no `FaceBvh`, no narrowphase, and no import of
+  `@cadfixer/mesh-hole-fill`. ONLY the patch faces travel.
+- **`holefill/commit` IS THE ONLY MUTATION, AND EVERY GUARD IS WORKER-SIDE.**
+  Four identifiers, no geometry. `prepareCommit` checks existence, lifecycle,
+  document, part, opening and revision — the caller's belief AND the store's own
+  reading, independently. `expectedPart` and `expectedLoopId` are STATED by the
+  caller, never read off the candidate. One call site, asserted by test, with the
+  guard above the swap.
+- **A REFUSED COMMIT CONSUMES NOTHING.** The candidate stays `Resolved` and
+  retryable; `markCommitted` runs only after `residentDocuments.replace`
+  succeeded. Consuming on a transient race would destroy a validated fill.
+- **A COMMITTED CANDIDATE IS DEAD, AND `Committed` IS NOT `Discarded`.** Applying
+  twice would append the same patch to a mesh that already carries it. The two
+  terminal states are distinct so the refusal can say what actually happened.
+- **SHARED GEOMETRY IS ISOLATED BY THE SWAP.** Filling part A gives A the
+  candidate and leaves a sibling holding the ORIGINAL mesh OBJECT — reference
+  identity, not value equality, because a copy passes a byte comparison and still
+  means the document silently stopped sharing. Proven at contract level and in a
+  real browser through the worker-side digest.
+- **ONE UNDO HISTORY, TWO RECONSTRUCTIONS.** A fill is recorded in
+  `RepairHistoryStore` and reversed by `repair/undo`; still exactly one undoable
+  change per document, and either kind supersedes the other. `UndoableInverse` is
+  a discriminated union: a repair rebuilds from retained coordinates, a fill
+  TRUNCATES. Truncation is exact BECAUSE the Stage 4B-1B1-R1 gate proved the
+  positions and index prefix unchanged. **Never run `restoreFromInverse` over a
+  fill** — it rebuilds a non-indexed mesh, so an indexed model would come back
+  as soup while appearing to succeed.
+- **UNDO RESTORES BYTES, NOT OBJECT SHARING.** The restored part is a NEW mesh
+  holding the same bytes, not the object a sibling still holds — a consequence of
+  the patch design ADR 0011 chose, and stated rather than hidden. A document that
+  shared one mesh before a fill holds two equal ones after a fill and an undo.
+  Retaining the pre-fill mesh, or re-sharing by byte comparison across the
+  document, were both considered and rejected; see ADR 0018.
+- **THE CANDIDATE CARRIES THE SOURCE'S GROUPS.** The patch is appended, so every
+  existing group range still describes exactly its own faces. Dropping them made
+  Apply a silent metadata loss on export. The patch faces join NO group: they are
+  geometry the file never carried.
+- **THE INVENTORY IS CAPPED AND THE COUNT IS NOT.** 256 rows, an exact
+  `loopCount`, and the truncation disclosed in words with both numbers. Only the
+  SELECTED opening's rim ever crosses to the page.
+- **THE FILL WORKER IS BUILT ONLY WHEN PREVIEW IS PRESSED.** Opening the app, the
+  panel, the listing and a selection construct no `Worker` at all.
+- **ALL HOLE-FILL COPY LIVES IN `apps/web/src/state/hole-fill-presentation.ts`**,
+  all of it, with exhaustive switches and no `default`. Banned by test:
+  `watertight`, `printable`, `model repaired`, `hole`, `defect`, `damage`,
+  `broken`, and every engine internal — `Geogram`, `narrowphase`, `broadphase`,
+  `Euler`, `Float32`, a raw status code. A refusal is toned as a DECISION;
+  `INTERNAL_FAILURE` is the only status toned as a failure.
+- **APPLY AND UNDO NEVER RUN CONCURRENTLY WITH A REPAIR COMMIT.** One mutation at
+  a time across the workspace: two commits racing for one revision would make the
+  loser's typed refusal look like a defect to the user.
 
 ## Repair invariants (Stage 3B-1)
 
@@ -820,8 +891,8 @@ ads, analytics, databases, backends. Leave clean seams; do not build them.
 Also out of scope until a task asks: redo, a multi-step undo history,
 inter-part overlap detection, an assembly tree editor, transform editing, any
 repair operation outside the four conservative ones, and every part of hole
-filling beyond the Stage 4B-1B1 engine — selection, preview, Apply, Undo,
-non-planar loops, batch filling and PMP.
+filling beyond the Stage 4B-1B2 workflow — non-planar loops, batch or "fill all"
+filling, seam or near-coincident boundary repair, and PMP.
 
 Do not install Manifold, Geogram, lib3mf, OpenVDB, CGAL, OpenCascade, or any
 other geometry kernel without an explicit decision — licensing and WASM

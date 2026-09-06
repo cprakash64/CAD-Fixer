@@ -51,6 +51,12 @@ export type {
   ListBoundaryLoopsResult,
   SendForFillPayload,
   SendForFillResult,
+  BoundaryPreviewPayload,
+  BoundaryPreviewResult,
+  PatchPreviewPayload,
+  PatchPreviewResult,
+  HoleFillCommitPayload,
+  HoleFillCommitResult,
 } from './protocol';
 
 /**
@@ -166,11 +172,12 @@ export type {
 
 export { TopologyReportCache } from './topology-cache';
 
-export { RepairHistoryStore } from './repair-history';
+export { RepairHistoryStore, UndoableChangeKind } from './repair-history';
 export type {
   RepairHistoryEntry,
   RepairHistoryStats,
   RepairUndoPreparation,
+  UndoableInverse,
 } from './repair-history';
 
 /**
@@ -182,6 +189,7 @@ export type {
  * one.
  */
 export {
+  BoundaryLoopRefusal,
   HOLE_FILL_CONTRACT_CHECKED,
   HOLE_FILL_MAX_BOUNDARY_VERTICES,
   HOLE_FILL_MAX_PART_FACES,
@@ -194,4 +202,5 @@ export type {
   HoleFillCandidateHandle,
   HoleFillCandidateId,
   HoleFillCandidateStats,
+  HoleFillCommitRequest,
 } from './hole-fill-candidates';

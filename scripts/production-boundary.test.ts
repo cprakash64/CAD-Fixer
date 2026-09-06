@@ -766,13 +766,25 @@ describe('the hole-fill engine stays where Stage 4B-1B1 put it', () => {
     }
   });
 
-  it('exposes no Fill Hole control anywhere in the interface', () => {
+  /*
+   * STAGE 4B-1B2 REPLACED THE "NO CONTROL" ASSERTION.
+   *
+   * Stage 4B-1B1 asserted that no Fill control existed anywhere, because the
+   * engine shipped without a workflow and "we will wire it up later" had to be
+   * kept from becoming "it is already wired up". That stage is closed and the
+   * workflow now exists, so the old assertion describes behaviour that has
+   * legitimately changed. It is REPLACED rather than deleted: the checks below
+   * assert precisely what the workflow may and may not offer, which is a
+   * stronger statement than the absence it replaces.
+   */
+  it('offers exactly ONE fill control, and it is not a batch one', () => {
     /*
-     * STAGE 4B-1B1 IS THE ENGINE ONLY. No button, no menu item, no panel. This
-     * is the check that keeps "we will wire it up later" from becoming "it is
-     * already wired up".
+     * FILL-ALL IS STILL FORBIDDEN, and always will be without an explicit
+     * decision: it would close every opening in a model, including the
+     * intentional ones, from a single click. So is any wording that promises to
+     * fill more than the one opening the user selected.
      */
-    const BANNED = ['Fill Hole', 'Fill hole', 'fill-hole-button', 'Fill All Holes'];
+    const BANNED = ['Fill All', 'fill all', 'Fill Holes', 'fill every', 'Close All'];
     const componentFiles = [
       ...sourceFilesUnder(join(REPO_ROOT, 'apps', 'web', 'src', 'components')),
       ...sourceFilesUnder(join(REPO_ROOT, 'apps', 'web', 'src', 'state')),
@@ -785,7 +797,72 @@ describe('the hole-fill engine stays where Stage 4B-1B1 put it', () => {
         if (contents.includes(banned)) offenders.push(`${relative(REPO_ROOT, file)}: ${banned}`);
       }
     }
-    expect(offenders, 'the hole-fill workflow belongs to Stage 4B-1B2').toEqual([]);
+    expect(offenders, 'batch filling is out of scope and must stay out').toEqual([]);
+  });
+
+  it('commits a hole-fill candidate from exactly ONE place', () => {
+    /*
+     * THE STAGE 4B-1B2 COUNTERPART of the registration check below. `Apply` is
+     * the only path by which proposed geometry becomes the user's model, and it
+     * goes through `HoleFillCandidateStore.prepareCommit` — which applies every
+     * identity, lifecycle and staleness guard — followed by
+     * `residentDocuments.replace`. A second commit path would be a second set of
+     * rules, and the two would eventually disagree.
+     */
+    const files = [
+      ...sourceFilesUnder(join(REPO_ROOT, 'apps')),
+      ...sourceFilesUnder(join(REPO_ROOT, 'packages')),
+    ].filter((file) => !/\.test\.(ts|tsx)$/.test(file));
+
+    const callers = files
+      .filter((file) => readFileSync(file, 'utf8').includes('holeFillCandidates.prepareCommit('))
+      .map((file) => relative(REPO_ROOT, file));
+
+    expect(callers).toEqual([
+      join('apps', 'web', 'src', 'workers', 'hole-fill-workflow-handlers.ts'),
+    ]);
+
+    const handlers = readFileSync(
+      join(REPO_ROOT, 'apps', 'web', 'src', 'workers', 'hole-fill-workflow-handlers.ts'),
+      'utf8',
+    );
+    // And the guard runs BEFORE the swap. An ordering inversion would let a
+    // stale or consumed candidate replace a part and only then be refused.
+    const guard = handlers.indexOf('holeFillCandidates.prepareCommit(');
+    const swap = handlers.indexOf('residentDocuments.replace(');
+    expect(guard).toBeGreaterThan(-1);
+    expect(swap).toBeGreaterThan(guard);
+  });
+
+  it('never re-runs the engine while applying a candidate', () => {
+    /*
+     * THE CORE PRODUCT-SAFETY GUARANTEE OF STAGE 4B-1B2: what the user previewed
+     * is what Apply commits. That holds because the commit path reads the mesh
+     * the candidate store already holds and does nothing else — no
+     * triangulation, no planarity test, no broadphase, no narrowphase, no
+     * boundary-loop extraction of the candidate.
+     *
+     * Asserted structurally rather than by measurement, because a timing test
+     * would pass on a fast machine with the re-run present.
+     */
+    const handlers = readFileSync(
+      join(REPO_ROOT, 'apps', 'web', 'src', 'workers', 'hole-fill-workflow-handlers.ts'),
+      'utf8',
+    );
+    const commit = handlers.slice(handlers.indexOf('holeFillCommitHandler'));
+    for (const banned of [
+      'runHoleFill',
+      'earClip',
+      'assessPlanarity',
+      'FaceBvh',
+      'narrowphase',
+      'sendForFill',
+    ]) {
+      expect(commit.includes(banned), `holefill/commit must not reach ${banned}`).toBe(false);
+    }
+
+    // And the engine is not even importable from the commit module.
+    expect(handlers).not.toContain("from '@cadfixer/mesh-hole-fill'");
   });
 
   it('registers a hole-fill candidate from exactly ONE place', () => {

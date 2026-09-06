@@ -16,6 +16,11 @@ import {
   holeFillListLoopsHandler,
   holeFillSendForFillHandler,
 } from './hole-fill-handlers';
+import {
+  holeFillBoundaryPreviewHandler,
+  holeFillCommitHandler,
+  holeFillPatchPreviewHandler,
+} from './hole-fill-workflow-handlers';
 import { documentSendForExportHandler } from './export-handlers';
 import {
   repairCommitHandler,
@@ -65,6 +70,11 @@ host.register('model/send-for-diagnostic', modelSendForDiagnosticHandler);
 host.register('holefill/list-loops', holeFillListLoopsHandler);
 host.register('holefill/send-for-fill', holeFillSendForFillHandler);
 host.register('holefill/discard', holeFillDiscardHandler);
+// The Stage 4B-1B2 workflow: two disposable render snapshots and ONE mutation.
+// Nothing here re-triangulates; `holefill/commit` applies the stored candidate.
+host.register('holefill/boundary-preview', holeFillBoundaryPreviewHandler);
+host.register('holefill/patch-preview', holeFillPatchPreviewHandler);
+host.register('holefill/commit', holeFillCommitHandler);
 host.register('document/send-for-export', documentSendForExportHandler);
 
 // Conservative repair. Five operations so planning, preview, apply and undo

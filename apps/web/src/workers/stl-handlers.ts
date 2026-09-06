@@ -39,6 +39,7 @@ import {
 } from '@cadfixer/file-formats';
 import { analyseTopology, estimateTopologyWorkspaceBytes } from '@cadfixer/mesh-topology';
 import {
+  HoleFillCandidateStore,
   RepairCandidateStore,
   RepairHistoryStore,
   TopologyReportCache,
@@ -104,6 +105,18 @@ export const repairCandidates = new RepairCandidateStore();
  * built here.
  */
 export const repairHistory = new RepairHistoryStore();
+
+/**
+ * Hole-fill candidates, beside the repair candidates and for the same reasons.
+ *
+ * DECLARED HERE RATHER THAN IN `hole-fill-handlers.ts` — Stage 4B-1B2. The store
+ * has to be released when a document is released, and `model/release` lives in
+ * this file; a store declared in the hole-fill module would have made this file
+ * import that one, which already imports this one. Only the DECLARATION moved.
+ * `HoleFillCandidateStore.create` is still called from exactly one place, and
+ * the production boundary scan still asserts which place that is.
+ */
+export const holeFillCandidates = new HoleFillCandidateStore();
 
 /**
  * The latest topology report per resident model.
@@ -684,6 +697,10 @@ export const modelReleaseHandler: OperationHandler<'model/release'> = (payload) 
   // nothing can reverse, and its reports would describe meshes nothing can
   // resolve.
   repairHistory.releaseDocument(documentId);
+  // A candidate for a released document can never be committed — every guard in
+  // `prepareCommit` would refuse it — so retaining a whole part's geometry for
+  // it would be a leak with no upside.
+  holeFillCandidates.releaseDocument(documentId);
   topologyReports.release(documentId);
   const value: ModelReleaseResult = { released };
   return Promise.resolve({ value });

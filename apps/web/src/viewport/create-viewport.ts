@@ -31,6 +31,11 @@ import {
   type ChangeOverlayView,
   type ChangeOverlayVisibility,
 } from './create-change-overlays';
+import {
+  createHoleFillOverlays,
+  type HoleFillOverlayData,
+  type HoleFillOverlayHandle,
+} from './create-hole-fill-overlays';
 
 /**
  * The 3D workspace viewport.
@@ -148,6 +153,15 @@ export interface ViewportChangeData {
   readonly generation: number;
 }
 
+/**
+ * The selected opening and the proposed patch for the ACTIVE part.
+ *
+ * `revision` names the model these belong to, and is checked for the same
+ * reason every other overlay's is: a rim computed for geometry the user has
+ * moved off would mark an opening where there is none.
+ */
+export type ViewportHoleFillData = HoleFillOverlayData;
+
 export interface ViewportHandle {
   /** Replaces the displayed model, disposing whatever was there. */
   setModel(model: ViewportModel | undefined): void;
@@ -179,6 +193,14 @@ export interface ViewportHandle {
   setPreview(preview: ViewportPreview | undefined): void;
   /** Replaces the repair change overlays. `undefined` clears them. */
   setChangeOverlays(data: ViewportChangeData | undefined): void;
+  /**
+   * Installs or clears the selected opening and its proposed patch.
+   *
+   * DOES NOT REFRAME, and does not touch the model. The source part stays drawn
+   * exactly as it was: the patch is added beside it, never in place of it, so
+   * the user can see how the two meet.
+   */
+  setHoleFillOverlays(data: ViewportHoleFillData | undefined): void;
   /** Frames the current model. No-op when the workspace is empty. */
   fitView(): void;
   /** Number of GPU-backed model objects in the scene. For leak tests. */
@@ -189,6 +211,10 @@ export interface ViewportHandle {
   readonly previewObjectCount: number;
   /** Repair change overlay objects currently in the scene. For leak tests. */
   readonly changeOverlayObjectCount: number;
+  /** Rim and patch objects currently in the scene. For leak tests. */
+  readonly holeFillOverlayObjectCount: number;
+  /** Cumulative rim/patch uploads and disposals. For double-dispose tests. */
+  readonly holeFillOverlayLifecycle: { readonly created: number; readonly disposed: number };
   /** Distinct GPU geometries currently uploaded. For sharing and leak tests. */
   readonly sharedGeometryCount: number;
   /** Cumulative uploads and disposals. For double-dispose and leak tests. */
@@ -294,6 +320,14 @@ export function createViewport(
   const changeOverlays: ChangeOverlayHandle = createChangeOverlays();
   activePartGroup.add(changeOverlays.group);
 
+  // The rim and the patch join the same group for exactly the same reason: they
+  // describe the ACTIVE part's mesh in part-local coordinates, so they have to
+  // ride on the active part's placement composed with the display-centring
+  // offset. One transform, applied once, rather than three call sites that have
+  // to agree.
+  const holeFillOverlays: HoleFillOverlayHandle = createHoleFillOverlays();
+  activePartGroup.add(holeFillOverlays.group);
+
   /**
    * One mesh per part, keyed by part id.
    *
@@ -391,6 +425,17 @@ export function createViewport(
     canvas.dataset.previewObjects = String(previewMesh === undefined ? 0 : 1);
     canvas.dataset.overlayObjects = String(overlays.objectCount);
     canvas.dataset.changeOverlayObjects = String(changeOverlays.objectCount);
+    /*
+     * THE RIM AND PATCH COUNTERS — Stage 4B-1B2. Published for the same reason
+     * the geometry lifecycle counters are: a leaked preview costs as much as a
+     * leaked model, and "it looks fine" is not a measurement. Cumulative
+     * create/dispose totals rather than only a live count, because a leak that
+     * grows and shrinks in step is indistinguishable from correctness without
+     * them.
+     */
+    canvas.dataset.holeFillOverlayObjects = String(holeFillOverlays.objectCount);
+    canvas.dataset.holeFillOverlaysCreated = String(holeFillOverlays.lifecycle.created);
+    canvas.dataset.holeFillOverlaysDisposed = String(holeFillOverlays.lifecycle.disposed);
   };
 
   /**
@@ -510,6 +555,10 @@ export function createViewport(
     // model's geometry is drawn under another model's defects.
     overlays.setSamples(undefined, undefined);
     changeOverlays.setSamples(undefined);
+    // The rim and the patch describe ONE part of ONE revision. Neither survives
+    // a model change or a part change; carrying either across would draw the
+    // previous selection's opening on geometry that does not have it.
+    holeFillOverlays.setData(undefined);
     currentModel = model;
 
     if (model === undefined) {
@@ -582,6 +631,10 @@ export function createViewport(
     disposePreviewMesh();
     overlays.setSamples(undefined, undefined);
     changeOverlays.setSamples(undefined);
+    // The rim and the patch describe ONE part of ONE revision. Neither survives
+    // a model change or a part change; carrying either across would draw the
+    // previous selection's opening on geometry that does not have it.
+    holeFillOverlays.setData(undefined);
 
     // A preview may have hidden the previously active part. Every part is drawn
     // once no candidate is on screen.
@@ -734,12 +787,33 @@ export function createViewport(
     render();
   };
 
+  const setHoleFillOverlays = (data: ViewportHoleFillData | undefined): void => {
+    if (data === undefined || currentModel === undefined) {
+      holeFillOverlays.setData(undefined);
+      render();
+      return;
+    }
+    /*
+     * THE STALE GUARD, repeated here rather than trusted from the caller. The
+     * panel checks it too; neither layer relies on the other, for the same
+     * reason the diagnostic overlays check twice.
+     */
+    if (data.revision !== currentModel.revision) {
+      holeFillOverlays.setData(undefined);
+      render();
+      return;
+    }
+    holeFillOverlays.setData(data);
+    render();
+  };
+
   return {
     setModel,
     setActivePart,
     setOverlays,
     setPreview,
     setChangeOverlays,
+    setHoleFillOverlays,
     fitView,
     get renderedObjectCount(): number {
       return partMeshes.size;
@@ -752,6 +826,12 @@ export function createViewport(
     },
     get changeOverlayObjectCount(): number {
       return changeOverlays.objectCount;
+    },
+    get holeFillOverlayObjectCount(): number {
+      return holeFillOverlays.objectCount;
+    },
+    get holeFillOverlayLifecycle(): { readonly created: number; readonly disposed: number } {
+      return holeFillOverlays.lifecycle;
     },
     get sharedGeometryCount(): number {
       return sharedGeometry.size;
@@ -772,6 +852,7 @@ export function createViewport(
       surfaceMaterial.dispose();
       overlays.dispose();
       changeOverlays.dispose();
+      holeFillOverlays.dispose();
       grid.geometry.dispose();
       disposeMaterial(grid);
       axes.geometry.dispose();
