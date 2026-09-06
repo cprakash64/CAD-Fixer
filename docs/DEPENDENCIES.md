@@ -47,14 +47,14 @@ That is the entire runtime dependency list. Notably absent:
 **This section describes code that is distributed to users**, unlike the
 research artifacts under `experiments/`.
 
-|                |                                                                      |
-| -------------- | -------------------------------------------------------------------- |
-| Version        | v1.10.0                                                              |
-| Commit         | `c8529bb00838186938ab31d96008a59b6a892dee`                           |
-| Toolchain      | emsdk 4.0.16                                                         |
-| Where          | `packages/self-intersection-kernel/artifacts/self-intersection.wasm` |
-| Reachable from | `apps/web/src/workers/self-intersection.worker.ts`, and nothing else |
-| Licence        | **BSD-3-Clause** (core)                                              |
+|                |                                                                                                                          |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| Version        | v1.10.0                                                                                                                  |
+| Commit         | `c8529bb00838186938ab31d96008a59b6a892dee`                                                                               |
+| Toolchain      | emsdk 4.0.16                                                                                                             |
+| Where          | `packages/self-intersection-kernel/artifacts/self-intersection.wasm`                                                     |
+| Reachable from | `apps/web/src/workers/self-intersection.worker.ts` and `apps/web/src/workers/hole-fill-narrowphase.ts`, and nothing else |
+| Licence        | **BSD-3-Clause** (core)                                                                                                  |
 
 **Why this is licence-clean.** Geogram's distribution bundles TetGen (AGPL-3.0)
 and Triangle (non-free), neither of which may enter a proprietary product.
@@ -73,6 +73,27 @@ it is not discharged by this file.**
 
 zlib is also linked (Geogram satisfies `<zlib.h>` from its own bundled copy) and
 carries the permissive zlib licence's attribution requirement.
+
+**Stage 4B-1B1 added a second entry point to the SAME artifact, not a second
+kernel.** `cf_hf_begin` / `cf_hf_classify` / `cf_hf_end` classify a
+caller-supplied list of face pairs and attribute each finding to patch/source or
+patch/patch, reusing Geogram's exact `triangles_intersections` and CAD Fixer's
+own frozen classifier unchanged. Nothing new is linked, no build option changed,
+and `si_core.h` and `si_bvh.h` stay byte-identical to the research copies. The
+build was verified REPRODUCIBLE first: rebuilding the unchanged source produced
+byte-identical output (`self-intersection.js` SHA-256
+`5829ce696e614eb295d2af8da5abfa7e52e6499dafa4060aed76c52d3813936d`,
+`self-intersection.wasm` SHA-256
+`8f6b3fa78be55078780615ed2118d4446422030734d413d9e3b9ea4be582482f`), so the
+artifact that ships now differs from the qualified one only by the code that was
+deliberately added.
+
+**PMP does not ship, and Stage 4B-1B1 is where that was decided rather than
+assumed.** ADR 0018 qualified `pmp::fill_hole` and rejected it: it traps
+uncatchably inside the module on a legal 512-vertex loop, loses append-only
+provenance, refines a 128-vertex loop by +1,193 vertices, and times out at
+2,000. CAD Fixer's own ear clipping is the production triangulator, and a
+boundary test scans for PMP imports and artifacts in every shipped package.
 
 ## Geometry kernel licensing
 

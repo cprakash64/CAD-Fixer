@@ -1,0 +1,21 @@
+{
+  "name": "@cadfixer/mesh-hole-fill",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "sideEffects": false,
+  "description": "Conservative planar hole-fill engine: ordered-loop eligibility, relative planarity, deterministic ear clipping, a bounded patch-query broadphase, and independent post-fill validation. Kernel-free; the exact narrowphase is injected by the disposable worker.",
+  "//exports": "./fixtures exposes the HP01-HP32 corpus so the worker and application suites exercise the SAME geometry the engine is pinned against. Test-only: no production path imports it, and the production boundary scan checks that.",
+  "exports": {
+    ".": "./src/index.ts",
+    "./fixtures": "./src/fixtures.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@cadfixer/mesh-core": "*",
+    "@cadfixer/mesh-topology": "*",
+    "@cadfixer/shared": "*"
+  }
+}

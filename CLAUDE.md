@@ -13,10 +13,11 @@ matter more than moving fast.
 Five workflows are planned: **Repair, Convert, Split, Texture, Hollow**. Target
 formats: **STL, OBJ, 3MF**.
 
-**Current stage: Stage 4A-2B3 complete — a USER-FACING FORMAT CONVERSION
-WORKFLOW over the validated export engine, on top of production STL/OBJ/3MF
-import, the multi-part geometry document foundation and conservative
-deterministic repair.** The engine, the transaction and the user workflow are all
+**Current stage: Stage 4B-1B1 complete — a PRODUCTION VALIDATED PLANAR
+HOLE-FILL ENGINE with no user-facing workflow, on top of the user-facing format
+conversion workflow, the validated export engine, production STL/OBJ/3MF import,
+the multi-part geometry document foundation and conservative deterministic
+repair.** The engine, the transaction and the user workflow are all
 production. Implemented: structural STL encoding detection, hand-written binary
 and ASCII STL parsers with resource budgets, worker-based parsing with progress
 and working cancellation, a real Three.js viewport with camera controls, model
@@ -41,7 +42,8 @@ returns that format's reader, every reader produces a `GeometryDocument`, and
 `docs/adr/0015-production-obj-and-3mf-import.md`.
 
 NOT implemented, and not to be implemented unless a task explicitly asks:
-tolerance welding, hole filling, booleans, remeshing, UNIT CONVERSION of any
+tolerance welding, NON-PLANAR hole filling, batch or "fill all" hole filling, a
+user-facing hole-fill workflow of any kind, booleans, remeshing, UNIT CONVERSION of any
 kind, OBJ polygons, MTL resolution, 3MF textures or materials, exported normals
 or texture coordinates, exported 3MF group or property resources, reconstruction
 of an imported 3MF's component hierarchy, splitting, connectors, texturing,
@@ -59,6 +61,15 @@ Stage 4A-2B3 made all three formats writable and put a workflow in front of the
 engine: a whole-document STL writer, a deterministic conversion compatibility
 report, and an export-local unit assertion for 3MF. See
 `docs/adr/0017-format-conversion-workflow.md`.
+
+Stage 4B-1B1 added a validated planar hole-fill ENGINE and NO workflow.
+`packages/mesh-hole-fill` fills ONE selected boundary loop, proven simple,
+manifold and planar, with in-house deterministic ear clipping that adds no
+vertex; the candidate is validated independently, including a PATCH-ATTRIBUTED
+intersection check against the qualified Geogram narrowphase. **There is no Fill
+Hole control and a boundary test asserts there is none** — selection, patch
+preview, Apply and Undo are Stage 4B-1B2. See
+`docs/adr/0018-hole-filling-qualification.md` and its production addendum.
 
 **Topology diagnoses; it never repairs.** Connectivity is recovered from exact
 stored coordinates with no tolerance, and analysis leaves the canonical buffers
@@ -139,6 +150,10 @@ packages/file-formats/      format descriptors, screening, budgets, identificati
                             conversion compatibility policy (src/export/)
 packages/mesh-topology/     read-only topology analysis (no mutation, no welding)
 packages/mesh-repair/       conservative deterministic repair (kernel-free)
+packages/mesh-hole-fill/    planar hole-fill engine: ordered-loop eligibility,
+                            relative planarity, deterministic ear clipping, a
+                            bounded patch-query broadphase, and independent
+                            validation (kernel-free; narrowphase injected)
 packages/geometry-runtime/  worker protocol, coordinator, worker host
 docs/                       architecture, dependencies, privacy, deployment
 docs/adr/                   architecture decision records
@@ -147,7 +162,8 @@ e2e/                        Playwright specs
 
 Dependency direction is one-way:
 `shared ← mesh-core ← file-formats`, `shared ← mesh-core ← mesh-topology`,
-`shared ← mesh-core ← mesh-topology ← geometry-runtime`, all ← `apps/web`.
+`shared ← mesh-core ← mesh-topology ← geometry-runtime`,
+`shared ← mesh-core ← mesh-topology ← mesh-hole-fill`, all ← `apps/web`.
 `geometry-runtime` gained a `mesh-core` dependency in Stage 1 because geometry
 operations speak `CanonicalMesh`, and a **type-only** `mesh-topology` dependency
 in Stage 2 because `model/analyze` returns a topology report and an untyped
@@ -177,6 +193,7 @@ npm run bench:document # document-wrapper cost + part-count scaling (NOT in CI)
 npm run bench:formats  # OBJ + 3MF import at 1/10/50 MiB (NOT in CI)
 npm run bench:export   # OBJ + 3MF export, sizes and placement counts (NOT in CI)
 npm run bench:repair-browser # repair workflow timings in a real browser (NOT in CI)
+npm run bench:hole-fill # hole-fill phase timings and broadphase reduction (NOT in CI)
 npm run check:node     # runtime version guard; also runs before test/build/verify
 ```
 
@@ -509,6 +526,90 @@ lost`, `printable`, `watertight`, and the rest. **"The numbers are unchanged"
   type-dead. The lookup uses `hasOwnProperty`, so `constructor` and `__proto__`
   are not formats.
 
+## Hole-fill invariants (Stage 4B-1B1)
+
+- **THE ENGINE SHIPS; THE WORKFLOW DOES NOT.** There is no Fill Hole button, no
+  boundary picker, no patch preview and no Apply, and a boundary test asserts
+  those strings are absent from `components/` and `state/`. They are Stage
+  4B-1B2. Do not add one "while we are here".
+- **STAGE 4B-1B1 PRODUCES CANDIDATES ONLY.** The resident document is never
+  replaced, its revision never moves and no undo record is written — for
+  success, refusal, cancellation, or a crash of the worker that ran it. There is
+  no commit path, and adding one is a stage rather than a patch.
+- **ONE SELECTED LOOP PER OPERATION, NAMED BY AN IDENTITY THE WORKER PRODUCED.**
+  `holefill/list-loops` is the only source of a `boundaryLoopId`. Never an
+  index, never a position in a UI list, never a boundary the caller describes.
+- **THE LOOP ID IS STRUCTURALLY UNIQUE, NOT PROBABILISTICALLY.**
+  `bl-<minVertex>-<count>-<hash64>`: boundary components are vertex-disjoint, so
+  no two components of one part can share a smallest welded vertex id. The
+  research 32-bit coordinate hash was audited and rejected — at 20,165 loops it
+  collides ~4.6% of the time, and a collision means filling the wrong hole. **The
+  identity is computed from the WALK, never from the verdict**: hashing only
+  eligible loops made one boundary hash two ways depending on whether the caller
+  passed a vertex ceiling.
+- **NO TOLERANCE ANYWHERE, EXCEPT ONE ALGORITHM-ELIGIBILITY RATIO.**
+  `RELATIVE_PLANARITY = 1e-4` is max deviation over the loop's OWN largest
+  extent — dimensionless, so it means the same thing at any scale and for a
+  unitless STL. It is NOT a welding distance, a merge tolerance or a proximity
+  test, and nothing in the package welds, merges, snaps or moves a coordinate.
+- **A ZERO NEWELL NORMAL IS DEGENERATE, NOT PLANAR.** A collinear loop has no
+  plane; calling it perfectly planar would send a zero-area loop into a
+  triangulator with nothing to triangulate.
+- **EAR CLIPPING, NEVER A FAN.** A fan covers area outside every concave polygon
+  — the same defect the OBJ reader refuses to commit. Zero added vertices, zero
+  moved vertices, exactly `n - 2` triangles, deterministic ear choice from the
+  lowest remaining index. The regression guard is a COMB, not an L: the L
+  happens to be star-shaped from its origin corner, so a fan covers it correctly
+  and the guard proved nothing.
+- **PROVENANCE IS FROZEN AND APPEND-ONLY.** Faces `[0, sourceFaceCount)` are the
+  user's; the rest is the patch. Candidate positions are the source's bytes and
+  the candidate's index prefix is the source's index bytes, compared as BYTES —
+  a numeric comparison would call `NaN` unequal to itself and `-0` equal to `+0`.
+- **TRIANGULATION SUCCESS IS NEVER ENGINE SUCCESS.** Structural validity,
+  topology postconditions, patch winding against the source's own directed
+  edges, patch connectivity, Euler as corroboration, and patch-attributed
+  intersection all run afterwards, on the final canonical Float32
+  representation.
+- **EULER IS CORROBORATION AND MAY NEVER OVERRIDE A FAILED VALIDATOR.** HP23 has
+  exactly the right χ and drives its patch through an internal wall.
+- **SELF-INTERSECTION IS PATCH-ATTRIBUTED, NEVER AGGREGATE.** Only
+  (patch × source) and (patch × patch) pairs are generated, so a pre-existing
+  crossing cannot be blamed on the fill and an unchanged total is never read as
+  proof. A pair the narrowphase could not classify FAILS the candidate.
+- **THE NARROWPHASE IS THE QUALIFIED GEOGRAM KERNEL, NOT THE RESEARCH SAT
+  CHECKER.** The research checker is a SECOND OPINION in tests only; it is
+  strictly weaker — no exact predicates, and it skips any pair sharing a welded
+  vertex, so it cannot see an overlap beyond a legitimately shared edge.
+  `si_core.h` and `si_bvh.h` stay byte-identical to the research copies; Stage
+  4B-1B1 added `cf_hf_*` to `binding.cpp` and changed `cf_si_run` not at all.
+- **THE BROADPHASE IS A PORT OF `si_bvh.h`, AND THE REASON IS WRITTEN DOWN.**
+  The C++ tree is unreachable from TypeScript and exposes only an all-pairs
+  query, so it cannot answer "which source faces might this patch triangle hit".
+  The port keeps median split, leaf size 8, INCLUSIVE overlap and the face-index
+  tie-break, and is validated against a brute-force oracle — a broadphase that
+  misses a pair turns a defect into a clean bill of health.
+- **CANDIDATE PAIRS STREAM; THEY ARE NEVER ACCUMULATED.** A reused 8,192-pair
+  buffer, plus ceilings on node visits, AABB tests, candidates and narrowphase
+  pairs. The research `O(patchFaces × sourceFaces)` list exhausted a 1.7 GB heap
+  and is forbidden.
+- **CANCELLATION IS TERMINATION.** The fill is one synchronous pass containing
+  long exact C++ calls that poll no JavaScript flag, so a cooperative token
+  would be a lie. Cancel kills the disposable worker AND cancels the
+  authoritative operation, which is otherwise awaiting a channel the dead worker
+  will never answer.
+- **A CANDIDATE FROM A REVISION THE USER HAS LEFT IS DISCARDED**, not registered:
+  the authoritative worker re-checks the revision when the reply arrives and
+  reports `STALE_REVISION`.
+- **THE CEILINGS ARE 512 BOUNDARY VERTICES AND 250,000 FACES, BOTH MEASURED.**
+  `npm run bench:hole-fill` is the evidence, and the patch ceiling is DERIVED
+  (`n - 2`) rather than a second number that could disagree with the first.
+- **HOLE FILLING IS INTRA-PART.** Part-local coordinates, `PartTransform`
+  untouched and never baked in, no unit assumption, and inter-part collision not
+  checked at all — exactly as self-intersection is not.
+- **`Filled` IS NOT `Repaired`.** A validated candidate means ONE named opening
+  was closed and validated against the part it came from. Not watertight, not
+  printable, not free of other openings, not free of pre-existing crossings.
+
 ## Repair invariants (Stage 3B-1)
 
 - **ONE GEOMETRY KERNEL IN PRODUCTION, CONFINED TO ONE WORKER.** As of Stage
@@ -698,8 +799,10 @@ Authentication, accounts, subscriptions, payments, pricing, download gating,
 ads, analytics, databases, backends. Leave clean seams; do not build them.
 
 Also out of scope until a task asks: redo, a multi-step undo history,
-inter-part overlap detection, an assembly tree editor, transform editing, and any
-repair operation outside the four conservative ones.
+inter-part overlap detection, an assembly tree editor, transform editing, any
+repair operation outside the four conservative ones, and every part of hole
+filling beyond the Stage 4B-1B1 engine — selection, preview, Apply, Undo,
+non-planar loops, batch filling and PMP.
 
 Do not install Manifold, Geogram, lib3mf, OpenVDB, CGAL, OpenCascade, or any
 other geometry kernel without an explicit decision — licensing and WASM

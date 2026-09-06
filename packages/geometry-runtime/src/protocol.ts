@@ -14,6 +14,11 @@ import type {
 } from '@cadfixer/mesh-repair';
 import type { DocumentHandle } from './resident-documents';
 import type { RepairCandidateHandle } from './repair-candidates';
+import type { HoleFillCandidateHandle } from './hole-fill-candidates';
+// Type-only, exactly as the topology and repair contracts are, so no engine
+// code is pulled into the main-thread bundle. The VALUES the interface compares
+// against are restated in `hole-fill.ts`.
+import type { HoleFillStatus, HoleFillValidationSummary } from './hole-fill';
 
 /**
  * Wire protocol between the main thread and geometry workers.
@@ -135,6 +140,117 @@ export interface OperationMap {
     payload: RepairUndoPayload;
     result: RepairUndoResult;
   };
+  /**
+   * Lists the boundary components of one part as ORDERED, TARGETABLE loops.
+   *
+   * READ-ONLY, and the only way a caller can obtain a `boundaryLoopId`. There
+   * is no other route: a fill names a loop by an identity the authoritative
+   * worker produced from the geometry it holds, never by an index the interface
+   * chose.
+   */
+  'holefill/list-loops': {
+    payload: ListBoundaryLoopsPayload;
+    result: ListBoundaryLoopsResult;
+  };
+  /**
+   * Hands the disposable fill worker a copy of one part and awaits its verdict.
+   *
+   * The same worker-to-worker shape as `model/send-for-diagnostic`, with one
+   * difference: this operation stays PENDING until the fill worker answers,
+   * because the answer includes a CANDIDATE the authoritative worker has to
+   * take ownership of. The page receives a handle and scalars; the geometry
+   * never leaves the workers.
+   */
+  'holefill/send-for-fill': {
+    payload: SendForFillPayload;
+    result: SendForFillResult;
+  };
+  /** Releases a hole-fill candidate's geometry. Candidate-scoped. */
+  'holefill/discard': {
+    payload: HoleFillDiscardPayload;
+    result: HoleFillDiscardResult;
+  };
+}
+
+/* --------------------------------------------------------------- hole fill -- */
+
+export interface ListBoundaryLoopsPayload {
+  readonly handle: DocumentHandle;
+  readonly partId: string;
+  /** Bounded: a mesh of loose triangles has one boundary component per face. */
+  readonly limit?: number;
+}
+
+/**
+ * One boundary component, described in SCALARS.
+ *
+ * NO COORDINATES. The interface needs to know an opening exists, how big it is,
+ * and whether it can be filled; it does not need the ring of points, and
+ * shipping one would put geometry in React state.
+ */
+export interface BoundaryLoopSummary {
+  readonly boundaryLoopId: string;
+  readonly vertexCount: number;
+  readonly edgeCount: number;
+  /** True when this component is one ordered, fillable cycle. */
+  readonly fillable: boolean;
+  /** Why not, when `fillable` is false. A code, never a sentence. */
+  readonly refusal?: string;
+}
+
+export interface ListBoundaryLoopsResult {
+  readonly handle: DocumentHandle;
+  readonly partId: string;
+  /** Exact count, even when `loops` was capped. */
+  readonly loopCount: number;
+  readonly loops: readonly BoundaryLoopSummary[];
+  readonly truncated: boolean;
+}
+
+export interface SendForFillPayload {
+  readonly handle: DocumentHandle;
+  readonly partId: string;
+  /** Resolved by the AUTHORITATIVE worker against the geometry it holds. */
+  readonly boundaryLoopId: string;
+  readonly operationId: string;
+  readonly port: ProtocolPort;
+  /** May only NARROW the production ceilings. The worker clamps. */
+  readonly limits?: Partial<HoleFillLimitsPayload>;
+}
+
+/** The subset of the engine's limits a message is allowed to carry. */
+export interface HoleFillLimitsPayload {
+  readonly maxBoundaryVertices: number;
+  readonly maxPartFaces: number;
+  readonly maxAabbTests: number;
+  readonly maxBvhNodeVisits: number;
+  readonly maxBroadphaseCandidates: number;
+  readonly maxNarrowphasePairs: number;
+  readonly maxSamples: number;
+}
+
+export interface SendForFillResult {
+  readonly status: HoleFillStatus;
+  readonly summary: HoleFillValidationSummary;
+  /**
+   * Present ONLY when the status is `VALID_CANDIDATE`.
+   *
+   * A handle, not a mesh. The candidate stays resident in the authoritative
+   * worker; Stage 4B-1B2 will add preview and apply on top of this handle
+   * without the page ever holding a coordinate.
+   */
+  readonly candidate?: HoleFillCandidateHandle;
+  /** Bounded (faceA, faceB, category) triples. Diagnostic only. */
+  readonly intersectionSamples: Uint32Array;
+  readonly samplesTruncated: boolean;
+}
+
+export interface HoleFillDiscardPayload {
+  readonly candidate: HoleFillCandidateHandle;
+}
+
+export interface HoleFillDiscardResult {
+  readonly released: boolean;
 }
 
 /* ------------------------------------------------------------------ repair -- */
@@ -613,6 +729,9 @@ export interface ModelReleasePayload {
  *   repair/commit               — PART-targeted; commits a DOCUMENT revision
  *   repair/discard              — candidate-scoped (the candidate names its part)
  *   repair/undo                 — DOCUMENT-level transaction restoring one part
+ *   holefill/list-loops         — PART-targeted; read-only
+ *   holefill/send-for-fill      — PART-targeted; produces a CANDIDATE only
+ *   holefill/discard            — candidate-scoped (the candidate names its part)
  *
  * Every part-targeted request carries its `partId` EXPLICITLY. The authoritative
  * worker never infers a target from UI selection state: a request is executable

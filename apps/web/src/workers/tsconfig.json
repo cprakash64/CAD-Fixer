@@ -4,5 +4,6 @@
   "compilerOptions": {
     "lib": ["ES2023", "WebWorker"]
   },
-  "include": ["**/*.ts"]
+  "include": ["**/*.ts"],
+  "exclude": ["node-tests/**"]
 }

@@ -1,6 +1,6 @@
 import { triangleCount } from '@cadfixer/mesh-core';
-import type { CanonicalMesh, PartId } from '@cadfixer/mesh-core';
-import { recoverVertexIdentity } from '@cadfixer/mesh-topology';
+import type { PartId } from '@cadfixer/mesh-core';
+import { buildTopologicalGeometry } from '@cadfixer/mesh-topology';
 import { SELF_INTERSECTION_MAX_FACES, narrowLimits } from '@cadfixer/mesh-self-intersection';
 import type { OperationHandler } from '@cadfixer/geometry-runtime';
 import { invalidState, isAppError } from '@cadfixer/shared';
@@ -21,43 +21,26 @@ import { residentDocuments } from './stl-handlers';
  * buffers are untouched and survive whatever happens downstream.
  */
 
-/**
- * Recovers TOPOLOGICAL vertices from the canonical soup.
+/*
+ * TOPOLOGICAL VERTICES COME FROM `@cadfixer/mesh-topology`, not from a local
+ * copy.
  *
  * The canonical mesh stores a position per CORNER; the diagnostic reasons about
- * shared vertices, because distinguishing a legitimate shared edge from an
- * overlap is impossible when every corner is its own vertex. This uses Stage 2's
- * exact stored-coordinate identity — the same function the analyser uses — so
- * the diagnostic and the rest of CAD Fixer agree on what the model IS. No second
- * merging rule, no tolerance.
+ * SHARED vertices, because distinguishing a legitimate shared edge from an
+ * overlap is impossible when every corner is its own vertex.
+ * `buildTopologicalGeometry` applies Stage 2's exact stored-coordinate identity
+ * — the same function the analyser uses — so the diagnostic and the rest of CAD
+ * Fixer agree on what the model IS. No second merging rule, no tolerance.
  *
- * It is also the precondition that makes the kernel's fixed-capacity symbolic
- * buffer safe: the overflow found during qualification required coincident
- * coordinates carrying distinct vertex ids, which this eliminates.
+ * IT IS ALSO THE PRECONDITION THAT MAKES THE KERNEL'S FIXED-CAPACITY SYMBOLIC
+ * BUFFER SAFE: the overflow found during qualification required coincident
+ * coordinates carrying distinct vertex ids, which welding eliminates.
+ *
+ * SHARED WITH THE HOLE-FILL ENGINE ON PURPOSE. Both hand pairs to the same
+ * exact predicates, and a second welding scheme would let the two callers
+ * disagree about which faces are adjacent — which is precisely the input those
+ * predicates use to tell a legitimate neighbour from a defect.
  */
-function toTopologicalGeometry(mesh: CanonicalMesh): {
-  positions: Float64Array;
-  triangles: Uint32Array;
-} {
-  const identity = recoverVertexIdentity(mesh);
-
-  // Float64 because the kernel's exact predicates work in double precision.
-  // Each stored Float32 value is WIDENED exactly; no precision is invented.
-  const positions = new Float64Array(identity.vertexCount * 3);
-  for (let vertex = 0; vertex < identity.vertexCount; vertex += 1) {
-    const corner = identity.vertexRepresentativeCorner[vertex] ?? 0;
-    positions[vertex * 3] = mesh.positions[corner * 3] ?? 0;
-    positions[vertex * 3 + 1] = mesh.positions[corner * 3 + 1] ?? 0;
-    positions[vertex * 3 + 2] = mesh.positions[corner * 3 + 2] ?? 0;
-  }
-
-  const triangles = new Uint32Array(mesh.indices.length);
-  for (let i = 0; i < mesh.indices.length; i += 1) {
-    triangles[i] = identity.cornerToVertex[mesh.indices[i] ?? 0] ?? 0;
-  }
-
-  return { positions, triangles };
-}
 
 export const modelSendForDiagnosticHandler: OperationHandler<'model/send-for-diagnostic'> = (
   payload,
@@ -109,7 +92,7 @@ export const modelSendForDiagnosticHandler: OperationHandler<'model/send-for-dia
       );
     }
 
-    const { positions, triangles } = toTopologicalGeometry(resolved);
+    const { positions, triangles } = buildTopologicalGeometry(resolved);
 
     // Transferred, and safe to transfer, because these are the COPY. The
     // authoritative arrays are not in this list and are not detached.

@@ -11,6 +11,7 @@ import {
   type ExportTarget,
 } from '../src/runtime/document-export-service';
 import { deriveDocumentExportName, downloadBytes } from '../src/runtime/download';
+import { HoleFillService } from '../src/runtime/hole-fill-service';
 import { HarnessBar } from './harness-bar';
 import '../src/styles/app.css';
 
@@ -273,6 +274,131 @@ async function runExport(
   return awaitExport();
 }
 
+/* ------------------------------------------------------- hole fill -- */
+
+/**
+ * THE HOLE-FILL ENGINE, DRIVEN FROM THE HARNESS AND FROM NOWHERE ELSE.
+ *
+ * Stage 4B-1B1 builds the ENGINE and deliberately ships no user-facing control:
+ * selection, patch preview and Apply are Stage 4B-1B2. That leaves the engine
+ * with no way to be exercised in a real browser — which is exactly the evidence
+ * gap the harness exists to close, the same way it closed the multi-part
+ * document gap and the document-export gap before it.
+ *
+ * It drives the PRODUCTION `HoleFillService`, which builds the production
+ * disposable worker, which loads the production kernel. Nothing about the
+ * operation is reimplemented here; the bridge only starts it, times it, and
+ * reports scalars.
+ *
+ * It is not in the application build, and there is still no production URL,
+ * query parameter or hidden button that reaches it.
+ */
+const holeFillService = new HoleFillService(geometryClient);
+
+interface HarnessHoleFillResult {
+  readonly status: string;
+  readonly message?: string;
+  readonly candidateId?: string;
+  readonly candidatePartId?: string;
+  readonly candidateRevision?: number;
+  readonly candidateLoopId?: string;
+  readonly summary?: Record<string, unknown>;
+  readonly durationMs: number;
+  /** Milliseconds from the cancel request to the terminal outcome. */
+  readonly cancelLatencyMs?: number;
+  readonly startedFaceCount?: number;
+}
+
+interface PendingHoleFill {
+  readonly session: { cancel(): void };
+  readonly result: Promise<HarnessHoleFillResult>;
+  readonly cancelAt: { requestedAt?: number };
+}
+
+let activeHoleFill: PendingHoleFill | undefined;
+
+function beginHoleFill(
+  documentId: string,
+  revision: number,
+  partIdentifier: string,
+  boundaryLoopId: string,
+  options: { readonly cancelAfterMs?: number } = {},
+): void {
+  const startedAt = performance.now();
+  const cancelAt: { requestedAt?: number } = {};
+  let startedFaceCount: number | undefined;
+
+  const session = holeFillService.run({
+    handle: { documentId, revision } as never,
+    partId: partIdentifier,
+    boundaryLoopId,
+    onStarted: (faceCount) => {
+      startedFaceCount = faceCount;
+    },
+  });
+
+  activeHoleFill = {
+    session,
+    cancelAt,
+    result: (async (): Promise<HarnessHoleFillResult> => {
+      try {
+        const outcome = await session.promise;
+        return {
+          status: outcome.status,
+          ...(outcome.candidate === undefined
+            ? {}
+            : {
+                candidateId: outcome.candidate.candidateId,
+                candidatePartId: outcome.candidate.partId,
+                candidateRevision: outcome.candidate.sourceRevision,
+                candidateLoopId: outcome.candidate.boundaryLoopId,
+              }),
+          summary: outcome.summary as unknown as Record<string, unknown>,
+          durationMs: performance.now() - startedAt,
+          ...(cancelAt.requestedAt === undefined
+            ? {}
+            : { cancelLatencyMs: performance.now() - cancelAt.requestedAt }),
+          ...(startedFaceCount === undefined ? {} : { startedFaceCount }),
+        };
+      } catch (cause) {
+        return {
+          status: cause instanceof Error ? cause.name : 'UNKNOWN',
+          message: cause instanceof Error ? cause.message : String(cause),
+          durationMs: performance.now() - startedAt,
+          ...(cancelAt.requestedAt === undefined
+            ? {}
+            : { cancelLatencyMs: performance.now() - cancelAt.requestedAt }),
+          ...(startedFaceCount === undefined ? {} : { startedFaceCount }),
+        };
+      }
+    })(),
+  };
+
+  if (options.cancelAfterMs !== undefined) {
+    setTimeout(() => {
+      cancelAt.requestedAt = performance.now();
+      session.cancel();
+    }, options.cancelAfterMs);
+  }
+}
+
+async function awaitHoleFill(): Promise<HarnessHoleFillResult> {
+  const pending = activeHoleFill;
+  if (pending === undefined) throw new Error('no hole fill is running');
+  const result = await pending.result;
+  activeHoleFill = undefined;
+  return result;
+}
+
+async function listBoundaryLoops(
+  documentId: string,
+  revision: number,
+  partIdentifier: string,
+): Promise<unknown> {
+  return geometryClient.listBoundaryLoops({ documentId, revision } as never, partIdentifier)
+    .promise;
+}
+
 declare global {
   interface Window {
     cadfixerHarness?: {
@@ -296,6 +422,19 @@ declare global {
       exportActiveOperation(): string | undefined;
       exportLiveWorkers(): number;
       exportLiveChannels(): number;
+      listBoundaryLoops(documentId: string, revision: number, partId: string): Promise<unknown>;
+      beginHoleFill(
+        documentId: string,
+        revision: number,
+        partId: string,
+        boundaryLoopId: string,
+        options?: { readonly cancelAfterMs?: number },
+      ): void;
+      awaitHoleFill(): Promise<HarnessHoleFillResult>;
+      cancelHoleFill(): void;
+      holeFillActiveOperation(): string | undefined;
+      holeFillLiveWorkers(): number;
+      holeFillLiveChannels(): number;
     };
   }
 }
@@ -314,6 +453,19 @@ window.cadfixerHarness = {
   exportActiveOperation: (): string | undefined => exportService.activeOperation,
   exportLiveWorkers: (): number => exportService.liveWorkerCount,
   exportLiveChannels: (): number => exportService.liveChannelCount,
+
+  listBoundaryLoops,
+  beginHoleFill,
+  awaitHoleFill,
+  cancelHoleFill: (): void => {
+    const pending = activeHoleFill;
+    if (pending === undefined) return;
+    pending.cancelAt.requestedAt = performance.now();
+    pending.session.cancel();
+  },
+  holeFillActiveOperation: (): string | undefined => holeFillService.activeOperation,
+  holeFillLiveWorkers: (): number => holeFillService.liveWorkerCount,
+  holeFillLiveChannels: (): number => holeFillService.liveChannelCount,
 };
 
 createRoot(container).render(

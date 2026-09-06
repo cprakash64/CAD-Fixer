@@ -18,6 +18,11 @@ import {
   type RepairPlanOperationResult,
   type RepairUndoResult,
   type SendForDiagnosticResult,
+  type HoleFillCandidateHandle,
+  type HoleFillDiscardResult,
+  type HoleFillLimits,
+  type ListBoundaryLoopsResult,
+  type SendForFillResult,
   type SendForExportResult,
   type StlExportResult,
 } from '@cadfixer/geometry-runtime';
@@ -299,6 +304,68 @@ export class GeometryClient {
       },
       { transfer: [request.port] },
     ).promise;
+  }
+
+  /**
+   * Lists a part's boundary components as ORDERED, TARGETABLE loops.
+   *
+   * READ-ONLY, and the only way the application can obtain a `boundaryLoopId`.
+   * A fill names a loop by an identity the authoritative worker derived from
+   * the geometry it holds — never by an index the interface chose, which would
+   * silently become a different loop the moment the mesh changed.
+   */
+  public listBoundaryLoops(
+    handle: DocumentHandle,
+    partId: string,
+    limit?: number,
+  ): OperationHandle<ListBoundaryLoopsResult> {
+    return this.coordinator.dispatch(
+      'holefill/list-loops',
+      limit === undefined ? { handle, partId } : { handle, partId, limit },
+      {},
+    );
+  }
+
+  /**
+   * Asks the authoritative worker to fill one boundary loop through `port`.
+   *
+   * The port is transferred; the geometry is not returned. Coordinates travel
+   * worker-to-worker in BOTH directions — a disposable copy out, a validated
+   * candidate back — and the page receives a candidate HANDLE and a summary of
+   * scalars (ADR 0008).
+   *
+   * An `OperationHandle` rather than a bare `Promise`, unlike
+   * `sendForDiagnostic`: this operation stays pending while the fill worker
+   * runs, so the controller must be able to cancel it when it terminates that
+   * worker.
+   */
+  public sendForFill(request: {
+    handle: DocumentHandle;
+    partId: string;
+    boundaryLoopId: string;
+    operationId: string;
+    port: MessagePort;
+    limits?: Partial<HoleFillLimits>;
+  }): OperationHandle<SendForFillResult> {
+    return this.coordinator.dispatch(
+      'holefill/send-for-fill',
+      {
+        handle: request.handle,
+        partId: request.partId,
+        boundaryLoopId: request.boundaryLoopId,
+        operationId: request.operationId,
+        port: request.port,
+        ...(request.limits === undefined ? {} : { limits: request.limits }),
+      },
+      { transfer: [request.port] },
+    );
+  }
+
+  /** Releases a hole-fill candidate's worker-resident geometry. */
+  public discardHoleFillCandidate(
+    candidate: HoleFillCandidateHandle,
+  ): OperationHandle<HoleFillDiscardResult> {
+    return this.coordinator.dispatch('holefill/discard', { candidate }, {});
   }
 
   /**

@@ -1,0 +1,9 @@
+{
+  "//": "NODE-ONLY WORKER TESTS. These instantiate the WebAssembly kernel, which cannot be initialised under jsdom (see vitest.config.ts), so they run under Node and need Node's own globals. They sit in their own directory with their own project because worker code must NOT see those globals: a worker that could name `process` or `node:fs` is a worker one refactor away from using them.",
+  "extends": "../../../../../tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2023"],
+    "types": ["node"]
+  },
+  "include": ["**/*.ts"]
+}

@@ -27,6 +27,9 @@ export const Fixture = {
   MillimetreLargeSinglePart: 'millimetre-large-single-part',
   MillimetreSharedMedium400: 'millimetre-shared-medium-400',
   MillimetreSharedMedium1000: 'millimetre-shared-medium-1000',
+  HoleFillSmall: 'hole-fill-small',
+  HoleFillLarge: 'hole-fill-large',
+  HoleFillPierced: 'hole-fill-pierced',
 } as const;
 
 export type Fixture = (typeof Fixture)[keyof typeof Fixture];

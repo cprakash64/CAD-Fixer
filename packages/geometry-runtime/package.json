@@ -5,6 +5,7 @@
   "type": "module",
   "sideEffects": false,
   "description": "Transport-agnostic worker protocol, coordinator, and worker-side host runtime for off-main-thread geometry work.",
+  "//dependencies": "mesh-hole-fill is TYPE-ONLY at the boundary: the protocol names a fill status and a validation summary, and `hole-fill.ts` RESTATES the values so no engine code reaches the main-thread bundle. Same arrangement as mesh-topology and mesh-repair.",
   "exports": {
     ".": "./src/index.ts"
   },
@@ -13,6 +14,7 @@
   },
   "dependencies": {
     "@cadfixer/mesh-core": "*",
+    "@cadfixer/mesh-hole-fill": "*",
     "@cadfixer/mesh-repair": "*",
     "@cadfixer/mesh-topology": "*",
     "@cadfixer/shared": "*"

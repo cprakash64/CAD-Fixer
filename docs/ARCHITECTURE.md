@@ -73,24 +73,26 @@ browser dependency creeping in breaks the test run.
 
 ## 3. Module responsibilities
 
-| Module                      | Owns                                                         | Must not                                    |
-| --------------------------- | ------------------------------------------------------------ | ------------------------------------------- |
-| `apps/web/src/components`   | Presentation, layout, accessibility, user intent             | Geometry, parsing, validation rules         |
-| `apps/web/src/viewport`     | Three.js scene, renderer lifecycle, GPU resource disposal    | Mesh semantics; it renders what it is given |
-| `apps/web/src/state`        | Workspace snapshot, status log, selection, future undo stack | React APIs, except in `use-*.ts` bindings   |
-| `apps/web/src/runtime`      | The only `Worker` construction site; transport adapter       | Protocol logic, geometry                    |
-| `apps/web/src/workers`      | Worker entry point; wires handlers to the host               | Business logic beyond registration          |
-| `packages/geometry-runtime` | Protocol, coordinator, worker host, cancellation, transfers  | DOM, React, Three.js, geometry algorithms   |
-| `packages/mesh-core`        | Canonical mesh contract, structural validation               | File formats, rendering, algorithms         |
-| `packages/mesh-topology`    | Read-only topology recovery, diagnostics, area/volume        | Mutating geometry, welding, UI, rendering   |
-| `packages/file-formats`     | Format descriptors, screening, budgets, the STL codec        | UI, rendering, worker protocol              |
-| `packages/shared`           | Typed errors, units, ids, cancellation primitive             | Everything domain-specific                  |
+| Module                      | Owns                                                                       | Must not                                       |
+| --------------------------- | -------------------------------------------------------------------------- | ---------------------------------------------- |
+| `apps/web/src/components`   | Presentation, layout, accessibility, user intent                           | Geometry, parsing, validation rules            |
+| `apps/web/src/viewport`     | Three.js scene, renderer lifecycle, GPU resource disposal                  | Mesh semantics; it renders what it is given    |
+| `apps/web/src/state`        | Workspace snapshot, status log, selection, future undo stack               | React APIs, except in `use-*.ts` bindings      |
+| `apps/web/src/runtime`      | The only `Worker` construction site; transport adapter                     | Protocol logic, geometry                       |
+| `apps/web/src/workers`      | Worker entry point; wires handlers to the host                             | Business logic beyond registration             |
+| `packages/geometry-runtime` | Protocol, coordinator, worker host, cancellation, transfers                | DOM, React, Three.js, geometry algorithms      |
+| `packages/mesh-core`        | Canonical mesh contract, structural validation                             | File formats, rendering, algorithms            |
+| `packages/mesh-topology`    | Read-only topology recovery, diagnostics, area/volume                      | Mutating geometry, welding, UI, rendering      |
+| `packages/file-formats`     | Format descriptors, screening, budgets, the STL codec                      | UI, rendering, worker protocol                 |
+| `packages/mesh-hole-fill`   | Planar hole-fill engine: eligibility, ear clipping, broadphase, validation | Kernels, UI, rendering, the narrowphase itself |
+| `packages/shared`           | Typed errors, units, ids, cancellation primitive                           | Everything domain-specific                     |
 
 Dependency direction is strictly one way:
 
 ```
 shared ← mesh-core ← file-formats
 shared ← mesh-core ← mesh-topology ← geometry-runtime
+shared ← mesh-core ← mesh-topology ← mesh-hole-fill
 all of the above ← apps/web
 ```
 
@@ -524,6 +526,41 @@ decide which side of a surface is outside. Everything it cannot decide from the
 stored coordinates alone is refused with a stated reason rather than guessed. See
 [docs/repair/REPAIR_POLICY.md](repair/REPAIR_POLICY.md).
 
+### Hole filling is a production ENGINE with no workflow yet
+
+Stage 4B-1B1 added `packages/mesh-hole-fill`: a validated planar hole-fill
+engine, reachable through the worker protocol (`holefill/list-loops`,
+`holefill/send-for-fill`, `holefill/discard`) and through no user-facing
+control. **There is no Fill Hole button, no boundary picker and no patch
+preview, and a boundary test asserts there is none** — selection, preview and
+Apply are Stage 4B-1B2.
+
+What the engine does, and only this: it fills ONE selected boundary loop, which
+must be a topologically simple manifold cycle under exact stored-coordinate
+identity and must be proven planar by a RELATIVE policy (max deviation over the
+loop's own largest extent, at or below 1e-4). Triangulation is in-house
+deterministic ear clipping, which adds no vertex, moves no vertex, and appends
+exactly `n − 2` faces after the user's. The candidate is then validated
+INDEPENDENTLY of the thing that built it — byte-level source preservation,
+structural validity, topology postconditions, patch winding against the source's
+own directed edges, patch connectivity, Euler as corroboration, and a
+PATCH-ATTRIBUTED intersection check against the qualified Geogram narrowphase.
+
+What it does NOT do: non-planar loops, batch or "fill all", tolerance welding,
+seam snapping, fairing, smoothing, surrounding remeshing, and any use of PMP —
+which ADR 0018 qualified and rejected because it traps uncatchably, loses
+append-only provenance and refines heavily. It also produces CANDIDATES only:
+Stage 4B-1B1 never replaces the resident document, never moves its revision and
+writes no undo record, whatever the outcome.
+
+Two limits it states rather than implies. **Filling a hole is not repairing a
+model** — another opening, a self-intersection, duplicate faces or non-manifold
+topology may all remain. And the intersection guarantee is INTRA-PART: whether
+the patch collides with a different part of the document in world space is not
+checked at all, exactly as self-intersection is not.
+
+See [docs/adr/0018-hole-filling-qualification.md](adr/0018-hole-filling-qualification.md).
+
 Two distinctions the interface is careful about, because both are easy to
 overstate:
 
@@ -542,3 +579,8 @@ overstate:
   requested defects improved and nothing else regressed, judged by CAD Fixer's
   own re-analysis. Self-intersections and wall thickness remain unchecked, and
   every repair verdict says so beside itself.
+- **A validated patch is not a repaired model.** A hole-fill candidate means
+  ONE named opening was closed and the patch was independently validated
+  against the part it was built from. It does not mean the model is watertight,
+  that other openings are gone, that pre-existing crossings were fixed, or that
+  the patch clears geometry in another part.

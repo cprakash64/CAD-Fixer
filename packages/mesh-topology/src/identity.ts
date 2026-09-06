@@ -245,3 +245,54 @@ export function estimateVertexIdentityBytes(cornerCount: number): StageMemory {
   const transient = tableCapacityFor(cornerCount) * 4;
   return stage(retained, transient);
 }
+
+/**
+ * The WELDED topological view of a mesh: one point per topological vertex, and
+ * three vertex ids per face.
+ *
+ * WHY IT LIVES HERE. Two production paths need it — the self-intersection
+ * diagnostic and the hole-fill engine — and both need it to mean exactly the
+ * same thing. A second copy would be a second answer to "which corners are the
+ * same point", which is the drift ADR 0009 exists to prevent, and the exact
+ * predicates downstream reason about SHARED vertices: a pair that disagreed
+ * about adjacency would be classified differently by the two callers.
+ *
+ * POSITIONS ARE Float64 because the exact predicates work in double precision.
+ * Every stored Float32 value is WIDENED EXACTLY; no precision is invented, and
+ * nothing is rounded, welded, snapped or moved.
+ */
+export interface TopologicalGeometry {
+  /** One XYZ triple per topological vertex. */
+  readonly positions: Float64Array;
+  /** Three topological vertex ids per face. */
+  readonly triangles: Uint32Array;
+  readonly vertexCount: number;
+  readonly faceCount: number;
+}
+
+export function buildTopologicalGeometry(
+  mesh: CanonicalMesh,
+  identity?: VertexIdentityResult,
+): TopologicalGeometry {
+  const resolved = identity ?? recoverVertexIdentity(mesh);
+
+  const positions = new Float64Array(resolved.vertexCount * 3);
+  for (let vertex = 0; vertex < resolved.vertexCount; vertex += 1) {
+    const corner = resolved.vertexRepresentativeCorner[vertex] ?? 0;
+    positions[vertex * 3] = mesh.positions[corner * 3] ?? 0;
+    positions[vertex * 3 + 1] = mesh.positions[corner * 3 + 1] ?? 0;
+    positions[vertex * 3 + 2] = mesh.positions[corner * 3 + 2] ?? 0;
+  }
+
+  const triangles = new Uint32Array(mesh.indices.length);
+  for (let index = 0; index < mesh.indices.length; index += 1) {
+    triangles[index] = resolved.cornerToVertex[mesh.indices[index] ?? 0] ?? 0;
+  }
+
+  return {
+    positions,
+    triangles,
+    vertexCount: resolved.vertexCount,
+    faceCount: Math.floor(mesh.indices.length / 3),
+  };
+}
