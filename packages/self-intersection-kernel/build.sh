@@ -73,7 +73,7 @@ em++ -O3 -std=c++17 -fexceptions \
   -sALLOW_MEMORY_GROWTH=1 \
   -sINITIAL_MEMORY=67108864 \
   -sENVIRONMENT=web,worker \
-  -sEXPORTED_FUNCTIONS='["_cf_si_run","_cf_si_failed","_cf_si_candidate_pairs","_cf_si_tested_pairs","_cf_si_intersecting_pairs","_cf_si_affected_faces","_cf_si_proper_crossing","_cf_si_coplanar_overlap","_cf_si_point_touch","_cf_si_edge_touch","_cf_si_adjacent_beyond","_cf_si_duplicate","_cf_si_legitimate","_cf_si_skipped_faces","_cf_si_skipped_pairs","_cf_si_unclassified_pairs","_cf_si_sample_pairs","_cf_si_samples_truncated","_cf_si_samples","_cf_si_aabb_ms","_cf_si_scan_ms","_malloc","_free"]' \
+  -sEXPORTED_FUNCTIONS='["_cf_si_run","_cf_si_failed","_cf_si_candidate_pairs","_cf_si_tested_pairs","_cf_si_intersecting_pairs","_cf_si_affected_faces","_cf_si_proper_crossing","_cf_si_coplanar_overlap","_cf_si_point_touch","_cf_si_edge_touch","_cf_si_adjacent_beyond","_cf_si_duplicate","_cf_si_legitimate","_cf_si_skipped_faces","_cf_si_skipped_pairs","_cf_si_unclassified_pairs","_cf_si_sample_pairs","_cf_si_samples_truncated","_cf_si_samples","_cf_si_aabb_ms","_cf_si_scan_ms","_cf_hf_begin","_cf_hf_classify","_cf_hf_end","_cf_hf_failed","_cf_hf_status","_cf_hf_tested_pairs","_cf_hf_skipped_pairs","_cf_hf_ignored_pairs","_cf_hf_unclassified_pairs","_cf_hf_invalid_patch_source","_cf_hf_invalid_patch_patch","_cf_hf_proper_crossing","_cf_hf_coplanar_overlap","_cf_hf_point_touch","_cf_hf_edge_touch","_cf_hf_adjacent_beyond","_cf_hf_duplicate","_cf_hf_legitimate","_cf_hf_sample_pairs","_cf_hf_samples_truncated","_cf_hf_samples","_malloc","_free"]' \
   -sEXPORTED_RUNTIME_METHODS='["HEAPF64","HEAPU32"]' \
   --no-entry
 

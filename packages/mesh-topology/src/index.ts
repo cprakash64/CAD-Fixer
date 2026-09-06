@@ -11,12 +11,13 @@ export { peakOf, stage } from './memory';
 export type { StageMemory } from './memory';
 
 export {
+  buildTopologicalGeometry,
   exactStoredCoordinateIdentity,
   estimateVertexIdentityBytes,
   recoverVertexIdentity,
   tableCapacityFor,
 } from './identity';
-export type { CoordinateIdentity, VertexIdentityResult } from './identity';
+export type { CoordinateIdentity, TopologicalGeometry, VertexIdentityResult } from './identity';
 
 export { buildDirectedEdges, groupEdges } from './edges';
 export type { DirectedEdges, EdgeGroups } from './edges';
@@ -51,3 +52,17 @@ export type {
   TopologyReport,
   TopologyResult,
 } from './report';
+
+export {
+  BoundaryLoopRefusal,
+  boundaryLoopIdentity,
+  estimateBoundaryLoopBytes,
+  extractBoundaryLoops,
+  findBoundaryLoop,
+} from './boundary-loops';
+export type {
+  BoundaryLoop,
+  BoundaryLoopId,
+  BoundaryLoopOptions,
+  BoundaryLoopSet,
+} from './boundary-loops';

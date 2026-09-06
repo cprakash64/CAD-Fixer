@@ -35,6 +35,9 @@ const FIXTURES: readonly { readonly id: FixtureId; readonly label: string }[] = 
   { id: HarnessFixtureId.MillimetreLargeSinglePart, label: 'Large plate (mm)' },
   { id: HarnessFixtureId.MillimetreSharedMedium400, label: '400 medium shared (mm)' },
   { id: HarnessFixtureId.MillimetreSharedMedium1000, label: '1000 medium shared (mm)' },
+  { id: HarnessFixtureId.HoleFillSmall, label: 'Hole fill: small' },
+  { id: HarnessFixtureId.HoleFillLarge, label: 'Hole fill: large' },
+  { id: HarnessFixtureId.HoleFillPierced, label: 'Hole fill: pierced' },
 ];
 
 /**

@@ -27,5 +27,13 @@ export default defineConfig({
     fileParallelism: false,
     // Large sizes genuinely take a while; the default 5s timeout is not enough.
     testTimeout: 600_000,
+    /*
+     * THE EMSCRIPTEN GLUE IS LOADED BY NODE, NOT BY VITEST'S TRANSFORM — the
+     * same reason `vitest.config.ts` externalises it for the worker-kernel
+     * project. Geogram's start-up `EM_ASM` detects a CommonJS host by testing
+     * `typeof module !== "undefined"`, which Vitest's module runner satisfies,
+     * and then dereferences `this` in a strict ES module.
+     */
+    server: { deps: { external: [/self-intersection\.js$/] } },
   },
 });

@@ -31,6 +31,14 @@ const REPO_ROOT = join(import.meta.dirname, '..');
 const WORKER_ONLY_PACKAGES: readonly string[] = [
   '@cadfixer/mesh-topology',
   '@cadfixer/mesh-repair',
+  /*
+   * STAGE 4B-1B1. The hole-fill engine carries the triangulator, the
+   * broadphase, every validator and — through `mesh-topology` — the whole
+   * topology engine. The application names a fill STATUS and a summary, both of
+   * which `geometry-runtime` restates without a runtime edge; see
+   * `packages/geometry-runtime/src/hole-fill.ts`.
+   */
+  '@cadfixer/mesh-hole-fill',
 ];
 
 /**
@@ -418,6 +426,7 @@ describe('the geometry engines stay in the worker', () => {
       [
         join('apps', 'web', 'src', 'runtime', 'document-export-service.ts'),
         join('apps', 'web', 'src', 'runtime', 'geometry-client.ts'),
+        join('apps', 'web', 'src', 'runtime', 'hole-fill-service.ts'),
         join('apps', 'web', 'src', 'runtime', 'self-intersection-service.ts'),
       ].sort(),
     );
@@ -511,8 +520,19 @@ describe('the self-intersection kernel is confined to its own worker', () => {
    */
   const KERNEL_PACKAGE = '@cadfixer/self-intersection-kernel';
   const DIAGNOSTIC_WORKER = join('apps', 'web', 'src', 'workers', 'self-intersection.worker.ts');
+  const HOLE_FILL_NARROWPHASE = join('apps', 'web', 'src', 'workers', 'hole-fill-narrowphase.ts');
 
-  it('is imported by exactly one file, the diagnostic worker', () => {
+  it('is imported by exactly the files named here, all of them worker code', () => {
+    /*
+     * THE LIST IS EXACT RATHER THAN A MAXIMUM, so a fourth importer has to be
+     * argued for in review instead of appearing quietly.
+     *
+     * STAGE 4B-1B1 added two entries. `hole-fill-narrowphase.ts` wraps the
+     * kernel as the fill engine's exact predicate and is imported only by the
+     * disposable fill worker; its `.node.test.ts` runs the HP corpus against
+     * that predicate and never ships. Both are under `apps/web/src/workers/`,
+     * which the main-thread scan below excludes wholesale.
+     */
     const files = [
       ...sourceFilesUnder(join(REPO_ROOT, 'apps')),
       ...sourceFilesUnder(join(REPO_ROOT, 'packages')),
@@ -521,11 +541,16 @@ describe('the self-intersection kernel is confined to its own worker', () => {
       .filter((file) =>
         new RegExp(`from\\s+['"]${KERNEL_PACKAGE}`).test(readFileSync(file, 'utf8')),
       )
-      .map((file) => relative(REPO_ROOT, file));
+      .map((file) => relative(REPO_ROOT, file))
+      .sort();
 
-    expect(importers, 'the WASM kernel must be reachable from the diagnostic worker only').toEqual([
-      DIAGNOSTIC_WORKER,
-    ]);
+    expect(importers, 'the WASM kernel must be reachable from worker code only').toEqual(
+      [
+        DIAGNOSTIC_WORKER,
+        HOLE_FILL_NARROWPHASE,
+        join('apps', 'web', 'src', 'workers', 'node-tests', 'hole-fill-kernel.test.ts'),
+      ].sort(),
+    );
   });
 
   it('is never imported by main-thread code', () => {
@@ -656,5 +681,158 @@ describe('no network API reaches production', () => {
     }
 
     expect(offenders, 'a network API reached shipped code').toEqual([]);
+  });
+});
+
+describe('the hole-fill engine stays where Stage 4B-1B1 put it', () => {
+  /*
+   * WHAT THIS SECTION PROTECTS, and why each rule is separate.
+   *
+   * The engine is production, the workflow is not. Stage 4B-1B1 ships an engine
+   * behind the worker boundary with NO user-facing control; Stage 4B-1B2 will
+   * add selection, preview and Apply. Until it does, an accidental import from
+   * a component would put a half-finished feature in front of users, and an
+   * accidental import from `experiments/` would put research code in the
+   * bundle.
+   */
+  const HOLE_FILL_ENGINE = '@cadfixer/mesh-hole-fill';
+
+  it('is imported only by worker code and by the runtime restatement', () => {
+    const files = [
+      ...sourceFilesUnder(join(REPO_ROOT, 'apps')),
+      ...sourceFilesUnder(join(REPO_ROOT, 'packages')),
+    ].filter((file) => !/\.test\.(ts|tsx)$/.test(file));
+
+    const importers = files
+      .filter((file) =>
+        new RegExp(`from\\s+['"]${HOLE_FILL_ENGINE}`).test(readFileSync(file, 'utf8')),
+      )
+      .map((file) => relative(REPO_ROOT, file))
+      .sort();
+
+    expect(importers).toEqual(
+      [
+        join('apps', 'web', 'src', 'workers', 'hole-fill.worker.ts'),
+        join('apps', 'web', 'src', 'workers', 'hole-fill-narrowphase.ts'),
+        join('packages', 'geometry-runtime', 'src', 'hole-fill.ts'),
+        /*
+         * THE HARNESS, and it is named rather than excluded so its access is
+         * visible in review. It imports the TEST-ONLY fixture corpus in order to
+         * build documents the shipped importers cannot — a 512-vertex rim, and
+         * the HP23 configuration whose patch pierces a wall — and it is not an
+         * input to the application build, which the checks above assert.
+         */
+        join('apps', 'web', 'e2e-harness', 'fixtures.ts'),
+      ].sort(),
+    );
+  });
+
+  it('ships NO narrowphase of its own', () => {
+    /*
+     * The engine takes its exact predicate as a parameter. A local
+     * implementation inside the package would be a second, weaker predicate
+     * shipped beside the qualified one — and `fixtures.ts` deliberately holds a
+     * separating-axis checker for tests, which must never become reachable from
+     * production.
+     */
+    const production = sourceFilesUnder(join(REPO_ROOT, 'packages', 'mesh-hole-fill')).filter(
+      (file) => !file.endsWith('.test.ts') && !file.endsWith('fixtures.ts'),
+    );
+    for (const file of production) {
+      const contents = readFileSync(file, 'utf8');
+      expect(
+        contents.includes('trianglesIntersect'),
+        `${relative(REPO_ROOT, file)} must not carry a triangle intersection predicate`,
+      ).toBe(false);
+      expect(contents.includes('referenceNarrowphase')).toBe(false);
+    }
+  });
+
+  it('exposes no Fill Hole control anywhere in the interface', () => {
+    /*
+     * STAGE 4B-1B1 IS THE ENGINE ONLY. No button, no menu item, no panel. This
+     * is the check that keeps "we will wire it up later" from becoming "it is
+     * already wired up".
+     */
+    const BANNED = ['Fill Hole', 'Fill hole', 'fill-hole-button', 'Fill All Holes'];
+    const componentFiles = [
+      ...sourceFilesUnder(join(REPO_ROOT, 'apps', 'web', 'src', 'components')),
+      ...sourceFilesUnder(join(REPO_ROOT, 'apps', 'web', 'src', 'state')),
+    ];
+
+    const offenders: string[] = [];
+    for (const file of componentFiles) {
+      const contents = readFileSync(file, 'utf8');
+      for (const banned of BANNED) {
+        if (contents.includes(banned)) offenders.push(`${relative(REPO_ROOT, file)}: ${banned}`);
+      }
+    }
+    expect(offenders, 'the hole-fill workflow belongs to Stage 4B-1B2').toEqual([]);
+  });
+
+  it('constructs the fill worker from exactly one place', () => {
+    const files = sourceFilesUnder(join(REPO_ROOT, 'apps', 'web', 'src')).filter(
+      (file) => !/\.test\.(ts|tsx)$/.test(file),
+    );
+    const constructors = files
+      .filter((file) => /new Worker\([\s\S]*?hole-fill\.worker/.test(readFileSync(file, 'utf8')))
+      .map((file) => relative(REPO_ROOT, file));
+
+    expect(constructors).toEqual([join('apps', 'web', 'src', 'runtime', 'hole-fill-service.ts')]);
+  });
+});
+
+describe('PMP reaches nothing', () => {
+  /**
+   * EXPLICIT, AND SEPARATE FROM THE GENERAL KERNEL SCAN.
+   *
+   * ADR 0018 qualified `pmp::fill_hole` and REJECTED it: it traps uncatchably
+   * on a legal 512-vertex loop, loses append-only provenance, refines a
+   * 128-vertex loop by +1,193 vertices, and times out at 2,000. It remains
+   * research evidence and must never become a runtime dependency, a vendored
+   * artifact, or an import — the whole reason CAD Fixer's own triangulator is
+   * the MVP.
+   */
+  const MARKERS = ['pmp-library', 'pmp/', 'pmp::', 'fill_hole', 'SurfaceHoleFilling'];
+
+  it('appears in no shipped source file', () => {
+    const files = [
+      ...sourceFilesUnder(join(REPO_ROOT, 'apps', 'web', 'src')),
+      ...sourceFilesUnder(join(REPO_ROOT, 'packages')),
+    ].filter((file) => !/\.test\.(ts|tsx)$/.test(file));
+
+    const offenders: string[] = [];
+    for (const file of files) {
+      const contents = readFileSync(file, 'utf8');
+      for (const marker of MARKERS) {
+        // A comment EXPLAINING why PMP was rejected is not a dependency, so
+        // only import and require forms count.
+        const pattern = new RegExp(
+          `(from|require)\\s*\\(?\\s*['"][^'"]*${marker.replace(/[.*+?^$()|[\]\\]/g, '\\$&')}`,
+        );
+        if (pattern.test(contents)) offenders.push(`${relative(REPO_ROOT, file)}: ${marker}`);
+      }
+    }
+    expect(offenders, 'PMP is research evidence and must not ship').toEqual([]);
+  });
+
+  it('leaves no PMP artifact in any shipped package', () => {
+    const packageDirectories = readdirSync(join(REPO_ROOT, 'packages'));
+    for (const name of packageDirectories) {
+      const walk = (directory: string): void => {
+        for (const entry of readdirSync(directory)) {
+          if (entry === 'node_modules') continue;
+          const full = join(directory, entry);
+          if (statSync(full).isDirectory()) {
+            walk(full);
+            continue;
+          }
+          expect(/pmp/i.test(entry), `${relative(REPO_ROOT, full)} looks like a PMP artifact`).toBe(
+            false,
+          );
+        }
+      };
+      walk(join(REPO_ROOT, 'packages', name));
+    }
   });
 });

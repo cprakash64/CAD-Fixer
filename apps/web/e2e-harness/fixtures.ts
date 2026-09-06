@@ -16,6 +16,13 @@ import {
   tetrahedronMesh,
   translation,
 } from '@cadfixer/mesh-core/fixtures';
+import {
+  concatMeshes,
+  hp02QuadHole,
+  hp23PatchPiercesOppositeShell,
+  hpBoundaryOfSize,
+  tetrahedron as holeFillTetrahedron,
+} from '@cadfixer/mesh-hole-fill/fixtures';
 import { LengthUnit } from '@cadfixer/shared';
 
 /**
@@ -93,6 +100,22 @@ export const HarnessFixtureId = {
   MillimetreSharedMedium400: 'millimetre-shared-medium-400',
   /** 1,000 placements of the same mesh. One resource; a million triangles placed. */
   MillimetreSharedMedium1000: 'millimetre-shared-medium-1000',
+
+  /*
+   * HOLE-FILL DOCUMENTS. Stage 4B-1B1.
+   *
+   * The shipped application still imports STL, OBJ and 3MF, so it CAN produce a
+   * part with a fillable hole — but not one beside a clean part, not a
+   * 512-vertex boundary on a hundred thousand faces, and not the HP23
+   * configuration whose patch pierces an internal wall. These three exist so
+   * the browser can be shown the cases that decide the stage.
+   */
+  /** A small fillable hole beside an untouched clean part. */
+  HoleFillSmall: 'hole-fill-small',
+  /** A 512-vertex boundary on a part near the face ceiling. The worst in-policy case. */
+  HoleFillLarge: 'hole-fill-large',
+  /** HP23: topologically perfect, and the patch runs through an opposing surface. */
+  HoleFillPierced: 'hole-fill-pierced',
 } as const;
 
 export type HarnessFixtureId = (typeof HarnessFixtureId)[keyof typeof HarnessFixtureId];
@@ -280,5 +303,40 @@ export function buildHarnessDocument(id: HarnessFixtureId): GeometryDocument {
 
     case HarnessFixtureId.MillimetreSharedMedium1000:
       return sharedGridPlacements(24, 1000);
+
+    case HarnessFixtureId.HoleFillSmall:
+      return {
+        parts: [
+          named('a', hp02QuadHole(), 'Open tube'),
+          // Deliberately present and deliberately far away: a fill must not
+          // touch it, and a digest proves that byte for byte.
+          named('b', tetrahedronMesh(), 'Untouched', translation(PART_B_OFFSET_X, 0, 0)),
+        ],
+      };
+
+    case HarnessFixtureId.HoleFillLarge:
+      /*
+       * THE WORST CASE THE POLICY ALLOWS: a 512-vertex boundary — the ceiling —
+       * on roughly 100,000 faces. Measured at ~1.25 s off-thread, which is a
+       * long enough window for a responsiveness test to have something to
+       * sample, and long enough for a cancellation to have something to
+       * interrupt.
+       */
+      return { parts: [named('a', largeFillablePart(), 'Large fillable')] };
+
+    case HarnessFixtureId.HoleFillPierced:
+      return { parts: [named('a', hp23PatchPiercesOppositeShell(), 'Pierced by its own patch')] };
   }
+}
+
+/** A 512-vertex boundary on ~100,000 faces of unrelated bulk. */
+function largeFillablePart(): CanonicalMesh {
+  const bodies: CanonicalMesh[] = [hpBoundaryOfSize(512)];
+  for (let index = 0; index < 25_000; index += 1) {
+    // Far from the hole, so the bulk exercises the broadphase rather than the
+    // narrowphase — the question is whether a large part costs anything when
+    // none of it is anywhere near the patch.
+    bodies.push(holeFillTetrahedron([100_000 + index * 0.5, 0, 0], 0.25));
+  }
+  return concatMeshes(...bodies);
 }

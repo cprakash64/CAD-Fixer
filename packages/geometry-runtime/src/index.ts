@@ -43,6 +43,14 @@ export type {
   StlExportResult,
   StlImportPayload,
   TransferHandle,
+  BoundaryLoopSummary,
+  HoleFillDiscardPayload,
+  HoleFillDiscardResult,
+  HoleFillLimitsPayload,
+  ListBoundaryLoopsPayload,
+  ListBoundaryLoopsResult,
+  SendForFillPayload,
+  SendForFillResult,
 } from './protocol';
 
 /**
@@ -164,3 +172,26 @@ export type {
   RepairHistoryStats,
   RepairUndoPreparation,
 } from './repair-history';
+
+/**
+ * Hole-fill contract values, RESTATED rather than re-exported from the engine,
+ * for exactly the reason `repair.ts` gives: a value edge to
+ * `@cadfixer/mesh-hole-fill` would drag the triangulator, the broadphase and the
+ * topology engine behind them into the main-thread bundle. See `hole-fill.ts`
+ * for the compile-time check and `hole-fill-contract.test.ts` for the runtime
+ * one.
+ */
+export {
+  HOLE_FILL_CONTRACT_CHECKED,
+  HOLE_FILL_MAX_BOUNDARY_VERTICES,
+  HOLE_FILL_MAX_PART_FACES,
+  HoleFillStatus,
+} from './hole-fill';
+export type { HoleFillLimits, HoleFillValidationSummary } from './hole-fill';
+
+export { HoleFillCandidateState, HoleFillCandidateStore } from './hole-fill-candidates';
+export type {
+  HoleFillCandidateHandle,
+  HoleFillCandidateId,
+  HoleFillCandidateStats,
+} from './hole-fill-candidates';

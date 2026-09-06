@@ -778,3 +778,88 @@ the same thing on any machine.
 
 They answer a different question. `npm run bench:export` measures throughput and
 scaling; this measures whether the interface survives it. Both are kept.
+
+# Hole filling (Stage 4B-1B1, 2026-09-05)
+
+`npm run bench:hole-fill`. NOT part of CI.
+
+## Environment
+
+Same machine and Node version as the sections above. Median of three measured
+iterations after a warm-up; a mean lets one scheduling hiccup rewrite the
+answer. The whole PRODUCTION path is measured — extraction, planarity,
+triangulation, candidate assembly, structural validation, topology
+postconditions, the broadphase and the exact Geogram narrowphase — because a
+benchmark of the triangulator alone would measure the cheap half.
+
+## Boundary size, on a bare tube
+
+| boundary | loop | plan | ear clip | topology | broadphase | narrowphase | TOTAL  | candidate pairs |
+| -------- | ---- | ---- | -------- | -------- | ---------- | ----------- | ------ | --------------- |
+| 8        | 0.72 | 0.01 | 0.01     | 0.81     | 0.10       | 0.60        | 2.3 ms | 106             |
+| 32       | 0.89 | 0.02 | 0.10     | 1.35     | 0.48       | 3.58        | 6.6 ms | 1,404           |
+| 128      | 1.04 | 0.06 | 0.66     | 2.44     | 37.24      | 53.23       | 58 ms  | 20,988          |
+| 256      | 0.99 | 0.11 | 0.12     | 3.05     | 218.66     | 220.46      | 227 ms | 82,940          |
+| 384      | 1.08 | 0.20 | 0.26     | 5.49     | 491.61     | 504.23      | 516 ms | 185,852         |
+| 511      | 1.04 | 0.25 | 0.42     | 5.61     | 870.42     | 868.70      | 883 ms | 328,183         |
+| 512      | 1.03 | 0.12 | 0.42     | 4.32     | 882.91     | 884.25      | 897 ms | 329,724         |
+
+All durations in milliseconds.
+
+**Validation dominates by three orders of magnitude.** At the 512-vertex ceiling
+ear clipping is 0.42 ms of an 897 ms operation. Stage 4B-1A's central finding
+holds: the ceilings belong on the validator, and capping the triangulator would
+cap the cheap half.
+
+## Part size, four-vertex hole
+
+| part faces | loop  | structural | topology | broadphase | narrowphase | TOTAL    | candidate pairs |
+| ---------- | ----- | ---------- | -------- | ---------- | ----------- | -------- | --------------- |
+| 10,000     | 2.67  | 1.13       | 20.94    | 2.50       | 0.05        | 28 ms    | 20              |
+| 50,000     | 10.60 | 5.72       | 135.32   | 14.50      | 0.05        | 170 ms   | 20              |
+| 100,000    | 22.05 | 11.22      | 309.08   | 29.49      | 0.05        | 378 ms   | 20              |
+| 200,000    | 49.54 | 22.33      | 781.58   | 60.47      | 0.05        | 928 ms   | 20              |
+| 249,000    | 74.91 | 29.64      | 1,085.48 | 78.64      | 0.06        | 1,286 ms | 20              |
+
+**Twenty candidate pairs at every size**, and the narrowphase is 0.05 ms
+throughout. The intersection check costs what the patch's NEIGHBOURHOOD costs,
+not what the model costs. What grows is topology validation, because the
+candidate's boundary loops are re-extracted over the whole part.
+
+## The combination
+
+| case                          | TOTAL    |
+| ----------------------------- | -------- |
+| 512-vertex rim, 100,000 faces | 1,244 ms |
+| 512-vertex rim, 248,000 faces | 2,184 ms |
+
+The worst case the policy allows is 2.18 s, off-thread and cancellable.
+
+## Bounded memory: the research shape is gone
+
+Stage 4B-1A tested every (patch, face) pair and exhausted a 1.7 GB heap. The
+production broadphase queries a hierarchy with each patch face's own box and
+streams candidates through a reused 8,192-pair (64 KiB) buffer.
+
+| case                          | naive pairs | generated | ratio  | node visits |
+| ----------------------------- | ----------- | --------- | ------ | ----------- |
+| 8-vertex rim, 100,000 faces   | 600,096     | 106       | 1.8e-4 | 192         |
+| 128-vertex rim, 100,000 faces | 12,632,256  | 20,988    | 1.7e-3 | 10,336      |
+| 512-vertex rim, 247,000 faces | 126,492,240 | 329,724   | 2.6e-3 | 105,726     |
+
+Nothing proportional to `patchFaces × sourceFaces` is materialised at any point.
+
+## Browser responsiveness
+
+`npm run test:e2e:harness`, `e2e-harness/hole-fill.spec.ts`. A 512-vertex rim on
+~100,000 faces, in real Chromium: the fill runs off the main thread, the longest
+main-thread gap stays inside both the self-scaling bound (ten times the idle gap
+measured on the same machine) and the absolute one-second line between "busy"
+and "frozen", and a real interaction with a production control completes well
+before the fill does. Cancellation terminates the worker and returns to the page
+in under two seconds, leaving zero live workers and zero live channels.
+
+## Not measured here
+
+Preview and Apply, which do not exist: Stage 4B-1B1 produces candidates only.
+Non-planar filling, batch filling, and PMP, none of which is implemented.

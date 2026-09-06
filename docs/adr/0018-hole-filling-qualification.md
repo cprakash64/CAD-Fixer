@@ -271,3 +271,181 @@ millimetre, so unknown-unit STL and OBJ documents remain eligible.
   but means some planar loops are refused.
 - A per-loop PMP binding does not exist yet; the vendored one fills every loop
   and republishes a compacted mesh.
+
+---
+
+# Production addendum — Stage 4B-1B1
+
+Status: **Engine implemented.** Recorded here rather than in a new ADR because
+it answers the questions this one deliberately left open, and a reader who has
+just read the qualification should not have to find a second document to learn
+what was actually built.
+
+## What shipped, and what did not
+
+`packages/mesh-hole-fill` is the engine described by the recommended scope
+above, in full: one selected loop, exact-identity eligibility, the relative
+planarity policy at 1e-4, in-house ear clipping only, zero added vertices,
+append-only provenance, a disposable worker, termination for cancellation, and
+independent validation of the final canonical Float32 candidate.
+
+**There is no user-facing control, and a boundary test asserts there is none.**
+Selection, patch preview, Apply and Undo are Stage 4B-1B2. The engine is
+reachable through three protocol operations — `holefill/list-loops`,
+`holefill/send-for-fill`, `holefill/discard` — and through nothing else.
+
+**Stage 4B-1B1 produces candidates only.** The resident document is never
+replaced, its revision never moves, and no undo record is written, for any
+outcome: success, refusal, cancellation, or a crash of the worker that ran it.
+
+## The three questions the qualification left open
+
+### 1. The boundary-vertex ceiling: **512**
+
+ADR 0018 said "low hundreds" and explicitly deferred the number until a spatial
+index existed, because the research validator's pairwise scan exhausted a 1.7 GB
+heap. `npm run bench:hole-fill` measures the production path end to end, median
+of three after a warm-up:
+
+| boundary vertices | total   | broadphase | narrowphase | ear clipping | candidate pairs |
+| ----------------- | ------- | ---------- | ----------- | ------------ | --------------- |
+| 8                 | 2.3 ms  | 0.10 ms    | 0.60 ms     | 0.01 ms      | 106             |
+| 32                | 6.6 ms  | 0.48 ms    | 3.58 ms     | 0.10 ms      | 1,404           |
+| 128               | 58.4 ms | 37.2 ms    | 53.2 ms     | 0.66 ms      | 20,988          |
+| 256               | 227 ms  | 219 ms     | 220 ms      | 0.12 ms      | 82,940          |
+| 384               | 516 ms  | 492 ms     | 504 ms      | 0.26 ms      | 185,852         |
+| 511               | 883 ms  | 870 ms     | 869 ms      | 0.42 ms      | 328,183         |
+| **512**           | 897 ms  | 883 ms     | 884 ms      | 0.42 ms      | 329,724         |
+
+The qualification's central finding holds exactly: **validation dominates**, and
+the triangulator is noise. Doubling to 1,024 would cost roughly three and a half
+seconds for the same hole, which is the shape of the curve rather than an
+accident of one machine. 512 keeps the operation under a second — an explicit,
+cancellable action in a disposable worker, in a band the self-intersection
+diagnostic already extends to ~9.4 s.
+
+A loop above the ceiling is refused BEFORE triangulation, so an oversized
+boundary costs the walk and nothing more.
+
+### 2. The part-size ceiling: **250,000 faces**, and the evidence agrees
+
+ADR 0018 permits inheriting the Stage 3C band "only once the intersection check
+uses a spatial index". It now does. Measured with a four-vertex hole, so the
+number is the part's cost rather than the boundary's:
+
+| part faces | total    | topology validation | broadphase | candidate pairs |
+| ---------- | -------- | ------------------- | ---------- | --------------- |
+| 10,000     | 28.3 ms  | 20.9 ms             | 2.5 ms     | 20              |
+| 50,000     | 169.6 ms | 135.3 ms            | 14.5 ms    | 20              |
+| 100,000    | 378.4 ms | 309.1 ms            | 29.5 ms    | 20              |
+| 200,000    | 927.8 ms | 781.6 ms            | 60.5 ms    | 20              |
+| 249,000    | 1,285 ms | 1,085 ms            | 78.6 ms    | 20              |
+
+**Twenty candidate pairs at every size.** The intersection check now costs what
+the patch's NEIGHBOURHOOD costs, not what the model costs. What still grows is
+topology validation, because the candidate's boundary loops are re-extracted
+over the whole part — which is unavoidable if the postconditions are to be
+checked over the whole part.
+
+The worst in-policy combination measured, a 512-vertex boundary on a
+248,000-face part, is 2.18 s.
+
+### 3. The spatial index: a TypeScript port, and why not the C++ one
+
+ADR 0018 said production needs "a spatial index or the existing Stage 3C BVH".
+The Stage 3C BVH could not be reused, for two reasons that are facts about the
+code rather than preferences:
+
+1. **It is C++ compiled into the Geogram WASM module**, whose only exported
+   surface is the flat `cf_si_*` C ABI. There is no way to call it from
+   TypeScript and no way to hand it a JavaScript visitor.
+2. **Its only query is all-pairs.** `for_each_overlapping_pair` enumerates every
+   overlapping pair of ONE mesh; there is no box query, so it cannot answer
+   "which source faces might this patch triangle hit". Asking it the all-pairs
+   question instead would make hole-fill validation cost a full
+   self-intersection scan of the part — the ~9.4 s at 250,000 faces ADR 0012
+   measured — to answer a question about at most 510 triangles.
+
+Editing `si_bvh.h` to add a box query was not available either: it is pinned
+byte-identical to `experiments/self-intersection/si_bvh.h` by
+`kernel-integrity.test.ts`, and changing it would change the evidence that
+describes what ships.
+
+So `packages/mesh-hole-fill/src/bvh.ts` is a **port, not an invention**, and
+deliberately the same tree: median split on the widest axis, leaf size 8,
+inclusive box overlap so exact contact is never discarded, and a deterministic
+tie-break on face index. It is validated against a brute-force all-pairs oracle,
+for the same reason `si_bvh.h` was — a broadphase that MISSES a pair turns a
+defect into a clean bill of health.
+
+Measured reduction against the naive product:
+
+| case                          | naive pairs | generated | ratio  |
+| ----------------------------- | ----------- | --------- | ------ |
+| 8-vertex rim, 100,000 faces   | 600,096     | 106       | 1.8e-4 |
+| 128-vertex rim, 100,000 faces | 12,632,256  | 20,988    | 1.7e-3 |
+| 512-vertex rim, 247,000 faces | 126,492,240 | 329,724   | 2.6e-3 |
+
+Candidates are STREAMED through a reused 8,192-pair buffer, so nothing
+proportional to `patchFaces × sourceFaces` is ever materialised.
+
+## The narrowphase IS the qualified kernel
+
+The research separating-axis checker was NOT promoted. It exists to be a second
+opinion and is deliberately weaker than the production predicate: no exact
+predicates, and it excludes any pair sharing a welded vertex, so it cannot see
+an overlap that goes BEYOND a legitimately shared edge.
+
+Instead, `binding.cpp` gained one additive entry point — `cf_hf_begin` /
+`cf_hf_classify` / `cf_hf_end` — which classifies a caller-supplied LIST of face
+pairs and attributes every finding to patch/source or patch/patch. It reuses,
+unchanged:
+
+- `GEO::triangles_intersections`, the exact symbolic narrowphase, through the
+  INDEXED overload;
+- `classify_pair`, the frozen Stage 3C taxonomy, so a legitimate shared edge, a
+  coplanar area overlap, an overlap beyond a shared edge and a non-adjacent
+  touch mean here exactly what they mean in the diagnostic;
+- `is_degenerate_face` and `shared_vertex_count`, so adjacency comes from
+  Stage 2's exact stored-coordinate identity;
+- the duplicate guard and the capacity guard, so a fixed-buffer overflow becomes
+  one unclassified pair and a PARTIAL verdict rather than a dead worker.
+
+`si_core.h` and `si_bvh.h` are byte-identical to the research copies, and
+`cf_si_run` is not modified and observes none of the new state. The rebuilt
+artifact was verified reproducible: rebuilding the UNCHANGED source produced
+byte-identical `.js` and `.wasm` (SHA-256
+`5829ce69…` and `8f6b3fa7…`) before the entry point was added.
+
+**A pair that could not be classified is never absorbed into a clean verdict.**
+A PARTIAL batch fails the candidate.
+
+## The loop identity was strengthened
+
+The research id was `loop-<fnv1a32(coordinates)>-<length>`. That is fine for
+naming a row in a results table and **not** fine for an identifier that selects
+which geometry a mutation targets: a 32-bit space collides by birthday around
+65,000 items, and the research corpus itself contains a part with 20,165
+boundary loops — roughly a 4.6% chance that two of them would become
+interchangeable.
+
+Production ids are `bl-<minVertex>-<count>-<hash64>`, and their intra-part
+uniqueness is **structural rather than probabilistic**: boundary components are
+vertex-disjoint, so no two components of one part can share a smallest welded
+vertex id. The 64-bit hash over the sorted (vertex id, coordinate) triples and
+the canonical ordered rotation is what makes a STALE id fail to match after an
+edit. `boundary-loops.test.ts` finds a real collision in the research function
+by brute force and shows the production identity keeping the two loops apart.
+
+One defect was found and fixed during implementation: the identity was initially
+hashed only for ELIGIBLE loops, which made the same boundary hash two different
+ways depending on whether the caller passed a vertex ceiling. An identity must
+be a property of the geometry, never of the options used to enumerate it.
+
+## What remains out of scope
+
+Unchanged from the qualification, and restated because an addendum is where
+scope quietly grows: non-planar loops, PMP, batch filling, tolerance welding,
+seam snapping, fairing, smoothing, surrounding remeshing, inter-part collision.
+Also out of scope for 4B-1B1 specifically: preview, Apply, Undo, and any
+user-facing control.

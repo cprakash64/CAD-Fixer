@@ -11,6 +11,11 @@ import {
   modelReleaseHandler,
 } from './stl-handlers';
 import { modelSendForDiagnosticHandler } from './self-intersection-handlers';
+import {
+  holeFillDiscardHandler,
+  holeFillListLoopsHandler,
+  holeFillSendForFillHandler,
+} from './hole-fill-handlers';
 import { documentSendForExportHandler } from './export-handlers';
 import {
   repairCommitHandler,
@@ -57,6 +62,9 @@ host.register('model/export', modelExportHandler);
 host.register('model/release', modelReleaseHandler);
 host.register('model/analyze', modelAnalyzeHandler);
 host.register('model/send-for-diagnostic', modelSendForDiagnosticHandler);
+host.register('holefill/list-loops', holeFillListLoopsHandler);
+host.register('holefill/send-for-fill', holeFillSendForFillHandler);
+host.register('holefill/discard', holeFillDiscardHandler);
 host.register('document/send-for-export', documentSendForExportHandler);
 
 // Conservative repair. Five operations so planning, preview, apply and undo

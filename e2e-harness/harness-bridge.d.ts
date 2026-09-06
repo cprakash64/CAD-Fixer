@@ -88,6 +88,67 @@ declare global {
       exportActiveOperation(): string | undefined;
       exportLiveWorkers(): number;
       exportLiveChannels(): number;
+
+      /**
+       * Boundary components of one part, as SCALARS.
+       *
+       * The only way a caller obtains a `boundaryLoopId` — and it carries no
+       * coordinates, because a browser test needs to know an opening exists and
+       * whether it is fillable, not where its vertices are.
+       */
+      listBoundaryLoops(
+        documentId: string,
+        revision: number,
+        partId: string,
+      ): Promise<HarnessBoundaryLoops>;
+      /** Starts a fill and returns immediately, so a probe can run beside it. */
+      beginHoleFill(
+        documentId: string,
+        revision: number,
+        partId: string,
+        boundaryLoopId: string,
+        options?: { readonly cancelAfterMs?: number },
+      ): void;
+      awaitHoleFill(): Promise<HarnessHoleFillResult>;
+      cancelHoleFill(): void;
+      holeFillActiveOperation(): string | undefined;
+      holeFillLiveWorkers(): number;
+      holeFillLiveChannels(): number;
     };
   }
+}
+
+interface HarnessBoundaryLoopSummary {
+  readonly boundaryLoopId: string;
+  readonly vertexCount: number;
+  readonly edgeCount: number;
+  readonly fillable: boolean;
+  readonly refusal?: string;
+}
+
+interface HarnessBoundaryLoops {
+  readonly partId: string;
+  readonly loopCount: number;
+  readonly loops: readonly HarnessBoundaryLoopSummary[];
+  readonly truncated: boolean;
+}
+
+/**
+ * What a fill attempt reports back.
+ *
+ * A HANDLE AND SCALARS, never a mesh. The candidate stays resident in the
+ * authoritative worker; the page learns its identity and what the validators
+ * measured.
+ */
+interface HarnessHoleFillResult {
+  readonly status: string;
+  readonly message?: string;
+  readonly candidateId?: string;
+  readonly candidatePartId?: string;
+  readonly candidateRevision?: number;
+  readonly candidateLoopId?: string;
+  readonly summary?: Record<string, number | boolean | Record<string, number>>;
+  readonly durationMs: number;
+  readonly cancelLatencyMs?: number;
+  readonly startedFaceCount?: number;
 }
