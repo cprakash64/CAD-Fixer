@@ -240,6 +240,20 @@ export interface SendForFillResult {
    * without the page ever holding a coordinate.
    */
   readonly candidate?: HoleFillCandidateHandle;
+  /**
+   * The AUTHORITATIVE preservation verdict — Stage 4B-1B1-R1.
+   *
+   * Set by the geometry worker by comparing the returned candidate against the
+   * RESIDENT part, byte for byte, immediately before registration. The engine's
+   * own check runs inside the fill worker where the candidate shares the
+   * source's buffer, so it cannot independently prove the source was not
+   * rewritten; this one can, because the two sides crossed a thread boundary.
+   *
+   * Absent when no candidate geometry came back, because there was nothing to
+   * compare.
+   */
+  readonly sourcePositionsPreserved?: boolean;
+  readonly sourceFacePrefixPreserved?: boolean;
   /** Bounded (faceA, faceB, category) triples. Diagnostic only. */
   readonly intersectionSamples: Uint32Array;
   readonly samplesTruncated: boolean;

@@ -43,6 +43,9 @@ interface HoleFillResult {
   readonly candidateRevision?: number;
   readonly candidateLoopId?: string;
   readonly summary?: Record<string, number | boolean | Record<string, number>>;
+  /** The authoritative worker's byte-preservation verdict. Stage 4B-1B1-R1. */
+  readonly sourcePositionsPreserved?: boolean;
+  readonly sourceFacePrefixPreserved?: boolean;
   readonly durationMs: number;
   readonly cancelLatencyMs?: number;
   readonly startedFaceCount?: number;
@@ -219,7 +222,18 @@ test('the authoritative document is untouched, byte for byte, by any outcome', a
 
   const loops = await listLoops(page, part);
   await beginFill(page, part, loops[0]?.boundaryLoopId ?? '');
-  expect((await awaitFill(page)).status).toBe('VALID_CANDIDATE');
+  const filled = await awaitFill(page);
+  expect(filled.status).toBe('VALID_CANDIDATE');
+
+  /*
+   * THE AUTHORITATIVE PRESERVATION VERDICT, in a real browser — Stage
+   * 4B-1B1-R1. The geometry worker compared the candidate that came back across
+   * the MessageChannel against its OWN resident buffers, byte for byte, before
+   * it would register anything.
+   */
+  expect(filled.sourcePositionsPreserved).toBe(true);
+  expect(filled.sourceFacePrefixPreserved).toBe(true);
+  expect(filled.candidateId).toBeDefined();
 
   // A REFUSAL as well as a success, because both must be non-destructive.
   await beginFill(page, part, 'bl-0-0-0000000000000000');
@@ -229,6 +243,13 @@ test('the authoritative document is untouched, byte for byte, by any outcome', a
   expect(after).toEqual(before);
 
   // The revision did not move either: Stage 4B-1B1 produces candidates only.
+  expect((await readState(page)).revision).toBe(state.revision);
+
+  // And the source is STILL unchanged once a second candidate supersedes the
+  // first, which is the only thing in this stage that releases one.
+  await beginFill(page, part, loops[1]?.boundaryLoopId ?? loops[0]?.boundaryLoopId ?? '');
+  expect((await awaitFill(page)).status).toBe('VALID_CANDIDATE');
+  expect(await digest(page, state)).toEqual(before);
   expect((await readState(page)).revision).toBe(state.revision);
 });
 

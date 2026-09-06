@@ -27,6 +27,15 @@ export interface HoleFillValidationSummary {
   readonly boundaryLoopsAfter: number;
   /** True when the loop that was targeted is gone from the candidate. */
   readonly selectedLoopRemoved: boolean;
+  /**
+   * Non-manifold defects the CANDIDATE has that the SOURCE did not, by
+   * IDENTITY rather than by kind or by count.
+   *
+   * Success requires zero. A pre-existing defect is not this operation's to
+   * fix and is not counted against it — the rule is
+   * `candidateDefects ⊆ sourceDefects`.
+   */
+  readonly newNonManifoldDefectCount: number;
 
   readonly degeneratePatchFaces: number;
   readonly duplicatePatchFaces: number;

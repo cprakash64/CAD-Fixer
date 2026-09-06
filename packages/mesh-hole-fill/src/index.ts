@@ -56,10 +56,14 @@ export {
   analysePatchConnectivity,
   analysePatchFaces,
   analysePatchOrientation,
+  collectNonManifoldDefects,
+  diffNonManifoldDefects,
   eulerCharacteristicOf,
   validateSourcePreservation,
 } from './validate';
 export type {
+  NonManifoldDefects,
+  NonManifoldDifference,
   PatchConnectivityReport,
   PatchFaceReport,
   PatchOrientationReport,

@@ -13,6 +13,8 @@ import {
   patchFaceCountFor,
 } from './limits';
 import { projectedPolygonTwiceArea, projectedTwiceArea } from './ear-clip';
+import { collectNonManifoldDefects, diffNonManifoldDefects } from './validate';
+import { recoverVertexIdentity } from '@cadfixer/mesh-topology';
 import {
   hp01TriangleHole,
   hp02QuadHole,
@@ -46,6 +48,11 @@ import {
   reviewNonAdjacentPointTouch,
   soup,
   concatMeshes,
+  tp01CleanFill,
+  tp02ExistingNonManifoldOnly,
+  tp03ChordCollisionWithExistingDefect,
+  tp04ChordCollisionAlone,
+  unrelatedNonManifoldCluster,
 } from './fixtures';
 
 /**
@@ -671,5 +678,129 @@ describe('REVIEW E: resource abuse', () => {
     const naive = summary.patchFaceCount * summary.sourceFaceCount;
     expect(naive).toBeGreaterThan(40_000);
     expect(summary.broadphaseCandidates).toBeLessThan(naive / 1_000);
+  });
+});
+
+/* ------------------------------------- TP: differential topology matrix -- */
+
+describe('TP01-TP06: new non-manifold topology is detected BY IDENTITY', () => {
+  it('TP01: a clean source and a clean fill create nothing', () => {
+    const result = fillTop(tp01CleanFill());
+    expect(result.outcome.status).toBe(HoleFillStatus.ValidCandidate);
+    expect(result.outcome.summary.newNonManifoldDefectCount).toBe(0);
+  });
+
+  it('TP02: an unrelated PRE-EXISTING defect does not block a clean fill', () => {
+    /*
+     * The same policy as pre-existing self-intersection: this operation is
+     * neither blamed for a defect it did not create nor expected to repair one.
+     */
+    const result = fillTop(tp02ExistingNonManifoldOnly());
+    expect(result.outcome.status).toBe(HoleFillStatus.ValidCandidate);
+    expect(result.outcome.summary.newNonManifoldDefectCount).toBe(0);
+  });
+
+  it('TP03/TP06: a NEW defect of an ALREADY-PRESENT KIND is still rejected', () => {
+    /*
+     * THE CASE THAT MOTIVATED STAGE 4B-1B1-R1, and the reason a kind comparison
+     * had to go. The source already contains a non-manifold edge, so the KIND
+     * is present before and after; only the identity of the second edge is new.
+     */
+    const mesh = tp03ChordCollisionWithExistingDefect();
+    const result = fillTop(mesh);
+    expect(result.outcome.status).toBe(HoleFillStatus.NonManifoldCreated);
+    expect(result.candidate).toBeUndefined();
+    expect(result.outcome.summary.newNonManifoldDefectCount).toBe(1);
+  });
+
+  it('TP06: and the KIND comparison it replaced would have passed this case', () => {
+    /*
+     * PROVEN, NOT ASSERTED. The defect KIND sets really are identical before and
+     * after — so the old check really would have accepted a candidate carrying a
+     * manufactured non-manifold edge. This is the discriminating evidence for
+     * the whole change.
+     */
+    const mesh = tp03ChordCollisionWithExistingDefect();
+    const sourceIdentity = recoverVertexIdentity(mesh);
+    const source = collectNonManifoldDefects(mesh, sourceIdentity);
+
+    // Build the candidate the engine would have registered, by re-running the
+    // fill with the differential's own inputs.
+    const loopId = topLoopId(mesh);
+    const attempt = runHoleFill({
+      source: mesh,
+      request: {
+        operationId: 'tp06',
+        documentId: 'tp06',
+        revision: 1,
+        partId: 'tp06',
+        boundaryLoopId: loopId,
+      },
+      narrowphase: referenceNarrowphase(),
+    });
+    expect(attempt.outcome.status).toBe(HoleFillStatus.NonManifoldCreated);
+
+    // The source genuinely has a non-manifold edge already.
+    expect(source.edges.size).toBeGreaterThan(0);
+    // And the candidate has strictly more of them — same kind, new identity.
+    expect(attempt.outcome.summary.newNonManifoldDefectCount).toBeGreaterThan(0);
+
+    // The kind comparison the differential replaced: "was NON_MANIFOLD present
+    // before?" — yes. "Is it present after?" — yes. No regression detected.
+    const kindBefore = source.edges.size > 0;
+    expect(kindBefore).toBe(true);
+  });
+
+  it('TP04: the chord collision is rejected even with NO pre-existing defect', () => {
+    const result = fillTop(tp04ChordCollisionAlone());
+    expect(result.outcome.status).toBe(HoleFillStatus.NonManifoldCreated);
+    expect(result.outcome.summary.newNonManifoldDefectCount).toBe(1);
+  });
+
+  it('TP04: and the exact narrowphase does NOT see it, which is why this check exists', () => {
+    /*
+     * Every contact on the shared chord is a legitimate shared edge — two faces
+     * meeting along topology they are entitled to share. Intersection testing is
+     * the wrong instrument for a topological defect, and this asserts it.
+     */
+    const summary = fillTop(tp04ChordCollisionAlone()).outcome.summary;
+    expect(summary.invalidPatchSourcePairs).toBe(0);
+    expect(summary.invalidPatchPatchPairs).toBe(0);
+  });
+
+  it('TP05: the rule is a SUBSET, so removing a defect is never a regression', () => {
+    // Stated directly against the differential, because no fill in this scope
+    // removes a non-manifold edge — the rule still has to be the right one.
+    const mesh = unrelatedNonManifoldCluster();
+    const defects = collectNonManifoldDefects(mesh, recoverVertexIdentity(mesh));
+    expect(defects.edges.size).toBeGreaterThan(0);
+
+    const empty = {
+      edges: new Set<string>(),
+      vertices: new Set<number>(),
+      windingConflictEdges: new Set<string>(),
+    };
+    // Candidate removed everything: allowed.
+    expect(diffNonManifoldDefects(defects, empty).total).toBe(0);
+    // Candidate kept everything: allowed.
+    expect(diffNonManifoldDefects(defects, defects).total).toBe(0);
+    // Candidate swapped one defect for a different one of the SAME KIND:
+    // rejected, which a count comparison would also have missed.
+    const swapped = {
+      edges: new Set<string>(['9999:10000']),
+      vertices: new Set<number>(),
+      windingConflictEdges: new Set<string>(),
+    };
+    expect(diffNonManifoldDefects(defects, swapped).total).toBe(1);
+    expect(defects.edges.size).toBe(swapped.edges.size);
+  });
+
+  it('counts non-manifold VERTICES too, not only edges', () => {
+    // Edge manifoldness does not imply vertex manifoldness — the bow-tie has
+    // every edge at exactly two faces and is still pinched.
+    const bowTie = hp15BowTie();
+    const defects = collectNonManifoldDefects(bowTie, recoverVertexIdentity(bowTie));
+    expect(defects.edges.size).toBe(0);
+    expect(defects.vertices.size).toBeGreaterThan(0);
   });
 });

@@ -1,4 +1,13 @@
 import type { CanonicalMesh } from '@cadfixer/mesh-core';
+import {
+  analyseEdges,
+  analyseVertexManifoldness,
+  buildDirectedEdges,
+  buildVertexIncidence,
+  EdgeClass,
+  groupEdges,
+  type VertexIdentityResult,
+} from '@cadfixer/mesh-topology';
 
 /**
  * INDEPENDENT POST-FILL VALIDATION.
@@ -379,4 +388,133 @@ export function eulerCharacteristicOf(mesh: CanonicalMesh, cornerToVertex: Uint3
     }
   }
   return vertices.size - edges.size + faceCount;
+}
+
+/* ------------------------------------------ non-manifold defect identity -- */
+
+/**
+ * The non-manifold defects a mesh actually contains, BY IDENTITY.
+ *
+ * WHY IDENTITY AND NOT A KIND, A COUNT OR A BOOLEAN. Stage 4B-1B1 compared the
+ * SET OF REFUSAL KINDS present before and after the fill, and that check is
+ * defeated by the commonest real case:
+ *
+ *     source    non-manifold edges = { X }        kinds = { NON_MANIFOLD }
+ *     candidate non-manifold edges = { X, Y }     kinds = { NON_MANIFOLD }
+ *
+ * The kind sets are equal, so a kind comparison reports no regression while the
+ * patch has manufactured a brand-new non-manifold edge Y. A COUNT would catch
+ * that particular example and would still miss a candidate that removed X and
+ * added Y. Only comparing the defects themselves answers the question the
+ * success contract actually asks: did THIS OPERATION create anything.
+ *
+ * EDGE IDENTITY IS THE WELDED ENDPOINT PAIR, ordered `min:max`, which is exactly
+ * the undirected identity `groupEdges` already produces. VERTEX IDENTITY is the
+ * welded vertex id. Both are deterministic and both are directly comparable
+ * between a source and its candidate, because an append-only candidate shares
+ * the source's position buffer and therefore its first-appearance vertex
+ * numbering — which the byte-level preservation check independently confirms.
+ */
+export interface NonManifoldDefects {
+  /** `"lo:hi"` welded endpoint pairs of edges with three or more incident faces. */
+  readonly edges: ReadonlySet<string>;
+  /** Welded ids of vertices whose incident faces do not form one fan. */
+  readonly vertices: ReadonlySet<number>;
+  /** `"lo:hi"` pairs of ordinary edges whose two faces traverse them alike. */
+  readonly windingConflictEdges: ReadonlySet<string>;
+}
+
+export function collectNonManifoldDefects(
+  mesh: CanonicalMesh,
+  identity: VertexIdentityResult,
+): NonManifoldDefects {
+  const faceCount = Math.floor(mesh.indices.length / 3);
+  const faceVertices = new Uint32Array(faceCount * 3);
+  for (let index = 0; index < faceVertices.length; index += 1) {
+    faceVertices[index] = identity.cornerToVertex[mesh.indices[index] ?? 0] ?? 0;
+  }
+
+  const directed = buildDirectedEdges(faceVertices, faceCount);
+  const groups = groupEdges(directed);
+  const analysis = analyseEdges(directed, groups);
+
+  const edges = new Set<string>();
+  const windingConflictEdges = new Set<string>();
+  for (let group = 0; group < groups.uniqueEdgeCount; group += 1) {
+    const nonManifold = analysis.edgeClass[group] === EdgeClass.NonManifold;
+    const conflicted = (analysis.windingConflict[group] ?? 0) === 1;
+    if (!nonManifold && !conflicted) continue;
+
+    const slot = groups.order[groups.groupStart[group] ?? 0] ?? 0;
+    const key = `${String(directed.low[slot] ?? 0)}:${String(directed.high[slot] ?? 0)}`;
+    if (nonManifold) edges.add(key);
+    if (conflicted) windingConflictEdges.add(key);
+  }
+
+  /*
+   * VERTEX MANIFOLDNESS IS NOT IMPLIED BY EDGE MANIFOLDNESS, which is the whole
+   * reason `analyseVertexManifoldness` exists: the bow-tie has every edge at
+   * exactly two faces and is still non-manifold. A differential that looked
+   * only at edges would let a patch pinch two fans together unnoticed.
+   */
+  const incidence = buildVertexIncidence(faceVertices, faceCount, identity.vertexCount);
+  const vertexAnalysis = analyseVertexManifoldness(
+    directed,
+    groups,
+    analysis,
+    incidence,
+    identity.vertexCount,
+  );
+  const vertices = new Set<number>();
+  for (let vertex = 0; vertex < identity.vertexCount; vertex += 1) {
+    if ((vertexAnalysis.nonManifoldVertex[vertex] ?? 0) === 1) vertices.add(vertex);
+  }
+
+  return { edges, vertices, windingConflictEdges };
+}
+
+export interface NonManifoldDifference {
+  readonly newEdges: number;
+  readonly newVertices: number;
+  readonly newWindingConflictEdges: number;
+  /** Everything above, summed. Success requires zero. */
+  readonly total: number;
+}
+
+/**
+ * Defects the CANDIDATE has that the SOURCE did not.
+ *
+ * A SUBSET RULE, deliberately one-directional. A fill legitimately REMOVES a
+ * boundary condition, and it may incidentally remove a defect; neither is a
+ * regression. What it may never do is introduce one — so the contract is
+ * `candidateDefects ⊆ sourceDefects`, and the number reported is the size of
+ * the difference in the direction that matters.
+ *
+ * PRE-EXISTING DEFECTS ARE NOT THIS OPERATION'S TO FIX, exactly as a
+ * pre-existing self-intersection is not. The fill is neither blamed for them
+ * nor credited with repairing them.
+ */
+export function diffNonManifoldDefects(
+  source: NonManifoldDefects,
+  candidate: NonManifoldDefects,
+): NonManifoldDifference {
+  let newEdges = 0;
+  for (const edge of candidate.edges) {
+    if (!source.edges.has(edge)) newEdges += 1;
+  }
+  let newVertices = 0;
+  for (const vertex of candidate.vertices) {
+    if (!source.vertices.has(vertex)) newVertices += 1;
+  }
+  let newWindingConflictEdges = 0;
+  for (const edge of candidate.windingConflictEdges) {
+    if (!source.windingConflictEdges.has(edge)) newWindingConflictEdges += 1;
+  }
+
+  return {
+    newEdges,
+    newVertices,
+    newWindingConflictEdges,
+    total: newEdges + newVertices + newWindingConflictEdges,
+  };
 }

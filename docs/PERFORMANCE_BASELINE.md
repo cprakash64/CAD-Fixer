@@ -863,3 +863,25 @@ in under two seconds, leaving zero live workers and zero live channels.
 
 Preview and Apply, which do not exist: Stage 4B-1B1 produces candidates only.
 Non-planar filling, batch filling, and PMP, none of which is implemented.
+
+## R1 — what the closure checks cost (2026-09-06)
+
+Stage 4B-1B1-R1 added an authoritative byte comparison of the returned candidate
+against the resident source, and a non-manifold differential by defect identity.
+Both had to be shown affordable rather than assumed so.
+
+| part faces | byte comparison | defect differential | topology phase | total      | share of total |
+| ---------- | --------------- | ------------------- | -------------- | ---------- | -------------- |
+| 10,000     | 0.54 ms         | 5.78 ms             | 24.2 ms        | 31.0 ms    | 20.4%          |
+| 100,000    | 5.41 ms         | 38.9 ms             | 316.5 ms       | 384.2 ms   | 11.5%          |
+| 249,000    | 13.4 ms         | 95.1 ms             | 1,077.6 ms     | 1,267.1 ms | 8.6%           |
+
+Both are linear and both SHRINK as a share of the whole, because the cost they
+join — re-extracting the candidate's topology over the entire part — grows
+faster than they do. End to end the 249,000-face case is unchanged within
+run-to-run noise: 1,286 ms before the closure, 1,267 ms after.
+
+**No persistent memory is added.** The byte comparison is `Uint8Array` views over
+buffers that already exist — a `memcmp` in all but name, with no second copy of
+the source — and the differential's edge, group and incidence arrays are
+released with the call.

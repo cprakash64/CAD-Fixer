@@ -549,6 +549,13 @@ describe('the self-intersection kernel is confined to its own worker', () => {
         DIAGNOSTIC_WORKER,
         HOLE_FILL_NARROWPHASE,
         join('apps', 'web', 'src', 'workers', 'node-tests', 'hole-fill-kernel.test.ts'),
+        /*
+         * STAGE 4B-1B1-R1. The rebuilt artifact is compared, fixture by
+         * fixture, against the pre-B1B1 one extracted from git — so this test
+         * instantiates the CURRENT kernel beside the historical one. It never
+         * ships.
+         */
+        join('apps', 'web', 'src', 'workers', 'node-tests', 'kernel-differential.test.ts'),
       ].sort(),
     );
   });
@@ -632,9 +639,20 @@ describe('no UNSHIPPED geometry kernel reaches production', () => {
       .map((file) => relative(REPO_ROOT, file))
       .sort();
 
-    expect(importers).toEqual([
-      join('packages', 'file-formats', 'src', 'format-differential.test.ts'),
-    ]);
+    expect(importers).toEqual(
+      [
+        join('packages', 'file-formats', 'src', 'format-differential.test.ts'),
+        /*
+         * STAGE 4B-1B1-R1. The Stage 3C kernel differential runs the FROZEN
+         * research corpus — the 24 hand-authored adversarial fixtures and the
+         * three regenerated shells — through the old and new artifacts. Reusing
+         * the frozen corpus is the point: a differential over a corpus invented
+         * for the occasion would prove the rebuild agrees with itself on cases
+         * chosen after the fact.
+         */
+        join('apps', 'web', 'src', 'workers', 'node-tests', 'kernel-differential.test.ts'),
+      ].sort(),
+    );
   });
 
   it('is not declared as a dependency of any shipped package', () => {
@@ -768,6 +786,63 @@ describe('the hole-fill engine stays where Stage 4B-1B1 put it', () => {
       }
     }
     expect(offenders, 'the hole-fill workflow belongs to Stage 4B-1B2').toEqual([]);
+  });
+
+  it('registers a hole-fill candidate from exactly ONE place', () => {
+    /*
+     * STAGE 4B-1B1-R1. `HoleFillCandidateStore.create` is the only way geometry
+     * becomes a candidate, and the byte-preservation gate sits immediately
+     * before the single call site. A second caller would be a second way in —
+     * one that had not compared the candidate against the resident source — so
+     * the number of call sites is asserted rather than assumed.
+     */
+    const files = [
+      ...sourceFilesUnder(join(REPO_ROOT, 'apps')),
+      ...sourceFilesUnder(join(REPO_ROOT, 'packages')),
+    ].filter((file) => !/\.test\.(ts|tsx)$/.test(file));
+
+    const callers = files
+      .filter((file) =>
+        /holeFillCandidates\.create\(|CandidateStore\(\)\.create\(/.test(
+          readFileSync(file, 'utf8'),
+        ),
+      )
+      .map((file) => relative(REPO_ROOT, file));
+
+    expect(callers).toEqual([join('apps', 'web', 'src', 'workers', 'hole-fill-handlers.ts')]);
+
+    // And that one call site is guarded: the gate has to be in the same file,
+    // above it.
+    const handlers = readFileSync(
+      join(REPO_ROOT, 'apps', 'web', 'src', 'workers', 'hole-fill-handlers.ts'),
+      'utf8',
+    );
+    const gate = handlers.indexOf('sourcePositionsPreserved');
+    const registration = handlers.indexOf('holeFillCandidates.create(');
+    expect(gate).toBeGreaterThan(-1);
+    expect(registration).toBeGreaterThan(gate);
+  });
+
+  it('exposes no corruption or bypass hook in shipped code', () => {
+    /*
+     * The mutation injection that proves the gate works lives entirely in
+     * `hole-fill-handlers.test.ts`, which substitutes a corrupted reply at the
+     * channel boundary. Nothing in production can produce one.
+     */
+    const BANNED = ['corruptCandidate', 'skipPreservationCheck', 'bypassPreservation'];
+    const offenders: string[] = [];
+    const files = [
+      ...sourceFilesUnder(join(REPO_ROOT, 'apps', 'web', 'src')),
+      ...sourceFilesUnder(join(REPO_ROOT, 'packages')),
+    ].filter((file) => !/\.test\.(ts|tsx)$/.test(file));
+
+    for (const file of files) {
+      const contents = readFileSync(file, 'utf8');
+      for (const banned of BANNED) {
+        if (contents.includes(banned)) offenders.push(`${relative(REPO_ROOT, file)}: ${banned}`);
+      }
+    }
+    expect(offenders, 'the corruption path must remain test-only').toEqual([]);
   });
 
   it('constructs the fill worker from exactly one place', () => {

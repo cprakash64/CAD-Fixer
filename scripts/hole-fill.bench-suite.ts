@@ -6,11 +6,14 @@ import createSelfIntersectionKernel from '@cadfixer/self-intersection-kernel';
 import type { CanonicalMesh } from '@cadfixer/mesh-core';
 import { extractBoundaryLoops } from '@cadfixer/mesh-topology';
 import {
+  collectNonManifoldDefects,
+  diffNonManifoldDefects,
   runHoleFill,
   type HoleFillStatus,
   type HoleFillValidationSummary,
   type PatchNarrowphase,
 } from '@cadfixer/mesh-hole-fill';
+import { recoverVertexIdentity } from '@cadfixer/mesh-topology';
 import {
   hp02QuadHole,
   hpBoundaryOfSize,
@@ -201,6 +204,92 @@ it('bounded memory: the candidate pair count never approaches patch x source', (
         `generated ${measurement.summary.broadphaseCandidates.toLocaleString().padStart(10)}  ` +
         `ratio ${ratio.toExponential(2)}  ` +
         `nodeVisits ${measurement.summary.broadphaseNodeVisits.toLocaleString()}`,
+    );
+  }
+});
+
+it('R1: what the closure checks cost', () => {
+  /*
+   * STAGE 4B-1B1-R1 added two gates, and both had to be shown affordable
+   * rather than assumed so:
+   *
+   *   1. an authoritative BYTE comparison of the returned candidate against the
+   *      resident source — linear in source bytes, and a `memcmp` in all but
+   *      name;
+   *   2. a NON-MANIFOLD DIFFERENTIAL by defect identity, which builds edge and
+   *      vertex manifoldness for the source AND the candidate.
+   *
+   * The second is the one that could have been expensive. It is measured
+   * beside the topology validation it joins, so the report is a share of an
+   * existing cost rather than a number with nothing to compare it to.
+   */
+  // eslint-disable-next-line no-console -- a benchmark's whole output is its report.
+  console.log('\n--- R1 closure checks ---');
+
+  for (const faces of [10_000, 100_000, 249_000]) {
+    const mesh = part(4, faces);
+    const identity = recoverVertexIdentity(mesh);
+
+    // The byte comparison, as the authoritative worker performs it: the
+    // candidate's buffers against the resident part's.
+    const candidatePositions = new Float32Array(mesh.positions);
+    const candidateIndices = new Uint32Array(mesh.indices.length + 6);
+    candidateIndices.set(mesh.indices, 0);
+
+    const compare = (): boolean => {
+      const a = new Uint8Array(
+        mesh.positions.buffer,
+        mesh.positions.byteOffset,
+        mesh.positions.byteLength,
+      );
+      const b = new Uint8Array(
+        candidatePositions.buffer,
+        candidatePositions.byteOffset,
+        candidatePositions.byteLength,
+      );
+      for (let index = 0; index < a.length; index += 1) {
+        if (a[index] !== b[index]) return false;
+      }
+      const c = new Uint8Array(
+        mesh.indices.buffer,
+        mesh.indices.byteOffset,
+        mesh.indices.byteLength,
+      );
+      const d = new Uint8Array(
+        candidateIndices.buffer,
+        candidateIndices.byteOffset,
+        mesh.indices.byteLength,
+      );
+      for (let index = 0; index < c.length; index += 1) {
+        if (c[index] !== d[index]) return false;
+      }
+      return true;
+    };
+
+    compare();
+    const bytesStart = performance.now();
+    for (let run = 0; run < 3; run += 1) compare();
+    const bytesMs = (performance.now() - bytesStart) / 3;
+
+    const defects = (): number => {
+      const source = collectNonManifoldDefects(mesh, identity);
+      const candidate = collectNonManifoldDefects(mesh, identity);
+      return diffNonManifoldDefects(source, candidate).total;
+    };
+    defects();
+    const defectStart = performance.now();
+    for (let run = 0; run < 3; run += 1) defects();
+    const defectMs = (performance.now() - defectStart) / 3;
+
+    const whole = measure(mesh, 3);
+    // eslint-disable-next-line no-console -- see above.
+    console.log(
+      `part ~${String(faces).padStart(7)} faces  ` +
+        `bytes ${bytesMs.toFixed(2).padStart(8)} ms  ` +
+        `defect differential ${defectMs.toFixed(2).padStart(9)} ms  ` +
+        `topology phase ${whole.summary.phaseMilliseconds.topologyValidation.toFixed(2).padStart(9)} ms  ` +
+        `TOTAL ${whole.totalMs.toFixed(2).padStart(9)} ms  ` +
+        `bytes+differential share ${(((bytesMs + defectMs) / whole.totalMs) * 100).toFixed(1)}%`,
     );
   }
 });

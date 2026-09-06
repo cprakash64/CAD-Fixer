@@ -561,6 +561,81 @@ export function hp29FarFromOrigin(): CanonicalMesh {
   return translateMesh(hp02QuadHole(), [1_000_000, 0, 0]);
 }
 
+/* ------------------------------------- TP: differential topology corpus -- */
+
+/**
+ * Three triangles sharing one edge, far from everything else.
+ *
+ * A PRE-EXISTING, UNRELATED non-manifold edge. Its only job is to make the
+ * defect KIND `NON_MANIFOLD` already present in the source, so a check that
+ * compared kinds rather than identities would see no regression when the patch
+ * manufactures a second one.
+ */
+export function unrelatedNonManifoldCluster(offsetX = 50): CanonicalMesh {
+  const a: Point = [offsetX, 0, 0];
+  const b: Point = [offsetX + 1, 0, 0];
+  return soup([
+    [a, b, [offsetX, 1, 0]],
+    [a, b, [offsetX, -1, 0]],
+    [a, b, [offsetX, 0, 1]],
+  ]);
+}
+
+/**
+ * A closed tetrahedron whose base edge IS the diagonal ear clipping will use.
+ *
+ * THE POINT OF THE FIXTURE. For `hp02QuadHole` the rim walks
+ * (0,0)→(2,0)→(2,2)→(0,2) and the triangulator emits (D,A,B) and (B,C,D), so
+ * its ONE internal edge is B–D — `(2,0,0)–(0,2,0)`. This tetrahedron already
+ * owns that edge with exactly two faces, which is perfectly manifold on its
+ * own. Add the patch and the edge reaches FOUR incident faces: a brand-new
+ * non-manifold edge that no earlier check can see.
+ *
+ * It is closed, so it adds no boundary and leaves the rim eligible; and it
+ * shares only topology the patch is entitled to share, so the exact narrowphase
+ * classifies every one of those contacts as a legitimate shared edge. This
+ * defect is invisible to intersection testing and visible only to a
+ * differential on defect IDENTITY.
+ */
+export function chordTetrahedron(): CanonicalMesh {
+  const b: Point = [2, 0, 0];
+  const d: Point = [0, 2, 0];
+  const p: Point = [1, 0.5, -1];
+  const q: Point = [0.5, 1, -2];
+  return soup([
+    [b, d, p],
+    [b, p, q],
+    [b, q, d],
+    [d, q, p],
+  ]);
+}
+
+/** TP01: a clean source and a clean fill. */
+export function tp01CleanFill(): CanonicalMesh {
+  return hp02QuadHole();
+}
+
+/** TP02 / TP05: an unrelated pre-existing non-manifold edge, and nothing new. */
+export function tp02ExistingNonManifoldOnly(): CanonicalMesh {
+  return concatMeshes(hp02QuadHole(), unrelatedNonManifoldCluster());
+}
+
+/**
+ * TP03 / TP04 / TP06: the case a defect-KIND comparison cannot see.
+ *
+ * The source already contains a non-manifold edge (so the kind is present) AND
+ * a chord the patch is about to land on top of. The candidate's defect kinds
+ * are identical to the source's; its defect IDENTITIES are not.
+ */
+export function tp03ChordCollisionWithExistingDefect(): CanonicalMesh {
+  return concatMeshes(hp02QuadHole(), chordTetrahedron(), unrelatedNonManifoldCluster());
+}
+
+/** The control: the same chord collision with NO pre-existing defect at all. */
+export function tp04ChordCollisionAlone(): CanonicalMesh {
+  return concatMeshes(hp02QuadHole(), chordTetrahedron());
+}
+
 /* --------------------------------------------------- review-pass cases -- */
 
 /**

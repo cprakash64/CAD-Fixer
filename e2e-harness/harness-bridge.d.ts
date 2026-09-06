@@ -148,6 +148,9 @@ interface HarnessHoleFillResult {
   readonly candidateRevision?: number;
   readonly candidateLoopId?: string;
   readonly summary?: Record<string, number | boolean | Record<string, number>>;
+  /** The authoritative worker's byte-preservation verdict. Stage 4B-1B1-R1. */
+  readonly sourcePositionsPreserved?: boolean;
+  readonly sourceFacePrefixPreserved?: boolean;
   readonly durationMs: number;
   readonly cancelLatencyMs?: number;
   readonly startedFaceCount?: number;
