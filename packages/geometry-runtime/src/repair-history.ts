@@ -33,10 +33,10 @@ import type { DocumentHandle, DocumentId } from './resident-documents';
  * here too, and reversed by the same `repair/undo` transaction. A second,
  * hole-specific history would be a second answer to "what does Undo do next",
  * and the two would eventually disagree about which change is the most recent
- * one. What differs between the two kinds of change is only HOW the previous
- * geometry is reconstructed, so that is the only thing the record varies: the
- * inverse is a discriminated union and everything else — the guards, the
- * supersession rule, the one-per-document cap, the descriptor trail — is shared.
+ * one. Since Stage 4B-1C nothing about the record varies with the kind either:
+ * both retain the mesh the part held and both are reversed by putting it back,
+ * so the guards, the supersession rule, the one-per-document cap and the
+ * descriptor trail are shared along with the reversal itself.
  */
 
 /**

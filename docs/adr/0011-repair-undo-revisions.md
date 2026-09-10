@@ -210,18 +210,20 @@ Release is unchanged in shape and stricter in effect: one undoable change per
 document, and the reference is dropped the moment the record is undone,
 superseded, evicted or its document released.
 
-### What validation replaces `assertMeshStructure`
+### What is validated now
 
 The section above says rule 11 applies to undo and "the patch promised it would
-be identical" is not a check. That reasoning was about a mesh an algorithm
-**produced**. Undo now produces none — it hands back a mesh that was
-authoritative when it was retained and has been immutable since, so re-validating
-it would be re-validating the document's own history.
+be identical" is not a check. That is unchanged: `assertMeshStructure` still runs
+on the restored mesh before it becomes authoritative, and rule 11 has no
+exemption for geometry we recognise.
 
-What is checked instead are the two O(1) postconditions a retained object can
-still get wrong through a bookkeeping error: the restored mesh's face count and
-index count against the counts recorded at retention. A mismatch is
-`INTERNAL_FAILURE`, never a silent success.
+What is ADDED is the postcondition a retained object can still fail where a
+rebuilt one could not: the restored mesh's face count and index count against the
+counts recorded when the commit retained it. Both are O(1), and they catch the
+failure mode retention actually introduces — a record wired to the wrong part, or
+built from the wrong mesh. Structural validation cannot see that, because the
+wrong mesh is a perfectly valid mesh. A mismatch is refused, never a silent
+success.
 
 ### What this closure does NOT change
 

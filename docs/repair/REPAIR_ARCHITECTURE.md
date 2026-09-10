@@ -393,12 +393,14 @@ than side effects of it:
   vertices it arrived with, and the file exported after an undo is byte-identical
   to the file that would have been exported before the repair.
 
-The postconditions are what a retained object can still usefully be checked for:
-that the restored mesh's face and index counts match the ones recorded when it
-was retained. Both are O(1). `assertMeshStructure` on the restored mesh would be
-re-validating a mesh that was authoritative when it was retained and has been
-immutable since — rule 11 is about geometry an algorithm PRODUCED, and undo
-produces none.
+`assertMeshStructure` still runs on the restored mesh. Rule 11 has no exemption
+for geometry we recognise, and the check is cheap beside the render snapshot the
+same handler is about to build. Beside it are two O(1) postconditions a retained
+object can still fail: the restored mesh's face count and index count against the
+counts the commit recorded when it retained the mesh. Those catch the failure
+that is actually possible now — a record wired to the wrong part, or built from
+the wrong mesh — which structural validation cannot see, because the wrong mesh
+is a perfectly valid mesh.
 
 The full reasoning, and why the revision does not go backwards, is
 [ADR 0011](../adr/0011-repair-undo-revisions.md).

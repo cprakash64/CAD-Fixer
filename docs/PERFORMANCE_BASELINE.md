@@ -454,8 +454,10 @@ user-facing number: the point at which Mesh Health describes the repaired model.
 **Undo costs about what apply costs**, and for the same reason it always did: it
 produces a render snapshot. What it no longer does is rebuild the mesh. Since
 Stage 4B-1C the record retains the pre-repair `CanonicalMesh` and undo assigns it
-back, so the geometry half of the cost is a reference assignment and two O(1)
-count checks; the snapshot is the whole of what is left. It is still a forward
+back, so the geometry half of the cost is a reference assignment plus the
+validation that was always there — `assertMeshStructure` on the restored mesh,
+and two O(1) count checks against what the commit recorded. The snapshot is the
+rest, and it is now the whole of the allocation. It is still a forward
 transaction, not a cached swap — see
 [ADR 0011](adr/0011-repair-undo-revisions.md) and its Stage 4B-1C closure.
 

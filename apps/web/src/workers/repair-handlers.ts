@@ -595,9 +595,6 @@ export const repairDiscardHandler: OperationHandler<'repair/discard'> = (payload
  * have been a second answer to "what does Undo do next", and two answers to that
  * question is how a user ends up undoing a change they did not make last.
  *
- * THE TWO RECONSTRUCTIONS ARE GENUINELY DIFFERENT, which is why the inverse is a
- * discriminated union rather than one shape stretched to cover both:
- *
  * ONE RECONSTRUCTION FOR BOTH KINDS — Stage 4B-1C. Every record RETAINS THE
  * MESH the part held, and undo puts that same object back. It was two
  * mechanisms: hole filling retained a reference (Stage 4B-1B2-R1) and a repair
@@ -614,9 +611,10 @@ export const repairDiscardHandler: OperationHandler<'repair/discard'> = (payload
  * and every guard in the runtime is built on that number only ever moving
  * forwards. See ADR 0011.
  *
- * The result is validated like any other geometry output. Both reconstructions
- * promise byte-identical coordinates and original ordering — but a promise is
- * not a check, and rule 11 says a returned mesh is not success.
+ * The result is validated like any other geometry output. A retained mesh was
+ * authoritative when it was retained and has been immutable since — but rule 11
+ * has no exemption for geometry we recognise, and "the record held the right
+ * object" is a claim, not a check.
  *
  * AND UNDO IS OBSERVABLY ATOMIC — Stage 4B-1B2-R2. Every fallible piece of the
  * answer is built BEFORE the authoritative swap, so a caller can never be told
