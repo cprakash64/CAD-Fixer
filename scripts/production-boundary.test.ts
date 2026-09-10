@@ -834,6 +834,79 @@ describe('the hole-fill engine stays where Stage 4B-1B1 put it', () => {
     expect(swap).toBeGreaterThan(guard);
   });
 
+  it('consumes the candidate and records the undo BEFORE anything that can allocate', () => {
+    /*
+     * THE TRANSACTION ORDERING, asserted structurally — Stage 4B-1B2-R1.
+     *
+     * `residentDocuments.replace` is the atomic step: before it the user has the
+     * old document, after it the new one. Everything that MUST accompany that
+     * swap has to sit immediately after it and be incapable of failing —
+     * consuming the candidate, so the same patch cannot be applied twice, and
+     * writing the undo record, so the change can be taken back. Both are map
+     * writes.
+     *
+     * Everything that can fail — building a render snapshot allocates, and a
+     * 250,000-face part allocates megabytes — has to come AFTER those, so a
+     * failure there leaves a worker state that is consistent and undoable rather
+     * than one where the document moved and nothing can reverse it.
+     *
+     * Checked by source order rather than by injecting a fault, because a
+     * production fault switch is exactly the kind of bypass hook the scan above
+     * forbids: the ordering IS the guarantee, so the ordering is what is
+     * asserted.
+     */
+    const commit = readFileSync(
+      join(REPO_ROOT, 'apps', 'web', 'src', 'workers', 'hole-fill-workflow-handlers.ts'),
+      'utf8',
+    );
+    const swap = commit.indexOf('residentDocuments.replace(');
+    const consume = commit.indexOf('holeFillCandidates.markCommitted(');
+    const record = commit.indexOf('repairHistory.record(');
+    const snapshot = commit.indexOf('buildRenderSnapshot(');
+    expect(swap).toBeGreaterThan(-1);
+    expect(consume).toBeGreaterThan(swap);
+    expect(record).toBeGreaterThan(consume);
+    expect(snapshot).toBeGreaterThan(record);
+
+    // Undo is the same shape: swap, then mark the record undone and release the
+    // stale candidate, and only then allocate.
+    const undo = readFileSync(
+      join(REPO_ROOT, 'apps', 'web', 'src', 'workers', 'repair-handlers.ts'),
+      'utf8',
+    );
+    const undoBody = undo.slice(undo.indexOf('repairUndoHandler'));
+    const undoSwap = undoBody.indexOf('residentDocuments.replace(');
+    const undoMark = undoBody.indexOf('repairHistory.markUndone(');
+    const undoRelease = undoBody.indexOf('holeFillCandidates.releaseDocument(');
+    const undoSnapshot = undoBody.indexOf('buildRenderSnapshot(');
+    expect(undoSwap).toBeGreaterThan(-1);
+    expect(undoMark).toBeGreaterThan(undoSwap);
+    expect(undoRelease).toBeGreaterThan(undoMark);
+    expect(undoSnapshot).toBeGreaterThan(undoRelease);
+  });
+
+  it('keeps the undo inverse OUT of the wire protocol', () => {
+    /*
+     * STAGE 4B-1B2-R1. `UndoableInverse` now carries a `CanonicalMesh` — the
+     * exact mesh a part held before a fill — so that undo can restore the
+     * document's sharing and not merely its bytes. That mesh is authoritative
+     * geometry and must never reach the page (ADR 0008).
+     *
+     * It cannot today, because no payload or result names the type. This asserts
+     * that, so the day someone reaches for the inverse to describe an undo over
+     * the wire, they are told rather than shipping a mesh to React.
+     */
+    const protocol = readFileSync(
+      join(REPO_ROOT, 'packages', 'geometry-runtime', 'src', 'protocol.ts'),
+      'utf8',
+    );
+    expect(protocol).not.toContain('UndoableInverse');
+    expect(protocol).not.toContain('previousMesh');
+    // `UndoableChangeKind` — a string union — IS on the wire, and that is fine:
+    // it is what lets a result say which kind of change was reversed.
+    expect(protocol).toContain('UndoableChangeKind');
+  });
+
   it('never re-runs the engine while applying a candidate', () => {
     /*
      * THE CORE PRODUCT-SAFETY GUARANTEE OF STAGE 4B-1B2: what the user previewed

@@ -742,7 +742,12 @@ representation with different bytes while appearing to succeed. The inverse
 retains two integers and no coordinates, because there is nothing to keep a copy
 of.
 
-### What undo does NOT restore: object sharing
+### What undo did NOT restore: object sharing — CORRECTED BY 4B-1B2-R1
+
+> **Superseded.** The reasoning below is kept as the record of what Stage
+> 4B-1B2 shipped and why. It was wrong about the trade, and the closure addendum
+> at the end of this document replaces it: undo now restores the exact mesh
+> object, and the alternatives rejected here were rejected for the wrong reason.
 
 Undo reproduces the part's GEOMETRY exactly — every position, every index, the
 placement, the name, the groups. It does not restore the `CanonicalMesh` OBJECT
@@ -820,3 +825,163 @@ surrounding remeshing, inter-part collision analysis, PMP, redo and a multi-step
 undo history. `Filled` still means ONE named opening was closed and validated
 against the part it came from — not watertight, not printable, not free of other
 openings, and not free of pre-existing crossings.
+
+---
+
+# Closure addendum — Stage 4B-1B2-R1
+
+**Status: implemented.** Stage 4B-1B2 shipped an undo that reproduced the
+pre-fill part's BYTES exactly and did not restore the document. This closes that.
+
+## The gap, and why byte equality was not enough
+
+Reversing an append-only fill by truncating the appended patch reproduces every
+position and every index, in the original order, for any mesh representation.
+That is a true statement about coordinates and an insufficient one about
+documents:
+
+```
+before Apply      A ─┐                after Undo (before)   A ─── M'
+                     ├── M                                  B ─── M
+                  B ─┘                                      bytes(M') = bytes(M)
+                                                            M' !== M
+```
+
+`M'` was a NEW object, so the document permanently held two meshes where it had
+one. Structural sharing is part of the `GeometryDocument` contract (ADR 0014),
+not an implementation detail, and every layer downstream keys on mesh IDENTITY
+rather than on coordinates:
+
+| layer                | keys on                 | consequence of losing identity                      |
+| -------------------- | ----------------------- | --------------------------------------------------- |
+| `documentByteLength` | distinct meshes         | the document reports, and holds, double             |
+| render snapshot      | distinct meshes         | two equal `Float32Array`s cross to the page         |
+| `SharedPartGeometry` | position-array identity | a second GPU geometry for the same picture          |
+| 3MF writer           | (mesh, name)            | a second `<object>` resource in every exported file |
+
+So an undo — the operation whose entire promise is that nothing happened —
+permanently degraded the document, its memory, its GPU footprint and its exported
+files. **Every byte-level assertion in the suite passed against it.** Only a
+reference comparison could see it, and nothing was making one.
+
+## The correction: retain the mesh, restore the reference
+
+The hole-fill inverse now holds the `CanonicalMesh` the part had:
+
+```ts
+{
+  kind: ('hole-fill', previousMesh, sourceFaceCount, sourceIndexCount, byteLength);
+}
+```
+
+Undo assigns that object back. The two counts are kept, but they no longer
+rebuild anything — they are an O(1) postcondition that the record was wired to
+the mesh the commit actually recorded, checked before geometry is replaced.
+
+**This is cheap because meshes are immutable.** Retaining one is a pointer; there
+is nothing to copy, compare or defend against mutation. `restoreFromInverse` is
+untouched and still reconstructs a conservative repair from its patch — the two
+operations reverse differently and the union says so.
+
+**Why the alternatives were wrong, not merely rejected.** Stage 4B-1B2 declined
+to retain the mesh on the grounds that ADR 0011 chose a patch over a copy. That
+conflated two things. ADR 0011 avoided COPYING the previous model on every undo
+step; retaining a REFERENCE to an immutable object copies nothing. In the case
+this exists for — a shared mesh — the geometry was live anyway and the record
+costs a pointer. The other alternative, re-sharing by comparing bytes across the
+document on undo, remains rejected: it is O(document) and a form of implicit
+deduplication this codebase does nowhere else.
+
+## What it costs, measured rather than asserted
+
+| case                             | what the record holds    | added geometry      |
+| -------------------------------- | ------------------------ | ------------------- |
+| mesh shared with a sibling       | a pointer to a live mesh | none                |
+| filled part owned the mesh alone | that mesh, until release | one part's geometry |
+
+Bounded by the one-undoable-change-per-document rule, so it is at most one part's
+mesh per document, never per step. `RepairHistoryEntry.inverseBytes` reports the
+mesh's size — an upper bound on the record's cost, not a claim about what it adds
+— and `stats().retainedBytes` sums it.
+
+**Released in exactly one place.** `release()` drops the inverse, and every path
+that ends a record's usefulness goes through it or deletes the record outright:
+undone, superseded by a later change, its document released, the store released,
+evicted by the descriptor cap. Asserted deterministically through
+`stats().retainedBytes`, never through GC timing.
+
+## The page had to follow, and did not
+
+Restoring canonical sharing in the worker is not sufficient on its own. The undo
+result carries a FRESH render snapshot for the restored part, and
+`SharedPartGeometry` reference-counts by position-array identity — so the
+document would have been sharing again while the page held two equal arrays and
+the viewport uploaded a second geometry for coordinates it was already drawing.
+
+`withPartRender` now reads `meshResourceIndex` from the successor's part
+descriptors — the worker's own answer, computed over its distinct meshes — and
+reuses a sibling's existing buffers when it says the two parts share. **The page
+compares no coordinates and could not: it has never held any.** This is not a
+hole-fill special case; every part-mesh replacement goes through that function,
+so a repair that lands a part back on a shared mesh keeps the page in step too.
+
+## Evidence
+
+Contract level, `hole-fill-commit.test.ts`:
+
+- US01/US02 — two parts sharing one mesh; the fill isolates A onto the candidate
+  and leaves B on the ORIGINAL object; undo puts A back on that same object, and
+  `A.mesh === B.mesh === M` by reference;
+- US03/US04/US05 — 1,000 placements: 1 distinct mesh, 2 after Apply, **1** after
+  Undo, with every one of the thousand parts back on the original;
+- US06 — the whole part-to-mesh equivalence GRAPH after undo equals the graph
+  before apply, alongside ids, names, transforms and unit. A pairwise check
+  cannot see a fill that restored one relationship and disturbed another;
+- US07 — the unique-source control: no sibling to share with, and the original
+  object still comes back;
+- US08 — fifty apply/undo cycles: the graph, the mesh identity, the candidate
+  store and the history are checked on EVERY cycle, and the revision advances 100
+  times while the document returns exactly to where it started;
+- US11/US12/US13 — the retained mesh is released by undo, by document release and
+  by supersession, measured through `stats().retainedBytes`;
+- US14 — repair then fill then undo lands on the post-repair document, sharing
+  included;
+- US15/US16 — the consumed candidate stays dead across an undo, and a fresh one
+  still applies.
+
+In a real browser, `e2e-harness/hole-fill-workflow.spec.ts`:
+
+- HFUX21 — the shared pair, through the production panel: one mesh resource
+  again after undo, and `residentBytes` back to the pre-fill figure;
+- US09 — the GPU: 1 shared geometry, 2 after Apply, **1** after Undo, with
+  `created − disposed` equal to what is drawn so neither a leak nor a double
+  disposal can hide; repeated over five cycles;
+- US10 — a 3MF exported after undo has the SAME object-resource count, triangle
+  count and byte length as one exported before the fill, and the writer reports
+  `STRUCTURAL_SHARING_PRESERVED` in both. This is the consequence a user could
+  actually see, in a file they open elsewhere.
+
+Structurally, `production-boundary.test.ts` asserts the transaction ordering —
+swap, then consume the candidate, then write the undo record, and only then
+allocate a render snapshot — and that `UndoableInverse` never reaches the wire
+protocol, because it now carries a mesh.
+
+## Two accepted coverage decisions, restated
+
+**HFUX07** (a part above the 250,000-face ceiling) stays covered at panel and
+contract level. The refusal is decided from `partFaceCount`, a scalar the
+authoritative listing returns; the interface refuses before any fill worker is
+constructed; and the engine enforces the same ceiling independently. A
+multi-minute browser import of an oversized model would add no semantic coverage.
+
+**HFUX18** (a stale loop) stays covered at UI-invariant and contract level. Every
+revision change clears the inventory synchronously, so no user-reachable row
+survives to name an old loop, and `holefill/boundary-preview` and `prepareCommit`
+reject an unresolvable identity independently.
+
+## What did not change
+
+The engine. Not one ceiling, refusal, validator or fixture. The Geogram artifact
+is byte-identical. The filler, the patch preview, the HP23 gate, cancellation,
+export semantics, accessibility, privacy and the production boundaries are as
+Stage 4B-1B2 left them.

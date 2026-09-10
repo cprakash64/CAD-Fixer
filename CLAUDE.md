@@ -675,12 +675,22 @@ validated`, and the qualifier naming what was NOT examined travels with it.
   positions and index prefix unchanged. **Never run `restoreFromInverse` over a
   fill** — it rebuilds a non-indexed mesh, so an indexed model would come back
   as soup while appearing to succeed.
-- **UNDO RESTORES BYTES, NOT OBJECT SHARING.** The restored part is a NEW mesh
-  holding the same bytes, not the object a sibling still holds — a consequence of
-  the patch design ADR 0011 chose, and stated rather than hidden. A document that
-  shared one mesh before a fill holds two equal ones after a fill and an undo.
-  Retaining the pre-fill mesh, or re-sharing by byte comparison across the
-  document, were both considered and rejected; see ADR 0018.
+- **UNDO RESTORES THE DOCUMENT, NOT MERELY ITS BYTES** — Stage 4B-1B2-R1. The
+  fill's inverse RETAINS THE EXACT `CanonicalMesh` the part held, and undo puts
+  that OBJECT back, so a document whose parts shared one mesh shares it again.
+  Reference identity, not byte equality: a rebuilt equal mesh passed every byte
+  assertion and still left the document holding two meshes where it had one,
+  permanently, along with two GPU geometries and two 3MF object resources. The
+  retention is O(1) — meshes are immutable, nothing is copied — and costs nothing
+  extra whenever a sibling still references the mesh. `inverseBytes` reports the
+  upper bound, and the reference is released the moment the record is undone,
+  superseded, evicted or its document released.
+- **THE PAGE'S RENDER SNAPSHOT FOLLOWS THE DOCUMENT'S SHARING.**
+  `SharedPartGeometry` keys on position-array IDENTITY, so restoring canonical
+  sharing is not enough on its own: `withPartRender` reuses a sibling's EXISTING
+  buffers whenever the successor's `meshResourceIndex` says the two parts share.
+  The worker is the authority for that; the page compares no coordinates and
+  holds none.
 - **THE CANDIDATE CARRIES THE SOURCE'S GROUPS.** The patch is appended, so every
   existing group range still describes exactly its own faces. Dropping them made
   Apply a silent metadata loss on export. The patch faces join NO group: they are

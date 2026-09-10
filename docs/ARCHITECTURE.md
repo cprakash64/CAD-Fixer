@@ -574,11 +574,15 @@ would destroy a validated fill.
 recorded in `RepairHistoryStore` beside conservative repairs and reversed by the
 same `repair/undo`; there is still exactly one undoable change per document, and
 either kind supersedes the other. A repair is rebuilt from retained coordinates;
-a fill is APPEND-ONLY, so its inverse is two integers and the reconstruction is a
-truncation — exact for any representation precisely because the authoritative
-preservation gate proved the positions and the index prefix unchanged. Running a
-repair's reconstruction over a fill would have rebuilt an indexed model as soup
-while appearing to succeed.
+a fill REPLACED one part's mesh, so its inverse RETAINS THAT MESH and undo puts
+the same object back. Reference identity, not byte equality — Stage 4B-1B2-R1:
+reconstructing an equal mesh reproduced the coordinates and lost the identity,
+so a document whose parts shared one mesh came back holding two, permanently,
+along with two GPU geometries and two 3MF object resources. Retaining an
+immutable mesh is O(1) and costs nothing extra while a sibling still references
+it. The page follows through `meshResourceIndex`: `withPartRender` reuses a
+sibling's existing buffers when the successor says the two parts share, because
+`SharedPartGeometry` reference-counts by array identity.
 
 What the engine does, and only this: it fills ONE selected boundary loop, which
 must be a topologically simple manifold cycle under exact stored-coordinate

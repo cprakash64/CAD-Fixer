@@ -1,10 +1,10 @@
 import { invalidState, modelUnavailable, type AppError } from '@cadfixer/shared';
 import type { RepairInversePatch, RepairOperation } from '@cadfixer/mesh-repair';
-import type { PartId } from '@cadfixer/mesh-core';
+import type { CanonicalMesh, PartId } from '@cadfixer/mesh-core';
 import type { DocumentHandle, DocumentId } from './resident-documents';
 
 /**
- * WORKER-RESIDENT REPAIR HISTORY.
+ * WORKER-RESIDENT UNDO HISTORY.
  *
  * Stage 3B-1A produced an inverse patch for every accepted repair but had
  * nowhere to keep it. This is that place, and it is deliberately in the worker
@@ -13,12 +13,19 @@ import type { DocumentHandle, DocumentId } from './resident-documents';
  * make the UI a second owner of the user's data and would defeat the resident
  * design entirely — see docs/adr/0008.
  *
- * WHAT IS RETAINED, and what is not. Exactly ONE undoable patch per model: the
- * most recent repair. A deeper stack would retain a patch per step for the
- * lifetime of the session, and a patch is proportional to what its repair
- * removed rather than to a fixed cost. Superseded records survive as
- * DESCRIPTORS — what was applied, and between which revisions — with their patch
- * released, so the trail stays readable without holding geometry for it.
+ * WHAT IS RETAINED, and what is not. Exactly ONE undoable record per model: the
+ * most recent change. A deeper stack would retain an inverse per step for the
+ * lifetime of the session, and an inverse costs either what its repair removed
+ * or one part's mesh. Superseded records survive as DESCRIPTORS — what was
+ * applied, and between which revisions — with their inverse released, so the
+ * trail stays readable without holding geometry for it.
+ *
+ * THE INVERSE IS THE ONLY THING HERE THAT HOLDS GEOMETRY, and releasing a record
+ * releases it. Every path that ends a record's usefulness — undone, superseded,
+ * document released, store released, evicted by the descriptor cap — goes
+ * through `release` or deletes the record outright, so there is exactly one
+ * place a retained mesh can be dropped and no way to reach a record whose
+ * inverse is gone.
  *
  * REDO IS NOT IMPLEMENTED. Undoing retains no forward patch, and nothing here
  * pretends otherwise. See docs/adr/0011.
@@ -41,11 +48,33 @@ import type { DocumentHandle, DocumentId } from './resident-documents';
  *
  *   - a conservative repair REMOVES faces and reorders corners within a face,
  *     so reversing it needs the removed triangles' coordinates back;
- *   - a hole fill is APPEND-ONLY. The authoritative preservation gate proves the
- *     candidate's positions are the source's bytes and its index prefix is the
- *     source's index bytes, so the exact inverse is a single number: the face
- *     count to truncate back to. Retaining coordinates for it would be storing a
- *     copy of data that demonstrably has not changed.
+ *   - a hole fill REPLACES one part's mesh with a longer one, so reversing it
+ *     means putting THE ORIGINAL MESH OBJECT back.
+ *
+ * WHY THE HOLE-FILL INVERSE RETAINS A MESH REFERENCE — Stage 4B-1B2-R1.
+ *
+ * It first held two integers and rebuilt the mesh by truncating the appended
+ * patch. That reproduced the source's BYTES exactly, and it was still wrong:
+ * the rebuilt mesh was a NEW object, so a document whose parts had SHARED one
+ * `CanonicalMesh` came back holding two byte-equal ones. Undo permanently
+ * doubled the document's geometry, its GPU resources and its exported 3MF
+ * object resources — for a change the user had just taken back.
+ *
+ * Structural sharing is part of the document contract (ADR 0014), not an
+ * implementation detail, so restoring bytes is not restoring the document.
+ * Holding the original REFERENCE is the only way to restore identity, and it is
+ * O(1): canonical meshes are immutable, so nothing has to be copied or compared.
+ *
+ * WHAT IT COSTS, stated rather than hidden. When the mesh is still referenced by
+ * a sibling part — the case this exists for — the reference costs nothing beyond
+ * a pointer. When the filled part was the mesh's only owner, the record keeps
+ * that mesh alive until the record is undone, superseded or released; that is
+ * ONE part's geometry per document, bounded by the one-undoable-change rule, and
+ * `inverseBytes` reports it.
+ *
+ * IT IS WORKER-RESIDENT AND MUST STAY SO. This union is not part of the wire
+ * protocol and a boundary test asserts it never becomes part of one. The page
+ * receives a record id; the mesh never leaves the worker that owns it.
  */
 export const UndoableChangeKind = {
   ConservativeRepair: 'conservative-repair',
@@ -62,9 +91,16 @@ export type UndoableInverse =
     }
   | {
       readonly kind: typeof UndoableChangeKind.HoleFill;
-      /** Faces the part had before the patch was appended. The whole inverse. */
+      /**
+       * THE EXACT MESH THE PART HELD BEFORE THE FILL.
+       *
+       * The object, not a copy and not a description of one. Restoring it is
+       * what puts a shared document back the way it was.
+       */
+      readonly previousMesh: CanonicalMesh;
+      /** Faces that mesh has. Checked against it on restore, never used to rebuild it. */
       readonly sourceFaceCount: number;
-      /** Index entries the part had before the patch. Truncation is exact on these. */
+      /** Index entries it has. The second half of the same postcondition. */
       readonly sourceIndexCount: number;
       readonly byteLength: number;
     };
@@ -100,7 +136,14 @@ export interface RepairHistoryEntry {
   readonly planHash: string;
   /** The opening that was filled. Present only for a hole fill. */
   readonly boundaryLoopId?: string;
-  /** Bytes the inverse occupies while it is still retained. Zero for a hole fill. */
+  /**
+   * Bytes the inverse occupies while it is still retained.
+   *
+   * For a hole fill this is the RETAINED MESH's size. It is an upper bound on
+   * what the record costs, not a claim about what it adds: when a sibling part
+   * still references that mesh — the case the retention exists for — the record
+   * holds a pointer and the geometry was live anyway.
+   */
   readonly inverseBytes: number;
   /**
    * Whether this record can still be reversed.

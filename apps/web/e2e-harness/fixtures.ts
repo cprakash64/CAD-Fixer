@@ -134,6 +134,26 @@ export const HarnessFixtureId = {
    * transform-aware overlay is most likely to get wrong.
    */
   HoleFillTransformed: 'hole-fill-transformed',
+  /**
+   * A SHARED FILLABLE PAIR THAT STATES A UNIT — Stage 4B-1B2-R1.
+   *
+   * The same shared pair, plus millimetres, so the 3MF writer will accept it. 3MF
+   * is where structural sharing is OBSERVABLE in a file: parts that share a mesh
+   * become one `<object>` resource referenced twice. That makes it the strongest
+   * available evidence that undo restored the document rather than merely its
+   * coordinates — a byte-equal copy would silently become a second resource.
+   */
+  HoleFillSharedPairMillimetre: 'hole-fill-shared-pair-mm',
+  /**
+   * ONE FILLABLE MESH, A THOUSAND PLACEMENTS — Stage 4B-1B2-R1.
+   *
+   * `Shared1000` is a thousand closed tetrahedra, so it has no opening to fill.
+   * This is the same shape with geometry that HAS one, which is what makes it
+   * possible to ask the question that matters at this scale: after filling one
+   * placement and undoing it, does the document hold ONE mesh again, or a
+   * thousand-and-one?
+   */
+  HoleFillShared1000: 'hole-fill-shared-1000',
 } as const;
 
 export type HarnessFixtureId = (typeof HarnessFixtureId)[keyof typeof HarnessFixtureId];
@@ -353,6 +373,36 @@ export function buildHarnessDocument(id: HarnessFixtureId): GeometryDocument {
         parts: [
           named('a', shared, 'Shared A'),
           named('b', shared, 'Shared B', translation(PART_B_OFFSET_X, 0, 0)),
+        ],
+      };
+    }
+
+    case HarnessFixtureId.HoleFillShared1000: {
+      // ONE mesh object, a thousand parts. Not a thousand equal meshes — the
+      // whole point is that the sharing is real before the fill touches it.
+      const shared = hp02QuadHole();
+      return {
+        parts: Array.from({ length: 1_000 }, (_, index) =>
+          named(`p${String(index)}`, shared, 'Placement', translation(index * 4, 0, 0)),
+        ),
+      };
+    }
+
+    case HarnessFixtureId.HoleFillSharedPairMillimetre: {
+      const shared = hp02QuadHole();
+      /*
+       * BOTH PARTS CARRY THE SAME NAME, and that is load-bearing rather than
+       * lazy. The 3MF writer groups objects by (MESH, NAME) — the metadata an
+       * `<object>` element actually carries — so two placements that share a
+       * mesh but disagree about their name correctly become two resources.
+       * Naming them alike is what makes a resource count a statement about MESH
+       * SHARING and nothing else, which is what this fixture exists to observe.
+       */
+      return {
+        unit: LengthUnit.Millimeter,
+        parts: [
+          named('a', shared, 'Shared component'),
+          named('b', shared, 'Shared component', translation(PART_B_OFFSET_X, 0, 0)),
         ],
       };
     }

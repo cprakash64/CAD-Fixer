@@ -310,9 +310,23 @@ test('§61: the interface stays interactive while a fill runs', async ({ page })
 
   await beginFill(page, part, target.boundaryLoopId);
 
-  // A REAL interaction with a production control, not a synthetic event.
+  /*
+   * A REAL interaction, dispatched by the browser rather than synthesised — and
+   * against a target that CANNOT change the document.
+   *
+   * It used to click `harness-bar`, the whole section. That relied on the click
+   * landing in the bar's dead space, which stopped being true the moment Stage
+   * 4B-1B2-R1 added fixture buttons and the wrapped row grew: the click hit a
+   * button, imported a fixture, moved the revision, and the fill it was
+   * measuring correctly came back `STALE_REVISION`. The test was measuring
+   * something it had not meant to do.
+   *
+   * `harness-state` is the scalar readout — a `<pre>` with no handler — so the
+   * interaction is exactly what it claims to be: the browser routing a real
+   * event to the main thread while a fill runs off it, and nothing else.
+   */
   const startedAt = Date.now();
-  await page.getByTestId('harness-bar').click();
+  await page.getByTestId('harness-state').click();
   const interactionMs = Date.now() - startedAt;
 
   const result = await awaitFill(page);

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   IDENTITY_PART_TRANSFORM,
+  meshByteLength,
   partId,
   singlePartDocument,
   triangleCount,
@@ -28,9 +29,11 @@ import {
   holeFillBoundaryPreviewHandler,
   holeFillCommitHandler,
   holeFillPatchPreviewHandler,
+  holeFillSuccessorDocument,
 } from './hole-fill-workflow-handlers';
 import { holeFillDiscardHandler } from './hole-fill-handlers';
 import { repairUndoHandler } from './repair-handlers';
+import { modelReleaseHandler } from './stl-handlers';
 import { holeFillCandidates, repairHistory, residentDocuments } from './stl-handlers';
 
 /**
@@ -820,3 +823,395 @@ describe('the previews are read-only and disposable', () => {
     });
   });
 });
+
+/* ------------------------------------- US01-US08: exact undo sharing ---- */
+
+/**
+ * STAGE 4B-1B2-R1: UNDO RESTORES THE DOCUMENT, NOT MERELY ITS BYTES.
+ *
+ * The first implementation reversed a fill by truncating the appended patch.
+ * That reproduced the source's bytes exactly and was still wrong: the rebuilt
+ * mesh was a NEW object, so a document whose parts had SHARED one
+ * `CanonicalMesh` came back holding two byte-equal ones — permanently, for a
+ * change the user had just taken back. Structural sharing is part of the
+ * document contract (ADR 0014), and every layer downstream keys on mesh
+ * identity: `documentByteLength` counts distinct meshes, the render snapshot
+ * builds buffers per distinct mesh, the viewport reference-counts GPU geometry
+ * by buffer identity, and the 3MF writer groups object resources by mesh.
+ *
+ * WHY REFERENCE IDENTITY IS THE ASSERTION AND BYTE EQUALITY IS NOT ENOUGH:
+ * every one of the byte assertions in this file passed against the broken
+ * implementation. `toBe` on the mesh object is the only check that could see it.
+ */
+describe('US01-US08: undo restores the exact mesh, not an equal one', () => {
+  /** The document's distinct `CanonicalMesh` objects. Identity, not equality. */
+  function distinctMeshCount(handle: DocumentHandle): number {
+    const document = residentDocuments.resolve(handle);
+    if (!('parts' in document)) throw document;
+    return new Set(document.parts.map((part) => part.mesh)).size;
+  }
+
+  /** `partId -> mesh object`, so a sharing GRAPH can be compared, not just a pair. */
+  function sharingGraph(handle: DocumentHandle): string {
+    const document = residentDocuments.resolve(handle);
+    if (!('parts' in document)) throw document;
+    const ids = new Map<CanonicalMesh, number>();
+    return document.parts
+      .map((part) => {
+        let id = ids.get(part.mesh);
+        if (id === undefined) {
+          id = ids.size;
+          ids.set(part.mesh, id);
+        }
+        return `${part.id}:${String(id)}`;
+      })
+      .join('|');
+  }
+
+  /**
+   * Fills one part and undoes it, OBSERVING THE DOCUMENT AT EACH STAGE.
+   *
+   * The intermediate readings are taken here rather than by the caller because
+   * a handle is only resolvable while it is current — the undo moves the
+   * revision on, so `applied` cannot be resolved afterwards. That is the
+   * staleness guard working, and measuring through it would mean weakening it.
+   */
+  async function fillAndUndo(
+    handle: DocumentHandle,
+    part: PartId,
+    source: CanonicalMesh,
+  ): Promise<{
+    applied: DocumentHandle;
+    undone: DocumentHandle;
+    meshesAfterApply: number;
+    filledPartAfterApply: CanonicalMesh | undefined;
+    siblingAfterApply: CanonicalMesh | undefined;
+  }> {
+    const loopId = firstFillableLoopId(source);
+    const candidate = register(
+      handle,
+      part,
+      loopId,
+      buildCandidate(source, loopId),
+      triangleCount(source),
+    );
+    const applied = await holeFillCommitHandler(
+      { candidate, expectedSource: handle, expectedPart: part, expectedLoopId: loopId },
+      context(),
+    );
+
+    const midDocument = residentDocuments.resolve(applied.value.handle);
+    if (!('parts' in midDocument)) throw midDocument;
+    const meshesAfterApply = new Set(midDocument.parts.map((entry) => entry.mesh)).size;
+    const filledPartAfterApply = midDocument.parts.find((entry) => entry.id === part)?.mesh;
+    const siblingAfterApply = midDocument.parts.find((entry) => entry.id !== part)?.mesh;
+
+    const undone = await repairUndoHandler(
+      { handle: applied.value.handle, recordId: applied.value.recordId },
+      context(),
+    );
+    return {
+      applied: applied.value.handle,
+      undone: undone.value.handle,
+      meshesAfterApply,
+      filledPartAfterApply,
+      siblingAfterApply,
+    };
+  }
+
+  it('US01, US02: two parts sharing one mesh share it again after undo', async () => {
+    const source = hp02QuadHole();
+    const handle = residentDocuments.commit(twoPartSharedDocument(source));
+    expect(distinctMeshCount(handle)).toBe(1);
+
+    const result = await fillAndUndo(handle, PART, source);
+    const undone = result.undone;
+
+    // US01. The fill isolated A and left B on the original OBJECT.
+    expect(result.filledPartAfterApply).not.toBe(result.siblingAfterApply);
+    expect(result.siblingAfterApply).toBe(source);
+    expect(result.meshesAfterApply).toBe(2);
+
+    // US02. THE ASSERTION THAT MATTERS. Not "equal bytes" — the same object,
+    // and the same object the sibling never stopped holding.
+    const afterUndo = residentDocuments.resolve(undone);
+    if (!('parts' in afterUndo)) throw afterUndo;
+    expect(afterUndo.parts[0]?.mesh).toBe(source);
+    expect(afterUndo.parts[1]?.mesh).toBe(source);
+    expect(afterUndo.parts[0]?.mesh).toBe(afterUndo.parts[1]?.mesh);
+    expect(distinctMeshCount(undone)).toBe(1);
+
+    // And the bytes, which were already true before this closure and must stay so.
+    expect(bytesEqual(residentPart(undone, PART).positions, source.positions)).toBe(true);
+    expect(bytesEqual(residentPart(undone, PART).indices, source.indices)).toBe(true);
+  });
+
+  it('US03, US04, US05: 1,000 placements collapse back to ONE mesh', async () => {
+    /*
+     * THE CASE THAT MAKES THE COST VISIBLE. A thousand parts referencing one
+     * mesh is the document shape Stage 4A-2A exists for. Under the old undo the
+     * filled part came back holding a byte-equal copy, so the document held two
+     * meshes forever — and every downstream layer that counts distinct meshes
+     * followed it.
+     */
+    const source = hp02QuadHole();
+    const parts = Array.from({ length: 1_000 }, (_, index) => ({
+      id: partId(`p${String(index)}`),
+      mesh: source,
+      transform: IDENTITY_PART_TRANSFORM,
+    }));
+    const handle = residentDocuments.commit({ parts });
+
+    expect(distinctMeshCount(handle)).toBe(1); // US03
+    const target = partId('p0');
+    const result = await fillAndUndo(handle, target, source);
+    const undone = result.undone;
+
+    expect(result.meshesAfterApply).toBe(2); // US04 — the candidate and the shared original
+    expect(distinctMeshCount(undone)).toBe(1); // US05 — not 1,001, and not 2
+
+    // EVERY placement is back on the original object, not just the filled one.
+    const document = residentDocuments.resolve(undone);
+    if (!('parts' in document)) throw document;
+    expect(document.parts.every((part) => part.mesh === source)).toBe(true);
+    expect(document.parts).toHaveLength(1_000);
+  });
+
+  it('US06: the sharing graph after undo equals the graph before apply', async () => {
+    /*
+     * STRONGER THAN CHECKING A AND B. A pairwise assertion cannot see a fill
+     * that restored one relationship and disturbed another; the whole
+     * part-to-mesh equivalence graph is compared, alongside every scalar the
+     * document carries.
+     */
+    const source = hp02QuadHole();
+    const other = hp12TwoIndependentHoles();
+    const handle = residentDocuments.commit({
+      parts: [
+        { id: PART, mesh: source, transform: IDENTITY_PART_TRANSFORM, name: 'A' },
+        { id: SIBLING, mesh: source, transform: IDENTITY_PART_TRANSFORM, name: 'B' },
+        { id: partId('part-3'), mesh: other, transform: IDENTITY_PART_TRANSFORM, name: 'C' },
+        { id: partId('part-4'), mesh: other, transform: IDENTITY_PART_TRANSFORM, name: 'D' },
+      ],
+      unit: 'millimeter',
+    });
+
+    const before = sharingGraph(handle);
+    const beforeDocument = residentDocuments.resolve(handle);
+    if (!('parts' in beforeDocument)) throw beforeDocument;
+    const beforeShape = beforeDocument.parts.map(
+      (part) => `${part.id}/${part.name ?? ''}/${part.transform.join(',')}`,
+    );
+
+    const { undone } = await fillAndUndo(handle, PART, source);
+
+    expect(sharingGraph(undone)).toBe(before);
+    const afterDocument = residentDocuments.resolve(undone);
+    if (!('parts' in afterDocument)) throw afterDocument;
+    expect(
+      afterDocument.parts.map(
+        (part) => `${part.id}/${part.name ?? ''}/${part.transform.join(',')}`,
+      ),
+    ).toEqual(beforeShape);
+    expect(afterDocument.unit).toBe(beforeDocument.unit);
+    // The untouched pair never stopped sharing either.
+    expect(afterDocument.parts[2]?.mesh).toBe(other);
+    expect(afterDocument.parts[3]?.mesh).toBe(other);
+  });
+
+  it('US07: a part that owned its mesh alone gets that same mesh back', async () => {
+    /*
+     * THE CONTROL. There is no sibling to share with, so nothing here could be
+     * "restored" by accident — and the retained reference still puts the
+     * original object back rather than an equal one. The document holds exactly
+     * one mesh for this part before and after, never two.
+     */
+    const source = hp02QuadHole();
+    const handle = residentDocuments.commit(singlePartDocument(source));
+    expect(distinctMeshCount(handle)).toBe(1);
+
+    const result = await fillAndUndo(handle, PART, source);
+    const undone = result.undone;
+
+    expect(result.meshesAfterApply).toBe(1); // the candidate replaced it outright
+    expect(distinctMeshCount(undone)).toBe(1);
+    expect(residentPart(undone, PART)).toBe(source);
+    expect(bytesEqual(residentPart(undone, PART).indices, source.indices)).toBe(true);
+  });
+
+  it('US08: fifty apply/undo cycles stay bounded and end exactly where they began', async () => {
+    const source = hp02QuadHole();
+    const handle = residentDocuments.commit(twoPartSharedDocument(source));
+    const before = sharingGraph(handle);
+
+    let current = handle;
+    for (let cycle = 0; cycle < 50; cycle += 1) {
+      const result = await fillAndUndo(current, PART, residentPart(current, PART));
+      current = result.undone;
+
+      // EVERY cycle, not just the last: a drift that only appears on repetition
+      // is exactly what a single round trip cannot see.
+      expect(distinctMeshCount(current), `cycle ${String(cycle)}`).toBe(1);
+      expect(sharingGraph(current), `cycle ${String(cycle)}`).toBe(before);
+      expect(residentPart(current, PART), `cycle ${String(cycle)}`).toBe(source);
+
+      // And nothing accumulates in either worker-resident store.
+      expect(holeFillCandidates.stats().candidateCount, `cycle ${String(cycle)}`).toBe(0);
+      expect(repairHistory.stats().undoableCount, `cycle ${String(cycle)}`).toBe(0);
+      expect(repairHistory.stats().retainedBytes, `cycle ${String(cycle)}`).toBe(0);
+    }
+
+    // The revision moved forward every time — 50 applies and 50 undos — while
+    // the document itself came back to exactly what it was.
+    expect(current.revision).toBe(handle.revision + 100);
+    expect(bytesEqual(residentPart(current, PART).positions, source.positions)).toBe(true);
+  });
+});
+
+/* ------------------------------ US11-US16: ownership after the fact ----- */
+
+describe('US11-US16: what the stores hold once a fill is over', () => {
+  async function applyOne(
+    handle: DocumentHandle,
+    source: CanonicalMesh,
+  ): Promise<{ applied: DocumentHandle; recordId: string; candidate: HoleFillCandidateHandle }> {
+    const loopId = firstFillableLoopId(source);
+    const candidate = register(
+      handle,
+      PART,
+      loopId,
+      buildCandidate(source, loopId),
+      triangleCount(source),
+    );
+    const applied = await holeFillCommitHandler(
+      { candidate, expectedSource: handle, expectedPart: PART, expectedLoopId: loopId },
+      context(),
+    );
+    return { applied: applied.value.handle, recordId: applied.value.recordId, candidate };
+  }
+
+  it('US11: undoing releases the retained mesh; nothing pins it afterwards', async () => {
+    const source = hp02QuadHole();
+    const handle = residentDocuments.commit(singlePartDocument(source));
+    const { applied, recordId } = await applyOne(handle, source);
+
+    // Between Apply and Undo the record legitimately holds the previous mesh.
+    expect(repairHistory.stats().retainedBytes).toBe(meshByteLength(source));
+
+    await repairUndoHandler({ handle: applied, recordId }, context());
+
+    // Afterwards it holds nothing. Deterministic ownership, not a GC claim.
+    expect(repairHistory.stats().retainedBytes).toBe(0);
+    expect(repairHistory.stats().undoableCount).toBe(0);
+  });
+
+  it('US12: releasing the document releases the retained mesh', async () => {
+    const source = hp02QuadHole();
+    const handle = residentDocuments.commit(singlePartDocument(source));
+    await applyOne(handle, source);
+    expect(repairHistory.stats().retainedBytes).toBeGreaterThan(0);
+
+    /*
+     * WHAT AN IMPORT DOES. A replacement import commits a NEW document and
+     * releases the old one; this is that release, and it must drop the history's
+     * hold on geometry that nothing can address any more.
+     */
+    await modelReleaseHandler({ documentId: handle.documentId }, context());
+
+    expect(repairHistory.stats().retainedBytes).toBe(0);
+    expect(repairHistory.stats().undoableCount).toBe(0);
+    expect(holeFillCandidates.stats().candidateCount).toBe(0);
+  });
+
+  it('US13: a superseding change releases the previous record immediately', async () => {
+    const source = hp02QuadHole();
+    const handle = residentDocuments.commit(singlePartDocument(source));
+    const first = await applyOne(handle, source);
+    const firstBytes = repairHistory.stats().retainedBytes;
+    expect(firstBytes).toBeGreaterThan(0);
+
+    // A second fill on the successor. One undoable change per document, so the
+    // first record's mesh is dropped rather than left pinned for the session.
+    const second = await applyOne(first.applied, residentPart(first.applied, PART));
+
+    expect(repairHistory.entryOf(first.recordId)?.undoable).toBe(false);
+    expect(repairHistory.stats().undoableCount).toBe(1);
+    expect(repairHistory.stats().retainedBytes).toBe(
+      repairHistory.entryOf(second.recordId)?.inverseBytes,
+    );
+  });
+
+  it('US14: repair then fill then undo lands exactly on the post-repair document', async () => {
+    /*
+     * ONE HISTORY, and the undo reverses the MOST RECENT change — which after a
+     * repair and a fill is the fill. The document must come back to what the
+     * repair produced, not to what the file contained.
+     */
+    const source = hp02QuadHole();
+    const handle = residentDocuments.commit(twoPartSharedDocument(source));
+
+    // A stand-in for a committed repair: a part-level mesh replacement recorded
+    // in the same history. Conservative repair's own commit path is exercised in
+    // its own suite; what matters here is the INTERACTION of two records.
+    const repaired = hp12TwoIndependentHoles();
+    const before = residentDocuments.resolve(handle);
+    if (!('parts' in before)) throw before;
+    const successor = holeFillSuccessorDocument(before, PART, repaired);
+    const afterRepair = residentDocuments.replace(handle, successor);
+    if (isAppError(afterRepair)) throw afterRepair;
+
+    const postRepairGraph = sharingGraphOf(afterRepair);
+    const { applied, recordId } = await applyOne(afterRepair, repaired);
+    const undone = await repairUndoHandler({ handle: applied, recordId }, context());
+
+    // Exactly the post-repair document: the same mesh object for the repaired
+    // part, and the sibling still on the original.
+    expect(residentPart(undone.value.handle, PART)).toBe(repaired);
+    expect(residentPart(undone.value.handle, SIBLING)).toBe(source);
+    expect(sharingGraphOf(undone.value.handle)).toBe(postRepairGraph);
+  });
+
+  it('US15, US16: the consumed candidate stays dead and a fresh one still works', async () => {
+    const source = hp02QuadHole();
+    const handle = residentDocuments.commit(singlePartDocument(source));
+    const { applied, recordId, candidate } = await applyOne(handle, source);
+    const undone = await repairUndoHandler({ handle: applied, recordId }, context());
+
+    // US15. Undo does not revive a consumed candidate.
+    expect(holeFillCandidates.stateOf(candidate)).toBe(HoleFillCandidateState.Committed);
+    const refusal = await refusalOf(() =>
+      holeFillCommitHandler(
+        {
+          candidate,
+          expectedSource: undone.value.handle,
+          expectedPart: PART,
+          expectedLoopId: candidate.boundaryLoopId,
+        },
+        context(),
+      ),
+    );
+    expect(refusal.code).toBe(AppErrorCode.InvalidState);
+
+    // US16. A fresh candidate against the restored geometry applies normally.
+    const restored = residentPart(undone.value.handle, PART);
+    const second = await applyOne(undone.value.handle, restored);
+    expect(second.applied.revision).toBe(undone.value.handle.revision + 1);
+  });
+});
+
+/** `partId -> mesh identity` for a resident document. Identity, never equality. */
+function sharingGraphOf(handle: DocumentHandle): string {
+  const document = residentDocuments.resolve(handle);
+  if (!('parts' in document)) throw document;
+  const ids = new Map<CanonicalMesh, number>();
+  return document.parts
+    .map((part) => {
+      let id = ids.get(part.mesh);
+      if (id === undefined) {
+        id = ids.size;
+        ids.set(part.mesh, id);
+      }
+      return `${part.id}:${String(id)}`;
+    })
+    .join('|');
+}

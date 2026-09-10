@@ -742,3 +742,169 @@ describe('lifecycle: nothing survives a context change', () => {
     expect(holeFill.inventory.state).toBe(HoleFillInventoryState.Unavailable);
   });
 });
+
+/* --------------------------- US09: the page mirrors the document's sharing -- */
+
+describe('US09: the render snapshot follows the document back into sharing', () => {
+  /**
+   * WHY THIS LIVES AT STORE LEVEL AND MATTERS AT GPU LEVEL.
+   *
+   * `SharedPartGeometry` keys on position-array IDENTITY — parts that share an
+   * authoritative mesh receive the SAME `Float32Array`, and structured clone
+   * preserves that across `postMessage`, so one GPU geometry serves both. An
+   * undo result carries a FRESH snapshot for the restored part only, so if the
+   * store installed it blindly the document would be sharing again while the
+   * page held two equal arrays and the viewport uploaded a second geometry for
+   * coordinates it was already drawing.
+   *
+   * The store reads the worker's own answer — `meshResourceIndex`, computed over
+   * the successor's distinct meshes — and reuses the sibling's existing buffers
+   * when it says the two parts share. No coordinates are compared: the page has
+   * never held any.
+   */
+  const SHARED_POSITIONS = new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]);
+  const SHARED_NORMALS = new Float32Array([0, 0, 1, 0, 0, 1, 0, 0, 1]);
+
+  function sharedDescriptor(partId: string, meshResourceIndex: number): PartDescriptor {
+    return { ...descriptor(partId), meshResourceIndex };
+  }
+
+  /** A two-part model whose parts hold the SAME render arrays, as an import would. */
+  function sharedModel(): Omit<LoadedModel, 'revision'> {
+    const parts = [sharedDescriptor(PART, 0), sharedDescriptor(SIBLING, 0)];
+    return {
+      ...model(parts),
+      render: {
+        parts: parts.map((part) => ({
+          partId: part.partId,
+          transform: part.transform,
+          positions: SHARED_POSITIONS,
+          normals: SHARED_NORMALS,
+          vertexCount: 3,
+        })),
+      },
+    };
+  }
+
+  function loadShared(): WorkspaceStore {
+    const store = new WorkspaceStore();
+    const token = store.beginImport('shared.stl');
+    store.commitImport(token, sharedModel());
+    // The workflow needs an opening chosen before a candidate can be claimed,
+    // exactly as the panel does.
+    const listing = store.beginHoleFillListing(handle(1), PART);
+    store.commitHoleFillListing(listing, {
+      handle: handle(1),
+      partId: PART,
+      loopCount: 2,
+      rows: ROWS,
+      truncated: false,
+      partFaceCount: 12,
+    });
+    store.selectBoundaryLoop('bl-a');
+    return store;
+  }
+
+  function buffersOf(store: WorkspaceStore, partId: string): Float32Array | undefined {
+    return store.getSnapshot().model?.render.parts.find((part) => part.partId === partId)
+      ?.positions;
+  }
+
+  it('un-shares on Apply and re-shares on Undo, by ARRAY IDENTITY', () => {
+    const store = loadShared();
+    // The import shared one array between both parts, exactly as the worker sent it.
+    expect(buffersOf(store, PART)).toBe(SHARED_POSITIONS);
+    expect(buffersOf(store, SIBLING)).toBe(SHARED_POSITIONS);
+
+    // Apply: the filled part gets its own buffers and its own resource index.
+    withCandidate(store);
+    store.beginHoleFillCommit();
+    const filledPositions = new Float32Array(18);
+    store.applyHoleFillResult({
+      handle: handle(2),
+      parentRevision: 1,
+      recordId: 'fill-1',
+      partId: PART,
+      boundaryLoopId: 'bl-a',
+      patchFaceCount: 2,
+      undoable: true,
+      render: { positions: filledPositions, normals: new Float32Array(18), vertexCount: 6 },
+      parts: [sharedDescriptor(PART, 0), sharedDescriptor(SIBLING, 1)],
+      bounds: bounds(),
+      triangleCount: 14,
+      vertexCount: 42,
+      residentBytes: 2048,
+    });
+
+    expect(buffersOf(store, PART)).toBe(filledPositions);
+    expect(buffersOf(store, SIBLING)).toBe(SHARED_POSITIONS);
+    expect(buffersOf(store, PART)).not.toBe(buffersOf(store, SIBLING));
+
+    /*
+     * UNDO: the worker restored the shared mesh, so both descriptors carry the
+     * same resource index — and the store must put the filled part back on the
+     * SIBLING'S EXISTING ARRAY rather than installing the fresh one it was sent.
+     * Installing the fresh array would satisfy every byte-level assertion and
+     * still leave the GPU holding two geometries for one mesh.
+     */
+    store.applyUndoResult({
+      handle: handle(3),
+      partId: PART,
+      render: { positions: new Float32Array(9), normals: new Float32Array(9), vertexCount: 3 },
+      parts: [sharedDescriptor(PART, 0), sharedDescriptor(SIBLING, 0)],
+      bounds: bounds(),
+      triangleCount: 12,
+      vertexCount: 36,
+      residentBytes: 1024,
+    });
+
+    expect(buffersOf(store, PART)).toBe(SHARED_POSITIONS);
+    expect(buffersOf(store, SIBLING)).toBe(SHARED_POSITIONS);
+    expect(buffersOf(store, PART)).toBe(buffersOf(store, SIBLING));
+  });
+
+  it('installs the new buffers when the part genuinely does not share', () => {
+    /*
+     * THE CONTROL, and the common path. A single-part document has no sibling to
+     * match, so the result's own snapshot is used — which is what every
+     * one-part model does on every repair, fill and undo.
+     */
+    const store = new WorkspaceStore();
+    const token = store.beginImport('one.stl');
+    store.commitImport(token, model([descriptor(PART)]));
+
+    const fresh = new Float32Array(18);
+    store.applyUndoResult({
+      handle: handle(2),
+      partId: PART,
+      render: { positions: fresh, normals: new Float32Array(18), vertexCount: 6 },
+      parts: [descriptor(PART)],
+      bounds: bounds(),
+      triangleCount: 12,
+      vertexCount: 36,
+      residentBytes: 1024,
+    });
+
+    expect(buffersOf(store, PART)).toBe(fresh);
+  });
+
+  it('does not re-share with a part whose resource index differs', () => {
+    // A sibling that holds a DIFFERENT mesh must never lend its buffers, however
+    // similar the geometry happens to be.
+    const store = loadShared();
+    const fresh = new Float32Array(18);
+    store.applyUndoResult({
+      handle: handle(2),
+      partId: PART,
+      render: { positions: fresh, normals: new Float32Array(18), vertexCount: 6 },
+      parts: [sharedDescriptor(PART, 0), sharedDescriptor(SIBLING, 1)],
+      bounds: bounds(),
+      triangleCount: 12,
+      vertexCount: 36,
+      residentBytes: 1024,
+    });
+
+    expect(buffersOf(store, PART)).toBe(fresh);
+    expect(buffersOf(store, SIBLING)).toBe(SHARED_POSITIONS);
+  });
+});

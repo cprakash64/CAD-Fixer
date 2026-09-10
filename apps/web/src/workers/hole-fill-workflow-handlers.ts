@@ -5,6 +5,7 @@ import {
   createIndexArray,
   documentTriangleCount,
   documentVertexCount,
+  meshByteLength,
   triangleCount,
   withPartMesh,
 } from '@cadfixer/mesh-core';
@@ -337,12 +338,23 @@ export const holeFillCommitHandler: OperationHandler<'holefill/commit'> = (paylo
   const filledPart = payload.candidate.partId;
 
   /*
-   * THE PRE-FILL SHAPE, read BEFORE the swap, for the undo record.
+   * THE PRE-FILL MESH, captured BEFORE the swap, for the undo record.
    *
-   * A hole fill is append-only, so reversing it is a truncation and these two
-   * counts are the entire inverse. They are read from the RESIDENT part rather
-   * than from the candidate's handle, so the record describes the geometry that
-   * is actually being replaced.
+   * THE OBJECT ITSELF, not a copy and not a description of one — Stage
+   * 4B-1B2-R1. Undo has to put the document back the way it was, and for a
+   * document whose parts SHARE a mesh that means restoring the same reference
+   * the sibling still holds. A rebuilt mesh with identical bytes would leave the
+   * document permanently holding two equal meshes where it had one.
+   *
+   * O(1) AND SAFE. Canonical meshes are immutable, so retaining one costs a
+   * pointer and nothing is copied, compared or mutated. When a sibling still
+   * references it the retention adds no memory at all; when the filled part was
+   * its only owner the record keeps it alive until it is undone, superseded or
+   * released, which is one part's geometry bounded by the one-undoable-change
+   * rule.
+   *
+   * Read from the RESIDENT part rather than from the candidate's handle, so the
+   * record holds the geometry that is actually being replaced.
    */
   const currentPart = source.parts.find((part) => part.id === filledPart);
   if (currentPart === undefined) {
@@ -351,8 +363,9 @@ export const holeFillCommitHandler: OperationHandler<'holefill/commit'> = (paylo
       operation: 'holefill/commit',
     });
   }
-  const sourceFaceCount = triangleCount(currentPart.mesh);
-  const sourceIndexCount = currentPart.mesh.indices.length;
+  const previousMesh = currentPart.mesh;
+  const sourceFaceCount = triangleCount(previousMesh);
+  const sourceIndexCount = previousMesh.indices.length;
   const patchFaceCount = triangleCount(prepared) - sourceFaceCount;
 
   // Rule 11. A returned mesh is not success, however confident its producer is.
@@ -383,9 +396,12 @@ export const holeFillCommitHandler: OperationHandler<'holefill/commit'> = (paylo
     boundaryLoopId: payload.expectedLoopId,
     inverse: {
       kind: UndoableChangeKind.HoleFill,
+      previousMesh,
       sourceFaceCount,
       sourceIndexCount,
-      byteLength: 0,
+      // The mesh's own size. An UPPER BOUND on what this record costs, not a
+      // claim about what it adds — see `RepairHistoryEntry.inverseBytes`.
+      byteLength: meshByteLength(previousMesh),
     },
   });
 
@@ -413,47 +429,6 @@ export const holeFillCommitHandler: OperationHandler<'holefill/commit'> = (paylo
     transfer: [render.positions.buffer, render.normals.buffer],
   });
 };
-
-/**
- * Reconstructs the pre-fill mesh by TRUNCATING the appended patch.
- *
- * EXACT, AND EXACT IS THE WHOLE CLAIM. The authoritative preservation gate
- * proved, byte for byte across a thread boundary, that the candidate's
- * positions ARE the source's positions and that its index buffer BEGINS with
- * the source's index bytes. So dropping the suffix reproduces the source's
- * bytes — every position, every index, in the original order — for any mesh
- * representation, indexed or not.
- *
- * WHY NOT `restoreFromInverse`. That function reconstructs a repair, which
- * removed and reordered faces, and it rebuilds a NON-INDEXED mesh in doing so.
- * For an indexed model — every OBJ and 3MF import — that would round-trip a
- * fill into a different representation with different bytes, and this stage
- * promises byte identity.
- *
- * THE POSITION BUFFER IS SHARED, not copied. It is provably identical and
- * canonical meshes are immutable, so a copy would allocate a second megabyte-
- * scale array to hold the same numbers.
- */
-export function truncatePatch(
-  mesh: CanonicalMesh,
-  sourceFaceCount: number,
-  sourceIndexCount: number,
-): CanonicalMesh {
-  const indices = createIndexArray(sourceIndexCount);
-  indices.set(mesh.indices.subarray(0, sourceIndexCount));
-  if (triangleCount({ ...mesh, indices }) !== sourceFaceCount) {
-    throw invalidState('The restored part does not have the expected number of triangles.', {
-      expected: sourceFaceCount,
-      actual: Math.floor(indices.length / 3),
-    });
-  }
-  return {
-    positions: mesh.positions,
-    indices,
-    ...(mesh.groups === undefined ? {} : { groups: mesh.groups }),
-    metadata: mesh.metadata,
-  };
-}
 
 /**
  * The successor document a part-level replacement produces.

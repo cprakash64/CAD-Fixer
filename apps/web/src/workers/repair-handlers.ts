@@ -36,7 +36,6 @@ import {
   type CancellationToken,
   type resourceLimitExceeded,
 } from '@cadfixer/shared';
-import { truncatePatch } from './hole-fill-workflow-handlers';
 import {
   buildRenderSnapshot,
   describeParts,
@@ -533,11 +532,12 @@ export const repairDiscardHandler: OperationHandler<'repair/discard'> = (payload
  *
  *   - a REPAIR removed faces and reordered corners, so `restoreFromInverse`
  *     rebuilds the original face ordering from the retained coordinates;
- *   - a HOLE FILL only appended, so `truncatePatch` drops the suffix. That is
- *     exact for any representation, and it is exact precisely because the
- *     authoritative preservation gate proved the prefix and the positions
- *     unchanged. Running a repair's reconstruction over a fill would rebuild a
- *     non-indexed mesh and silently change an indexed model's bytes.
+ *   - a HOLE FILL replaced one part's mesh, so the record RETAINS THAT MESH and
+ *     undo puts the same object back — Stage 4B-1B2-R1. Reconstructing an equal
+ *     mesh instead reproduced the bytes and lost the IDENTITY, which left a
+ *     document whose parts had shared one mesh holding two byte-equal ones
+ *     forever after. Structural sharing is part of the document contract, so
+ *     restoring bytes is not restoring the document.
  *
  * A NEW MONOTONIC REVISION, not a revival of the old one, for either kind.
  * Reactivating revision N after N+1 existed would make "is this handle stale?"
@@ -569,9 +569,20 @@ export const repairUndoHandler: OperationHandler<'repair/undo'> = (payload, cont
 
   context.reportProgress(0.1, 'restoring previous version');
   const inverse = preparation.inverse;
+
+  /*
+   * A FILL RESTORES A REFERENCE; A REPAIR REBUILDS FROM A PATCH.
+   *
+   * The fill's retained mesh is the object the part held before the fill, so
+   * putting it back restores the document's sharing as well as its bytes: a
+   * sibling that still references it is once again sharing with this part, and
+   * every layer that keys on mesh identity — the render snapshot's per-mesh
+   * buffers, the GPU geometry, the 3MF object resources — follows from that
+   * without anyone comparing coordinates.
+   */
   const restored =
     inverse.kind === UndoableChangeKind.HoleFill
-      ? truncatePatch(currentPart.mesh, inverse.sourceFaceCount, inverse.sourceIndexCount)
+      ? inverse.previousMesh
       : restoreFromInverse(currentPart.mesh, inverse.patch);
   const expectedFaceCount =
     inverse.kind === UndoableChangeKind.HoleFill
@@ -579,13 +590,32 @@ export const repairUndoHandler: OperationHandler<'repair/undo'> = (payload, cont
       : inverse.patch.sourceFaceCount;
 
   // Rule 11: the output of a geometry operation is validated before it is
-  // accepted, no matter how confident the operation is.
+  // accepted, no matter how confident the operation is. A retained mesh was
+  // validated when it was admitted, and it is checked again here rather than
+  // trusted — the rule does not have an exemption for geometry we recognise.
   assertMeshStructure(restored, 'repair/undo');
 
   if (triangleCount(restored) !== expectedFaceCount) {
     throw invalidState('The restored model does not have the expected number of triangles.', {
       expected: expectedFaceCount,
       actual: triangleCount(restored),
+    });
+  }
+
+  /*
+   * THE SECOND HALF OF THE FILL'S POSTCONDITION, and the reason the record keeps
+   * two counts it never uses to rebuild anything. A retained reference is only
+   * correct if it is the reference that was retained: comparing the mesh's index
+   * length against what the commit recorded catches a record wired to the wrong
+   * part or built from the wrong mesh, at O(1), before it replaces geometry.
+   */
+  if (
+    inverse.kind === UndoableChangeKind.HoleFill &&
+    restored.indices.length !== inverse.sourceIndexCount
+  ) {
+    throw invalidState('The retained previous version does not match what was recorded.', {
+      expected: inverse.sourceIndexCount,
+      actual: restored.indices.length,
     });
   }
 

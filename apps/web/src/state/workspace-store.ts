@@ -890,19 +890,75 @@ function withPartRender(
   snapshot: DocumentRenderSnapshot,
   partId: string,
   render: RenderSnapshot,
+  descriptors: readonly PartDescriptor[],
 ): DocumentRenderSnapshot {
   const index = snapshot.parts.findIndex((part) => part.partId === partId);
   const existing = index < 0 ? undefined : snapshot.parts[index];
   if (existing === undefined) return snapshot;
 
+  const shared = sharedBuffersFor(snapshot, descriptors, partId);
   const parts = snapshot.parts.slice();
-  parts[index] = {
-    ...existing,
-    positions: render.positions,
-    normals: render.normals,
-    vertexCount: render.vertexCount,
-  };
+  parts[index] =
+    shared === undefined
+      ? {
+          ...existing,
+          positions: render.positions,
+          normals: render.normals,
+          vertexCount: render.vertexCount,
+        }
+      : { ...existing, ...shared };
   return { parts };
+}
+
+/**
+ * A sibling's EXISTING buffers, when the successor document says the two parts
+ * share one mesh.
+ *
+ * WHY THIS EXISTS — Stage 4B-1B2-R1. The worker restores the exact pre-fill mesh
+ * on undo, so a document whose parts shared one mesh shares it again. The page
+ * would not have followed: the result carries a FRESH render snapshot for the
+ * changed part, and `SharedPartGeometry` keys on position-array IDENTITY, so the
+ * viewport would have uploaded a second GPU geometry for coordinates it was
+ * already drawing. Undo would have restored the document and permanently
+ * doubled what the GPU holds.
+ *
+ * THE WORKER IS THE AUTHORITY, and this reads its answer rather than forming its
+ * own. `meshResourceIndex` is computed over the successor's DISTINCT meshes, so
+ * two parts carrying the same index provably hold the same `CanonicalMesh`. No
+ * coordinates are compared here and none could be: the page has never held any.
+ *
+ * IT IS NOT A HOLE-FILL SPECIAL CASE. Every part-mesh replacement goes through
+ * here — repair commit, fill commit and undo — so any of them that lands a part
+ * back on a shared mesh now keeps the page's sharing in step. A replacement that
+ * genuinely un-shares finds no match and installs the new buffers, which is the
+ * common path and is unchanged.
+ */
+function sharedBuffersFor(
+  snapshot: DocumentRenderSnapshot,
+  descriptors: readonly PartDescriptor[],
+  partId: string,
+): { positions: Float32Array; normals: Float32Array; vertexCount: number } | undefined {
+  const changed = descriptors.find((part) => part.partId === partId);
+  if (changed === undefined) return undefined;
+
+  for (const candidate of descriptors) {
+    if (candidate.partId === partId) continue;
+    if (candidate.meshResourceIndex !== changed.meshResourceIndex) continue;
+    /*
+     * The sibling's buffers were built from the mesh both parts now hold, and
+     * the sibling was not touched by this operation — so reusing them is exact,
+     * not an approximation, and it restores ARRAY IDENTITY, which is what the
+     * viewport's reference counting keys on.
+     */
+    const buffers = snapshot.parts.find((part) => part.partId === candidate.partId);
+    if (buffers === undefined) continue;
+    return {
+      positions: buffers.positions,
+      normals: buffers.normals,
+      vertexCount: buffers.vertexCount,
+    };
+  }
+  return undefined;
 }
 
 export class WorkspaceStore {
@@ -1771,7 +1827,7 @@ export class WorkspaceStore {
         parts: result.parts,
         // Only the repaired part's buffers change. The rest of the scene is
         // already correct and is not re-uploaded.
-        render: withPartRender(model.render, result.partId, result.render),
+        render: withPartRender(model.render, result.partId, result.render, result.parts),
         bounds: result.bounds,
         triangleCount: result.triangleCount,
         vertexCount: result.vertexCount,
@@ -1899,7 +1955,7 @@ export class WorkspaceStore {
         ...model,
         handle: result.handle,
         parts: result.parts,
-        render: withPartRender(model.render, result.partId, result.render),
+        render: withPartRender(model.render, result.partId, result.render, result.parts),
         bounds: result.bounds,
         triangleCount: result.triangleCount,
         vertexCount: result.vertexCount,
@@ -2333,7 +2389,7 @@ export class WorkspaceStore {
         // Only the filled part's buffers change. The rest of the scene is
         // already correct and is not re-uploaded — which is also what keeps a
         // sibling that SHARED the old mesh drawing the geometry it still has.
-        render: withPartRender(model.render, result.partId, result.render),
+        render: withPartRender(model.render, result.partId, result.render, result.parts),
         bounds: result.bounds,
         triangleCount: result.triangleCount,
         vertexCount: result.vertexCount,

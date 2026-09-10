@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { partId } from '@cadfixer/mesh-core';
+import { meshByteLength, partId } from '@cadfixer/mesh-core';
+import type { CanonicalMesh } from '@cadfixer/mesh-core';
 import { isAppError, AppErrorCode } from '@cadfixer/shared';
 import type { RepairInversePatch } from '@cadfixer/mesh-repair';
 import { RepairHistoryStore, UndoableChangeKind, type UndoableInverse } from './repair-history';
@@ -44,19 +45,30 @@ function repairInverse(faceCount = 4, byteLength = 128): UndoableInverse {
 }
 
 /**
- * A hole fill's inverse: two counts and nothing else.
+ * A hole fill's inverse: THE MESH THE PART HELD, plus the two counts that check
+ * the record was wired to the right one.
  *
- * The append-only contract is what makes this exact. Storing coordinates for it
- * would be retaining a copy of bytes the preservation gate has already proven
- * unchanged.
+ * Stage 4B-1B2-R1 replaced the two-integer inverse. Reconstructing an equal mesh
+ * reproduced the bytes and lost the IDENTITY, so a document whose parts shared
+ * one mesh came back holding two byte-equal ones — permanently, for a change the
+ * user had just taken back.
  */
-function holeFillInverse(sourceFaceCount = 4): UndoableInverse {
+function holeFillInverse(sourceFaceCount = 4, mesh = meshOf(sourceFaceCount)): UndoableInverse {
   return {
     kind: UndoableChangeKind.HoleFill,
+    previousMesh: mesh,
     sourceFaceCount,
-    sourceIndexCount: sourceFaceCount * 3,
-    byteLength: 0,
+    sourceIndexCount: mesh.indices.length,
+    byteLength: meshByteLength(mesh),
   };
+}
+
+/** A soup mesh of `faces` triangles. Distinct objects for distinct calls. */
+function meshOf(faces: number): CanonicalMesh {
+  const positions = new Float32Array(faces * 9);
+  const indices = new Uint32Array(faces * 3);
+  for (let i = 0; i < indices.length; i += 1) indices[i] = i;
+  return { positions, indices, metadata: {} };
 }
 
 function recordOne(store: RepairHistoryStore, from = 1, to = 2, recordId = 'r1'): void {
@@ -300,7 +312,7 @@ describe('a hole fill uses the same one-step history', () => {
     });
   }
 
-  it('records the kind, the opening and a zero-byte inverse', () => {
+  it('records the kind, the opening, and what the retained mesh costs', () => {
     const store = new RepairHistoryStore();
     recordFill(store);
 
@@ -309,23 +321,81 @@ describe('a hole fill uses the same one-step history', () => {
     expect(entry?.boundaryLoopId).toBe('bl-7-4-abcdef0123456789');
     expect(entry?.appliedOperations).toEqual([]);
     expect(entry?.undoable).toBe(true);
-    // Reversing an append costs nothing to retain: the positions and the index
-    // prefix are provably unchanged, so there is nothing to keep a copy of.
-    expect(entry?.inverseBytes).toBe(0);
-    expect(store.stats().retainedBytes).toBe(0);
+    /*
+     * REPORTED, NOT HIDDEN — Stage 4B-1B2-R1. The record retains the mesh the
+     * part held, because restoring bytes is not restoring a shared document.
+     * `inverseBytes` is that mesh's size: an upper bound on what the record
+     * costs, which is zero extra when a sibling still references it.
+     */
+    expect(entry?.inverseBytes).toBe(meshByteLength(meshOf(12)));
+    expect(store.stats().retainedBytes).toBe(entry?.inverseBytes);
   });
 
-  it('resolves the truncation counts when everything still holds', () => {
+  it('resolves THE SAME MESH OBJECT, not a description of one', () => {
     const store = new RepairHistoryStore();
-    recordFill(store);
+    const original = meshOf(12);
+    store.record({
+      recordId: 'f1',
+      kind: UndoableChangeKind.HoleFill,
+      part: PART,
+      source: handle(1),
+      result: handle(2),
+      appliedOperations: [],
+      planHash: 'loop-hash',
+      boundaryLoopId: 'bl-7-4-abcdef0123456789',
+      inverse: holeFillInverse(12, original),
+    });
 
     const prepared = store.prepareUndo('f1', handle(2), 2);
     expect(isAppError(prepared)).toBe(false);
     if (isAppError(prepared)) return;
     expect(prepared.inverse.kind).toBe(UndoableChangeKind.HoleFill);
     if (prepared.inverse.kind !== UndoableChangeKind.HoleFill) return;
+    // REFERENCE IDENTITY. A byte-equal copy would satisfy every other assertion
+    // in this file and would still lose the document's sharing.
+    expect(prepared.inverse.previousMesh).toBe(original);
     expect(prepared.inverse.sourceFaceCount).toBe(12);
     expect(prepared.inverse.sourceIndexCount).toBe(36);
+  });
+
+  it('US11: releases the retained mesh when the record stops being undoable', () => {
+    const store = new RepairHistoryStore();
+    recordFill(store);
+    expect(store.stats().retainedBytes).toBeGreaterThan(0);
+
+    store.markUndone('f1');
+
+    /*
+     * DETERMINISTIC OWNERSHIP, not a GC claim. The store holds no inverse, so it
+     * holds no mesh — that is a statement about references this code owns, which
+     * is the only kind of memory statement worth making.
+     */
+    expect(store.stats().retainedBytes).toBe(0);
+    expect(store.stats().undoableCount).toBe(0);
+  });
+
+  it('US11: releases the retained mesh when a later change supersedes it', () => {
+    const store = new RepairHistoryStore();
+    recordFill(store, 1, 2, 'f1');
+    recordFill(store, 2, 3, 'f2');
+
+    // One undoable record per document, so the first record's mesh is dropped
+    // the moment the second is written — not left pinned until the session ends.
+    expect(store.entryOf('f1')?.undoable).toBe(false);
+    expect(store.stats().undoableCount).toBe(1);
+    expect(store.stats().retainedBytes).toBe(store.entryOf('f2')?.inverseBytes);
+  });
+
+  it('US13: releases the retained mesh when the document goes away', () => {
+    const store = new RepairHistoryStore();
+    recordFill(store);
+    store.releaseDocument('model-1' as DocumentId);
+    expect(store.stats().retainedBytes).toBe(0);
+
+    recordFill(store, 1, 2, 'f2');
+    store.releaseAll();
+    expect(store.stats().retainedBytes).toBe(0);
+    expect(store.stats().recordCount).toBe(0);
   });
 
   it('is refused once the model has moved past the revision it produced', () => {

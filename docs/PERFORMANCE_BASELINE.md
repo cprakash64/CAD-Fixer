@@ -957,8 +957,12 @@ number, because the claim is about the WORK: a commit that re-ran the fill would
 land in the same order as generation. Most of the 650 ms is the render-snapshot
 rebuild and re-upload for a 100,000-face part, not the transaction.
 
-**Undo is 60 ms** because reversing an append is a truncation: one index array
-allocation and a copy, with the position buffer shared rather than rebuilt.
+**Undo is 60 ms** because reversing a fill restores a RETAINED REFERENCE — Stage
+4B-1B2-R1. The record holds the mesh the part had, so the undo assigns an object
+back and rebuilds the render snapshot; no geometry is reconstructed, copied or
+compared. That is also what restores the document's structural sharing, and with
+it the single GPU geometry and the single 3MF object resource a shared pair had
+before the fill.
 
 ## Browser evidence
 
@@ -1003,3 +1007,67 @@ thread.
 
 Non-planar filling, batch filling, seam repair and PMP, none of which is
 implemented.
+
+# Exact undo sharing (Stage 4B-1B2-R1, 2026-09-10)
+
+Stage 4B-1B2-R1 replaced the fill's two-integer inverse with a retained reference
+to the mesh the part held, so that undo restores the document's structural
+sharing and not merely its coordinates. Retaining an immutable object is O(1) by
+construction; both halves were measured anyway, on the document where a copy or a
+document-wide comparison would be impossible to miss.
+
+## Apply and undo do not track the placement count
+
+`npm run test:e2e:harness`, one fillable mesh referenced by **1,000 parts**:
+
+| step   | latency    | distinct meshes | resident bytes |
+| ------ | ---------- | --------------- | -------------- |
+| loaded | —          | 1               | 384            |
+| apply  | 86–151 ms  | 2               | 792            |
+| undo   | 476–533 ms | **1**           | **384**        |
+
+**One mesh again, not 1,001 and not 2.** All thousand parts reference the object
+they referenced before the fill. Undo assigns a retained reference and rebuilds
+one part's render snapshot; nothing is reconstructed, copied or compared across
+the document, which is why the cost does not rise with the placement count.
+
+Undo is slower than apply here because it rebuilds the render snapshot for a part
+that a thousand objects draw from, not because it does geometry work.
+
+## What the retention costs
+
+`residentBytes` counts each DISTINCT mesh once, in the worker that owns them, so
+it is a statement about what the document holds rather than an RSS reading.
+
+| case                             | evidence                                                  | added geometry                    |
+| -------------------------------- | --------------------------------------------------------- | --------------------------------- |
+| mesh shared with a sibling       | 384 → 792 → 384 bytes across apply and undo               | none; the growth is the candidate |
+| filled part owned the mesh alone | `stats().retainedBytes` = the mesh's size, contract level | one part's geometry until release |
+
+Bounded by the one-undoable-change-per-document rule, so at most one part's mesh
+per document — never per step. Released by undo, by supersession, by document
+release, by store release and by descriptor eviction, asserted through
+`stats().retainedBytes` rather than through GC timing.
+
+## The GPU follows
+
+`SharedPartGeometry` reference-counts by position-array identity, so restoring
+canonical sharing is not sufficient on its own — the page has to hand the
+viewport the same array. Measured through the viewport's own counters: **1**
+shared geometry before the fill, 2 after Apply, **1** after Undo, with
+`created − disposed` equal to what is drawn at every point, over five cycles. A
+double disposal would push disposals past creations; a leak would leave the
+difference above the live count.
+
+## And the exported file
+
+A 3MF written after undo has the same object-resource count, triangle count and
+byte length as one written before the fill, and the writer reports
+`STRUCTURAL_SHARING_PRESERVED` in both. That is the consequence a user could
+actually see, in a file they open elsewhere.
+
+## Not measured here
+
+RSS or heap size. The numbers above are deterministic ownership counts from the
+stores that hold the geometry; a process-level reading would be less precise and
+would not say who was holding what.
