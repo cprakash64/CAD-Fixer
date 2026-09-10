@@ -18,7 +18,6 @@ import {
   type RepairValidation,
 } from './contract';
 import { CANCEL_POLL_MASK, RepairCancelled } from './cancellation';
-import { buildInversePatch, type RepairInversePatch } from './inverse';
 import { WindingOutcome } from './operations';
 import { predictAfterRemoval } from './predict';
 import { prepareConservativeRepair, type PreparedRepair } from './prepare';
@@ -62,7 +61,6 @@ export interface RepairExecutionResult {
   readonly validation: RepairValidation;
   readonly counts: RepairChangeCounts;
   readonly samples: RepairChangeSamples;
-  readonly inverse: RepairInversePatch | undefined;
   readonly candidateToSourceFace: Uint32Array | undefined;
 }
 
@@ -198,14 +196,13 @@ export function executeConservativeRepair(input: RepairExecutionInput): RepairEx
   const samples = buildSamples(perOperation, rebuilt.flippedSourceFaces, sampleLimit);
 
   if (validation.acceptance !== RepairAcceptance.Accepted) {
-    // A rejected candidate produces no geometry and no inverse patch. Returning
-    // the mesh anyway would leave something committable lying around.
+    // A rejected candidate produces no geometry. Returning the mesh anyway
+    // would leave something committable lying around.
     return {
       candidate: undefined,
       validation,
       counts,
       samples,
-      inverse: undefined,
       candidateToSourceFace: undefined,
     };
   }
@@ -215,7 +212,6 @@ export function executeConservativeRepair(input: RepairExecutionInput): RepairEx
     validation,
     counts,
     samples,
-    inverse: buildInversePatch(source, rebuilt.removedSourceFaces, rebuilt.flippedSourceFaces),
     candidateToSourceFace: rebuilt.candidateToSourceFace,
   };
 }
@@ -324,7 +320,6 @@ function noOp(
       truncated: false,
       sampleLimit,
     },
-    inverse: undefined,
     candidateToSourceFace: undefined,
   };
 }
@@ -383,7 +378,6 @@ function blocked(
       truncated: false,
       sampleLimit,
     },
-    inverse: undefined,
     candidateToSourceFace: undefined,
   };
 }

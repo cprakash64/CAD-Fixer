@@ -681,7 +681,8 @@ export interface RepairPreview {
   readonly samples: RepairChangeSamples;
   readonly render: RenderSnapshot | undefined;
   readonly bounds: MeshBounds | undefined;
-  readonly inverseBytes: number;
+  /** Bytes undo would retain if this candidate were applied. See the protocol. */
+  readonly undoRetainedBytes: number;
 }
 
 /** A repair that has actually been applied, and what it takes to reverse it. */

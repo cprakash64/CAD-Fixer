@@ -328,7 +328,7 @@ export function useConservativeRepair(): ConservativeRepairControls {
           samples: outcome.samples,
           render: outcome.render,
           bounds: outcome.candidateBounds,
-          inverseBytes: outcome.inverseBytes,
+          undoRetainedBytes: outcome.undoRetainedBytes,
         });
 
         if (!installed) {

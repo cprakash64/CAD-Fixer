@@ -353,10 +353,14 @@ toggles visibility between them, sharing one display transform and one camera. N
 handle changes, so a preview cannot be exported, cannot be analysed, and cannot
 survive the model being replaced.
 
-**Undo is a forward transaction.** It restores geometry in the worker from an
-inverse patch and commits it as a NEW, higher revision — revision numbers only
-ever move forwards, because every staleness guard in the runtime depends on that.
-See [ADR 0011](adr/0011-repair-undo-revisions.md).
+**Undo is a forward transaction.** It puts the RETAINED pre-repair mesh back in
+the worker and commits it as a NEW, higher revision — revision numbers only ever
+move forwards, because every staleness guard in the runtime depends on that. The
+history holds the `CanonicalMesh` OBJECT the document held, not a patch to
+rebuild it from, so structural sharing and an indexed representation both survive
+the round trip and the file exported after an undo is byte-identical to the file
+that would have been exported before the repair (Stage 4B-1C). See
+[ADR 0011](adr/0011-repair-undo-revisions.md).
 
 Details, including why the repair contract's constants are RESTATED in
 `geometry-runtime` rather than re-exported, are in
@@ -573,9 +577,10 @@ would destroy a validated fill.
 **Undo is the existing one-step history, with two reconstructions.** A fill is
 recorded in `RepairHistoryStore` beside conservative repairs and reversed by the
 same `repair/undo`; there is still exactly one undoable change per document, and
-either kind supersedes the other. A repair is rebuilt from retained coordinates;
-a fill REPLACED one part's mesh, so its inverse RETAINS THAT MESH and undo puts
-the same object back. Reference identity, not byte equality — Stage 4B-1B2-R1:
+either kind supersedes the other. Both retain the `CanonicalMesh` the part held
+and undo puts the same object back — a fill because it REPLACED one part's mesh
+(Stage 4B-1B2-R1), a repair because rebuilding one from a patch lost exactly what
+retaining it preserves (Stage 4B-1C). Reference identity, not byte equality:
 reconstructing an equal mesh reproduced the coordinates and lost the identity,
 so a document whose parts shared one mesh came back holding two, permanently,
 along with two GPU geometries and two 3MF object resources. Retaining an

@@ -14,7 +14,6 @@ import { analyseTopology, estimateTopologyWorkspaceBytes } from '@cadfixer/mesh-
 import {
   executeConservativeRepair,
   planConservativeRepair,
-  restoreFromInverse,
   RepairAcceptance,
   RepairCancelled,
 } from '@cadfixer/mesh-repair';
@@ -370,13 +369,7 @@ const runRepairCreateCandidate: OperationHandler<'repair/create-candidate'> = as
   // committable lying around for a caller to find.
   const candidate =
     outcome.candidate !== undefined && outcome.validation.acceptance === RepairAcceptance.Accepted
-      ? repairCandidates.create(
-          payload.handle,
-          part.id,
-          outcome.candidate,
-          outcome.validation,
-          outcome.inverse,
-        )
+      ? repairCandidates.create(payload.handle, part.id, outcome.candidate, outcome.validation)
       : undefined;
 
   const render: RenderSnapshot | undefined =
@@ -391,7 +384,10 @@ const runRepairCreateCandidate: OperationHandler<'repair/create-candidate'> = as
       validation: outcome.validation,
       counts: outcome.counts,
       samples: outcome.samples,
-      inverseBytes: outcome.inverse?.byteLength ?? 0,
+      // WHAT UNDO WILL RETAIN if this candidate is applied — Stage 4B-1C. The
+      // record holds the SOURCE mesh, so the number is that mesh's size rather
+      // than a patch's.
+      undoRetainedBytes: meshByteLength(resolved),
       candidateBounds:
         outcome.candidate === undefined ? undefined : computeBounds(outcome.candidate),
       render,
@@ -426,94 +422,165 @@ export const repairCreateCandidateHandler: OperationHandler<'repair/create-candi
   }
 };
 
-export const repairCommitHandler: OperationHandler<'repair/commit'> = (payload, context) => {
-  const source = residentDocuments.resolve(payload.expectedSource);
-  if (!isDocument(source)) throw source;
+/**
+ * The fallible work `repair/commit` performs, INJECTED so its failure can be
+ * exercised.
+ *
+ * The construction seam Stage 4B-1B2-R2 established for hole filling, applied
+ * here for the same reason: source order proves the statements are in an order,
+ * not that the handler behaves when one of them actually fails.
+ * `PRODUCTION_COMMIT_WORK` is the only value the application ever uses.
+ */
+export interface RepairCommitWork {
+  readonly buildRenderSnapshot: (mesh: CanonicalMesh) => RenderSnapshot;
+  readonly describeParts: (document: GeometryDocument) => readonly PartDescriptor[];
+}
 
-  const currentRevision = residentDocuments.revisionOf(payload.expectedSource.documentId);
-  const prepared = repairCandidates.prepareCommit(
-    {
-      candidate: payload.candidate,
-      expectedSource: payload.expectedSource,
-      expectedPart: payload.expectedPart as PartId,
-      planHash: payload.planHash,
-    },
-    currentRevision,
-  );
-  if (isAppError(prepared)) throw prepared;
+export const PRODUCTION_COMMIT_WORK: RepairCommitWork = { buildRenderSnapshot, describeParts };
 
-  const repairedPart = payload.candidate.partId;
+/**
+ * Applies one validated repair candidate. THE ONLY CONSERVATIVE-REPAIR MUTATION.
+ *
+ * TWO PROPERTIES THIS ORDERING EXISTS FOR — Stage 4B-1C.
+ *
+ * ONE: THE PREVIOUS MESH IS RETAINED, NOT DESCRIBED. The undo record holds the
+ * `CanonicalMesh` object the part had. It used to hold a PATCH of the removed
+ * triangles and rebuild the mesh from it, which returned an indexed model as
+ * triangle soup and turned one shared mesh into two byte-equal ones. Retaining
+ * an immutable object is O(1) — see `UndoableInverse`.
+ *
+ * TWO: EVERY FALLIBLE PIECE OF THE ANSWER IS BUILT BEFORE THE SWAP.
+ * `buildRenderSnapshot` allocates megabytes for a large part and can fail; when
+ * it ran after `replace`, its failure threw out of the handler, the worker host
+ * turned that into an ordinary error reply, and the caller was told the repair
+ * had FAILED while the document had already changed. "The worker's internal
+ * state was consistent" is not the guarantee that matters — the guarantee is
+ * what the caller may observe, because the interface acts on it.
+ *
+ * Preparing early cannot introduce a stale race: `replace` compares the revision
+ * against the store itself and is the only arbiter, so an answer built against a
+ * document the user has moved off is discarded rather than installed. A prepared
+ * snapshot is not authoritative either — it is disposable render data derived
+ * from a document that does not exist yet.
+ *
+ * A REFUSAL AT ANY STEP LEAVES THE CANDIDATE RESOLVED AND RETRYABLE. Consuming
+ * it before the swap succeeded would destroy a valid repair over a transient
+ * race.
+ */
+export function createRepairCommitHandler(
+  work: RepairCommitWork,
+): OperationHandler<'repair/commit'> {
+  return (payload, context) => {
+    const source = residentDocuments.resolve(payload.expectedSource);
+    if (!isDocument(source)) throw source;
 
-  // The inverse patch is read BEFORE the candidate is consumed: `markCommitted`
-  // releases the candidate's references, and undo needs the patch afterwards.
-  const inverse = repairCandidates.inverseOf(payload.candidate);
-  const validation = repairCandidates.validationOf(payload.candidate);
+    const currentRevision = residentDocuments.revisionOf(payload.expectedSource.documentId);
+    const prepared = repairCandidates.prepareCommit(
+      {
+        candidate: payload.candidate,
+        expectedSource: payload.expectedSource,
+        expectedPart: payload.expectedPart as PartId,
+        planHash: payload.planHash,
+      },
+      currentRevision,
+    );
+    if (isAppError(prepared)) throw prepared;
 
-  /*
-   * THE ATOMIC STEP. `replace` re-checks the revision and swaps one map entry.
-   * If it refuses, the candidate stays RESOLVED and retryable — the failure
-   * must not consume it, or a transient race would destroy a valid repair.
-   */
-  const successor = successorDocument(source, repairedPart, prepared, 'repair/commit');
-  const next = residentDocuments.replace(payload.expectedSource, successor);
-  if (isAppError(next)) throw next;
-  repairCandidates.markCommitted(payload.candidate);
+    const repairedPart = payload.candidate.partId;
+    const validation = repairCandidates.validationOf(payload.candidate);
 
-  // Deterministic identity: lineage, parent and plan. NOT a wall clock — two
-  // repairs a millisecond apart must still be distinguishable by what they did,
-  // not by when they happened.
-  const repairRecordId = `${next.documentId}/${repairedPart}@${String(payload.expectedSource.revision)}->${String(next.revision)}#${payload.planHash}`;
+    /*
+     * THE PRE-REPAIR MESH, captured BEFORE the swap, for the undo record.
+     *
+     * THE OBJECT ITSELF. Read from the RESIDENT part rather than reconstructed
+     * from anything, so the record holds the geometry that is actually being
+     * replaced — indexing, sharing and all.
+     */
+    const currentPart = source.parts.find((part) => part.id === repairedPart);
+    if (currentPart === undefined) {
+      throw invalidState('That part is no longer in this model.', {
+        partId: repairedPart,
+        operation: 'repair/commit',
+      });
+    }
+    const previousMesh = currentPart.mesh;
 
-  const entry = repairHistory.record({
-    recordId: repairRecordId,
-    kind: UndoableChangeKind.ConservativeRepair,
-    source: payload.expectedSource,
-    part: repairedPart,
-    result: next,
-    appliedOperations: validation?.applied ?? [],
-    planHash: payload.planHash,
-    inverse:
-      inverse === undefined
-        ? undefined
-        : {
-            kind: UndoableChangeKind.ConservativeRepair,
-            patch: inverse,
-            byteLength: inverse.byteLength,
-          },
-  });
+    const successor = successorDocument(source, repairedPart, prepared, 'repair/commit');
 
-  /*
-   * A HOLE-FILL PREVIEW DOES NOT SURVIVE A REPAIR — Stage 4B-1B2. The commit
-   * above moved the revision, so any candidate for this document was built from
-   * geometry that is no longer authoritative and every guard in `prepareCommit`
-   * would refuse it. Releasing it here frees a whole part's geometry rather than
-   * leaving it resident until something happens to notice.
-   */
-  holeFillCandidates.releaseDocument(next.documentId);
+    /* ---- EVERYTHING THAT CAN FAIL, BEFORE ANYTHING CHANGES ---- */
+    const render = work.buildRenderSnapshot(prepared);
+    const parts = work.describeParts(successor);
+    const residentBytes = documentByteLength(successor);
+    const totalTriangles = documentTriangleCount(successor);
+    const totalVertices = documentVertexCount(successor);
+    const bounds = computeBounds(prepared);
+    const inverse = {
+      previousMesh,
+      sourceFaceCount: triangleCount(previousMesh),
+      sourceIndexCount: previousMesh.indices.length,
+      byteLength: meshByteLength(previousMesh),
+    };
 
-  const render = buildRenderSnapshot(prepared);
-  context.reportProgress(1, 'applied');
+    // Reported BEFORE the swap and worded for what is true at this moment.
+    // Saying "applied" here would claim something that has not happened; saying
+    // it afterwards would put a fallible transport call inside the committed
+    // region.
+    context.reportProgress(0.9, 'applying');
 
-  return Promise.resolve({
-    value: {
-      handle: next,
-      parentRevision: payload.expectedSource.revision,
-      repairRecordId,
-      partId: repairedPart,
+    /* ---- THE COMMIT. Nothing below may fail. ---- */
+    const next = residentDocuments.replace(payload.expectedSource, successor);
+    if (isAppError(next)) throw next;
+    repairCandidates.markCommitted(payload.candidate);
+
+    // Deterministic identity: lineage, parent and plan. NOT a wall clock — two
+    // repairs a millisecond apart must still be distinguishable by what they
+    // did, not by when they happened.
+    const repairRecordId = `${next.documentId}/${repairedPart}@${String(payload.expectedSource.revision)}->${String(next.revision)}#${payload.planHash}`;
+
+    const entry = repairHistory.record({
+      recordId: repairRecordId,
+      kind: UndoableChangeKind.ConservativeRepair,
+      source: payload.expectedSource,
+      part: repairedPart,
+      result: next,
       appliedOperations: validation?.applied ?? [],
-      render,
-      parts: describeParts(successor),
-      residentBytes: documentByteLength(successor),
-      // DOCUMENT totals: the panel reports the model the user now has, not just
-      // the part that changed.
-      triangleCount: documentTriangleCount(successor),
-      vertexCount: documentVertexCount(successor),
-      bounds: computeBounds(prepared),
-      undoable: entry.undoable,
-    },
-    transfer: [render.positions.buffer, render.normals.buffer],
-  });
-};
+      planHash: payload.planHash,
+      inverse,
+    });
+
+    /*
+     * A HOLE-FILL PREVIEW DOES NOT SURVIVE A REPAIR — Stage 4B-1B2. The commit
+     * above moved the revision, so any candidate for this document was built
+     * from geometry that is no longer authoritative and every guard in
+     * `prepareCommit` would refuse it. Releasing it here frees a whole part's
+     * geometry rather than leaving it resident until something notices.
+     */
+    holeFillCandidates.releaseDocument(next.documentId);
+
+    return Promise.resolve({
+      value: {
+        handle: next,
+        parentRevision: payload.expectedSource.revision,
+        repairRecordId,
+        partId: repairedPart,
+        appliedOperations: validation?.applied ?? [],
+        render,
+        parts,
+        residentBytes,
+        // DOCUMENT totals: the panel reports the model the user now has, not
+        // just the part that changed.
+        triangleCount: totalTriangles,
+        vertexCount: totalVertices,
+        bounds,
+        undoable: entry.undoable,
+      },
+      transfer: [render.positions.buffer, render.normals.buffer],
+    });
+  };
+}
+
+/** The application's commit handler. The only one the product ever registers. */
+export const repairCommitHandler = createRepairCommitHandler(PRODUCTION_COMMIT_WORK);
 
 export const repairDiscardHandler: OperationHandler<'repair/discard'> = (payload) => {
   return Promise.resolve({ value: { released: repairCandidates.discard(payload.candidate) } });
@@ -531,14 +598,15 @@ export const repairDiscardHandler: OperationHandler<'repair/discard'> = (payload
  * THE TWO RECONSTRUCTIONS ARE GENUINELY DIFFERENT, which is why the inverse is a
  * discriminated union rather than one shape stretched to cover both:
  *
- *   - a REPAIR removed faces and reordered corners, so `restoreFromInverse`
- *     rebuilds the original face ordering from the retained coordinates;
- *   - a HOLE FILL replaced one part's mesh, so the record RETAINS THAT MESH and
- *     undo puts the same object back — Stage 4B-1B2-R1. Reconstructing an equal
- *     mesh instead reproduced the bytes and lost the IDENTITY, which left a
- *     document whose parts had shared one mesh holding two byte-equal ones
- *     forever after. Structural sharing is part of the document contract, so
- *     restoring bytes is not restoring the document.
+ * ONE RECONSTRUCTION FOR BOTH KINDS — Stage 4B-1C. Every record RETAINS THE
+ * MESH the part held, and undo puts that same object back. It was two
+ * mechanisms: hole filling retained a reference (Stage 4B-1B2-R1) and a repair
+ * rebuilt from a patch of removed triangles. The rebuild reproduced the bytes
+ * of a SOUP source and, for an indexed one, not even that — an indexed OBJ or
+ * 3MF came back flattened, with a different vertex count and different bytes —
+ * and in every case it produced a NEW object, so a document whose parts shared
+ * one mesh came back holding two. Structural sharing and indexing are both part
+ * of the document contract, so restoring bytes is not restoring the document.
  *
  * A NEW MONOTONIC REVISION, not a revival of the old one, for either kind.
  * Reactivating revision N after N+1 existed would make "is this handle stale?"
@@ -597,23 +665,20 @@ export function createRepairUndoHandler(work: RepairUndoWork): OperationHandler<
     const inverse = preparation.inverse;
 
     /*
-     * A FILL RESTORES A REFERENCE; A REPAIR REBUILDS FROM A PATCH.
+     * BOTH KINDS RESTORE A REFERENCE — Stage 4B-1C.
      *
-     * The fill's retained mesh is the object the part held before the fill, so
-     * putting it back restores the document's sharing as well as its bytes: a
-     * sibling that still references it is once again sharing with this part, and
-     * every layer that keys on mesh identity — the render snapshot's per-mesh
-     * buffers, the GPU geometry, the 3MF object resources — follows from that
-     * without anyone comparing coordinates.
+     * The record holds the object the part held before the change, so putting it
+     * back restores the document's INDEXING and its SHARING as well as its
+     * bytes: a sibling that still references it is once again sharing with this
+     * part, and every layer that keys on mesh identity — the render snapshot's
+     * per-mesh buffers, the GPU geometry, the 3MF object resources — follows
+     * from that without anyone comparing coordinates.
+     *
+     * A repair used to rebuild from a patch here, which returned an indexed
+     * model as soup and a shared mesh as two byte-equal copies. There is now ONE
+     * reconstruction, so the two kinds cannot drift.
      */
-    const restored =
-      inverse.kind === UndoableChangeKind.HoleFill
-        ? inverse.previousMesh
-        : restoreFromInverse(currentPart.mesh, inverse.patch);
-    const expectedFaceCount =
-      inverse.kind === UndoableChangeKind.HoleFill
-        ? inverse.sourceFaceCount
-        : inverse.patch.sourceFaceCount;
+    const restored = inverse.previousMesh;
 
     // Rule 11: the output of a geometry operation is validated before it is
     // accepted, no matter how confident the operation is. A retained mesh was
@@ -621,24 +686,20 @@ export function createRepairUndoHandler(work: RepairUndoWork): OperationHandler<
     // trusted — the rule does not have an exemption for geometry we recognise.
     assertMeshStructure(restored, 'repair/undo');
 
-    if (triangleCount(restored) !== expectedFaceCount) {
+    /*
+     * THE POSTCONDITION, and the reason the record keeps two counts it never
+     * uses to rebuild anything. A retained reference is only correct if it is
+     * the reference that was retained: comparing the mesh's own shape against
+     * what the commit recorded catches a record wired to the wrong part or built
+     * from the wrong mesh, at O(1), before it replaces geometry.
+     */
+    if (triangleCount(restored) !== inverse.sourceFaceCount) {
       throw invalidState('The restored model does not have the expected number of triangles.', {
-        expected: expectedFaceCount,
+        expected: inverse.sourceFaceCount,
         actual: triangleCount(restored),
       });
     }
-
-    /*
-     * THE SECOND HALF OF THE FILL'S POSTCONDITION, and the reason the record keeps
-     * two counts it never uses to rebuild anything. A retained reference is only
-     * correct if it is the reference that was retained: comparing the mesh's index
-     * length against what the commit recorded catches a record wired to the wrong
-     * part or built from the wrong mesh, at O(1), before it replaces geometry.
-     */
-    if (
-      inverse.kind === UndoableChangeKind.HoleFill &&
-      restored.indices.length !== inverse.sourceIndexCount
-    ) {
+    if (restored.indices.length !== inverse.sourceIndexCount) {
       throw invalidState('The retained previous version does not match what was recorded.', {
         expected: inverse.sourceIndexCount,
         actual: restored.indices.length,

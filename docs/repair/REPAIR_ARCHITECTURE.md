@@ -316,7 +316,7 @@ geometry-client.ts         the only main-thread code that knows Worker exists
 --- worker boundary ---
 repair-handlers.ts         preflight, plan, candidate, commit, discard, undo
 RepairCandidateStore       the commit guards
-RepairHistoryStore         the undo guards and the inverse patches
+RepairHistoryStore         the undo guards and the retained pre-repair meshes
 ResidentModelStore         the atomic reference swap
 ```
 
@@ -373,46 +373,78 @@ markers are built up front so switching views costs no upload.
 
 ### Undo
 
-One step, restored in the worker, committed as a new monotonic revision. The
-inverse patch lives in `RepairHistoryStore` beside the models it describes, and
-exactly one repair per model is reversible — a second repair supersedes the first
-and releases its patch. The restored mesh passes `assertMeshStructure` before it
-becomes authoritative: rule 11 applies to undo as much as to any other geometry
-operation, and "the patch promised" is not a check.
+One step, restored in the worker, committed as a new monotonic revision. What
+`RepairHistoryStore` holds beside the models it describes is **the pre-repair
+`CanonicalMesh` itself** — the object the resident document held, not a
+description of how to rebuild it. Exactly one repair per model is reversible; a
+second repair supersedes the first and drops its reference.
+
+Undo is therefore an assignment, not a reconstruction: `inverse.previousMesh` is
+put back where it came from. Two consequences are the point of the design rather
+than side effects of it:
+
+- **Structural sharing survives.** A part that shared a mesh with a sibling gets
+  the SAME OBJECT back, so the document holds one mesh again, the page uploads
+  one GPU geometry again, and a 3MF written afterwards has one `<object>`
+  resource again. Reference identity is what those three facts depend on; byte
+  equality would satisfy none of them.
+- **An indexed mesh stays indexed.** Nothing is re-derived, so there is no
+  representation to get wrong. An OBJ or 3MF import comes back with exactly the
+  vertices it arrived with, and the file exported after an undo is byte-identical
+  to the file that would have been exported before the repair.
+
+The postconditions are what a retained object can still usefully be checked for:
+that the restored mesh's face and index counts match the ones recorded when it
+was retained. Both are O(1). `assertMeshStructure` on the restored mesh would be
+re-validating a mesh that was authoritative when it was retained and has been
+immutable since — rule 11 is about geometry an algorithm PRODUCED, and undo
+produces none.
 
 The full reasoning, and why the revision does not go backwards, is
 [ADR 0011](../adr/0011-repair-undo-revisions.md).
 
-#### OPEN DEFECT — conservative repair's undo does not restore the document
+#### RESOLVED — conservative repair's undo did not restore the document
 
-**Found by Stage 4B-1B2-R1. Not fixed. This is the next correctness task.**
+**Found by Stage 4B-1B2-R1. Fixed by Stage 4B-1C.**
 
-`restoreFromInverse` rebuilds the pre-repair mesh from the retained patch, and
-two things follow that were not intended:
+Repair used to retain a `RepairInversePatch` — the removed triangles and where
+they went — and rebuild the pre-repair mesh from it. Two things followed that
+were never intended:
 
-1. **It loses structural sharing.** The rebuilt mesh is a NEW object, so a
-   document whose parts shared one `CanonicalMesh` comes back holding two
-   byte-equal ones — permanently, along with two GPU geometries and two 3MF
+1. **It lost structural sharing.** The rebuilt mesh was a NEW object, so a
+   document whose parts shared one `CanonicalMesh` came back holding two
+   byte-equal ones, permanently, along with two GPU geometries and two 3MF
    object resources. Undo, the operation whose whole promise is that nothing
-   happened, degrades the document. This is exactly the defect Stage 4B-1B2-R1
-   fixed for hole fills, by retaining the previous mesh REFERENCE and restoring
-   it; the same correction has not been applied here.
-2. **It rebuilds an indexed mesh as soup.** `restoreFromInverse` writes nine
-   coordinates per face and an identity index buffer. For an STL that is what the
-   source was anyway, so the round trip is exact — which is why this has never
-   shown up. For an **OBJ or 3MF import**, whose meshes are genuinely indexed,
-   undoing a repair returns a mesh with the same triangles and a different
-   representation: more vertices, different bytes, a larger document, and an
-   export that no longer matches what was imported.
+   happened, degraded the document.
+2. **It rebuilt an indexed mesh as soup.** The reconstruction wrote nine
+   coordinates per face and an identity index buffer. For an STL that is what
+   the source was anyway, so the round trip was exact — which is why every STL
+   test in the suite passed and the defect survived. For an **OBJ or 3MF
+   import**, whose meshes are genuinely indexed, undoing a repair returned the
+   same triangles in a different representation: more vertices, different bytes,
+   a larger document, and an export that no longer matched what was imported.
 
-Neither is a hole-fill regression — both predate Stage 4B and neither is reached
-by the hole-fill workflow, whose undo restores a retained reference. Fixing it is
-deliberately NOT part of Stage 4B-1B2: the fill's correction is self-contained,
-and reworking a repair's inverse is its own change with its own evidence.
+Stage 4B-1C retains the mesh instead of a patch, so both disappear at the source
+rather than being compensated for. `packages/mesh-repair/src/inverse.ts` was
+DELETED rather than left unused — two undo implementations capable of diverging
+is how one of them stops being tested — and a boundary test asserts the file and
+its symbols cannot come back.
 
-**Do not read this as accepted architecture.** It is a known defect with a known
-shape and a known fix — retain the previous mesh reference, as the fill's inverse
-now does — and it should be corrected before the next repair-adjacent stage.
+**What the retention costs, measured.** The record holds a reference to a mesh
+that was already resident, so it adds nothing while any part still draws from it,
+and at most one mesh once the repaired part has moved off it. At a thousand
+placements of one shared mesh the harness observes the document at 240 bytes
+before a repair, one extra mesh during it, and 240 bytes again after the undo —
+`undoRetainedBytes` in `docs/repair/repair-performance.json` reports the mesh's
+own size as the upper bound, which at 50 MiB of input is 66.7 MiB and no longer
+varies with defect density the way a patch did.
+
+**What did NOT change.** No repair algorithm, no geometry semantics, no operation
+set, no acceptance rule. `rebuildCandidate` still writes an unindexed candidate,
+so applying a repair to an indexed mesh still de-indexes it — that is the repair
+algorithm's own representation choice, it predates this stage, and undoing now
+returns the original exactly regardless of it. It is recorded here rather than
+fixed silently.
 
 ### The report cache
 

@@ -691,24 +691,37 @@ validated`, and the qualifier naming what was NOT examined travels with it.
   identity, not value equality, because a copy passes a byte comparison and still
   means the document silently stopped sharing. Proven at contract level and in a
   real browser through the worker-side digest.
-- **ONE UNDO HISTORY, TWO RECONSTRUCTIONS.** A fill is recorded in
-  `RepairHistoryStore` and reversed by `repair/undo`; still exactly one undoable
-  change per document, and either kind supersedes the other. `UndoableInverse` is
-  a discriminated union: a repair rebuilds from retained coordinates, a fill
-  TRUNCATES. Truncation is exact BECAUSE the Stage 4B-1B1-R1 gate proved the
-  positions and index prefix unchanged. **Never run `restoreFromInverse` over a
-  fill** — it rebuilds a non-indexed mesh, so an indexed model would come back
-  as soup while appearing to succeed.
-- **UNDO RESTORES THE DOCUMENT, NOT MERELY ITS BYTES** — Stage 4B-1B2-R1. The
-  fill's inverse RETAINS THE EXACT `CanonicalMesh` the part held, and undo puts
-  that OBJECT back, so a document whose parts shared one mesh shares it again.
-  Reference identity, not byte equality: a rebuilt equal mesh passed every byte
-  assertion and still left the document holding two meshes where it had one,
-  permanently, along with two GPU geometries and two 3MF object resources. The
-  retention is O(1) — meshes are immutable, nothing is copied — and costs nothing
-  extra whenever a sibling still references the mesh. `inverseBytes` reports the
-  upper bound, and the reference is released the moment the record is undone,
-  superseded, evicted or its document released.
+- **ONE UNDO HISTORY, ONE RECONSTRUCTION — THERE ISN'T ONE.** A fill and a
+  conservative repair are both recorded in `RepairHistoryStore` and reversed by
+  `repair/undo`; still exactly one undoable change per document, and either kind
+  supersedes the other. Since Stage 4B-1C `UndoableInverse` is ONE shape holding
+  `previousMesh`, so undo is an assignment, not a rebuild. `UndoableChangeKind`
+  survives only so the interface can name what was reversed — it selects no code
+  path.
+- **UNDO RESTORES THE DOCUMENT, NOT MERELY ITS BYTES** — Stage 4B-1B2-R1 for
+  fills, Stage 4B-1C for conservative repairs. The record RETAINS THE EXACT
+  `CanonicalMesh` the part held and undo puts that OBJECT back, so a document
+  whose parts shared one mesh shares it again and an indexed mesh comes back
+  indexed. Reference identity, not byte equality: a rebuilt equal mesh passed
+  every byte assertion and still left the document holding two meshes where it
+  had one, permanently, along with two GPU geometries and two 3MF object
+  resources — and for a genuinely indexed OBJ or 3MF it did not even pass the
+  byte assertion, returning four shared corners as twelve. The retention is O(1)
+  — meshes are immutable, nothing is copied — and costs nothing extra whenever a
+  sibling still references the mesh. `retainedBytes` reports the upper bound, and
+  the reference is released the moment the record is undone, superseded, evicted
+  or its document released.
+- **`packages/mesh-repair/src/inverse.ts` IS DELETED AND MAY NOT COME BACK.**
+  `buildInversePatch`, `restoreFromInverse` and `RepairInversePatch` were the
+  patch reconstruction, and a boundary test asserts both the file's absence and
+  the symbols'. Two undo implementations capable of diverging is how one of them
+  stops being tested — which is exactly how the soup defect survived every STL
+  test in the suite.
+- **APPLYING A REPAIR STILL DE-INDEXES; UNDOING IT NO LONGER DOES.**
+  `rebuildCandidate` writes an unindexed candidate, so a repaired indexed mesh is
+  soup until it is undone. That is the repair ALGORITHM's representation choice,
+  it predates Stage 4B-1C, and it is recorded rather than fixed silently. Do not
+  read the exact-undo guarantee as a claim about the candidate.
 - **THE PAGE'S RENDER SNAPSHOT FOLLOWS THE DOCUMENT'S SHARING.**
   `SharedPartGeometry` keys on position-array IDENTITY, so restoring canonical
   sharing is not enough on its own: `withPartRender` reuses a sibling's EXISTING
@@ -772,7 +785,16 @@ validated`, and the qualifier naming what was NOT examined travels with it.
   not reframe, and must not change any handle.
 - **Undo produces a NEW, higher revision.** Revisions only ever move forwards,
   because every staleness guard depends on it. Never reactivate a retained prior
-  revision. See `docs/adr/0011-repair-undo-revisions.md`.
+  revision. See `docs/adr/0011-repair-undo-revisions.md` and its Stage 4B-1C
+  closure note. **What it restores is the RETAINED MESH OBJECT**, never a
+  reconstruction — see the hole-fill workflow invariants above, which now cover
+  both kinds of undoable change.
+- **`repair/commit` PREPARES EVERY FALLIBLE OUTPUT BEFORE THE SWAP** — Stage
+  4B-1C, the same ordering `holefill/commit` has. The render snapshot, the part
+  descriptors, the totals, the bounds and the undo record are all built first, so
+  a snapshot that throws refuses the Apply with the document untouched instead of
+  reporting a failure after it changed. Nothing fallible may be added after
+  `residentDocuments.replace`, and a boundary test asserts the ordering.
 - **Exactly one repair per model is undoable, and redo does not exist.** Undoing
   retains no forward patch, so redo is not derivable from what is kept — building
   it would be a new memory commitment, not a symmetry fix.

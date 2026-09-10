@@ -19,7 +19,6 @@ import {
   threeTrianglesSharingEdge,
 } from '@cadfixer/mesh-topology/fixtures';
 import { RepairAcceptance, RepairDecision, RepairOperation, RepairReason } from './contract';
-import { fullCopyBytes, restoreFromInverse } from './inverse';
 import { executeConservativeRepair } from './pipeline';
 import { planConservativeRepair } from './plan';
 import { solveWinding, WindingOutcome } from './operations';
@@ -512,42 +511,56 @@ describe('CR18–CR19 cancellation', () => {
   });
 });
 
-describe('CR23 inverse patch', () => {
-  it('CR23: applying the inverse patch restores the source exactly', () => {
-    // Translated apart: `concat` alone would leave these fixtures overlapping
-    // at the origin, which would test an accidental tangle rather than three
-    // independent defects.
+/**
+ * CR23 — WHAT THE PIPELINE NO LONGER PRODUCES.
+ *
+ * It used to return an inverse patch: the removed triangles' coordinates, so
+ * undo could rebuild the pre-repair mesh. Stage 4B-1C removed it, because
+ * rebuilding was the defect. `restoreFromInverse` wrote nine coordinates per
+ * face and an identity index buffer, so an indexed OBJ or 3MF import came back
+ * as triangle soup — a different vertex count and different bytes — and in every
+ * case it produced a NEW object, so a document whose parts shared one mesh came
+ * back holding two byte-equal ones.
+ *
+ * The undo record now retains the SOURCE MESH OBJECT and puts it back, which is
+ * exact for any representation and restores sharing for free. The round-trip
+ * assertions that lived here have moved to
+ * `apps/web/src/workers/repair-integrity.test.ts`, where the real transaction
+ * runs and reference identity can be asserted; what remains here is that the
+ * pipeline carries no inverse at all, so nothing can quietly start rebuilding
+ * again.
+ */
+describe('CR23: the pipeline produces no inverse patch', () => {
+  it('returns a candidate and nothing to reconstruct from', () => {
     const mesh = disjoint([
       duplicateSameOrientation(),
       repeatedPositionTriangle(),
       tetrahedronOneFaceReversed(),
     ]);
-    const { candidate, inverse } = repair(mesh);
-    expect(candidate).toBeDefined();
-    expect(inverse).toBeDefined();
-    if (candidate === undefined || inverse === undefined) return;
-
-    const restored = restoreFromInverse(candidate, inverse);
-
-    // Face count, ORDER and every coordinate, position by position.
-    expect(triangleCount(restored)).toBe(triangleCount(mesh));
-    expect([...restored.positions]).toEqual([...mesh.positions]);
-    expect([...restored.indices]).toEqual([...mesh.indices]);
-
-    // And the topology report is identical, which is the property that matters
-    // to the rest of the application.
-    const originalReport = report(mesh);
-    const restoredReport = report(restored);
-    expect(restoredReport.sourceFaceCount).toBe(originalReport.sourceFaceCount);
-    expect(restoredReport.componentCount).toBe(originalReport.componentCount);
-    expect(restoredReport.windingConflictEdgeCount).toBe(originalReport.windingConflictEdgeCount);
-    expect(restoredReport.sameOrientationDuplicateCount).toBe(
-      originalReport.sameOrientationDuplicateCount,
-    );
-    expect(restoredReport.totalSurfaceArea).toBeCloseTo(originalReport.totalSurfaceArea, 9);
+    const outcome = repair(mesh);
+    expect(outcome.candidate).toBeDefined();
+    // No patch field survives. Undo's source is the mesh the worker retained.
+    expect('inverse' in outcome).toBe(false);
   });
 
-  it('restores groups', () => {
+  it('leaves the SOURCE mesh untouched, which is what makes retaining it safe', () => {
+    /*
+     * THE PROPERTY THE RETENTION DEPENDS ON. The undo record holds the source
+     * object rather than a copy, so the pipeline must never write through it —
+     * otherwise undo would restore a mesh the repair had already altered.
+     */
+    const mesh = disjoint([duplicateSameOrientation(), repeatedPositionTriangle()]);
+    const positionsBefore = new Float32Array(mesh.positions);
+    const indicesBefore = new Uint32Array(mesh.indices);
+
+    const outcome = repair(mesh);
+    expect(outcome.candidate).toBeDefined();
+
+    expect([...mesh.positions]).toEqual([...positionsBefore]);
+    expect([...mesh.indices]).toEqual([...indicesBefore]);
+  });
+
+  it('preserves the source groups on the mesh undo will restore', () => {
     const base = concat(tetrahedron(), repeatedPositionTriangle());
     const faces = triangleCount(base);
     const mesh: CanonicalMesh = {
@@ -557,18 +570,14 @@ describe('CR23 inverse patch', () => {
         { name: 'junk', indexOffset: (faces - 1) * 3, indexCount: 3 },
       ],
     };
-    const { candidate, inverse } = repair(mesh, [RepairOperation.RemoveRepeatedPositionFaces]);
-    const restored = restoreFromInverse(
-      must(candidate, 'candidate'),
-      must(inverse, 'inverse patch'),
-    );
-    expect(restored.groups).toEqual(mesh.groups);
-  });
-
-  it('the inverse patch is far smaller than a full copy for sparse defects', () => {
-    const mesh = concat(tetrahedron(), repeatedPositionTriangle());
-    const { inverse } = repair(mesh, [RepairOperation.RemoveRepeatedPositionFaces]);
-    expect(must(inverse, 'inverse patch').byteLength).toBeLessThan(fullCopyBytes(mesh));
+    const { candidate } = repair(mesh, [RepairOperation.RemoveRepeatedPositionFaces]);
+    expect(candidate).toBeDefined();
+    // Groups come back because the ORIGINAL OBJECT comes back — there is nothing
+    // to reconstruct them from and nothing that could get them wrong.
+    expect(mesh.groups).toEqual([
+      { name: 'solid', indexOffset: 0, indexCount: (faces - 1) * 3 },
+      { name: 'junk', indexOffset: (faces - 1) * 3, indexCount: 3 },
+    ]);
   });
 });
 
@@ -672,11 +681,15 @@ describe('CR26 memory estimate against observed buffers', () => {
       sourceRevision: 1,
       requested: [RepairOperation.RemoveDuplicateFaces],
     });
-    const outcome = repair(mesh, [RepairOperation.RemoveDuplicateFaces]);
-    const inverse = must(outcome.inverse, 'inverse patch');
-
-    expect(inverse.byteLength).toBeGreaterThan(0);
-    expect(plan.memory.inverseBytes).toBeGreaterThanOrEqual(inverse.byteLength);
+    /*
+     * THE UNDO ESTIMATE IS THE SOURCE MESH — Stage 4B-1C. It used to size a
+     * patch from the planned removals; the record now retains the mesh itself,
+     * so the honest number is that mesh's size. Understating it would put the
+     * peak estimate below what a repair actually holds, which is the one thing
+     * this estimate exists to prevent.
+     */
+    const sourceBytes = mesh.positions.byteLength + mesh.indices.byteLength;
+    expect(plan.memory.undoRetainedBytes).toBe(sourceBytes);
   });
 
   it('counts BOTH meshes in the peak, because they coexist by design', () => {
@@ -702,18 +715,31 @@ describe('CR26 memory estimate against observed buffers', () => {
         plan.memory.candidateBytes +
         plan.memory.workspaceBytes +
         plan.memory.validationBytes +
-        plan.memory.inverseBytes,
+        plan.memory.undoRetainedBytes,
     );
   });
 
-  it('reports what a full copy would have cost, so the patch choice stays measurable', () => {
-    // Retained deliberately: for a repair that removes most of a mesh the patch
-    // is NOT smaller, and a future stage may want to choose per repair.
+  it('counts the retained source mesh at its real size, not at a patch\u2019s', () => {
+    /*
+     * WHAT THE CHANGE COST, MEASURED. A patch sized to sparse defects was
+     * smaller than the mesh — that was its whole point, and it was the wrong
+     * trade: it bought a fraction of one part's memory and paid with an indexed
+     * model returned as soup and a shared document permanently un-shared.
+     *
+     * The estimate now says what is actually retained. It is an UPPER BOUND on
+     * the record's cost: a sibling that still references the mesh makes it free.
+     */
     const mesh = gridWithDuplicates(1_000);
-    const outcome = repair(mesh, [RepairOperation.RemoveDuplicateFaces]);
-    const inverse = must(outcome.inverse, 'inverse patch');
-
-    expect(fullCopyBytes(mesh)).toBeGreaterThan(inverse.byteLength);
+    const sourceReport = report(mesh);
+    const { plan } = planConservativeRepair({
+      mesh,
+      report: sourceReport,
+      documentId: 'm',
+      partId: 'part-1',
+      sourceRevision: 1,
+      requested: [RepairOperation.RemoveDuplicateFaces],
+    });
+    expect(plan.memory.undoRetainedBytes).toBe(mesh.positions.byteLength + mesh.indices.byteLength);
   });
 });
 

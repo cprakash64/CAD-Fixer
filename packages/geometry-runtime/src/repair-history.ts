@@ -1,5 +1,5 @@
 import { invalidState, modelUnavailable, type AppError } from '@cadfixer/shared';
-import type { RepairInversePatch, RepairOperation } from '@cadfixer/mesh-repair';
+import type { RepairOperation } from '@cadfixer/mesh-repair';
 import type { CanonicalMesh, PartId } from '@cadfixer/mesh-core';
 import type { DocumentHandle, DocumentId } from './resident-documents';
 
@@ -14,11 +14,10 @@ import type { DocumentHandle, DocumentId } from './resident-documents';
  * design entirely — see docs/adr/0008.
  *
  * WHAT IS RETAINED, and what is not. Exactly ONE undoable record per model: the
- * most recent change. A deeper stack would retain an inverse per step for the
- * lifetime of the session, and an inverse costs either what its repair removed
- * or one part's mesh. Superseded records survive as DESCRIPTORS — what was
- * applied, and between which revisions — with their inverse released, so the
- * trail stays readable without holding geometry for it.
+ * most recent change. A deeper stack would retain a mesh per step for the
+ * lifetime of the session. Superseded records survive as DESCRIPTORS — what was
+ * applied, and between which revisions — with their retained mesh released, so
+ * the trail stays readable without holding geometry for it.
  *
  * THE INVERSE IS THE ONLY THING HERE THAT HOLDS GEOMETRY, and releasing a record
  * releases it. Every path that ends a record's usefulness — undone, superseded,
@@ -41,40 +40,12 @@ import type { DocumentHandle, DocumentId } from './resident-documents';
  */
 
 /**
- * How a recorded change is reversed.
+ * WHAT KIND of change a record describes.
  *
- * TWO SHAPES, BECAUSE THE TWO OPERATIONS ARE GENUINELY DIFFERENT, not because
- * the union looked tidy:
- *
- *   - a conservative repair REMOVES faces and reorders corners within a face,
- *     so reversing it needs the removed triangles' coordinates back;
- *   - a hole fill REPLACES one part's mesh with a longer one, so reversing it
- *     means putting THE ORIGINAL MESH OBJECT back.
- *
- * WHY THE HOLE-FILL INVERSE RETAINS A MESH REFERENCE — Stage 4B-1B2-R1.
- *
- * It first held two integers and rebuilt the mesh by truncating the appended
- * patch. That reproduced the source's BYTES exactly, and it was still wrong:
- * the rebuilt mesh was a NEW object, so a document whose parts had SHARED one
- * `CanonicalMesh` came back holding two byte-equal ones. Undo permanently
- * doubled the document's geometry, its GPU resources and its exported 3MF
- * object resources — for a change the user had just taken back.
- *
- * Structural sharing is part of the document contract (ADR 0014), not an
- * implementation detail, so restoring bytes is not restoring the document.
- * Holding the original REFERENCE is the only way to restore identity, and it is
- * O(1): canonical meshes are immutable, so nothing has to be copied or compared.
- *
- * WHAT IT COSTS, stated rather than hidden. When the mesh is still referenced by
- * a sibling part — the case this exists for — the reference costs nothing beyond
- * a pointer. When the filled part was the mesh's only owner, the record keeps
- * that mesh alive until the record is undone, superseded or released; that is
- * ONE part's geometry per document, bounded by the one-undoable-change rule, and
- * `inverseBytes` reports it.
- *
- * IT IS WORKER-RESIDENT AND MUST STAY SO. This union is not part of the wire
- * protocol and a boundary test asserts it never becomes part of one. The page
- * receives a record id; the mesh never leaves the worker that owns it.
+ * Reported so the interface can say what Undo would reverse. It no longer
+ * selects a reconstruction — since Stage 4B-1C both kinds are reversed the same
+ * way — but a repair and a fill are still different things to a user, and a
+ * result that could not name which one had happened would be guessing.
  */
 export const UndoableChangeKind = {
   ConservativeRepair: 'conservative-repair',
@@ -83,27 +54,59 @@ export const UndoableChangeKind = {
 
 export type UndoableChangeKind = (typeof UndoableChangeKind)[keyof typeof UndoableChangeKind];
 
-export type UndoableInverse =
-  | {
-      readonly kind: typeof UndoableChangeKind.ConservativeRepair;
-      readonly patch: RepairInversePatch;
-      readonly byteLength: number;
-    }
-  | {
-      readonly kind: typeof UndoableChangeKind.HoleFill;
-      /**
-       * THE EXACT MESH THE PART HELD BEFORE THE FILL.
-       *
-       * The object, not a copy and not a description of one. Restoring it is
-       * what puts a shared document back the way it was.
-       */
-      readonly previousMesh: CanonicalMesh;
-      /** Faces that mesh has. Checked against it on restore, never used to rebuild it. */
-      readonly sourceFaceCount: number;
-      /** Index entries it has. The second half of the same postcondition. */
-      readonly sourceIndexCount: number;
-      readonly byteLength: number;
-    };
+/**
+ * How a recorded change is reversed: BY PUTTING THE EXACT PREVIOUS MESH BACK.
+ *
+ * ONE MECHANISM FOR BOTH KINDS — Stage 4B-1C. It was two, and the second was
+ * wrong. A conservative repair used to retain a PATCH of the triangles it
+ * removed and rebuild the previous mesh from it, which reproduced geometry the
+ * user would recognise and a document they did not have:
+ *
+ *   - the rebuild was NON-INDEXED, nine coordinates per face, so an indexed OBJ
+ *     or 3MF import came back as triangle soup — a different vertex count, a
+ *     different index buffer, different bytes, and a different exported file
+ *     from then on. Measured on a four-vertex indexed tetrahedron: it returned
+ *     with fifteen vertices;
+ *   - it was a NEW object, so a document whose parts SHARED one `CanonicalMesh`
+ *     came back holding two byte-equal ones, permanently, along with two GPU
+ *     geometries and two 3MF object resources.
+ *
+ * Neither showed up in a triangle count, and neither showed up in the suite that
+ * existed, because STL is already soup and STL was the only importable format
+ * when the patch was written. Structural sharing and indexing are both part of
+ * the document contract (ADR 0014), so restoring bytes is not restoring the
+ * document — and for an indexed source the patch did not even restore the bytes.
+ *
+ * RETAINING AN IMMUTABLE MESH IS O(1). Nothing is copied, compared or defended
+ * against mutation: the record holds the object the part held. The patch design
+ * existed to avoid COPYING the previous model on every undo step; a REFERENCE
+ * copies nothing, and where a sibling still holds the mesh it costs a pointer.
+ *
+ * WHAT IT COSTS, stated rather than hidden. When the mesh is still referenced by
+ * a sibling the reference is free. When the changed part was its only owner, the
+ * record keeps that mesh alive until it is undone, superseded, evicted or its
+ * document released — one part's geometry per document, bounded by the
+ * one-undoable-change rule, and `retainedBytes` reports it.
+ *
+ * IT IS WORKER-RESIDENT AND MUST STAY SO. This type is not part of the wire
+ * protocol and a boundary test asserts it never becomes part of one. The page
+ * receives a record id; the mesh never leaves the worker that owns it.
+ */
+export interface UndoableInverse {
+  /**
+   * THE EXACT MESH THE PART HELD BEFORE THE CHANGE.
+   *
+   * The object, not a copy and not a description of one. Restoring it is what
+   * puts a shared, indexed document back the way it was.
+   */
+  readonly previousMesh: CanonicalMesh;
+  /** Faces that mesh has. Checked against it on restore, never used to rebuild it. */
+  readonly sourceFaceCount: number;
+  /** Index entries it has. The second half of the same postcondition. */
+  readonly sourceIndexCount: number;
+  /** The mesh's own size. An upper bound on the record's cost — see the entry. */
+  readonly byteLength: number;
+}
 
 /** What a committed change did. Never carries geometry. */
 export interface RepairHistoryEntry {
@@ -137,14 +140,14 @@ export interface RepairHistoryEntry {
   /** The opening that was filled. Present only for a hole fill. */
   readonly boundaryLoopId?: string;
   /**
-   * Bytes the inverse occupies while it is still retained.
+   * Bytes the retained previous mesh occupies while the record is still
+   * undoable.
    *
-   * For a hole fill this is the RETAINED MESH's size. It is an upper bound on
-   * what the record costs, not a claim about what it adds: when a sibling part
-   * still references that mesh — the case the retention exists for — the record
-   * holds a pointer and the geometry was live anyway.
+   * AN UPPER BOUND ON WHAT THE RECORD COSTS, not a claim about what it adds:
+   * when a sibling part still references that mesh — the case the retention
+   * exists for — the record holds a pointer and the geometry was live anyway.
    */
-  readonly inverseBytes: number;
+  readonly retainedBytes: number;
   /**
    * Whether this record can still be reversed.
    *
@@ -219,7 +222,7 @@ export class RepairHistoryStore {
       appliedOperations: [...input.appliedOperations],
       planHash: input.planHash,
       ...(input.boundaryLoopId === undefined ? {} : { boundaryLoopId: input.boundaryLoopId }),
-      inverseBytes: input.inverse?.byteLength ?? 0,
+      retainedBytes: input.inverse?.byteLength ?? 0,
       undoable: input.inverse !== undefined,
     };
 
@@ -342,7 +345,7 @@ export class RepairHistoryStore {
     for (const record of this.records.values()) {
       if (record.inverse === undefined) continue;
       undoableCount += 1;
-      retainedBytes += record.entry.inverseBytes;
+      retainedBytes += record.entry.retainedBytes;
     }
     return { recordCount: this.records.size, undoableCount, retainedBytes };
   }

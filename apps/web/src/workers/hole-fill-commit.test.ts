@@ -1137,7 +1137,7 @@ describe('US11-US16: what the stores hold once a fill is over', () => {
     expect(repairHistory.entryOf(first.recordId)?.undoable).toBe(false);
     expect(repairHistory.stats().undoableCount).toBe(1);
     expect(repairHistory.stats().retainedBytes).toBe(
-      repairHistory.entryOf(second.recordId)?.inverseBytes,
+      repairHistory.entryOf(second.recordId)?.retainedBytes,
     );
   });
 

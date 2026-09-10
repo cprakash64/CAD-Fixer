@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 import { meshByteLength, partId } from '@cadfixer/mesh-core';
 import type { CanonicalMesh } from '@cadfixer/mesh-core';
 import { isAppError, AppErrorCode } from '@cadfixer/shared';
-import type { RepairInversePatch } from '@cadfixer/mesh-repair';
 import { RepairHistoryStore, UndoableChangeKind, type UndoableInverse } from './repair-history';
 import type { DocumentHandle, DocumentId } from './resident-documents';
 
@@ -23,39 +22,16 @@ function handle(revision: number, documentId = 'model-1'): DocumentHandle {
   return { documentId: documentId as DocumentId, revision };
 }
 
-function patch(faceCount = 4, byteLength = 128): RepairInversePatch {
-  return {
-    schemaVersion: 1,
-    sourceFaceCount: faceCount,
-    removedFaces: new Uint32Array([0]),
-    removedCoordinates: new Float64Array(9),
-    flippedFaces: new Uint32Array(0),
-    groups: undefined,
-    byteLength,
-  };
-}
-
-/** A repair's inverse, in the discriminated shape the store now holds. */
-function repairInverse(faceCount = 4, byteLength = 128): UndoableInverse {
-  return {
-    kind: UndoableChangeKind.ConservativeRepair,
-    patch: patch(faceCount, byteLength),
-    byteLength,
-  };
-}
-
 /**
- * A hole fill's inverse: THE MESH THE PART HELD, plus the two counts that check
- * the record was wired to the right one.
+ * AN INVERSE IS THE MESH THE PART HELD — Stage 4B-1C, for BOTH kinds of change.
  *
- * Stage 4B-1B2-R1 replaced the two-integer inverse. Reconstructing an equal mesh
- * reproduced the bytes and lost the IDENTITY, so a document whose parts shared
- * one mesh came back holding two byte-equal ones — permanently, for a change the
- * user had just taken back.
+ * It was two shapes: a hole fill retained a reference and a repair retained a
+ * PATCH of removed triangles to rebuild from. The rebuild was the defect — it
+ * returned an indexed mesh as soup and a shared mesh as a new object — so there
+ * is now one shape and one reconstruction, which cannot drift.
  */
-function holeFillInverse(sourceFaceCount = 4, mesh = meshOf(sourceFaceCount)): UndoableInverse {
+function inverseOf(sourceFaceCount = 4, mesh = meshOf(sourceFaceCount)): UndoableInverse {
   return {
-    kind: UndoableChangeKind.HoleFill,
     previousMesh: mesh,
     sourceFaceCount,
     sourceIndexCount: mesh.indices.length,
@@ -80,7 +56,7 @@ function recordOne(store: RepairHistoryStore, from = 1, to = 2, recordId = 'r1')
     result: handle(to),
     appliedOperations: ['remove-duplicate-faces'],
     planHash: 'abcd1234',
-    inverse: repairInverse(),
+    inverse: inverseOf(),
   });
 }
 
@@ -118,19 +94,27 @@ describe('recording a committed repair', () => {
     expect(store.entryOf('r1')?.undoable).toBe(false);
   });
 
-  it('retains exactly one undoable patch per model, releasing the older one', () => {
+  it('retains exactly one undoable record per model, releasing the older one', () => {
+    /*
+     * ONE MESH RETAINED, NOT ONE PER STEP. The figure is DERIVED from the mesh
+     * the record holds rather than written as a literal — since Stage 4B-1C the
+     * inverse is the previous `CanonicalMesh`, so a hard-coded number would say
+     * nothing about what is actually kept and would have to be edited every time
+     * the fixture changed.
+     */
+    const retained = meshByteLength(meshOf(4));
     const store = new RepairHistoryStore();
     recordOne(store, 1, 2, 'r1');
-    expect(store.stats().retainedBytes).toBe(128);
+    expect(store.stats().retainedBytes).toBe(retained);
 
     recordOne(store, 2, 3, 'r2');
 
-    // The newer repair is the undoable one, and the older patch is gone rather
-    // than accumulating for the lifetime of the session.
+    // The newer change is the undoable one, and the older record's mesh is
+    // released rather than accumulating for the lifetime of the session.
     expect(store.undoableFor('model-1' as DocumentId)?.recordId).toBe('r2');
     expect(store.entryOf('r1')?.undoable).toBe(false);
     expect(store.stats().undoableCount).toBe(1);
-    expect(store.stats().retainedBytes).toBe(128);
+    expect(store.stats().retainedBytes).toBe(retained);
   });
 
   it('keeps models independent', () => {
@@ -144,7 +128,7 @@ describe('recording a committed repair', () => {
       result: handle(2, 'model-2'),
       appliedOperations: [],
       planHash: 'ffff',
-      inverse: repairInverse(),
+      inverse: inverseOf(),
     });
 
     expect(store.undoableFor('model-1' as DocumentId)?.recordId).toBe('r1');
@@ -161,9 +145,7 @@ describe('the undo guards', () => {
     const prepared = store.prepareUndo('r1', handle(2), 2);
     expect(isAppError(prepared)).toBe(false);
     if (isAppError(prepared)) return;
-    expect(prepared.inverse.kind).toBe(UndoableChangeKind.ConservativeRepair);
-    if (prepared.inverse.kind !== UndoableChangeKind.ConservativeRepair) return;
-    expect(prepared.inverse.patch.sourceFaceCount).toBe(4);
+    expect(prepared.inverse.sourceFaceCount).toBe(4);
     expect(prepared.entry.parentRevision).toBe(1);
   });
 
@@ -308,7 +290,7 @@ describe('a hole fill uses the same one-step history', () => {
       appliedOperations: [],
       planHash: 'loop-hash',
       boundaryLoopId: 'bl-7-4-abcdef0123456789',
-      inverse: holeFillInverse(12),
+      inverse: inverseOf(12),
     });
   }
 
@@ -324,11 +306,11 @@ describe('a hole fill uses the same one-step history', () => {
     /*
      * REPORTED, NOT HIDDEN — Stage 4B-1B2-R1. The record retains the mesh the
      * part held, because restoring bytes is not restoring a shared document.
-     * `inverseBytes` is that mesh's size: an upper bound on what the record
+     * `retainedBytes` is that mesh's size: an upper bound on what the record
      * costs, which is zero extra when a sibling still references it.
      */
-    expect(entry?.inverseBytes).toBe(meshByteLength(meshOf(12)));
-    expect(store.stats().retainedBytes).toBe(entry?.inverseBytes);
+    expect(entry?.retainedBytes).toBe(meshByteLength(meshOf(12)));
+    expect(store.stats().retainedBytes).toBe(entry?.retainedBytes);
   });
 
   it('resolves THE SAME MESH OBJECT, not a description of one', () => {
@@ -343,14 +325,12 @@ describe('a hole fill uses the same one-step history', () => {
       appliedOperations: [],
       planHash: 'loop-hash',
       boundaryLoopId: 'bl-7-4-abcdef0123456789',
-      inverse: holeFillInverse(12, original),
+      inverse: inverseOf(12, original),
     });
 
     const prepared = store.prepareUndo('f1', handle(2), 2);
     expect(isAppError(prepared)).toBe(false);
     if (isAppError(prepared)) return;
-    expect(prepared.inverse.kind).toBe(UndoableChangeKind.HoleFill);
-    if (prepared.inverse.kind !== UndoableChangeKind.HoleFill) return;
     // REFERENCE IDENTITY. A byte-equal copy would satisfy every other assertion
     // in this file and would still lose the document's sharing.
     expect(prepared.inverse.previousMesh).toBe(original);
@@ -383,7 +363,7 @@ describe('a hole fill uses the same one-step history', () => {
     // the moment the second is written — not left pinned until the session ends.
     expect(store.entryOf('f1')?.undoable).toBe(false);
     expect(store.stats().undoableCount).toBe(1);
-    expect(store.stats().retainedBytes).toBe(store.entryOf('f2')?.inverseBytes);
+    expect(store.stats().retainedBytes).toBe(store.entryOf('f2')?.retainedBytes);
   });
 
   it('US13: releases the retained mesh when the document goes away', () => {
@@ -427,7 +407,7 @@ describe('a hole fill uses the same one-step history', () => {
       result: handle(4),
       appliedOperations: ['unify-winding'],
       planHash: 'zzzz',
-      inverse: repairInverse(),
+      inverse: inverseOf(),
     });
     expect(store.undoableFor('model-1' as DocumentId)?.recordId).toBe('r2');
     expect(store.entryOf('f1')?.undoable).toBe(false);

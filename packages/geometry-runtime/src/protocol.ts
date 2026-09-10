@@ -472,8 +472,15 @@ export interface RepairCandidateResult {
   readonly validation: RepairValidation;
   readonly counts: RepairChangeCounts;
   readonly samples: RepairChangeSamples;
-  /** Bytes the inverse patch occupies, for history budgeting. */
-  readonly inverseBytes: number;
+  /**
+   * Bytes the undo record will retain if this candidate is applied.
+   *
+   * THE SOURCE MESH'S OWN SIZE — Stage 4B-1C. It used to be a patch of the
+   * removed triangles; undo now restores the exact previous `CanonicalMesh`
+   * object, so this is an upper bound on the record's cost and zero extra
+   * whenever a sibling part still references that mesh.
+   */
+  readonly undoRetainedBytes: number;
   readonly candidateBounds: MeshBounds | undefined;
   readonly render: RenderSnapshot | undefined;
 }

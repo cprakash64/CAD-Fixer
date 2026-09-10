@@ -34,6 +34,8 @@ export const Fixture = {
   HoleFillTransformed: 'hole-fill-transformed',
   HoleFillSharedPairMillimetre: 'hole-fill-shared-pair-mm',
   HoleFillShared1000: 'hole-fill-shared-1000',
+  RepairSharedPairMillimetre: 'repair-shared-pair-mm',
+  RepairShared1000Millimetre: 'repair-shared-1000-mm',
 } as const;
 
 export type Fixture = (typeof Fixture)[keyof typeof Fixture];

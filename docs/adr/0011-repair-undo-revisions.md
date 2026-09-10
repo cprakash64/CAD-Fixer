@@ -139,3 +139,95 @@ that is the copy cost the patch exists to avoid, and Stage 3A-1 measured the
 difference. `fullCopyBytes` is retained in the engine so the comparison stays
 measurable rather than assumed — for a repair that removes most of a mesh, the
 patch is genuinely not smaller, and a future stage may want to choose per repair.
+
+---
+
+## Stage 4B-1C closure — the patch is replaced by the mesh it described
+
+**Status:** Accepted (Stage 4B-1C). Additive. Everything above about REVISIONS
+still holds unchanged; what changes is WHAT IS RETAINED and how the previous
+mesh is recovered.
+
+### What went wrong
+
+The inverse patch reproduced the source mesh's coordinates, face order, group
+ranges and metadata, and a test proved it — which is why this survived. What no
+test asked was whether it reproduced the source mesh's **representation** or its
+**identity**, and it reproduced neither.
+
+1. **Identity.** `restoreFromInverse` returns a NEW `CanonicalMesh`. A document
+   whose parts shared one mesh came back holding two byte-equal ones,
+   permanently: two entries in the resident document, two GPU geometries on the
+   page, two `<object>` resources in every 3MF written afterwards. Undo, the
+   operation whose entire promise is that nothing happened, made the document
+   permanently larger.
+2. **Representation.** The rebuild writes nine coordinates per face and an
+   identity index buffer. For an STL — soup already — the round trip was exact,
+   which is why every STL test in the suite passed. For a genuinely indexed OBJ
+   or 3MF it was not: four shared corners returned as twelve, the document grew,
+   and the file exported after an undo no longer matched the file imported.
+
+Stage 4B-1B2-R1 had already hit (1) for hole fills and fixed it there by
+retaining the mesh. This ADR's own patch decision was the reason the same fix
+had not reached conservative repair.
+
+### The decision
+
+**`RepairHistoryStore` retains the pre-repair `CanonicalMesh` itself, and undo
+assigns it back.** `UndoableInverse` collapses to one shape — `previousMesh`
+plus the counts and byte length recorded when it was retained — for both
+undoable kinds. `UndoableChangeKind` survives so the interface can name what was
+reversed; it selects no code path.
+
+`packages/mesh-repair/src/inverse.ts` is **deleted**, not left unused:
+`buildInversePatch`, `restoreFromInverse`, `RepairInversePatch` and
+`fullCopyBytes` are gone, and a production-boundary test asserts the file and
+its symbols cannot return. Two undo implementations capable of diverging is how
+one of them stops being tested, which is the mechanism that produced this defect.
+
+### Why the "full copy" alternative above was the wrong shape of the right answer
+
+The alternative this ADR rejected was committing the previous geometry as a full
+**copy**. That rejection was correct and is not being reversed. What Stage 4B-1C
+retains is a **reference** to an immutable mesh that is already resident — no
+allocation, no traversal, and **no additional bytes at all** while any other part
+still holds it. The rejected alternative's cost was the copy; there is no copy.
+
+`fullCopyBytes` went with the file for the same reason: it existed to keep the
+patch-versus-copy comparison measurable, and there is nothing left to compare.
+
+### What it costs, measured
+
+`RepairMemoryEstimate.undoRetainedBytes` now reports the SOURCE MESH's own size
+rather than a patch's, so it is an upper bound that tracks the model instead of
+the defect density — 1.3 MiB at 1 MiB of input, 66.7 MiB at 50 MiB, at every
+defect rate. The bound is loose by design: at a thousand placements of one shared
+mesh the browser harness observes the document at 240 bytes before a repair and
+240 bytes after the undo, because the retained object is the one 999 other parts
+are still drawing from.
+
+Release is unchanged in shape and stricter in effect: one undoable change per
+document, and the reference is dropped the moment the record is undone,
+superseded, evicted or its document released.
+
+### What validation replaces `assertMeshStructure`
+
+The section above says rule 11 applies to undo and "the patch promised it would
+be identical" is not a check. That reasoning was about a mesh an algorithm
+**produced**. Undo now produces none — it hands back a mesh that was
+authoritative when it was retained and has been immutable since, so re-validating
+it would be re-validating the document's own history.
+
+What is checked instead are the two O(1) postconditions a retained object can
+still get wrong through a bookkeeping error: the restored mesh's face count and
+index count against the counts recorded at retention. A mismatch is
+`INTERNAL_FAILURE`, never a silent success.
+
+### What this closure does NOT change
+
+No repair algorithm, no geometry semantics, no operation set, no acceptance rule,
+no revision behaviour. `rebuildCandidate` still writes an **unindexed** candidate,
+so applying a repair to an indexed mesh still de-indexes it until it is undone.
+That is the repair algorithm's own representation choice, it predates this stage,
+and it is recorded here rather than corrected silently as part of a transaction
+fix.

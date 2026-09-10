@@ -8,7 +8,6 @@ import {
   executeConservativeRepair,
   planConservativeRepair,
   RepairOperation,
-  restoreFromInverse,
 } from '@cadfixer/mesh-repair';
 import { CandidateState, RepairCandidateStore } from './repair-candidates';
 import { ResidentDocumentStore } from './resident-documents';
@@ -108,7 +107,6 @@ describe('repair candidate transactions', () => {
       PART,
       must(result.candidate, 'candidate'),
       result.validation,
-      result.inverse,
     );
     expect(candidates.stateOf(handle)).toBe(CandidateState.Resolved);
 
@@ -143,7 +141,6 @@ describe('repair candidate transactions', () => {
       PART,
       must(result.candidate, 'candidate'),
       result.validation,
-      result.inverse,
     );
 
     // Something else replaces the model first.
@@ -171,7 +168,6 @@ describe('repair candidate transactions', () => {
       PART,
       must(result.candidate, 'candidate'),
       result.validation,
-      result.inverse,
     );
 
     expect(candidates.discard(handle)).toBe(true);
@@ -195,7 +191,6 @@ describe('repair candidate transactions', () => {
       PART,
       must(result.candidate, 'candidate'),
       result.validation,
-      result.inverse,
     );
     expect(candidates.discard(handle)).toBe(true);
     // Second discard releases nothing, and is NOT an error — cancelling twice
@@ -210,7 +205,6 @@ describe('repair candidate transactions', () => {
       PART,
       must(result.candidate, 'candidate'),
       result.validation,
-      result.inverse,
     );
 
     const first = candidates.prepareCommit(
@@ -235,13 +229,7 @@ describe('repair candidate transactions', () => {
       ...result.validation,
       acceptance: 'REJECTED_REGRESSION' as const,
     };
-    const handle = candidates.create(
-      source,
-      PART,
-      must(result.candidate, 'candidate'),
-      rejected,
-      result.inverse,
-    );
+    const handle = candidates.create(source, PART, must(result.candidate, 'candidate'), rejected);
 
     const outcome = candidates.prepareCommit(
       { candidate: handle, expectedSource: source, expectedPart: PART, planHash: plan.planHash },
@@ -258,7 +246,6 @@ describe('repair candidate transactions', () => {
       PART,
       must(result.candidate, 'candidate'),
       result.validation,
-      result.inverse,
     );
 
     const outcome = candidates.prepareCommit(
@@ -276,14 +263,12 @@ describe('repair candidate transactions', () => {
       PART,
       must(result.candidate, 'candidate'),
       result.validation,
-      result.inverse,
     );
     const second = candidates.create(
       source,
       PART,
       must(result.candidate, 'candidate'),
       result.validation,
-      result.inverse,
     );
 
     expect(candidates.stateOf(first)).toBe(CandidateState.Discarded);
@@ -295,13 +280,7 @@ describe('repair candidate transactions', () => {
 
   it('export and analysis cannot reach candidate geometry through a model handle', () => {
     const { models, candidates, source, result } = setUp();
-    candidates.create(
-      source,
-      PART,
-      must(result.candidate, 'candidate'),
-      result.validation,
-      result.inverse,
-    );
+    candidates.create(source, PART, must(result.candidate, 'candidate'), result.validation);
 
     // Before commit, the ordinary handle still resolves to M0 — the candidate
     // has not become the export target.
@@ -317,7 +296,6 @@ describe('repair candidate transactions', () => {
       PART,
       must(result.candidate, 'candidate'),
       result.validation,
-      result.inverse,
     );
 
     // Policy A: the worker session ends, so authoritative geometry AND
@@ -337,14 +315,13 @@ describe('repair candidate transactions', () => {
     expect(isAppError(models.resolve(source))).toBe(true);
   });
 
-  it('CR23 through the transaction: the inverse patch restores the committed revision', () => {
+  it('CR23 through the transaction: the candidate commits and carries no inverse', () => {
     const { models, candidates, source, mesh, plan, result } = setUp();
     const handle = candidates.create(
       source,
       PART,
       must(result.candidate, 'candidate'),
       result.validation,
-      result.inverse,
     );
     const committedMesh = candidates.prepareCommit(
       { candidate: handle, expectedSource: source, expectedPart: PART, planHash: plan.planHash },
@@ -354,16 +331,25 @@ describe('repair candidate transactions', () => {
     candidates.markCommitted(handle);
     expect(isAppError(next)).toBe(false);
 
-    const patch = candidates.inverseOf(handle);
-    expect(patch).toBeDefined();
-    const restored = restoreFromInverse(committedMesh, must(patch, 'inverse patch'));
+    /*
+     * THE CANDIDATE CARRIES NO INVERSE — Stage 4B-1C.
+     *
+     * It used to hold a patch of the removed triangles so undo could rebuild the
+     * source. Rebuilding WAS the defect: it returned an indexed mesh as soup and
+     * a shared mesh as a new object. Undo now restores the SOURCE OBJECT the
+     * worker retained — exact for any representation — so the store has nothing
+     * to reconstruct from and there is no second reconstruction to disagree with
+     * the first.
+     *
+     * The round trip is asserted where the real transaction runs, in
+     * `apps/web/src/workers/repair-integrity.test.ts`, because only there can
+     * reference identity be compared against the resident document.
+     */
+    expect('inverseOf' in candidates).toBe(false);
 
-    // Byte-for-byte back to M0, which is what makes undo implementable without
-    // retaining a whole second copy of the model.
-    expect([...restored.positions]).toEqual([...mesh.positions]);
-    expect(triangleCount(restored)).toBe(triangleCount(mesh));
-    expect(must(patch, 'inverse patch').byteLength).toBeLessThan(
-      mesh.positions.byteLength + mesh.indices.byteLength,
-    );
+    // What the store DOES hold is the candidate, and committing it really did
+    // install the repaired mesh.
+    expect(triangleCount(committedMesh)).toBeLessThan(triangleCount(mesh));
+    expect(candidates.stateOf(handle)).toBe(CandidateState.Committed);
   });
 });

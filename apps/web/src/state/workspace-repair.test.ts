@@ -114,7 +114,7 @@ function planFor(handleValue: DocumentHandle, noOp = false): ConservativeRepairP
       candidateBytes: 0,
       workspaceBytes: 0,
       validationBytes: 0,
-      inverseBytes: 0,
+      undoRetainedBytes: 0,
       peakBytes: 0,
     },
     warnings: [],
@@ -154,7 +154,7 @@ function previewFor(source: DocumentHandle): RepairPreview {
     },
     render: render(),
     bounds: undefined,
-    inverseBytes: 128,
+    undoRetainedBytes: 128,
   };
 }
 

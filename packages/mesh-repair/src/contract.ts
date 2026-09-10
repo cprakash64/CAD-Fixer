@@ -134,8 +134,15 @@ export interface RepairMemoryEstimate {
   readonly workspaceBytes: number;
   /** Topology analysis workspace for validating the candidate. */
   readonly validationBytes: number;
-  /** Inverse patch, worst case for the planned removals and flips. */
-  readonly inverseBytes: number;
+  /**
+   * Geometry the undo record will retain: the SOURCE MESH.
+   *
+   * An upper bound on what the record costs rather than what it adds — Stage
+   * 4B-1C. Undo restores the exact previous `CanonicalMesh` object, so when a
+   * sibling part still references it the record holds a pointer and the geometry
+   * was live anyway.
+   */
+  readonly undoRetainedBytes: number;
   /**
    * Peak while the authoritative mesh and the candidate coexist.
    *

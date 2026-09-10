@@ -154,6 +154,27 @@ export const HarnessFixtureId = {
    * thousand-and-one?
    */
   HoleFillShared1000: 'hole-fill-shared-1000',
+  /**
+   * TWO PARTS SHARING ONE REPAIRABLE MESH — Stage 4B-1C.
+   *
+   * The conservative-repair counterpart of `HoleFillSharedPair`. Repairing one
+   * part must isolate it and leave the other on the ORIGINAL mesh; undoing must
+   * put them back on the same object. Millimetres, so the 3MF writer will accept
+   * it — 3MF is where structural sharing is OBSERVABLE in a file, and the same
+   * name on both parts is what makes an object-resource count a statement about
+   * mesh sharing rather than about naming.
+   */
+  RepairSharedPairMillimetre: 'repair-shared-pair-mm',
+  /**
+   * ONE REPAIRABLE MESH, A THOUSAND PLACEMENTS — Stage 4B-1C.
+   *
+   * `Shared1000` is a thousand CLEAN tetrahedra, so a repair of it is a no-op
+   * and measures nothing. This is the same shape with geometry that has a real
+   * duplicate face, which is what makes the memory question askable at scale:
+   * repairing ONE placement must add exactly one mesh, and undoing it must
+   * leave the document holding ONE again rather than a thousand-and-one.
+   */
+  RepairShared1000Millimetre: 'repair-shared-1000-mm',
 } as const;
 
 export type HarnessFixtureId = (typeof HarnessFixtureId)[keyof typeof HarnessFixtureId];
@@ -385,6 +406,27 @@ export function buildHarnessDocument(id: HarnessFixtureId): GeometryDocument {
         parts: Array.from({ length: 1_000 }, (_, index) =>
           named(`p${String(index)}`, shared, 'Placement', translation(index * 4, 0, 0)),
         ),
+      };
+    }
+
+    case HarnessFixtureId.RepairShared1000Millimetre: {
+      const shared = duplicateDefectMesh();
+      return {
+        unit: LengthUnit.Millimeter,
+        parts: Array.from({ length: 1_000 }, (_, index) =>
+          named(`p${String(index)}`, shared, 'Placement', translation(index * 4, 0, 0)),
+        ),
+      };
+    }
+
+    case HarnessFixtureId.RepairSharedPairMillimetre: {
+      const shared = duplicateDefectMesh();
+      return {
+        unit: LengthUnit.Millimeter,
+        parts: [
+          named('a', shared, 'Shared component'),
+          named('b', shared, 'Shared component', translation(PART_B_OFFSET_X, 0, 0)),
+        ],
       };
     }
 

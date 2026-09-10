@@ -451,10 +451,13 @@ is dominated by rebuilding the snapshot for the committed geometry, not by the
 transaction, which is one map assignment. Click-to-reanalysed is the honest
 user-facing number: the point at which Mesh Health describes the repaired model.
 
-**Undo costs about what apply costs**, and for the same reasons: it rebuilds a
-mesh from the inverse patch, validates it structurally, and produces a render
-snapshot. It is a forward transaction, not a cached swap — see
-[ADR 0011](adr/0011-repair-undo-revisions.md).
+**Undo costs about what apply costs**, and for the same reason it always did: it
+produces a render snapshot. What it no longer does is rebuild the mesh. Since
+Stage 4B-1C the record retains the pre-repair `CanonicalMesh` and undo assigns it
+back, so the geometry half of the cost is a reference assignment and two O(1)
+count checks; the snapshot is the whole of what is left. It is still a forward
+transaction, not a cached swap — see
+[ADR 0011](adr/0011-repair-undo-revisions.md) and its Stage 4B-1C closure.
 
 ## The topology report cache
 
@@ -490,8 +493,14 @@ bytes **we** allocate. During a preview these coexist by design:
 | Candidate render snapshot         | main thread | ≤ 72 n                   |
 | Connectivity + compaction scratch | worker      | ≈ 72 n                   |
 | Validation (topology) workspace   | worker      | ≈ 225 n                  |
-| Inverse patch                     | worker      | 76 per removed face      |
+| Undo record (retained mesh)       | worker      | 0 new; ≤ 48 n retained   |
 | Change overlays                   | main thread | ≤ 256 faces per category |
+
+The undo record's row reads **0 new** because since Stage 4B-1C it retains a
+reference to M0 itself, which is on the line above and already allocated. The
+`≤ 48 n` is what that reference KEEPS ALIVE once the repaired part has moved off
+it — an upper bound, and zero extra for as long as any sibling part still
+references the same mesh.
 
 The coexistence IS the safety property: M0 survives until the commit succeeds.
 The preflight in `repair-handlers.ts` therefore models
@@ -1105,3 +1114,68 @@ successor document plus the history's retained mesh, which R1 already measured
 
 RSS. The figures above are wall-clock latencies from the page and deterministic
 ownership counts from the stores that hold the geometry.
+
+# Exact conservative-repair undo (Stage 4B-1C, 2026-09-10)
+
+Stage 4B-1B2-R1 gave the FILL a retained reference. Stage 4B-1C gives the
+conservative repair the same thing, deleting the inverse patch rather than
+keeping a second undo path beside it. The question this section answers is what
+retaining a mesh instead of a patch costs.
+
+## What undo retains, by input size
+
+`npx vitest run --config vitest.bench.config.ts scripts/repair.bench-suite.ts`,
+node 24 on darwin/arm64. `undoRetainedBytes` is the SOURCE MESH's own size.
+
+| input  | faces     | defects | analyse | plan    | execute | undo retains |
+| ------ | --------- | ------- | ------- | ------- | ------- | ------------ |
+| 1 MiB  | 29,000    | 0%      | 89 ms   | 44 ms   | 7 ms    | 1.3 MiB      |
+| 1 MiB  | 29,000    | 5%      | 83 ms   | 66 ms   | 72 ms   | 1.3 MiB      |
+| 1 MiB  | 29,000    | 33%     | 44 ms   | 62 ms   | 58 ms   | 1.3 MiB      |
+| 10 MiB | 291,000   | 0%      | 238 ms  | 165 ms  | 7 ms    | 13.3 MiB     |
+| 10 MiB | 291,000   | 5%      | 190 ms  | 341 ms  | 324 ms  | 13.3 MiB     |
+| 10 MiB | 291,000   | 33%     | 176 ms  | 253 ms  | 190 ms  | 13.3 MiB     |
+| 50 MiB | 1,456,000 | 0%      | 1060 ms | 1004 ms | 35 ms   | 66.7 MiB     |
+| 50 MiB | 1,456,000 | 5%      | 1104 ms | 1898 ms | 1841 ms | 66.7 MiB     |
+| 50 MiB | 1,456,000 | 33%     | 1325 ms | 1599 ms | 1417 ms | 66.7 MiB     |
+
+**The column is now flat across defect density and proportional to the model.**
+That is the honest change and it is stated rather than buried: a patch was
+proportional to what the repair REMOVED, so a repair that removed little retained
+little. A mesh reference is proportional to the model. The pipeline timings are
+unchanged — nothing was added to the hot path, and the patch construction that
+used to run per accepted repair is gone.
+
+**It is an upper bound, not a charge.** The reference costs nothing while another
+part still holds the same mesh, and it is dropped the moment the record is undone,
+superseded, evicted or its document released.
+
+## At a thousand placements the bound is not paid at all
+
+`npm run test:e2e:harness`, one repairable mesh referenced by **1,000 parts**
+(`RepairShared1000Millimetre`):
+
+| step   | latency | distinct meshes | resident bytes |
+| ------ | ------- | --------------- | -------------- |
+| loaded | —       | 1               | 240            |
+| apply  | 430 ms  | 2               | —              |
+| undo   | 426 ms  | **1**           | **240**        |
+
+**One mesh again, not 1,001 and not 2**, and the document is the size it was to
+the byte. The repaired placement left the shared mesh, the other 999 did not
+follow it, and the undo record held the object those 999 were still drawing from —
+so the retention cost nothing that was not already resident.
+
+The GPU follows: `geometriesCreated − geometriesDisposed` equals what is on
+screen at every step, so the second upload is genuinely released rather than
+merely unreferenced.
+
+Both latencies are dominated by rebuilding a render snapshot for a thousand
+parts, as they were before this stage. They are reported, never asserted — a
+wall-clock number beside a thousand placements on whatever machine is running is
+evidence for a report and a flake as a threshold.
+
+## Not measured here
+
+Process RSS, `performance.memory`, and the cost of a multi-step history, none of
+which exists.

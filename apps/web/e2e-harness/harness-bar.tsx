@@ -42,6 +42,8 @@ const FIXTURES: readonly { readonly id: FixtureId; readonly label: string }[] = 
   { id: HarnessFixtureId.HoleFillTransformed, label: 'Hole fill: transformed' },
   { id: HarnessFixtureId.HoleFillSharedPairMillimetre, label: 'Hole fill: shared pair (mm)' },
   { id: HarnessFixtureId.HoleFillShared1000, label: 'Hole fill: 1000 shared' },
+  { id: HarnessFixtureId.RepairSharedPairMillimetre, label: 'Repair: shared pair (mm)' },
+  { id: HarnessFixtureId.RepairShared1000Millimetre, label: 'Repair: 1000 shared (mm)' },
 ];
 
 /**

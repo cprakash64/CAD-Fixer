@@ -1,4 +1,4 @@
-import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
@@ -914,6 +914,91 @@ describe('the hole-fill engine stays where Stage 4B-1B1 put it', () => {
     }
   });
 
+  it('CRT13: repair/commit builds every fallible answer BEFORE the authoritative swap', () => {
+    /*
+     * THE SAME PROTECTION HOLE FILLING GOT IN STAGE 4B-1B2-R2, extended to
+     * conservative repair in Stage 4B-1C. `buildRenderSnapshot` allocates and
+     * can fail; running it after `replace` meant a failure was reported to the
+     * caller as an ordinary error while the document had already changed.
+     */
+    const commit = readFileSync(
+      join(REPO_ROOT, 'apps', 'web', 'src', 'workers', 'repair-handlers.ts'),
+      'utf8',
+    );
+    const body = commit.slice(commit.indexOf('createRepairCommitHandler'));
+    const snapshot = body.indexOf('work.buildRenderSnapshot(');
+    const describe_ = body.indexOf('work.describeParts(');
+    const progress = body.indexOf('context.reportProgress(');
+    const swap = body.indexOf('residentDocuments.replace(');
+    const consume = body.indexOf('repairCandidates.markCommitted(');
+    const record = body.indexOf('repairHistory.record(');
+    for (const [name, at] of [
+      ['buildRenderSnapshot', snapshot],
+      ['describeParts', describe_],
+      ['reportProgress', progress],
+      ['replace', swap],
+      ['markCommitted', consume],
+      ['record', record],
+    ] as const) {
+      expect(at, `${name} is missing from repair/commit`).toBeGreaterThan(-1);
+    }
+    expect(snapshot).toBeLessThan(swap);
+    expect(describe_).toBeLessThan(swap);
+    expect(progress).toBeLessThan(swap);
+    expect(consume).toBeGreaterThan(swap);
+    expect(record).toBeGreaterThan(consume);
+
+    const end = body.indexOf('export const repairCommitHandler =');
+    expect(end).toBeGreaterThan(swap);
+    const committedRegion = body.slice(swap, end);
+    for (const banned of [
+      'buildRenderSnapshot',
+      'describeParts',
+      'reportProgress',
+      'computeBounds',
+      'documentByteLength',
+      'assertMeshStructure',
+      'assertGeometryDocument',
+    ]) {
+      expect(
+        committedRegion.includes(banned),
+        `${banned} runs after the authoritative swap in repair/commit`,
+      ).toBe(false);
+    }
+  });
+
+  it('reconstructs undo from a RETAINED MESH, never from a patch', () => {
+    /*
+     * STAGE 4B-1C. Repair's undo rebuilt the pre-repair mesh from a patch of
+     * removed triangles, which returned an indexed OBJ or 3MF as triangle soup
+     * and turned one shared mesh into two byte-equal ones. The patch is gone —
+     * along with the module that defined it — so there is ONE reconstruction and
+     * the two kinds of change cannot drift apart.
+     */
+    /*
+     * SHIPPED SOURCE ONLY. Tests may still NAME the removed functions — the
+     * repair suite explains what they did and why they went, which is the record
+     * of the defect and is worth keeping readable.
+     */
+    const files = [
+      ...sourceFilesUnder(join(REPO_ROOT, 'apps')),
+      ...sourceFilesUnder(join(REPO_ROOT, 'packages')),
+      ...sourceFilesUnder(join(REPO_ROOT, 'scripts')),
+    ].filter((file) => !/\.test\.(ts|tsx)$/.test(file));
+
+    const offenders: string[] = [];
+    for (const file of files) {
+      const contents = readFileSync(file, 'utf8');
+      for (const banned of ['restoreFromInverse', 'buildInversePatch', 'RepairInversePatch']) {
+        if (contents.includes(banned)) offenders.push(`${relative(REPO_ROOT, file)}: ${banned}`);
+      }
+    }
+    expect(offenders, 'undo reconstruction from a patch must stay removed').toEqual([]);
+
+    // And the module that defined them is gone, not merely unreferenced.
+    expect(existsSync(join(REPO_ROOT, 'packages', 'mesh-repair', 'src', 'inverse.ts'))).toBe(false);
+  });
+
   it('builds every fallible answer BEFORE the authoritative swap, in undo too', () => {
     const undo = readFileSync(
       join(REPO_ROOT, 'apps', 'web', 'src', 'workers', 'repair-handlers.ts'),
@@ -964,7 +1049,9 @@ describe('the hole-fill engine stays where Stage 4B-1B1 put it', () => {
     );
     const callers = files
       .filter((file) =>
-        /createHoleFillCommitHandler\(|createRepairUndoHandler\(/.test(readFileSync(file, 'utf8')),
+        /createHoleFillCommitHandler\(|createRepairUndoHandler\(|createRepairCommitHandler\(/.test(
+          readFileSync(file, 'utf8'),
+        ),
       )
       .map((file) => relative(REPO_ROOT, file))
       .sort();
@@ -986,6 +1073,7 @@ describe('the hole-fill engine stays where Stage 4B-1B1 put it', () => {
       'utf8',
     );
     expect(undo).toContain('createRepairUndoHandler(PRODUCTION_UNDO_WORK)');
+    expect(undo).toContain('createRepairCommitHandler(PRODUCTION_COMMIT_WORK)');
   });
 
   it('keeps the undo inverse OUT of the wire protocol', () => {

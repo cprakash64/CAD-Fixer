@@ -13,6 +13,7 @@ import {
   windingBlockedByVertexStl,
   windingConflictStl,
 } from './stl-fixtures';
+import { objDefectAndClean, threeMfDefectiveTetrahedron } from './format-fixtures';
 
 /**
  * The conservative repair workflow, end to end, through the REAL worker.
@@ -811,4 +812,139 @@ test('O18: the repair workflow stays usable at a narrow viewport', async ({ page
   await applyButton.scrollIntoViewIfNeeded();
   await applyButton.click();
   await expect(page.getByTestId('repair-applied')).toBeVisible({ timeout: 30_000 });
+});
+
+/* ------------------------------ Stage 4B-1C: exact undo, in the product -- */
+
+/**
+ * CRU03, CRT/§36: EXACT UNDO AND THE FILES THAT PROVE IT.
+ *
+ * The contract suite asserts the resident document holds the original mesh
+ * OBJECT again after an undo. This is the same claim from where a user stands:
+ * an INDEXED OBJ goes in, a repair is previewed, applied and undone, and the
+ * file exported afterwards is the file that would have been exported before.
+ *
+ * Repair's undo used to rebuild the pre-repair mesh from a patch of removed
+ * triangles, writing nine coordinates per face and an identity index buffer.
+ * For an STL — soup already — that round-tripped exactly, which is why the
+ * defect survived every STL test in this file. For an OBJ it did not: four
+ * shared corners came back as twelve, and every export afterwards carried the
+ * flattening.
+ *
+ * WHY BYTES AND NOT COUNTS. A triangle count cannot distinguish a restored mesh
+ * from a re-derived one that happens to describe the same surface. Two files
+ * that differ are two files a user would see differ.
+ */
+test('CRU03: an indexed OBJ survives repair and undo, and exports as it imported', async ({
+  page,
+}) => {
+  test.setTimeout(180_000);
+  await page.goto('/');
+  await openFile(page, 'indexed.obj', objDefectAndClean().bytes);
+  await expect(page.getByTestId('topology-headline')).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByTestId('repair-operations')).toBeVisible({ timeout: 60_000 });
+
+  /*
+   * GENUINELY INDEXED, and that is the whole point of this fixture: four corners
+   * shared across five faces. Soup describing the same faces needs fifteen, so
+   * this number is what the defect destroyed and what the assertion after the
+   * undo is really about.
+   */
+  expect(await readFact(page, 'health-corners')).toBe(4);
+  expect(await readFact(page, 'health-triangles')).toBe(5);
+
+  const beforeObj = await exportAs(page, 'obj');
+  const beforeStl = await exportAs(page, 'stl');
+
+  // BEFORE APPLY, A PREVIEW IS NOT AN APPLICATION — including on the way out to
+  // a file. Exporting with a candidate on screen must write the old geometry.
+  await preview(page);
+  expect((await exportAs(page, 'obj')).equals(beforeObj)).toBe(true);
+  await expect(page.getByTestId('repair-candidate')).toBeVisible();
+
+  await apply(page);
+  // The repair really did something: the duplicate face is gone.
+  await expect.poll(async () => readFact(page, 'health-triangles'), { timeout: 60_000 }).toBe(4);
+  const appliedObj = await exportAs(page, 'obj');
+  expect(appliedObj.equals(beforeObj)).toBe(false);
+
+  await page.getByTestId('undo-repair').click();
+  await expect.poll(async () => readFact(page, 'health-triangles'), { timeout: 60_000 }).toBe(5);
+
+  /*
+   * STILL INDEXED. Four corners, not twelve — the assertion the patch
+   * reconstruction failed, and the one a triangle count cannot make.
+   */
+  expect(await readFact(page, 'health-corners')).toBe(4);
+
+  // AND THE FILES ARE THE SAME FILES. Not "the same shape": the same bytes,
+  // which is what a user would diff. Both writers, because OBJ is the one that
+  // carries the indexing and STL is the one that never could.
+  expect((await exportAs(page, 'obj')).equals(beforeObj)).toBe(true);
+  expect((await exportAs(page, 'stl')).equals(beforeStl)).toBe(true);
+});
+
+/** Reads a whole number out of a Mesh Health fact row. */
+async function readFact(page: Page, testId: string): Promise<number> {
+  const text = (await page.getByTestId(testId).textContent()) ?? '';
+  return Number(text.replace(/[^0-9]/g, ''));
+}
+
+/** Saves the WHOLE document through the conversion dialog and returns the file. */
+async function exportAs(page: Page, target: 'stl' | 'obj' | '3mf'): Promise<Buffer> {
+  await page.getByTestId('open-convert').click();
+  await expect(page.getByTestId('convert-dialog')).toBeVisible({ timeout: 30_000 });
+  await page.getByTestId(`convert-target-${target}`).check();
+  await expect(page.getByTestId('convert-report')).toBeVisible();
+
+  const pending = page.waitForEvent('download', { timeout: 60_000 });
+  await page.getByTestId('convert-export').click();
+  const download = await pending;
+  await expect(page.getByTestId('convert-saved')).toBeVisible({ timeout: 60_000 });
+
+  const stream = await download.createReadStream();
+  const chunks: Buffer[] = [];
+  for await (const chunk of stream) chunks.push(chunk as Buffer);
+  await page.getByTestId('convert-close').click();
+  await expect(page.getByTestId('convert-dialog')).toHaveCount(0);
+  return Buffer.concat(chunks);
+}
+
+/**
+ * CRU04, §17: THE SAME GATE FOR 3MF, WHICH IS WHERE INDEXING IS NATIVE.
+ *
+ * A 3MF `<mesh>` is vertices plus triangles referencing them, so an import is
+ * indexed by construction and a de-indexing undo is a change to the FILE FORMAT'S
+ * own structure, not merely to our buffers. Four vertices and five triangles go
+ * in; four vertices must come back.
+ *
+ * Millimetres, because the 3MF writer refuses a document that states no unit and
+ * CAD Fixer will not invent one — so this is also the only one of the three
+ * targets whose export can be compared at all here.
+ */
+test('CRU04: an indexed 3MF survives repair and undo, and exports as it imported', async ({
+  page,
+}) => {
+  test.setTimeout(180_000);
+  await page.goto('/');
+  await openFile(page, 'indexed.3mf', threeMfDefectiveTetrahedron());
+  await expect(page.getByTestId('topology-headline')).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByTestId('repair-operations')).toBeVisible({ timeout: 60_000 });
+
+  expect(await readFact(page, 'health-corners')).toBe(4);
+  expect(await readFact(page, 'health-triangles')).toBe(5);
+
+  const before = await exportAs(page, '3mf');
+
+  await preview(page);
+  await apply(page);
+  await expect.poll(async () => readFact(page, 'health-triangles'), { timeout: 60_000 }).toBe(4);
+
+  await page.getByTestId('undo-repair').click();
+  await expect.poll(async () => readFact(page, 'health-triangles'), { timeout: 60_000 }).toBe(5);
+
+  // FOUR VERTICES, not twelve. The §17 gate.
+  expect(await readFact(page, 'health-corners')).toBe(4);
+  // And the archive is the archive: same bytes, so same `<vertices>` block.
+  expect((await exportAs(page, '3mf')).equals(before)).toBe(true);
 });

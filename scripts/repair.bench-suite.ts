@@ -7,7 +7,6 @@ import { uncancellable } from '@cadfixer/shared';
 import { analyseTopology } from '@cadfixer/mesh-topology';
 import {
   executeConservativeRepair,
-  fullCopyBytes,
   planConservativeRepair,
   RepairOperation,
 } from '@cadfixer/mesh-repair';
@@ -82,8 +81,7 @@ interface Row {
   readonly removed: number;
   readonly flipped: number;
   readonly candidateBytes: number;
-  readonly inverseBytes: number;
-  readonly fullCopyBytes: number;
+  readonly undoRetainedBytes: number;
   readonly modelledPeakBytes: number;
   readonly acceptance: string;
 }
@@ -156,8 +154,11 @@ it('measures conservative repair at realistic sizes', () => {
           result.counts.removedZeroAreaFaces,
         flipped: result.counts.flippedFaces,
         candidateBytes: result.candidate === undefined ? 0 : meshBytes(result.candidate),
-        inverseBytes: result.inverse?.byteLength ?? 0,
-        fullCopyBytes: fullCopyBytes(mesh),
+        // WHAT UNDO RETAINS — Stage 4B-1C. The record holds the SOURCE MESH
+        // rather than a patch of removed triangles, so this is the mesh's own
+        // size: an upper bound on the record's cost, and zero extra whenever a
+        // sibling part still references it.
+        undoRetainedBytes: meshBytes(mesh),
         modelledPeakBytes: plan.memory.peakBytes,
         acceptance: result.validation.acceptance,
       });
@@ -171,7 +172,7 @@ it('measures conservative repair at realistic sizes', () => {
       {
         startedAt: new Date().toISOString(),
         environment: `node ${process.version} ${process.platform}/${process.arch}`,
-        note: 'No timing assertions. Numbers are machine-dependent; the point is the SHAPE — anything superlinear, or an inverse patch that approaches a full copy at low defect density, is a regression.',
+        note: 'No timing assertions. Numbers are machine-dependent; the point is the SHAPE — anything superlinear is a regression. Since Stage 4B-1C, undo retains the source mesh rather than a patch of removed triangles, so undoRetainedBytes tracks the model rather than the defect density.',
         rows,
       },
       null,
@@ -185,8 +186,8 @@ it('measures conservative repair at realistic sizes', () => {
       `  ${String(row.targetMiB).padStart(2)} MiB  defects ${(row.defectRate * 100).toFixed(0).padStart(2)}%  ` +
         `faces ${String(row.faces).padStart(9)}  analyse ${row.analyseMs.toFixed(0).padStart(5)}ms  ` +
         `plan ${row.planMs.toFixed(0).padStart(5)}ms  exec ${row.executeMs.toFixed(0).padStart(5)}ms  ` +
-        `removed ${String(row.removed).padStart(7)}  inverse ${(row.inverseBytes / 1048576).toFixed(1)} MiB  ` +
-        `vs copy ${(row.fullCopyBytes / 1048576).toFixed(1)} MiB  ${row.acceptance}\n`,
+        `removed ${String(row.removed).padStart(7)}  undo retains ${(row.undoRetainedBytes / 1048576).toFixed(1)} MiB  ` +
+        `${row.acceptance}\n`,
     );
   }
 }, 1_800_000);

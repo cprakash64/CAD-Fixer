@@ -44,9 +44,6 @@ export {
 } from './cancellation';
 export type { RepairExecutionInput, RepairExecutionResult } from './pipeline';
 
-export { buildInversePatch, fullCopyBytes, restoreFromInverse } from './inverse';
-export type { RepairInversePatch } from './inverse';
-
 export {
   selectDuplicateFaces,
   selectRepeatedPositionFaces,

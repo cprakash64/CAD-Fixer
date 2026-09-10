@@ -268,6 +268,37 @@ export function tetrahedronMesh(scale = 10): string {
    </mesh>`;
 }
 
+/**
+ * A tetrahedron carrying an EXACT DUPLICATE FACE — four vertices, five triangles.
+ *
+ * The conservative repair fixture for 3MF, and genuinely INDEXED in the way that
+ * matters: five triangles reference four vertices, so a round trip that returned
+ * soup would need fifteen. That is the whole §17 gate.
+ */
+export function defectiveTetrahedronMesh(scale = 10): string {
+  return `<mesh>
+    <vertices>
+     <vertex x="0" y="0" z="0"/><vertex x="${String(scale)}" y="0" z="0"/>
+     <vertex x="0" y="${String(scale)}" z="0"/><vertex x="0" y="0" z="${String(scale)}"/>
+    </vertices>
+    <triangles>
+     <triangle v1="0" v2="2" v3="1"/><triangle v1="0" v2="1" v3="3"/>
+     <triangle v1="0" v2="3" v3="2"/><triangle v1="1" v2="2" v3="3"/>
+     <triangle v1="0" v2="2" v3="1"/>
+    </triangles>
+   </mesh>`;
+}
+
+/** A millimetre 3MF holding one repairable, genuinely indexed object. */
+export function threeMfDefectiveTetrahedron(): Buffer {
+  return threeMf(
+    modelXml({
+      unit: 'millimeter',
+      resources: `<object id="1" type="model" name="Solid">${defectiveTetrahedronMesh()}</object>`,
+    }),
+  );
+}
+
 export interface ModelXmlOptions {
   readonly unit?: string;
   readonly resources?: string;

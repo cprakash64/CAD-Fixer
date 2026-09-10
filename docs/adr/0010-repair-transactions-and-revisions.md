@@ -78,6 +78,17 @@ arbitrary choice.
 
 ## Decision 4 — Undo is an inverse patch, not a model copy
 
+> **Superseded by Stage 4B-1C.** This decision is reversed: the history retains
+> the pre-repair `CanonicalMesh` OBJECT and undo assigns it back. The patch
+> reproduced the source's coordinates and face order — a test asserted exactly
+> that — but not its REPRESENTATION or its IDENTITY, so an indexed mesh came
+> back as soup and a shared mesh came back as two. The retained reference is not
+> the "model copy" rejected below: nothing is copied, and it costs no additional
+> bytes while any sibling part still holds the same mesh. See the Stage 4B-1C
+> closure in
+> [ADR 0011](0011-repair-undo-revisions.md#stage-4b-1c-closure--the-patch-is-replaced-by-the-mesh-it-described).
+> The reasoning below is kept as the record of what Stage 3B-1A decided and why.
+
 Retaining M0 per history step costs the model's own size — ~100 MiB for a
 100 MiB import, before any depth. Conservative repair only removes faces and
 reorders corners within a face, so the exact inverse is small: the removed

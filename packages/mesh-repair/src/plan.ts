@@ -168,7 +168,7 @@ export function planConservativeRepair(input: RepairPlanInput): RepairPlanResult
     ),
   );
 
-  const memory = estimateRepairMemory(mesh, faceCount, decisions);
+  const memory = estimateRepairMemory(mesh, faceCount);
   if (input.memoryBudgetBytes !== undefined && memory.peakBytes > input.memoryBudgetBytes) {
     warnings.push(
       `Estimated repair peak ${String(Math.round(memory.peakBytes / 1_048_576))} MiB exceeds the ${String(Math.round(input.memoryBudgetBytes / 1_048_576))} MiB budget.`,
@@ -293,14 +293,17 @@ function blockedWinding(conflicts: number, reason: RepairReason): RepairOperatio
  *
  * They DO coexist — M0 survives until commit succeeds, which is the safety
  * property this whole design exists for — so the peak is both meshes plus the
- * masks, the compaction scratch, the validation workspace and the patch. An
- * estimate that counted only the candidate would under-report by roughly half.
+ * masks, the compaction scratch, the validation workspace and what undo will
+ * retain. An estimate that counted only the candidate would under-report by
+ * roughly half.
+ *
+ * IT NO LONGER DEPENDS ON THE PLANNED DECISIONS — Stage 4B-1C. The undo cost
+ * used to be sized from the removals and flips a plan expected, because the
+ * record held a patch of them. It now retains the SOURCE MESH, whose size is a
+ * property of the model rather than of the repair, so nothing here needs to
+ * know what the repair intends to do.
  */
-export function estimateRepairMemory(
-  mesh: CanonicalMesh,
-  faceCount: number,
-  decisions: readonly RepairOperationDecision[],
-): RepairMemoryEstimate {
+export function estimateRepairMemory(mesh: CanonicalMesh, faceCount: number): RepairMemoryEstimate {
   const authoritativeBytes = mesh.positions.byteLength + mesh.indices.byteLength;
   // Worst case: nothing is removed, so the candidate is the same size.
   const candidateBytes = authoritativeBytes;
@@ -313,24 +316,25 @@ export function estimateRepairMemory(
 
   const validationBytes = estimateTopologyWorkspaceBytes(faceCount, faceCount * 3);
 
-  let removals = 0;
-  let flips = 0;
-  for (const entry of decisions) {
-    if (entry.decision !== 'APPLICABLE') continue;
-    if (entry.operation === RepairOperation.UnifyWinding) flips += entry.expectedFaceMutations;
-    else removals += entry.expectedFaceMutations;
-  }
-  // Nine float64 coordinates plus an index per removed face, plus an index per
-  // flipped face.
-  const inverseBytes = removals * (9 * 8 + 4) + flips * 4;
+  /*
+   * WHAT UNDO WILL RETAIN — Stage 4B-1C.
+   *
+   * It used to be a patch of removed triangles, sized from the planned removals
+   * and flips. The undo record now retains the SOURCE MESH itself, because
+   * rebuilding from a patch returned an indexed model as soup and turned one
+   * shared mesh into two. So the number is the mesh's own size — an upper bound
+   * on what the record costs, and zero extra whenever a sibling part still
+   * references it.
+   */
+  const undoRetainedBytes = authoritativeBytes;
 
   return {
     candidateBytes,
     workspaceBytes,
     validationBytes,
-    inverseBytes,
+    undoRetainedBytes,
     peakBytes:
-      authoritativeBytes + candidateBytes + workspaceBytes + validationBytes + inverseBytes,
+      authoritativeBytes + candidateBytes + workspaceBytes + validationBytes + undoRetainedBytes,
   };
 }
 

@@ -1,7 +1,7 @@
 import { invalidState, modelUnavailable, type AppError } from '@cadfixer/shared';
 import { meshByteLength } from '@cadfixer/mesh-core';
 import type { CanonicalMesh, PartId } from '@cadfixer/mesh-core';
-import type { RepairInversePatch, RepairValidation } from '@cadfixer/mesh-repair';
+import type { RepairValidation } from '@cadfixer/mesh-repair';
 import type { DocumentHandle, DocumentId } from './resident-documents';
 
 /**
@@ -66,7 +66,6 @@ interface CandidateEntry {
   mesh: CanonicalMesh | undefined;
   state: CandidateState;
   readonly validation: RepairValidation;
-  readonly inverse: RepairInversePatch | undefined;
   readonly byteLength: number;
 }
 
@@ -118,7 +117,6 @@ export class RepairCandidateStore {
     part: PartId,
     mesh: CanonicalMesh,
     validation: RepairValidation,
-    inverse: RepairInversePatch | undefined,
   ): RepairCandidateHandle {
     const previous = this.activeByDocument.get(source.documentId);
     if (previous !== undefined) this.discardById(previous);
@@ -140,7 +138,6 @@ export class RepairCandidateStore {
       mesh,
       state: CandidateState.Resolved,
       validation,
-      inverse,
       byteLength: meshByteLength(mesh),
     });
     this.activeByDocument.set(source.documentId, candidateId);
@@ -149,10 +146,6 @@ export class RepairCandidateStore {
 
   public validationOf(handle: RepairCandidateHandle): RepairValidation | undefined {
     return this.candidates.get(handle.candidateId)?.validation;
-  }
-
-  public inverseOf(handle: RepairCandidateHandle): RepairInversePatch | undefined {
-    return this.candidates.get(handle.candidateId)?.inverse;
   }
 
   public stateOf(handle: RepairCandidateHandle): CandidateState | undefined {

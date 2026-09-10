@@ -453,14 +453,13 @@ export function createHoleFillCommitHandler(
     const totalVertices = documentVertexCount(successor);
     const bounds = computeBounds(prepared);
     const inverse = {
-      kind: UndoableChangeKind.HoleFill,
       previousMesh,
       sourceFaceCount,
       sourceIndexCount,
       // The mesh's own size. An UPPER BOUND on what this record costs, not a
-      // claim about what it adds — see `RepairHistoryEntry.inverseBytes`.
+      // claim about what it adds — see `RepairHistoryEntry.retainedBytes`.
       byteLength: meshByteLength(previousMesh),
-    } as const;
+    };
 
     // Reported BEFORE the swap and worded for what is actually true at this
     // moment. Saying "applied" here would be a claim about something that has

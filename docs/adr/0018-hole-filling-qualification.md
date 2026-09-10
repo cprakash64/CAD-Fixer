@@ -722,8 +722,18 @@ still exactly ONE undoable change per document, and applying either kind
 supersedes whatever was there — which the interface reflects by dropping the
 other panel's Undo rather than leaving a button that the worker would refuse.
 
+> **Superseded by Stage 4B-1C.** The discriminated union described below is
+> gone: both kinds now retain the previous `CanonicalMesh` and undo assigns it
+> back, so nothing is rebuilt and there is no reconstruction to choose between.
+> See the Stage 4B-1C closure in
+> [ADR 0011](0011-repair-undo-revisions.md#stage-4b-1c-closure--the-patch-is-replaced-by-the-mesh-it-described).
+> The paragraphs below are kept as the record of what Stage 4B-1B2 shipped and
+> why — including the prediction, made here, that running the repair
+> reconstruction over an indexed mesh would silently return soup. It did exactly
+> that for repairs, and that is the defect Stage 4B-1C fixed.
+
 What differs is only HOW the previous geometry is rebuilt, so that is the only
-thing the record varies — `UndoableInverse` is a discriminated union:
+thing the record varies — `UndoableInverse` was a discriminated union:
 
 - a **repair** removed faces and reordered corners, so `restoreFromInverse`
   rebuilds the original ordering from retained coordinates;
@@ -900,9 +910,10 @@ deduplication this codebase does nowhere else.
 | filled part owned the mesh alone | that mesh, until release | one part's geometry |
 
 Bounded by the one-undoable-change-per-document rule, so it is at most one part's
-mesh per document, never per step. `RepairHistoryEntry.inverseBytes` reports the
-mesh's size — an upper bound on the record's cost, not a claim about what it adds
-— and `stats().retainedBytes` sums it.
+mesh per document, never per step. `RepairHistoryEntry.retainedBytes` (named
+`inverseBytes` until Stage 4B-1C, when the patch it was named after stopped
+existing) reports the mesh's size — an upper bound on the record's cost, not a
+claim about what it adds — and `stats().retainedBytes` sums it.
 
 **Released in exactly one place.** `release()` drops the inverse, and every path
 that ends a record's usefulness goes through it or deletes the record outright:

@@ -83,7 +83,7 @@ function candidateResult(overrides: Partial<RepairCandidateResult> = {}): Repair
     validation: { acceptance: 'ACCEPTED' },
     counts: {},
     samples: {},
-    inverseBytes: 0,
+    undoRetainedBytes: 0,
     candidateBounds: undefined,
     render: undefined,
     ...overrides,
