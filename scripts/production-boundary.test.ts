@@ -834,55 +834,158 @@ describe('the hole-fill engine stays where Stage 4B-1B1 put it', () => {
     expect(swap).toBeGreaterThan(guard);
   });
 
-  it('consumes the candidate and records the undo BEFORE anything that can allocate', () => {
+  it('builds every fallible answer BEFORE the authoritative swap', () => {
     /*
-     * THE TRANSACTION ORDERING, asserted structurally — Stage 4B-1B2-R1.
+     * THE TRANSACTION ORDERING, asserted structurally — Stage 4B-1B2-R2.
      *
      * `residentDocuments.replace` is the atomic step: before it the user has the
-     * old document, after it the new one. Everything that MUST accompany that
-     * swap has to sit immediately after it and be incapable of failing —
-     * consuming the candidate, so the same patch cannot be applied twice, and
-     * writing the undo record, so the change can be taken back. Both are map
-     * writes.
+     * old document, after it the new one. Everything that CAN FAIL has to happen
+     * before it, because a failure afterwards would be reported to the caller as
+     * an ordinary error while the document had already changed — telling a user
+     * their fill failed when it succeeded, which the interface then acts on.
      *
-     * Everything that can fail — building a render snapshot allocates, and a
-     * 250,000-face part allocates megabytes — has to come AFTER those, so a
-     * failure there leaves a worker state that is consistent and undoable rather
-     * than one where the document moved and nothing can reverse it.
+     * `buildRenderSnapshot` allocates megabytes for a large part, `describeParts`
+     * allocates a descriptor per part, and `reportProgress` posts on a channel
+     * that can be gone. All three now precede the swap. What follows it is a
+     * string concatenation, two bounded map writes and an object literal.
      *
-     * Checked by source order rather than by injecting a fault, because a
-     * production fault switch is exactly the kind of bypass hook the scan above
-     * forbids: the ordering IS the guarantee, so the ordering is what is
-     * asserted.
+     * Source order is asserted here and the BEHAVIOUR is exercised in
+     * `hole-fill-atomicity.test.ts`, which injects a failing snapshot builder
+     * through a construction seam. Neither alone is enough: order does not prove
+     * the handler copes with a failure, and a passing failure test would not
+     * notice a future statement quietly added below the swap.
      */
     const commit = readFileSync(
       join(REPO_ROOT, 'apps', 'web', 'src', 'workers', 'hole-fill-workflow-handlers.ts'),
       'utf8',
     );
-    const swap = commit.indexOf('residentDocuments.replace(');
-    const consume = commit.indexOf('holeFillCandidates.markCommitted(');
-    const record = commit.indexOf('repairHistory.record(');
-    const snapshot = commit.indexOf('buildRenderSnapshot(');
-    expect(swap).toBeGreaterThan(-1);
+    const commitBody = commit.slice(commit.indexOf('createHoleFillCommitHandler'));
+    const snapshot = commitBody.indexOf('work.buildRenderSnapshot(');
+    const describe_ = commitBody.indexOf('work.describeParts(');
+    const progress = commitBody.indexOf('context.reportProgress(');
+    const swap = commitBody.indexOf('residentDocuments.replace(');
+    const consume = commitBody.indexOf('holeFillCandidates.markCommitted(');
+    const record = commitBody.indexOf('repairHistory.record(');
+    for (const [name, at] of [
+      ['buildRenderSnapshot', snapshot],
+      ['describeParts', describe_],
+      ['reportProgress', progress],
+      ['replace', swap],
+      ['markCommitted', consume],
+      ['record', record],
+    ] as const) {
+      expect(at, `${name} is missing from holefill/commit`).toBeGreaterThan(-1);
+    }
+    expect(snapshot).toBeLessThan(swap);
+    expect(describe_).toBeLessThan(swap);
+    expect(progress).toBeLessThan(swap);
     expect(consume).toBeGreaterThan(swap);
     expect(record).toBeGreaterThan(consume);
-    expect(snapshot).toBeGreaterThan(record);
 
-    // Undo is the same shape: swap, then mark the record undone and release the
-    // stale candidate, and only then allocate.
+    /*
+     * AND NOTHING ALLOCATING SURVIVES BELOW THE SWAP. Named rather than
+     * inferred: these are the calls that would reintroduce the defect, and a
+     * substring scan of the committed region is what catches one being added
+     * back without anybody thinking about the ordering.
+     */
+    /*
+     * BOUNDED AT THE END OF THE HANDLER, not at the end of the file. The
+     * successor-document helper is defined below the factory and legitimately
+     * calls `assertGeometryDocument`; scanning past the handler would flag it
+     * for running "after the swap" when it runs before, from inside the
+     * preparation.
+     */
+    const commitEnd = commitBody.indexOf('export const holeFillCommitHandler =');
+    expect(commitEnd).toBeGreaterThan(swap);
+    const committedRegion = commitBody.slice(swap, commitEnd);
+    for (const banned of [
+      'buildRenderSnapshot',
+      'describeParts',
+      'reportProgress',
+      'computeBounds',
+      'documentByteLength',
+      'assertMeshStructure',
+      'assertGeometryDocument',
+    ]) {
+      expect(
+        committedRegion.includes(banned),
+        `${banned} runs after the authoritative swap in holefill/commit`,
+      ).toBe(false);
+    }
+  });
+
+  it('builds every fallible answer BEFORE the authoritative swap, in undo too', () => {
     const undo = readFileSync(
       join(REPO_ROOT, 'apps', 'web', 'src', 'workers', 'repair-handlers.ts'),
       'utf8',
     );
-    const undoBody = undo.slice(undo.indexOf('repairUndoHandler'));
-    const undoSwap = undoBody.indexOf('residentDocuments.replace(');
-    const undoMark = undoBody.indexOf('repairHistory.markUndone(');
-    const undoRelease = undoBody.indexOf('holeFillCandidates.releaseDocument(');
-    const undoSnapshot = undoBody.indexOf('buildRenderSnapshot(');
-    expect(undoSwap).toBeGreaterThan(-1);
-    expect(undoMark).toBeGreaterThan(undoSwap);
-    expect(undoRelease).toBeGreaterThan(undoMark);
-    expect(undoSnapshot).toBeGreaterThan(undoRelease);
+    const undoBody = undo.slice(undo.indexOf('createRepairUndoHandler'));
+    const snapshot = undoBody.indexOf('work.buildRenderSnapshot(');
+    const describe_ = undoBody.indexOf('work.describeParts(');
+    const swap = undoBody.indexOf('residentDocuments.replace(');
+    const mark = undoBody.indexOf('repairHistory.markUndone(');
+    const release = undoBody.indexOf('holeFillCandidates.releaseDocument(');
+    expect(snapshot).toBeGreaterThan(-1);
+    expect(snapshot).toBeLessThan(swap);
+    expect(describe_).toBeLessThan(swap);
+    expect(mark).toBeGreaterThan(swap);
+    expect(release).toBeGreaterThan(mark);
+
+    const undoEnd = undoBody.indexOf('export const repairUndoHandler =');
+    expect(undoEnd).toBeGreaterThan(swap);
+    const committedRegion = undoBody.slice(swap, undoEnd);
+    for (const banned of [
+      'buildRenderSnapshot',
+      'describeParts',
+      'reportProgress',
+      'computeBounds',
+      'restoreFromInverse',
+      'assertMeshStructure',
+    ]) {
+      expect(
+        committedRegion.includes(banned),
+        `${banned} runs after the authoritative swap in repair/undo`,
+      ).toBe(false);
+    }
+  });
+
+  it('registers the production handlers, and only those', () => {
+    /*
+     * THE SEAM IS A CONSTRUCTION SEAM, NOT A FAULT SWITCH — Stage 4B-1B2-R2.
+     *
+     * `createHoleFillCommitHandler` and `createRepairUndoHandler` take their
+     * fallible work as a parameter so a test can make it fail. That is only safe
+     * while the APPLICATION builds exactly one of each, from the production
+     * defaults — otherwise the parameter becomes a way to divert real work,
+     * which is the bypass hook the scan above forbids.
+     */
+    const files = sourceFilesUnder(join(REPO_ROOT, 'apps', 'web', 'src')).filter(
+      (file) => !/\.test\.(ts|tsx)$/.test(file),
+    );
+    const callers = files
+      .filter((file) =>
+        /createHoleFillCommitHandler\(|createRepairUndoHandler\(/.test(readFileSync(file, 'utf8')),
+      )
+      .map((file) => relative(REPO_ROOT, file))
+      .sort();
+    expect(callers).toEqual(
+      [
+        join('apps', 'web', 'src', 'workers', 'hole-fill-workflow-handlers.ts'),
+        join('apps', 'web', 'src', 'workers', 'repair-handlers.ts'),
+      ].sort(),
+    );
+
+    // And each builds its exported handler from the production defaults.
+    const commit = readFileSync(
+      join(REPO_ROOT, 'apps', 'web', 'src', 'workers', 'hole-fill-workflow-handlers.ts'),
+      'utf8',
+    );
+    expect(commit).toContain('createHoleFillCommitHandler(PRODUCTION_COMMIT_WORK)');
+    const undo = readFileSync(
+      join(REPO_ROOT, 'apps', 'web', 'src', 'workers', 'repair-handlers.ts'),
+      'utf8',
+    );
+    expect(undo).toContain('createRepairUndoHandler(PRODUCTION_UNDO_WORK)');
   });
 
   it('keeps the undo inverse OUT of the wire protocol', () => {

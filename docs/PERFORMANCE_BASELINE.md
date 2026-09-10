@@ -1071,3 +1071,37 @@ actually see, in a file they open elsewhere.
 RSS or heap size. The numbers above are deterministic ownership counts from the
 stores that hold the geometry; a process-level reading would be less precise and
 would not say who was holding what.
+
+# Atomic apply and undo (Stage 4B-1B2-R2, 2026-09-10)
+
+Stage 4B-1B2-R2 moved every fallible piece of the answer — the render snapshot,
+the part descriptors, the totals, the progress report — to BEFORE the
+authoritative swap, so that a committed change can never be reported as a
+failure. The work is the same work; only its position moved. Measured anyway,
+because "it should be the same" is not a measurement.
+
+| case                          | apply                   | undo                    |
+| ----------------------------- | ----------------------- | ----------------------- |
+| 512-vertex rim on ~100k faces | 561 ms (was 481–686 ms) | 91 ms (was 55–64 ms)    |
+| 1,000 placements of one mesh  | 464 ms (was 86–481 ms)  | 437 ms (was 418–533 ms) |
+
+All inside the run-to-run spread already recorded for R1 on the same machine.
+Nothing was traded away for atomicity, and nothing needed to be: reordering
+statements does not change how many there are.
+
+## Memory
+
+No new overlap. The render snapshot is built from the PROPOSED document's part
+mesh and then handed to the caller — the same single snapshot the handler always
+produced, constructed a few statements earlier. Nothing holds both an old and a
+new snapshot: the previous one lives on the page, not in the worker.
+
+The bounded peak during a commit is what it was — the resident document, the
+candidate, and one render snapshot — and after the call the worker holds the
+successor document plus the history's retained mesh, which R1 already measured
+(shared pair: 384 → 792 → 384 bytes; back to baseline after undo).
+
+## Not measured here
+
+RSS. The figures above are wall-clock latencies from the page and deterministic
+ownership counts from the stores that hold the geometry.

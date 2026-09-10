@@ -985,3 +985,139 @@ The engine. Not one ceiling, refusal, validator or fixture. The Geogram artifact
 is byte-identical. The filler, the patch preview, the HP23 gate, cancellation,
 export semantics, accessibility, privacy and the production boundaries are as
 Stage 4B-1B2 left them.
+
+---
+
+# Closure addendum — Stage 4B-1B2-R2
+
+**Status: implemented.** R1 made undo restore the document. This makes Apply and
+Undo observably atomic.
+
+## The gap
+
+Both handlers built their answer AFTER the authoritative swap:
+
+```
+replace  →  markCommitted  →  record  →  buildRenderSnapshot  →  reply
+                                         ^^^^^^^^^^^^^^^^^^^ allocates, can fail
+```
+
+`buildRenderSnapshot` copies the part's positions and derives per-vertex normals
+— megabytes for a 250,000-face part. A failure there threw out of the handler,
+`GeometryWorkerHost` turned it into an ordinary `error` reply, and **the caller
+was told the fill had failed while the document had already changed.**
+
+"The worker's internal state was consistent" is not the guarantee that matters.
+The guarantee that matters is what the caller may OBSERVE, because the interface
+acts on it: a user told their fill failed presses Apply again, and a user told
+their undo failed is looking at a screen that no longer matches their model.
+
+## The throw-point audit
+
+Everything between `replace` and the return, before this change:
+
+| operation                                                            | classification                                                                      |
+| -------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| `markCommitted`                                                      | `Map.get`, field write, `Map.delete` — **non-throwing**                             |
+| record-id template                                                   | string concatenation — **non-throwing**                                             |
+| `repairHistory.record`                                               | object literals, bounded map/array writes, eviction capped at 64 — **non-throwing** |
+| `buildRenderSnapshot`                                                | **allocation-dependent — CAN THROW**                                                |
+| `describeParts`                                                      | **allocation-dependent — can throw**                                                |
+| `context.reportProgress`                                             | **transport-dependent — can throw**                                                 |
+| `documentByteLength`, `documentTriangleCount`, `documentVertexCount` | arithmetic loops — non-throwing                                                     |
+| `computeBounds`                                                      | loop plus a small object — effectively non-throwing                                 |
+| result object literal                                                | **non-throwing**                                                                    |
+
+Undo was the same shape: `markUndone` and `releaseDocument` are bounded map
+writes; `buildRenderSnapshot`, `describeParts`, `reportProgress` and the totals
+all ran after the swap.
+
+## The correction
+
+Both handlers now build the entire answer against the PROPOSED document, then
+commit:
+
+```
+resolve → guard → validate → build successor
+   → render snapshot, part descriptors, totals, inverse   (fallible)
+   → reportProgress('applying')                           (fallible transport)
+   → replace                                              (the atomic step)
+   → markCommitted, record                                (bounded map writes)
+   → return the already-built answer
+```
+
+**Preparing early introduces no stale race.** `replace` compares the revision
+against the store itself and is the only arbiter; an answer built against a
+document the user has since moved off is refused there and discarded. AT03
+stages exactly that — the document is replaced from inside the injected
+preparation, at the one moment that window exists in a synchronous handler — and
+confirms nothing commits and the candidate is not consumed.
+
+**A prepared snapshot is not authoritative.** It is disposable render data
+derived from a document that does not exist yet; only the store's replacement
+defines the mutation.
+
+**The progress report moved before the swap and its wording changed** from
+`applied` to `applying`. Reporting "applied" beforehand would have been a claim
+about something that had not happened; leaving it afterwards would have kept a
+fallible transport call inside the committed region.
+
+## Why a seam, and why it is not a fault switch
+
+Source order proves the statements are in an order. It does not prove the handler
+copes when one of them fails, and making a megabyte allocation fail on demand is
+the only way to walk that path. So the two allocating steps arrive as injected
+functions — `HoleFillCommitWork` and `RepairUndoWork` — and a test builds a
+handler whose snapshot builder throws.
+
+This is the construction seam `HoleFillWorkerFactory` already established, not a
+bypass: `PRODUCTION_COMMIT_WORK` and `PRODUCTION_UNDO_WORK` are the only values
+the application uses, the exported handlers are built from them at module scope,
+and a boundary test asserts both the call sites and the defaults.
+
+Both kinds of evidence are kept. The boundary scan additionally NAMES the calls
+that may not reappear below the swap, so a future statement added there is caught
+even while every failure test still passes.
+
+## Evidence
+
+`hole-fill-atomicity.test.ts`, ten cases:
+
+- **AT01/AT02** — a snapshot or descriptor failure leaves the revision, the part's
+  mesh OBJECT, the candidate's `Resolved` state and an empty history exactly as
+  they were, and the candidate still applies afterwards. A failed attempt must
+  not cost the user their validated fill;
+- **AT03** — a revision that moved while the answer was being built commits
+  nothing and consumes nothing;
+- **AT04** — a successful apply commits the exact candidate object, once, and the
+  prepared snapshot describes what was committed (TX06);
+- **AT05** — a context whose progress call throws produces a clean refusal with no
+  mutation, and a successful apply reports progress exactly once, before the
+  swap — so the committed region contains no transport call at all;
+- **UT01/UT02** — an undo whose snapshot or descriptors fail leaves the document
+  filled, the record undoable and its retained mesh held, and the undo still
+  works;
+- **UT03** — a successful undo restores the exact mesh object, restores the
+  sharing, releases the retained mesh, and its snapshot describes the restored
+  document (TX07);
+- **UT04** — a consumed record refuses and changes nothing.
+
+## The boundary that remains
+
+The worker dying between the commit and the reply. The mutation is in that
+worker's memory and no synchronous rollback exists; pretending otherwise would be
+worse than saying so. Policy A is the answer and the page follows it — worker
+loss CLEARS the model and reports the session lost, rather than keeping a
+revision it can no longer verify. Asserted for an applied fill specifically, so
+the page never shows a pre-fill document as though the fill had not happened.
+
+`postMessage` itself is not a realistic additional risk here: every value in the
+result is structured-cloneable by construction, the transferred buffers are not
+detached, and a closed `MessagePort` drops a message rather than throwing.
+
+## What did not change
+
+The engine, the candidate lifecycle, the HP23 gate, cancellation, the previews,
+export semantics, accessibility, privacy, the production boundaries, and R1's
+sharing restoration — all re-run and green. The Geogram artifact is
+byte-identical.

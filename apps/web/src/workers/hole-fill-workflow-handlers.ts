@@ -17,6 +17,8 @@ import {
   documentByteLength,
   isDocument,
   type OperationHandler,
+  type PartDescriptor,
+  type RenderSnapshot,
 } from '@cadfixer/geometry-runtime';
 import { invalidState, isAppError, modelUnavailable } from '@cadfixer/shared';
 import {
@@ -54,6 +56,10 @@ import {
  * APPLY IS THE ONLY MUTATION IN THE WHOLE WORKFLOW. Listing openings, drawing a
  * rim, running the engine, drawing a patch, cancelling and discarding all leave
  * the resident document byte-identical and its revision exactly where it was.
+ *
+ * AND APPLY IS OBSERVABLY ATOMIC — Stage 4B-1B2-R2. Every fallible piece of the
+ * answer is built BEFORE the authoritative swap, so a caller can never be told a
+ * fill failed after it succeeded. See `createHoleFillCommitHandler`.
  */
 
 /* --------------------------------------------------- boundary preview -- */
@@ -293,6 +299,36 @@ function boundsOf(positions: Float32Array): ReturnType<typeof computeBounds> {
 /* ------------------------------------------------------------- commit -- */
 
 /**
+ * The fallible work `holefill/commit` performs, INJECTED so its failure can be
+ * exercised.
+ *
+ * WHY A SEAM AND NOT A FLAG — Stage 4B-1B2-R2. The atomicity claim below is that
+ * no ordinary fallible operation runs after the authoritative swap. Asserting
+ * that by reading source order proves the statements are in that order; it does
+ * not prove the handler behaves correctly when one of them actually fails.
+ * Making a large allocation fail on demand is the only way to test the path, and
+ * a production flag that could disable or divert real work is exactly the bypass
+ * hook the boundary scan forbids.
+ *
+ * So the two ALLOCATING steps arrive as functions. `PRODUCTION_COMMIT_WORK` is
+ * the only value the application ever uses — the exported handler is built from
+ * it at module scope and nothing in the product can select another — and a test
+ * can build a second handler whose snapshot builder throws. A CONSTRUCTION SEAM,
+ * exactly as `HoleFillWorkerFactory` is, not a fault switch.
+ */
+export interface HoleFillCommitWork {
+  /** Drawable buffers for the committed part. Allocates; can fail. */
+  readonly buildRenderSnapshot: (mesh: CanonicalMesh) => RenderSnapshot;
+  /** Scalar metadata for the whole successor document. Allocates; can fail. */
+  readonly describeParts: (document: GeometryDocument) => readonly PartDescriptor[];
+}
+
+export const PRODUCTION_COMMIT_WORK: HoleFillCommitWork = {
+  buildRenderSnapshot,
+  describeParts,
+};
+
+/**
  * Applies ONE stored, validated candidate. THE ONLY HOLE-FILL MUTATION.
  *
  * THE TRANSACTION, in order, and the order is the point:
@@ -306,11 +342,37 @@ function boundsOf(positions: Float32Array): ReturnType<typeof computeBounds> {
  *   4. `withPartMesh` builds the SUCCESSOR document, sharing every other part by
  *      reference, and `assertGeometryDocument` checks what only a document can
  *      be asked;
- *   5. `residentDocuments.replace` re-checks the revision and swaps ONE map
+ *   5. EVERY FALLIBLE PIECE OF THE ANSWER IS BUILT — the render snapshot, the
+ *      part descriptors, the totals, the undo record's contents. See below;
+ *   6. `residentDocuments.replace` re-checks the revision and swaps ONE map
  *      entry. That single swap is the atomic step: before it the user has the
  *      old document, after it the new one, and there is no moment in between
  *      where the revision has moved but the part has not;
- *   6. only then is the candidate consumed and the undo record written.
+ *   7. the candidate is consumed and the undo record written — both bounded map
+ *      writes — and the already-built answer is returned.
+ *
+ * WHY THE ANSWER IS BUILT BEFORE THE SWAP — Stage 4B-1B2-R2, and this is the
+ * whole point of the ordering.
+ *
+ * `buildRenderSnapshot` allocates: for a 250,000-face part it copies megabytes
+ * and derives per-vertex normals. It can fail. When it ran AFTER the swap, its
+ * failure threw out of the handler, the worker host turned that into an ordinary
+ * error reply, and the caller was told the fill had FAILED — while the
+ * authoritative document had already changed. "The worker's internal state was
+ * consistent" is not the guarantee that matters: the guarantee that matters is
+ * what the caller may observe, and observing a failure for a change that
+ * happened is a lie the interface would then act on.
+ *
+ * So everything that can fail happens first, against the PROPOSED document, and
+ * the swap is the last thing that can go either way. If it refuses — because the
+ * revision moved while the answer was being built — the prepared snapshot is
+ * discarded and nothing has changed. Preparing early cannot introduce a stale
+ * race, because `replace` compares the revision itself and is the only arbiter.
+ *
+ * PREPARING A SNAPSHOT DOES NOT MAKE IT AUTHORITATIVE. It is disposable render
+ * data derived from a document that does not exist yet; only the store's
+ * replacement defines the mutation, and a refused swap means the snapshot
+ * described something that never happened.
  *
  * A REFUSAL AT ANY STEP LEAVES EVERYTHING AS IT WAS, and specifically leaves the
  * candidate RESOLVED and retryable. Consuming it before the swap succeeded
@@ -319,82 +381,78 @@ function boundsOf(positions: Float32Array): ReturnType<typeof computeBounds> {
  * NO GEOMETRY ARRIVES FROM THE PAGE. The payload is four identifiers. The page
  * could not send a mesh if it wanted to — it has never held one.
  */
-export const holeFillCommitHandler: OperationHandler<'holefill/commit'> = (payload, context) => {
-  const source = residentDocuments.resolve(payload.expectedSource);
-  if (!isDocument(source)) throw source;
+export function createHoleFillCommitHandler(
+  work: HoleFillCommitWork,
+): OperationHandler<'holefill/commit'> {
+  return (payload, context) => {
+    const source = residentDocuments.resolve(payload.expectedSource);
+    if (!isDocument(source)) throw source;
 
-  const currentRevision = residentDocuments.revisionOf(payload.expectedSource.documentId);
-  const prepared = holeFillCandidates.prepareCommit(
-    {
-      candidate: payload.candidate,
-      expectedSource: payload.expectedSource,
-      expectedPart: payload.expectedPart as PartId,
-      expectedLoopId: payload.expectedLoopId,
-    },
-    currentRevision,
-  );
-  if (isAppError(prepared)) throw prepared;
+    const currentRevision = residentDocuments.revisionOf(payload.expectedSource.documentId);
+    const prepared = holeFillCandidates.prepareCommit(
+      {
+        candidate: payload.candidate,
+        expectedSource: payload.expectedSource,
+        expectedPart: payload.expectedPart as PartId,
+        expectedLoopId: payload.expectedLoopId,
+      },
+      currentRevision,
+    );
+    if (isAppError(prepared)) throw prepared;
 
-  const filledPart = payload.candidate.partId;
+    const filledPart = payload.candidate.partId;
 
-  /*
-   * THE PRE-FILL MESH, captured BEFORE the swap, for the undo record.
-   *
-   * THE OBJECT ITSELF, not a copy and not a description of one — Stage
-   * 4B-1B2-R1. Undo has to put the document back the way it was, and for a
-   * document whose parts SHARE a mesh that means restoring the same reference
-   * the sibling still holds. A rebuilt mesh with identical bytes would leave the
-   * document permanently holding two equal meshes where it had one.
-   *
-   * O(1) AND SAFE. Canonical meshes are immutable, so retaining one costs a
-   * pointer and nothing is copied, compared or mutated. When a sibling still
-   * references it the retention adds no memory at all; when the filled part was
-   * its only owner the record keeps it alive until it is undone, superseded or
-   * released, which is one part's geometry bounded by the one-undoable-change
-   * rule.
-   *
-   * Read from the RESIDENT part rather than from the candidate's handle, so the
-   * record holds the geometry that is actually being replaced.
-   */
-  const currentPart = source.parts.find((part) => part.id === filledPart);
-  if (currentPart === undefined) {
-    throw invalidState('That part is no longer in this model.', {
-      partId: filledPart,
-      operation: 'holefill/commit',
-    });
-  }
-  const previousMesh = currentPart.mesh;
-  const sourceFaceCount = triangleCount(previousMesh);
-  const sourceIndexCount = previousMesh.indices.length;
-  const patchFaceCount = triangleCount(prepared) - sourceFaceCount;
+    /*
+     * THE PRE-FILL MESH, captured BEFORE the swap, for the undo record.
+     *
+     * THE OBJECT ITSELF, not a copy and not a description of one — Stage
+     * 4B-1B2-R1. Undo has to put the document back the way it was, and for a
+     * document whose parts SHARE a mesh that means restoring the same reference
+     * the sibling still holds. A rebuilt mesh with identical bytes would leave
+     * the document permanently holding two equal meshes where it had one.
+     *
+     * O(1) AND SAFE. Canonical meshes are immutable, so retaining one costs a
+     * pointer and nothing is copied, compared or mutated. When a sibling still
+     * references it the retention adds no memory at all; when the filled part
+     * was its only owner the record keeps it alive until it is undone,
+     * superseded or released, which is one part's geometry bounded by the
+     * one-undoable-change rule.
+     *
+     * Read from the RESIDENT part rather than from the candidate's handle, so
+     * the record holds the geometry that is actually being replaced.
+     */
+    const currentPart = source.parts.find((part) => part.id === filledPart);
+    if (currentPart === undefined) {
+      throw invalidState('That part is no longer in this model.', {
+        partId: filledPart,
+        operation: 'holefill/commit',
+      });
+    }
+    const previousMesh = currentPart.mesh;
+    const sourceFaceCount = triangleCount(previousMesh);
+    const sourceIndexCount = previousMesh.indices.length;
+    const patchFaceCount = triangleCount(prepared) - sourceFaceCount;
 
-  // Rule 11. A returned mesh is not success, however confident its producer is.
-  assertMeshStructure(prepared, 'holefill/commit');
+    // Rule 11. A returned mesh is not success, however confident its producer is.
+    assertMeshStructure(prepared, 'holefill/commit');
 
-  const successor = successorDocument(source, filledPart, prepared);
-  const next = residentDocuments.replace(payload.expectedSource, successor);
-  if (isAppError(next)) throw next;
-  holeFillCandidates.markCommitted(payload.candidate);
+    const successor = successorDocument(source, filledPart, prepared);
 
-  /*
-   * A DETERMINISTIC RECORD ID: lineage, part, both revisions and the opening.
-   * Not a wall clock — two fills a millisecond apart must be distinguishable by
-   * WHAT they did, not by when. The same rule `repair/commit` follows.
-   */
-  const recordId = `${next.documentId}/${filledPart}@${String(payload.expectedSource.revision)}->${String(next.revision)}#${payload.expectedLoopId}`;
-
-  const entry = repairHistory.record({
-    recordId,
-    kind: UndoableChangeKind.HoleFill,
-    source: payload.expectedSource,
-    part: filledPart,
-    result: next,
-    // A fill is not one of the four conservative operations, and claiming one
-    // here would put a repair's name on a different change.
-    appliedOperations: [],
-    planHash: payload.expectedLoopId,
-    boundaryLoopId: payload.expectedLoopId,
-    inverse: {
+    /*
+     * ---- EVERYTHING THAT CAN FAIL, BEFORE ANYTHING CHANGES ----
+     *
+     * Both of these allocate, and both are built from the PROPOSED document. If
+     * either throws, the handler rejects and the resident store has not been
+     * touched: the caller sees a failure for an operation that genuinely did not
+     * happen, which is the whole point.
+     */
+    const render = work.buildRenderSnapshot(prepared);
+    const parts = work.describeParts(successor);
+    const residentBytes = documentByteLength(successor);
+    const totalTriangles = documentTriangleCount(successor);
+    const totalVertices = documentVertexCount(successor);
+    const bounds = computeBounds(prepared);
+    const inverse = {
       kind: UndoableChangeKind.HoleFill,
       previousMesh,
       sourceFaceCount,
@@ -402,33 +460,73 @@ export const holeFillCommitHandler: OperationHandler<'holefill/commit'> = (paylo
       // The mesh's own size. An UPPER BOUND on what this record costs, not a
       // claim about what it adds — see `RepairHistoryEntry.inverseBytes`.
       byteLength: meshByteLength(previousMesh),
-    },
-  });
+    } as const;
 
-  const render = buildRenderSnapshot(prepared);
-  context.reportProgress(1, 'applied');
+    // Reported BEFORE the swap and worded for what is actually true at this
+    // moment. Saying "applied" here would be a claim about something that has
+    // not happened; saying it afterwards would put a fallible transport call
+    // after the commit, which is exactly what this ordering removes.
+    context.reportProgress(0.9, 'applying');
 
-  return Promise.resolve({
-    value: {
-      handle: next,
-      parentRevision: payload.expectedSource.revision,
+    /*
+     * ---- THE COMMIT. Nothing below may fail. ----
+     *
+     * `replace` is the atomic step and the last thing that can refuse: it
+     * re-checks the revision against the store itself, so an answer built
+     * against a document the user has since moved off is discarded here rather
+     * than installed. Everything after it is a bounded map write, a string
+     * concatenation or an object literal — see `AT05`, which enumerates them.
+     */
+    const next = residentDocuments.replace(payload.expectedSource, successor);
+    if (isAppError(next)) throw next;
+    holeFillCandidates.markCommitted(payload.candidate);
+
+    /*
+     * A DETERMINISTIC RECORD ID: lineage, part, both revisions and the opening.
+     * Not a wall clock — two fills a millisecond apart must be distinguishable
+     * by WHAT they did, not by when. The same rule `repair/commit` follows.
+     */
+    const recordId = `${next.documentId}/${filledPart}@${String(payload.expectedSource.revision)}->${String(next.revision)}#${payload.expectedLoopId}`;
+
+    const entry = repairHistory.record({
       recordId,
-      partId: filledPart,
+      kind: UndoableChangeKind.HoleFill,
+      source: payload.expectedSource,
+      part: filledPart,
+      result: next,
+      // A fill is not one of the four conservative operations, and claiming one
+      // here would put a repair's name on a different change.
+      appliedOperations: [],
+      planHash: payload.expectedLoopId,
       boundaryLoopId: payload.expectedLoopId,
-      patchFaceCount,
-      render,
-      parts: describeParts(successor),
-      residentBytes: documentByteLength(successor),
-      // DOCUMENT totals, so the panel reports the model the user now has rather
-      // than only the part that changed.
-      triangleCount: documentTriangleCount(successor),
-      vertexCount: documentVertexCount(successor),
-      bounds: computeBounds(prepared),
-      undoable: entry.undoable,
-    },
-    transfer: [render.positions.buffer, render.normals.buffer],
-  });
-};
+      inverse,
+    });
+
+    return Promise.resolve({
+      value: {
+        handle: next,
+        parentRevision: payload.expectedSource.revision,
+        recordId,
+        partId: filledPart,
+        boundaryLoopId: payload.expectedLoopId,
+        patchFaceCount,
+        render,
+        parts,
+        residentBytes,
+        // DOCUMENT totals, so the panel reports the model the user now has
+        // rather than only the part that changed.
+        triangleCount: totalTriangles,
+        vertexCount: totalVertices,
+        bounds,
+        undoable: entry.undoable,
+      },
+      transfer: [render.positions.buffer, render.normals.buffer],
+    });
+  };
+}
+
+/** The application's commit handler. The only one the product ever registers. */
+export const holeFillCommitHandler = createHoleFillCommitHandler(PRODUCTION_COMMIT_WORK);
 
 /**
  * The successor document a part-level replacement produces.

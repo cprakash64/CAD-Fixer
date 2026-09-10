@@ -650,6 +650,30 @@ validated`, and the qualifier naming what was NOT examined travels with it.
   test asserts the commit path reaches no engine symbol: no `runHoleFill`, no
   `earClip`, no `assessPlanarity`, no `FaceBvh`, no narrowphase, and no import of
   `@cadfixer/mesh-hole-fill`. ONLY the patch faces travel.
+- **APPLY AND UNDO ARE OBSERVABLY ATOMIC** — Stage 4B-1B2-R2. EVERY fallible
+  piece of the answer — the render snapshot, the part descriptors, the totals,
+  the progress report — is built BEFORE `residentDocuments.replace`. What follows
+  the swap is a string concatenation, two bounded map writes and an object
+  literal, and a boundary test names the calls that may not reappear below it.
+  The reason is not tidiness: `buildRenderSnapshot` allocates megabytes and can
+  fail, and when it ran after the swap its failure was reported to the caller as
+  an ordinary error while the document had already changed. **"The worker's
+  internal state was consistent" is not the guarantee that matters** — the
+  guarantee is what the caller may OBSERVE, because the interface acts on it.
+  Preparing early introduces no stale race: `replace` re-checks the revision and
+  is the only arbiter, so an answer built against a document the user has moved
+  off is discarded rather than installed.
+- **THE FALLIBLE WORK IS INJECTED, AND IT IS A CONSTRUCTION SEAM.**
+  `createHoleFillCommitHandler` and `createRepairUndoHandler` take it as a
+  parameter so a test can make a large allocation fail on demand; source order
+  proves an ordering, not that the handler copes when a step actually fails. The
+  application builds exactly one handler of each, from `PRODUCTION_COMMIT_WORK`
+  and `PRODUCTION_UNDO_WORK`, and a boundary test asserts that. It is NOT a fault
+  switch: nothing in the product can select another.
+- **THE ONE REMAINING BOUNDARY IS THE WORKER DYING**, between the commit and the
+  reply. No synchronous rollback exists for that and none is pretended: Policy A
+  applies, the page CLEARS the model and says the session was lost, rather than
+  keeping a revision it can no longer verify.
 - **`holefill/commit` IS THE ONLY MUTATION, AND EVERY GUARD IS WORKER-SIDE.**
   Four identifiers, no geometry. `prepareCommit` checks existence, lifecycle,
   document, part, opening and revision — the caller's belief AND the store's own

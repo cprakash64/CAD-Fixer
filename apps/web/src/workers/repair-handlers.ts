@@ -27,6 +27,7 @@ import {
   type DocumentHandle,
   type OperationContext,
   type OperationHandler,
+  type PartDescriptor,
   type RenderSnapshot,
 } from '@cadfixer/geometry-runtime';
 import {
@@ -548,103 +549,157 @@ export const repairDiscardHandler: OperationHandler<'repair/discard'> = (payload
  * The result is validated like any other geometry output. Both reconstructions
  * promise byte-identical coordinates and original ordering — but a promise is
  * not a check, and rule 11 says a returned mesh is not success.
+ *
+ * AND UNDO IS OBSERVABLY ATOMIC — Stage 4B-1B2-R2. Every fallible piece of the
+ * answer is built BEFORE the authoritative swap, so a caller can never be told
+ * an undo failed after it succeeded.
  */
-export const repairUndoHandler: OperationHandler<'repair/undo'> = (payload, context) => {
-  const current = residentDocuments.resolve(payload.handle);
-  if (!isDocument(current)) throw current;
+/**
+ * The fallible work `repair/undo` performs, INJECTED so its failure can be
+ * exercised.
+ *
+ * The same construction seam `createHoleFillCommitHandler` uses, and for the
+ * same reason: source order proves the statements are in an order, not that the
+ * handler behaves when one of them fails. `PRODUCTION_UNDO_WORK` is the only
+ * value the application ever uses.
+ */
+export interface RepairUndoWork {
+  readonly buildRenderSnapshot: (mesh: CanonicalMesh) => RenderSnapshot;
+  readonly describeParts: (document: GeometryDocument) => readonly PartDescriptor[];
+}
 
-  const currentRevision = residentDocuments.revisionOf(payload.handle.documentId);
-  const preparation = repairHistory.prepareUndo(payload.recordId, payload.handle, currentRevision);
-  if (isAppError(preparation)) throw preparation;
+export const PRODUCTION_UNDO_WORK: RepairUndoWork = { buildRenderSnapshot, describeParts };
 
-  /*
-   * UNDO PUTS GEOMETRY BACK WHERE IT CAME FROM. The part is read from the
-   * RECORD, not from anything the caller sent and not from whatever part the UI
-   * happens to have selected — the patch was computed against one specific
-   * part's mesh, and applying it to another would reconstruct nonsense.
-   */
-  const repairedPart = preparation.entry.partId;
-  const currentPart = residentDocuments.resolvePart(payload.handle, repairedPart);
-  if (!isPart(currentPart)) throw currentPart;
+export function createRepairUndoHandler(work: RepairUndoWork): OperationHandler<'repair/undo'> {
+  return (payload, context) => {
+    const current = residentDocuments.resolve(payload.handle);
+    if (!isDocument(current)) throw current;
 
-  context.reportProgress(0.1, 'restoring previous version');
-  const inverse = preparation.inverse;
+    const currentRevision = residentDocuments.revisionOf(payload.handle.documentId);
+    const preparation = repairHistory.prepareUndo(
+      payload.recordId,
+      payload.handle,
+      currentRevision,
+    );
+    if (isAppError(preparation)) throw preparation;
 
-  /*
-   * A FILL RESTORES A REFERENCE; A REPAIR REBUILDS FROM A PATCH.
-   *
-   * The fill's retained mesh is the object the part held before the fill, so
-   * putting it back restores the document's sharing as well as its bytes: a
-   * sibling that still references it is once again sharing with this part, and
-   * every layer that keys on mesh identity — the render snapshot's per-mesh
-   * buffers, the GPU geometry, the 3MF object resources — follows from that
-   * without anyone comparing coordinates.
-   */
-  const restored =
-    inverse.kind === UndoableChangeKind.HoleFill
-      ? inverse.previousMesh
-      : restoreFromInverse(currentPart.mesh, inverse.patch);
-  const expectedFaceCount =
-    inverse.kind === UndoableChangeKind.HoleFill
-      ? inverse.sourceFaceCount
-      : inverse.patch.sourceFaceCount;
+    /*
+     * UNDO PUTS GEOMETRY BACK WHERE IT CAME FROM. The part is read from the
+     * RECORD, not from anything the caller sent and not from whatever part the UI
+     * happens to have selected — the patch was computed against one specific
+     * part's mesh, and applying it to another would reconstruct nonsense.
+     */
+    const repairedPart = preparation.entry.partId;
+    const currentPart = residentDocuments.resolvePart(payload.handle, repairedPart);
+    if (!isPart(currentPart)) throw currentPart;
 
-  // Rule 11: the output of a geometry operation is validated before it is
-  // accepted, no matter how confident the operation is. A retained mesh was
-  // validated when it was admitted, and it is checked again here rather than
-  // trusted — the rule does not have an exemption for geometry we recognise.
-  assertMeshStructure(restored, 'repair/undo');
+    context.reportProgress(0.1, 'restoring previous version');
+    const inverse = preparation.inverse;
 
-  if (triangleCount(restored) !== expectedFaceCount) {
-    throw invalidState('The restored model does not have the expected number of triangles.', {
-      expected: expectedFaceCount,
-      actual: triangleCount(restored),
+    /*
+     * A FILL RESTORES A REFERENCE; A REPAIR REBUILDS FROM A PATCH.
+     *
+     * The fill's retained mesh is the object the part held before the fill, so
+     * putting it back restores the document's sharing as well as its bytes: a
+     * sibling that still references it is once again sharing with this part, and
+     * every layer that keys on mesh identity — the render snapshot's per-mesh
+     * buffers, the GPU geometry, the 3MF object resources — follows from that
+     * without anyone comparing coordinates.
+     */
+    const restored =
+      inverse.kind === UndoableChangeKind.HoleFill
+        ? inverse.previousMesh
+        : restoreFromInverse(currentPart.mesh, inverse.patch);
+    const expectedFaceCount =
+      inverse.kind === UndoableChangeKind.HoleFill
+        ? inverse.sourceFaceCount
+        : inverse.patch.sourceFaceCount;
+
+    // Rule 11: the output of a geometry operation is validated before it is
+    // accepted, no matter how confident the operation is. A retained mesh was
+    // validated when it was admitted, and it is checked again here rather than
+    // trusted — the rule does not have an exemption for geometry we recognise.
+    assertMeshStructure(restored, 'repair/undo');
+
+    if (triangleCount(restored) !== expectedFaceCount) {
+      throw invalidState('The restored model does not have the expected number of triangles.', {
+        expected: expectedFaceCount,
+        actual: triangleCount(restored),
+      });
+    }
+
+    /*
+     * THE SECOND HALF OF THE FILL'S POSTCONDITION, and the reason the record keeps
+     * two counts it never uses to rebuild anything. A retained reference is only
+     * correct if it is the reference that was retained: comparing the mesh's index
+     * length against what the commit recorded catches a record wired to the wrong
+     * part or built from the wrong mesh, at O(1), before it replaces geometry.
+     */
+    if (
+      inverse.kind === UndoableChangeKind.HoleFill &&
+      restored.indices.length !== inverse.sourceIndexCount
+    ) {
+      throw invalidState('The retained previous version does not match what was recorded.', {
+        expected: inverse.sourceIndexCount,
+        actual: restored.indices.length,
+      });
+    }
+
+    const successor = successorDocument(current, repairedPart, restored, 'repair/undo');
+
+    /*
+     * ---- EVERYTHING THAT CAN FAIL, BEFORE ANYTHING CHANGES ---- Stage 4B-1B2-R2.
+     *
+     * `buildRenderSnapshot` allocates: for a large part it copies megabytes and
+     * derives per-vertex normals. When it ran AFTER the swap, its failure threw
+     * out of the handler and the caller was told the UNDO had failed — while the
+     * document had already been restored. A user told their undo failed will press
+     * it again, or trust a screen that is showing the wrong revision.
+     *
+     * So the whole answer is built against the PROPOSED document first, and the
+     * swap is the last thing that can go either way. `replace` re-checks the
+     * revision itself, so preparing early cannot introduce a stale race: an answer
+     * built against a document the user has moved off is discarded here.
+     */
+    const render = work.buildRenderSnapshot(restored);
+    const parts = work.describeParts(successor);
+    const residentBytes = documentByteLength(successor);
+    const totalTriangles = documentTriangleCount(successor);
+    const totalVertices = documentVertexCount(successor);
+    const bounds = computeBounds(restored);
+
+    /*
+     * ---- THE COMMIT. Nothing below may fail. ----
+     *
+     * A bounded map write, another bounded map write, and an object literal built
+     * from values that already exist.
+     */
+    const next = residentDocuments.replace(payload.handle, successor);
+    if (isAppError(next)) throw next;
+    repairHistory.markUndone(payload.recordId);
+    // The revision moved, so any hole-fill candidate for this document is stale.
+    holeFillCandidates.releaseDocument(next.documentId);
+
+    return Promise.resolve({
+      value: {
+        handle: next,
+        revertedRevision: payload.handle.revision,
+        restoredRevision: preparation.entry.parentRevision,
+        recordId: payload.recordId,
+        kind: preparation.entry.kind,
+        partId: repairedPart,
+        appliedOperations: preparation.entry.appliedOperations,
+        render,
+        parts,
+        residentBytes,
+        triangleCount: totalTriangles,
+        vertexCount: totalVertices,
+        bounds,
+      },
+      transfer: [render.positions.buffer, render.normals.buffer],
     });
-  }
+  };
+}
 
-  /*
-   * THE SECOND HALF OF THE FILL'S POSTCONDITION, and the reason the record keeps
-   * two counts it never uses to rebuild anything. A retained reference is only
-   * correct if it is the reference that was retained: comparing the mesh's index
-   * length against what the commit recorded catches a record wired to the wrong
-   * part or built from the wrong mesh, at O(1), before it replaces geometry.
-   */
-  if (
-    inverse.kind === UndoableChangeKind.HoleFill &&
-    restored.indices.length !== inverse.sourceIndexCount
-  ) {
-    throw invalidState('The retained previous version does not match what was recorded.', {
-      expected: inverse.sourceIndexCount,
-      actual: restored.indices.length,
-    });
-  }
-
-  const successor = successorDocument(current, repairedPart, restored, 'repair/undo');
-  const next = residentDocuments.replace(payload.handle, successor);
-  if (isAppError(next)) throw next;
-  repairHistory.markUndone(payload.recordId);
-  // The revision moved, so any hole-fill candidate for this document is stale.
-  holeFillCandidates.releaseDocument(next.documentId);
-
-  const render = buildRenderSnapshot(restored);
-  context.reportProgress(1, 'restored');
-
-  return Promise.resolve({
-    value: {
-      handle: next,
-      revertedRevision: payload.handle.revision,
-      restoredRevision: preparation.entry.parentRevision,
-      recordId: payload.recordId,
-      kind: preparation.entry.kind,
-      partId: repairedPart,
-      appliedOperations: preparation.entry.appliedOperations,
-      render,
-      parts: describeParts(successor),
-      residentBytes: documentByteLength(successor),
-      triangleCount: documentTriangleCount(successor),
-      vertexCount: documentVertexCount(successor),
-      bounds: computeBounds(restored),
-    },
-    transfer: [render.positions.buffer, render.normals.buffer],
-  });
-};
+/** The application's undo handler. The only one the product ever registers. */
+export const repairUndoHandler = createRepairUndoHandler(PRODUCTION_UNDO_WORK);

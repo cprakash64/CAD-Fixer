@@ -383,6 +383,37 @@ operation, and "the patch promised" is not a check.
 The full reasoning, and why the revision does not go backwards, is
 [ADR 0011](../adr/0011-repair-undo-revisions.md).
 
+#### OPEN DEFECT — conservative repair's undo does not restore the document
+
+**Found by Stage 4B-1B2-R1. Not fixed. This is the next correctness task.**
+
+`restoreFromInverse` rebuilds the pre-repair mesh from the retained patch, and
+two things follow that were not intended:
+
+1. **It loses structural sharing.** The rebuilt mesh is a NEW object, so a
+   document whose parts shared one `CanonicalMesh` comes back holding two
+   byte-equal ones — permanently, along with two GPU geometries and two 3MF
+   object resources. Undo, the operation whose whole promise is that nothing
+   happened, degrades the document. This is exactly the defect Stage 4B-1B2-R1
+   fixed for hole fills, by retaining the previous mesh REFERENCE and restoring
+   it; the same correction has not been applied here.
+2. **It rebuilds an indexed mesh as soup.** `restoreFromInverse` writes nine
+   coordinates per face and an identity index buffer. For an STL that is what the
+   source was anyway, so the round trip is exact — which is why this has never
+   shown up. For an **OBJ or 3MF import**, whose meshes are genuinely indexed,
+   undoing a repair returns a mesh with the same triangles and a different
+   representation: more vertices, different bytes, a larger document, and an
+   export that no longer matches what was imported.
+
+Neither is a hole-fill regression — both predate Stage 4B and neither is reached
+by the hole-fill workflow, whose undo restores a retained reference. Fixing it is
+deliberately NOT part of Stage 4B-1B2: the fill's correction is self-contained,
+and reworking a repair's inverse is its own change with its own evidence.
+
+**Do not read this as accepted architecture.** It is a known defect with a known
+shape and a known fix — retain the previous mesh reference, as the fill's inverse
+now does — and it should be corrected before the next repair-adjacent stage.
+
 ### The report cache
 
 `repair/plan` and `repair/create-candidate` reuse the topology report the

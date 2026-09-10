@@ -729,6 +729,52 @@ describe('lifecycle: nothing survives a context change', () => {
     expect(store.getSnapshot().holeFill.inventory.state).toBe(HoleFillInventoryState.Unavailable);
   });
 
+  it('losing the worker after an applied fill leaves nothing stale to trust', () => {
+    /*
+     * THE TRANSPORT BOUNDARY — Stage 4B-1B2-R2. Preparing the whole answer
+     * before the swap removes every ORDINARY way a committed fill can be
+     * reported as a failure. What it cannot remove is the worker dying between
+     * the commit and the reply: the mutation is in that worker's memory and no
+     * synchronous rollback exists.
+     *
+     * Policy A is the answer, and this asserts the page actually follows it. The
+     * model is CLEARED rather than left on screen at a revision the page can no
+     * longer verify — so a user is never shown a stale document as though the
+     * fill had not happened, and no control offers to act on one.
+     */
+    const store = readyStore();
+    withCandidate(store);
+    store.beginHoleFillCommit();
+    store.applyHoleFillResult({
+      handle: handle(2),
+      parentRevision: 1,
+      recordId: 'fill-1',
+      partId: PART,
+      boundaryLoopId: 'bl-a',
+      patchFaceCount: 2,
+      undoable: true,
+      render: render(),
+      parts: [descriptor(PART, 14)],
+      bounds: bounds(),
+      triangleCount: 14,
+      vertexCount: 42,
+      residentBytes: 2048,
+    });
+    expect(store.getSnapshot().holeFill.lastApplied?.undoable).toBe(true);
+
+    store.loseGeometrySession('The geometry worker stopped.');
+
+    const state = store.getSnapshot();
+    // NOT "the pre-fill model" and NOT "the filled model" — no model at all,
+    // plus a reason. Guessing either way would be the page asserting a revision
+    // nothing can confirm.
+    expect(state.model).toBeUndefined();
+    expect(state.geometrySessionLost).toBe('The geometry worker stopped.');
+    expect(state.holeFill.lastApplied).toBeUndefined();
+    expect(state.holeFill.candidate).toBeUndefined();
+    expect(state.holeFill.handle).toBeUndefined();
+  });
+
   it('losing the geometry session clears every part of it', () => {
     const store = readyStore();
     withCandidate(store);
