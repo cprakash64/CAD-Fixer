@@ -314,3 +314,69 @@ describe('repair peak budget', () => {
     expectLimitError(requestRepairPeak('repair/plan', 1000, {}, -5));
   });
 });
+
+/* ------------------------------------------- Stage 5A: no dead ceilings --- */
+
+describe('every declared ceiling is enforced by something', () => {
+  /**
+   * A CEILING NOBODY CHECKS IS WORSE THAN NO CEILING, because it reads like a
+   * guarantee in the budget table while permitting anything at runtime.
+   *
+   * Stage 5A's resource audit found two of them. `maxResidentBytes` and
+   * `maxExportPeakBytes` are declared here and have no production call site:
+   * `checkResident`, `checkExportPeak`, `estimateExportPeak` and
+   * `residentBytesFor` are reached only by this file. The bytes ARE bounded —
+   * resident geometry by `mesh-core`'s `maxTotalGeometryBytes` at the same 768
+   * MiB, and export by `export-contract.ts`'s own incrementally-enforced
+   * `maxOutputBytes` / `maxSerialisedBytes` — so this was drift, not a hole.
+   *
+   * This test exists so the drift cannot grow. Every field is either enforced
+   * from production through one of this module's own request/check functions, or
+   * NAMED BELOW as superseded, with where the real gate lives. Adding a field
+   * without doing one of those two things fails here.
+   */
+  const SUPERSEDED_ELSEWHERE: Readonly<Record<string, string>> = {
+    // Enforced by `assertGeometryDocument` via DEFAULT_DOCUMENT_LIMITS
+    // .maxTotalGeometryBytes, which is the same 768 MiB and runs on every
+    // document before it can become resident.
+    maxResidentBytes: 'mesh-core document-validation maxTotalGeometryBytes',
+    // Enforced by file-formats export-contract maxOutputBytes (256 MiB) and
+    // maxSerialisedBytes (512 MiB), both checked before a chunk is retained.
+    maxExportPeakBytes: 'file-formats export-contract maxOutputBytes',
+    // The render snapshot is main-thread and disposable; its size is a
+    // consequence of the resident triangle count, which the document gate above
+    // already bounds. `renderBytesFor` is used to REPORT it, not to gate it.
+    maxRenderBytes: 'bounded transitively by the resident document gate',
+  };
+
+  const ENFORCED_FROM_PRODUCTION: readonly string[] = [
+    'maxImportPeakBytes',
+    'maxAnalysisWorkspaceBytes',
+    'maxRepairPeakBytes',
+  ];
+
+  it('accounts for every field of the default budget', () => {
+    const declared = Object.keys(DEFAULT_SESSION_MEMORY_BUDGET).sort();
+    const accounted = [...ENFORCED_FROM_PRODUCTION, ...Object.keys(SUPERSEDED_ELSEWHERE)].sort();
+
+    expect(
+      declared,
+      'a new memory ceiling must either be enforced from production or recorded here as superseded',
+    ).toEqual(accounted);
+  });
+
+  it('states where each superseded ceiling is actually enforced', () => {
+    // Not a tautology: it fails if someone adds a field to the exemption list
+    // without saying which gate replaces it.
+    for (const [field, gate] of Object.entries(SUPERSEDED_ELSEWHERE)) {
+      expect(gate.length, `${field} needs a named real gate`).toBeGreaterThan(10);
+    }
+  });
+
+  it('keeps every declared ceiling a positive finite number of bytes', () => {
+    for (const [field, value] of Object.entries(DEFAULT_SESSION_MEMORY_BUDGET)) {
+      expect(Number.isFinite(value), `${field} must be finite`).toBe(true);
+      expect(value, `${field} must be positive`).toBeGreaterThan(0);
+    }
+  });
+});

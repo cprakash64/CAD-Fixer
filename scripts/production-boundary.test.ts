@@ -1186,6 +1186,43 @@ describe('the hole-fill engine stays where Stage 4B-1B1 put it', () => {
     expect(offenders, 'the corruption path must remain test-only').toEqual([]);
   });
 
+  it('wraps the application in an error boundary, outside the providers', () => {
+    /*
+     * STAGE 5A. React unmounts the whole tree when a component throws during
+     * render, so without a boundary one unexpected interface bug replaced the
+     * entire application with a blank page — no message, no reload affordance,
+     * and a model still sitting in a worker the user could no longer reach.
+     *
+     * ASSERTED AS AN ORDERING, not merely as an import. The boundary has to be
+     * OUTSIDE the providers: a throw inside a provider's own render would
+     * otherwise be outside anything that could catch it, which is exactly the
+     * case being defended against.
+     */
+    const entry = readFileSync(join(REPO_ROOT, 'apps', 'web', 'src', 'main.tsx'), 'utf8');
+    const boundary = entry.indexOf('<ErrorBoundary>');
+    const workspace = entry.indexOf('<WorkspaceProvider');
+    const app = entry.indexOf('<App />');
+
+    expect(boundary, 'the application must be wrapped in ErrorBoundary').toBeGreaterThan(-1);
+    expect(workspace).toBeGreaterThan(boundary);
+    expect(app).toBeGreaterThan(workspace);
+  });
+
+  it('sends nothing off-origin when the interface fails', () => {
+    /*
+     * A crash reporter would be the first thing in this application to transmit
+     * anything, and the privacy architecture has no exception for one. The
+     * boundary's only sink is the console.
+     */
+    const boundary = readFileSync(
+      join(REPO_ROOT, 'apps', 'web', 'src', 'components', 'ErrorBoundary.tsx'),
+      'utf8',
+    );
+    for (const banned of ['fetch(', 'XMLHttpRequest', 'sendBeacon', 'WebSocket', 'new Image(']) {
+      expect(boundary, `the error boundary must not reach for ${banned}`).not.toContain(banned);
+    }
+  });
+
   it('constructs the fill worker from exactly one place', () => {
     const files = sourceFilesUnder(join(REPO_ROOT, 'apps', 'web', 'src')).filter(
       (file) => !/\.test\.(ts|tsx)$/.test(file),

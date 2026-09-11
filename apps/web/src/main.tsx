@@ -1,6 +1,7 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { App } from './App';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import { GeometryClientProvider } from './runtime/client-context';
 import { GeometryClient } from './runtime/geometry-client';
 import { WorkspaceProvider } from './state/store-context';
@@ -37,12 +38,22 @@ const geometryClient = new GeometryClient({
   },
 });
 
+/*
+ * THE BOUNDARY IS OUTSIDE THE PROVIDERS, deliberately.
+ *
+ * A throw inside a provider's own render would otherwise be outside anything
+ * that could catch it, which is the blank-page case this exists to prevent. It
+ * renders no geometry and reads no store, so it cannot itself be the thing that
+ * fails.
+ */
 createRoot(container).render(
   <StrictMode>
-    <WorkspaceProvider store={store}>
-      <GeometryClientProvider client={geometryClient}>
-        <App />
-      </GeometryClientProvider>
-    </WorkspaceProvider>
+    <ErrorBoundary>
+      <WorkspaceProvider store={store}>
+        <GeometryClientProvider client={geometryClient}>
+          <App />
+        </GeometryClientProvider>
+      </WorkspaceProvider>
+    </ErrorBoundary>
   </StrictMode>,
 );
