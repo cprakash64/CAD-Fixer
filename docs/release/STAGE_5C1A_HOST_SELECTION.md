@@ -5,6 +5,16 @@
 **No deployment, no provider account, no DNS change was made.** This document is
 research and a plan.
 
+> **SUPERSEDED BY USER INFRASTRUCTURE DECISION (2026-09-11).** The production
+> target is now the user's **existing Hostinger VPS**, not Cloudflare. Cloudflare
+> Workers Static Assets remains **technically qualified** — it is no longer the
+> selected deployment target, which is an infrastructure choice, not a defect.
+> The current plan is
+> [`STAGE_5C_HOSTINGER_VPS_PLAN.md`](STAGE_5C_HOSTINGER_VPS_PLAN.md). The
+> Cloudflare deployment work on `stage-5c1b1-cloudflare-preview` was never
+> merged and must not be. Everything below is retained as auditable historical
+> reasoning.
+
 > **SUPERSEDED IN PART — read Stage 5C-1A-R1 at the end of this document before
 > acting on anything here.** The provider recommendation in §8 (Cloudflare
 > Pages) was corrected on 2026-09-11 to **Cloudflare Workers Static Assets**,
