@@ -1,6 +1,10 @@
 # Stage 5C (Hostinger) — VPS production architecture and predeployment audit
 
-**Status: PARTIAL. Architecture qualified; on-server audit BLOCKED on SSH access.**
+**Status: AUDIT COMPLETE. Architecture qualified. No server change performed.**
+
+_Stage 5C-Hostinger-R1 (2026-09-11): SSH key access was granted for the deployment
+account, and the read-only audit below is now measured on the server rather than
+inferred from outside._
 
 The user has chosen to deploy CAD Fixer on their existing Hostinger VPS. This
 document records that decision, everything the audit could establish, the
@@ -56,103 +60,148 @@ Node runtime, no model upload.
 
 ## 3. What the audit established
 
-Everything below was obtained **without logging in** — reverse DNS, an SSH
-protocol banner, and unauthenticated HTTP/TLS against the user's own server.
-Nothing was modified.
+Measured read-only over SSH as the deployment account, plus unauthenticated
+checks from outside. **Nothing was modified.**
 
-| Property                  | Finding                                                                                                         | How                              |
-| ------------------------- | --------------------------------------------------------------------------------------------------------------- | -------------------------------- |
-| VPS address               | `<VPS_IP>`                                                                                                      | shell history + `known_hosts`    |
-| Reverse DNS               | **`srv<NNNNNN>.hstgr.cloud`** — confirms a Hostinger VPS                                                        | PTR lookup                       |
-| OS                        | **Ubuntu** — `OpenSSH_9.6p1 Ubuntu-3ubuntu13.19` and `nginx/1.24.0 (Ubuntu)` both indicate **Ubuntu 24.04 LTS** | SSH banner, HTTP `Server` header |
-| SSH                       | OpenSSH 9.6p1, port 22 open, offers `publickey,password`                                                        | SSH handshake                    |
-| Host key                  | `ssh-ed25519 <recorded outside the repository>`                                                                 | SSH handshake                    |
-| Web server                | **nginx/1.24.0 (Ubuntu) already installed and serving**                                                         | HTTP `Server` header             |
-| Ports 22 / 80 / 443       | **all OPEN from the public internet**                                                                           | TCP connect                      |
-| Existing site on `:80`    | a **Streamlit** application (`<title>Streamlit</title>`), `Cache-Control: no-cache`, last modified 2025-02-27   | HTTP GET                         |
-| TLS on `:443`             | Let's Encrypt certificate `CN=<legacy-domain>` (+`www`), **EXPIRED 2025-05-29**                                 | `openssl s_client`               |
-| `<legacy-domain>`         | **does not resolve at all** — no A, no NS, no MX                                                                | DNS                              |
-| Known Linux users         | `<deploy-user>`, `root`                                                                                         | shell history                    |
-| Other projects on the box | several unrelated application directories under `/home/<deploy-user>/apps/`                                     | shell history                    |
+| Property            | Finding                                                                          |
+| ------------------- | -------------------------------------------------------------------------------- |
+| Host                | Hostinger VPS `srv<NNNNNN>`, `<VPS_IP>`, Phoenix US                              |
+| OS                  | **Ubuntu 24.04.2 LTS (Noble)**, kernel `6.8.0-110-generic`, `x86_64`             |
+| CPU                 | **4 cores**, AMD EPYC 7543P                                                      |
+| Memory              | **15 GiB total**, 3.5 GiB used, ~12 GiB available                                |
+| **Swap**            | **0 B — none configured**                                                        |
+| Disk                | `/` 193 G, **67 G used, 126 G available (35 %)**                                 |
+| Uptime / load       | 134 days, load **0.12 / 0.17 / 0.16** — essentially idle                         |
+| Deployment account  | `<deploy-user>` (uid 1001), groups: `sudo`, `users`, **`docker`**                |
+| Passwordless sudo   | **NOT available** (`sudo -n` → 1)                                                |
+| Web server          | **nginx/1.24.0 (Ubuntu)**, worker user **`www-data`** (read from `nginx.conf:1`) |
+| Certbot             | **2.9.0 installed, `certbot.timer` ACTIVE** (ran 6 h ago, next in 8 h)           |
+| Unattended upgrades | **enabled and active**                                                           |
+| fail2ban            | **not installed**                                                                |
 
-### 3.1 THE VPS IS NOT DEDICATED TO CAD FIXER — the hard safety gate
+All panel figures reconcile with the server: 4 CPU, 16 GB RAM (15 GiB usable),
+200 GB disk (193 G usable), ~67 GB used. **No discrepancy.**
 
-This is the most important finding in this document.
+### 3.1 THE VPS IS SHARED — three enabled vhosts, two live products
 
-The server **already runs other work**: a live Streamlit application answering
-on port 80, an nginx vhost carrying a `<legacy-domain>` certificate, and
-several Luna AI project directories under `/home/<deploy-user>/apps/`. At least one of
-those is serving the public internet right now.
+`/etc/nginx/sites-enabled/` contains **three** symlinks, not two. The Debian
+`default` site exists in `sites-available` but is **not enabled**.
 
-Consequences, and none of them are optional:
+| vhost           | `server_name`                    | Listens             | Backend                                 | State                                        |
+| --------------- | -------------------------------- | ------------------- | --------------------------------------- | -------------------------------------------- |
+| `<site-a>`      | `<site-a-domain>`, `www`         | 80 **only**         | `proxy_pass 127.0.0.1:8501` (Streamlit) | **live over HTTP; HTTPS BROKEN**             |
+| `<legacy-site>` | `<legacy-domain>`, `www`         | 80 → 301, 443 ssl   | `proxy_pass localhost:8080`             | **dead — DNS gone, cert expired 2025-05-29** |
+| `<site-b>`      | `<site-b-domain>`, `www`, `api.` | 443 ssl (+80 → 301) | `proxy_pass 127.0.0.1:3000` and `:8020` | **healthy, cert valid to 2026-11-10**        |
 
-- **Any nginx change can break a running site.** A new `server` block, a
-  changed `default_server`, or a careless reload affects everything nginx
-  serves. Every future change is preceded by a config backup, `nginx -t`, and
-  `reload` (never `restart`).
-- **CAD Fixer must not become the catch-all.** It gets its own `server` block
-  matched by `server_name`. It must NOT be marked `default_server`, or it would
-  capture traffic currently going to the Streamlit app.
-- **Nothing belonging to another project is to be stopped, moved, reconfigured
-  or deleted** — not to tidy up, not to free a port, not to standardise.
-- **The expired certificate is somebody else's vhost.** It is a finding, not a
-  thing to fix under this task.
+Every enabled vhost is a **reverse proxy**. **None serves static files**, and
+none has a `root` under `/var/www`. CAD Fixer would be the first static site on
+this server.
 
-### 3.2 Firewall — already permissive, at both layers
+`<site-b>` runs as a **Docker Compose stack** — web, api, worker, scheduler,
+`redis:7-alpine`, `postgres:16-alpine` — with only `127.0.0.1:3000` and
+`127.0.0.1:8020` published to the loopback interface.
 
-Ports 22, 80 and 443 all accept connections from outside. Hostinger maintains
-a **managed VPS firewall in hPanel that is separate from the OS firewall**, and
-an OS-level `ufw status` alone would not have proved inbound traffic works.
-Reachability from off-host proves **both layers already allow** 80 and 443, so
-**no firewall change is expected** for this deployment. The OS firewall's own
-rule set still needs `ufw status verbose` once SSH access exists, for the record.
+### 3.2 THE `default_server` HAZARD — the most important finding
 
-### 3.3 What the audit could NOT establish
+**There is no `default_server` directive anywhere** in `nginx.conf`,
+`conf.d/` or any enabled site.
 
-Blocked on SSH, all of it read-only and required before any mutation:
+When no server block is marked `default_server`, **nginx makes the FIRST block
+loaded for a given `listen` socket the implicit default**, and
+`include /etc/nginx/sites-enabled/*` loads in glob (alphabetical) order. So
+today:
 
-RAM · swap · disk capacity and free space · CPU count · load and uptime ·
-full running-service list · Docker containers · `nginx -T` vhost inventory and
-roots · `ufw status verbose` · Certbot presence, certificates and renewal timer
-· `authorized_keys` · SSH root-login and password-auth policy as configured ·
-`fail2ban` · unattended-upgrades · the nginx worker user · whether
-`/etc/nginx/mime.types` is stock · existing backup/snapshot evidence.
+- **`:80` default → `<site-a>`** (sorts first) — which is why a request to the
+  bare IP returns the Streamlit page.
+- **`:443` default → `<legacy-site>`** (first block with `listen 443`) — which is
+  why the bare IP presents the **expired** certificate, and why `<site-a>` over
+  HTTPS also lands on that expired certificate, since `<site-a>` has no TLS
+  block of its own.
 
-## 4. SSH access — the blocker
+**The consequence for CAD Fixer is concrete and easy to get wrong.**
+`conf.d/*.conf` is included at `nginx.conf:59`, **before** `sites-enabled/*` at
+line 60. So a CAD Fixer config placed in `conf.d/`, **or** named
+`cad-fixer` in `sites-enabled` (which sorts before `<site-a>`), would
+**silently become the implicit default for both `:80` and `:443`** and hijack
+every IP-based and unmatched-`Host` request away from the existing site.
 
-A read-only `BatchMode` connectivity test was run against both known users:
+Two controls, both required:
+
+1. **Name the site file so it sorts LAST** in `sites-enabled` — e.g.
+   `zz-cad-fixer`. Never place it in `conf.d/`.
+2. **Verify after install** with `sudo nginx -T` that the first block for each
+   of `:80` and `:443` is unchanged, before reloading.
+
+Marking the existing sites `default_server` explicitly would be the more robust
+fix, but it **mutates another project's config** and is out of scope here.
+Recorded as a recommendation for the owner.
+
+### 3.3 Listeners and exposure
+
+`ss -lntup` shows several services bound to `0.0.0.0`: `8010` (uvicorn),
+`3010` (next-server), `8501` (Streamlit), `8080`, and **`631` (CUPS)**.
+
+Measured from off-host, **only `22`, `80` and `443` are reachable**; `631`,
+`3010`, `8010`, `8080`, `8501`, `5432` and `11434` are all filtered. So a
+firewall **is** active and effective, even though the hPanel firewall shows
+0 rules — the filtering is happening at the OS layer (`ufw`, whose rule set
+needs sudo to read).
+
+**This is worth stating plainly: those five services are protected by the
+firewall, not by their bind address.** If the OS firewall were ever flushed,
+five services — including a print daemon and an LLM runtime — would become
+publicly reachable in that instant. Unrelated VPS debt, not a CAD Fixer
+blocker, but the owner should know.
+
+Correctly bound to loopback: PostgreSQL `5432`, Ollama `11434`, and the
+`<site-b>` containers.
+
+### 3.4 Filesystem
+
+`/var/www/cad-fixer` **does not exist — the path is free.** `/var/www` is
+`root:root drwxr-xr-x`, so the deployment account **cannot create it**; initial
+setup needs one sudo step.
+
+`/var/www` currently holds unreferenced legacy application source
+(~840 MB across two directories) that **no enabled vhost points at**. It is not
+touched. `/srv` is empty. Application code for the live sites lives under
+`/home/<deploy-user>/apps/` (~2.5 GB).
+
+With **126 GB free**, a CAD Fixer release at 2.45 MiB is 0.002 % of free space.
+
+## 4. SSH access — RESOLVED
+
+Key authentication now works for the deployment account:
 
 ```
-<deploy-user>@<VPS_IP>: Permission denied (publickey,password).
-root@<VPS_IP>: Permission denied (publickey,password).
+$ ssh -o BatchMode=yes <deploy-user>@<VPS_IP> 'printf "CAD_FIXER_SSH_OK\n"'
+CAD_FIXER_SSH_OK
 ```
 
-The TCP connection and SSH handshake **succeed**, so the server is reachable and
-healthy. What fails is authentication: this Mac's only key,
-`~/.ssh/id_ed25519` , is
-offered and **rejected** for both users, `ssh-agent` holds no identities, and
-`~/.ssh/config` has no Hostinger alias (its single `akida-cloud` entry is an
-unrelated host). The shell history shows past sessions, so the user has been
-authenticating **interactively with a password**.
+`root` is **not** used for audit or deployment, and will not be.
 
-Per the stage rules this is a full stop: no brute force, no credential
-prompting, and no request for a password or private key in chat.
+**Passwordless sudo is not available** (`sudo -n` returns 1). That is not a
+deployment blocker — it means the handful of privileged steps
+(`mkdir /var/www/cad-fixer`, installing the site file, `nginx -t`, `reload`,
+Certbot) are run by the user or with an interactive password, never automated.
+Everything else — upload, hashing, symlink activation — is unprivileged once the
+release root exists and is owned by the deployment account.
 
-**Remediation — the user runs this in their own terminal**, where the password
-prompt is answered locally and never enters this conversation:
+### 4.1 Root-only items still outstanding
+
+These need `sudo` and were deliberately not run. Exact read-only bundle for the
+user:
 
 ```bash
-ssh-copy-id -i ~/.ssh/id_ed25519.pub <deploy-user>@<VPS_IP>
+sudo ufw status verbose
+sudo nginx -T | grep -nE 'server_name|listen|root|proxy_pass|default_server'
+sudo certbot certificates
+sudo systemctl status certbot.timer --no-pager
+sudo sshd -T | grep -iE 'passwordauthentication|permitrootlogin'
+sudo cat /etc/ssh/sshd_config.d/50-cloud-init.conf
 ```
 
-Then confirm key-only access works:
-
-```bash
-ssh -o BatchMode=yes <deploy-user>@<VPS_IP> 'echo OK'
-```
-
-If that account is not the right deployment account, substitute it. Whether a
-dedicated deploy user is warranted is §12.
+None of it blocks planning; all of it should be captured before mutation.
 
 ## 5. Release directory layout
 
@@ -312,11 +361,18 @@ add_header X-Content-Type-Options       "nosniff" always;
 add_header Referrer-Policy              "no-referrer" always;
 ```
 
+Installed as **`/etc/nginx/sites-available/zz-cad-fixer`**, symlinked into
+`sites-enabled` under the same name so it loads LAST and cannot become the
+implicit default for `:80` or `:443` — see §3.2. Never in `conf.d/`.
+
 ```nginx
 server {
     listen 443 ssl;
     http2 on;
-    server_name <STAGING_HOSTNAME>;          # never default_server
+    server_name <CAD_FIXER_STAGING_HOST>;    # explicit; never default_server
+
+    access_log /var/log/nginx/cad-fixer.access.log;
+    error_log  /var/log/nginx/cad-fixer.error.log;
 
     root /var/www/cad-fixer/current;
     index index.html;
@@ -357,9 +413,10 @@ application/wasm         wasm;
 ```
 
 So **no MIME change is expected**: `.wasm` should already be `application/wasm`
-and `.js` a valid JavaScript type for module workers. Two caveats: confirm the
-Ubuntu package has not patched `mime.types` (`grep wasm /etc/nginx/mime.types`),
-and prove it on the wire (HV09) rather than from the file.
+and `.js` a valid JavaScript type for module workers. **Confirmed on the server itself** — `/etc/nginx/mime.types:55` contains
+`application/wasm wasm;` and line 8 contains `application/javascript js;`. The
+Ubuntu package is unpatched, so **no MIME change is required**. It is still
+proven on the wire by HV09 rather than trusted from the file.
 
 If a mapping were ever missing, the addition is **narrow** — a `types { }` entry
 alongside the existing include — never a replacement of the MIME configuration,
@@ -433,8 +490,8 @@ writable by nobody else:
   files                       <deploy>:<nginx-group>   644
 ```
 
-The nginx worker user must be read from the running config (Ubuntu stock is
-`www-data`) rather than assumed. nginx needs **read** access only; it must never
+**Confirmed: the nginx worker user is `www-data`** (`/etc/nginx/nginx.conf:1`),
+read from the running config rather than assumed. nginx needs **read** access only; it must never
 be able to modify a release. **No `chmod -R 777`**, no world-writable path.
 
 ## 17. Deploy user
@@ -470,22 +527,30 @@ compute infrastructure is needed or to be installed.**
 
 ## 20. Security findings
 
-**Release blockers — none identified so far**, but the audit is incomplete.
+**CAD Fixer release blockers: none.**
 
-**Findings to note, not to fix under this task:**
+**Unrelated VPS security debt** — recorded for the owner, not fixed here:
 
-- **SSH password authentication is enabled** (the server offers
-  `publickey,password`). Once key access works, disabling password auth is
-  ordinary hardening — but it touches a shared box and belongs to its own
-  change, not to a CAD Fixer deployment.
-- **An expired TLS certificate is being served** on :443 for a domain that no
-  longer resolves. Another project's vhost; evidence that certificate renewal
-  is unmonitored here, which matters because CAD Fixer will depend on renewal.
-- Root login policy, `fail2ban`, unattended-upgrades and exposed database
-  listeners are **unknown** pending SSH.
+- **SSH password authentication appears to be ENABLED, and root login is
+  permitted.** `sshd_config:121` sets `PermitRootLogin yes`.
+  `sshd_config.d/60-cloudimg-settings.conf` sets `PasswordAuthentication no`,
+  but `50-cloud-init.conf` sorts first and sshd is first-match-wins; that file
+  is root-only and its 27-byte length is exactly `PasswordAuthentication yes`.
+  **The authoritative evidence is the server's own behaviour**: the SSH
+  handshake advertises `publickey,password`. Confirm with `sudo sshd -T`.
+- **fail2ban is not installed.** Combined with the above, an internet-facing
+  port 22 accepts password attempts against `root` with no brute-force
+  throttling. This is the most significant finding on the host.
+- **The deployment account is in the `docker` group**, which is
+  root-equivalent on this machine.
+- **CUPS (`631`) binds `0.0.0.0`**, as do four other services; only the
+  firewall prevents exposure (§3.3).
+- **No swap is configured.** With 12 GiB available and an idle load this is not
+  a present risk, and CAD Fixer adds no memory pressure.
 
-Unrelated VPS debt is recorded as debt. CAD Fixer does not refactor another
-project's server posture.
+**Healthy:** unattended-upgrades enabled and active; Certbot timer active and
+demonstrably renewing the live certificate; database and container ports bound
+to loopback.
 
 ## 21. Backup and snapshot — a required gate, not a claim
 
@@ -585,11 +650,20 @@ target requires one.
 
 ## 28. Required before the next stage
 
-1. **SSH key access** — `ssh-copy-id` as in §4. Blocking.
-2. **Hostinger snapshot** created in hPanel and confirmed by the user. Blocking.
-3. **A staging hostname** chosen and provided. Blocking for HTTPS.
-4. **Confirmation that its DNS can be edited**, and at which provider.
-5. **Approval of the nginx change plan** in §11, given the box is shared.
+1. **A fresh Hostinger snapshot**, created in hPanel and confirmed by the user.
+   The panel shows a weekly schedule and 2 stored snapshots, which is **not**
+   proof of a current pre-deployment checkpoint. Blocking.
+2. **A staging hostname**, plus confirmation its DNS can be edited and at which
+   provider. Blocking for HTTPS, and therefore for browser qualification.
+3. **Approval of the nginx plan in §11**, specifically the `zz-` file-name
+   control that keeps CAD Fixer from becoming the implicit `default_server`
+   (§3.2).
+4. **The sudo-only read-only bundle in §4.1**, run by the user, to capture the
+   firewall rule set, the full `nginx -T`, the certificate inventory and the
+   effective sshd policy.
+5. **Acknowledgement of the security debt in §20** — particularly SSH password
+   authentication with `PermitRootLogin yes` and no fail2ban. Not a CAD Fixer
+   blocker, and the owner's decision.
 
 ## 29. Next stage
 
