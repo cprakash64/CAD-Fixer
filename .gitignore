@@ -46,3 +46,18 @@ experiments/repair-kernels/geogram/artifacts/geogram-reference
 # sources by the commands in experiments/self-intersection/README.md, and large.
 # What IS committed is the harness, the corpus and the results.
 experiments/self-intersection/artifacts/
+
+# Stage 5C release artifact manifests. Generated deterministically from a build
+# by scripts/release-manifest.mjs and regenerable from any commit, so committing
+# one would create a second authority that could disagree with the build it
+# claims to describe. The evidence that matters is recorded in docs/release/.
+artifacts/release/
+
+# Wrangler's project-local state and cache. Account credentials live OUTSIDE the
+# repository (~/Library/Preferences/.wrangler on macOS) and must stay there;
+# this entry makes sure a local build/cache directory can never be committed
+# either. `.dev.vars` is a secrets file Wrangler reads and is already covered by
+# the .env rules above, but it is named here so the intent is explicit.
+.wrangler/
+.dev.vars
+.dev.vars.*

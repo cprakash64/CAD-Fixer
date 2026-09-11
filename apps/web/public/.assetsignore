@@ -1,0 +1,14 @@
+# Files present in the build output that must NOT be uploaded to Cloudflare as
+# public static assets. Same syntax as .gitignore.
+#
+# Source maps only. Stage 5C-1A approved excluding them from the initial
+# Technical Preview: they are ~72% of the build and no user requests them. This
+# is a TRANSFER decision, not a security one — the repository is public and the
+# build is reproducible, so a map for any released commit can be regenerated
+# locally. Excluding them here leaves `sourcemap: true` and local debugging
+# untouched, and does not alter a single runtime asset byte.
+*.map
+
+# _headers is deliberately NOT listed. Wrangler must still read it as static
+# asset configuration; excluding it would silently drop the cross-origin
+# isolation contract.
