@@ -8,6 +8,7 @@ import {
 } from '@cadfixer/mesh-core';
 import {
   duplicateDefectMesh,
+  indexedDuplicateDefectMesh,
   faceCountMesh,
   makePart,
   mp02SharedGeometry,
@@ -175,6 +176,15 @@ export const HarnessFixtureId = {
    * leave the document holding ONE again rather than a thousand-and-one.
    */
   RepairShared1000Millimetre: 'repair-shared-1000-mm',
+  /**
+   * TWO PARTS SHARING ONE REPAIRABLE, GENUINELY INDEXED MESH — Stage 4B-1D.
+   *
+   * `RepairSharedPairMillimetre` is soup, which is a fine control and can say
+   * nothing about indexing. Four vertices carrying five faces can: a candidate
+   * rebuilt as soup comes back with twelve, and the sharing question and the
+   * representation question can be asked of the same Apply.
+   */
+  RepairSharedIndexedPairMillimetre: 'repair-shared-indexed-pair-mm',
 } as const;
 
 export type HarnessFixtureId = (typeof HarnessFixtureId)[keyof typeof HarnessFixtureId];
@@ -416,6 +426,17 @@ export function buildHarnessDocument(id: HarnessFixtureId): GeometryDocument {
         parts: Array.from({ length: 1_000 }, (_, index) =>
           named(`p${String(index)}`, shared, 'Placement', translation(index * 4, 0, 0)),
         ),
+      };
+    }
+
+    case HarnessFixtureId.RepairSharedIndexedPairMillimetre: {
+      const shared = indexedDuplicateDefectMesh();
+      return {
+        unit: LengthUnit.Millimeter,
+        parts: [
+          named('a', shared, 'Shared component'),
+          named('b', shared, 'Shared component', translation(PART_B_OFFSET_X, 0, 0)),
+        ],
       };
     }
 

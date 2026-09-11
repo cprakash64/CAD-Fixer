@@ -717,11 +717,10 @@ validated`, and the qualifier naming what was NOT examined travels with it.
   the symbols'. Two undo implementations capable of diverging is how one of them
   stops being tested — which is exactly how the soup defect survived every STL
   test in the suite.
-- **APPLYING A REPAIR STILL DE-INDEXES; UNDOING IT NO LONGER DOES.**
-  `rebuildCandidate` writes an unindexed candidate, so a repaired indexed mesh is
-  soup until it is undone. That is the repair ALGORITHM's representation choice,
-  it predates Stage 4B-1C, and it is recorded rather than fixed silently. Do not
-  read the exact-undo guarantee as a claim about the candidate.
+- **APPLY PRESERVES THE SOURCE'S INDEXING** — Stage 4B-1D, and this SUPERSEDES
+  the Stage 4B-1C note that said a repaired indexed mesh was soup until undone.
+  `rebuildCandidate` keeps the surviving faces' original index triplets, in
+  source face order, over the source's own vertices.
 - **THE PAGE'S RENDER SNAPSHOT FOLLOWS THE DOCUMENT'S SHARING.**
   `SharedPartGeometry` keys on position-array IDENTITY, so restoring canonical
   sharing is not enough on its own: `withPartRender` reuses a sibling's EXISTING
@@ -789,6 +788,36 @@ validated`, and the qualifier naming what was NOT examined travels with it.
   closure note. **What it restores is the RETAINED MESH OBJECT**, never a
   reconstruction — see the hole-fill workflow invariants above, which now cover
   both kinds of undoable change.
+- **THE CANDIDATE KEEPS THE SOURCE'S REPRESENTATION — POLICY B, Stage 4B-1D.**
+  Surviving faces keep their ORIGINAL index triplets, in source face order, with
+  their winding untouched; retained vertices keep their exact Float32 bytes; and
+  the ONLY vertices removed are those no surviving face references, renumbered in
+  ASCENDING ORIGINAL INDEX order. When nothing is orphaned the remap is the
+  identity and the position buffer is a straight copy of the source's bytes.
+- **KEEPING THE WHOLE VERTEX TABLE (Policy A) WAS REJECTED, AND FOR A REASON THAT
+  IS NOT TASTE.** `computeBounds` walks every position slot, so retaining an
+  orphan would freeze a model's reported bounding box when the faces around an
+  extreme corner are removed, and `topologicalVertexCount` would keep counting a
+  point no triangle touches. The soup rebuild got both right; a representation
+  fix is not allowed to change them.
+- **NOTHING IS WELDED WHILE REBUILDING REPRESENTATION.** Two vertices with
+  identical coordinates and different indices stay two vertices. Merging them is
+  tolerance welding under another name — decided by no user, qualified by nobody
+  — and it would change the surviving topology.
+- **THE REBUILD DECIDES NOTHING.** The removal mask and the flip mask arrive
+  already decided by the plan and the winding solver; `rebuildCandidate` only
+  MATERIALISES them. A frozen test compares acceptance, counts, regressions and
+  every surviving face's corner COORDINATES against what the pre-4B-1D engine
+  produced, for ten fixtures covering every operation and outcome.
+- **THE RENDER SNAPSHOT IS EXPANDED; THE CANONICAL MESH IS NOT.**
+  `buildDrawableTriangles` materialises three corners per face from the index
+  buffer at the render boundary, because the draw is non-indexed. It used to send
+  `mesh.positions.slice()` with no reference to the indices at all — correct only
+  for STL soup, so every indexed OBJ and 3MF was drawn as a few stray triangles
+  out of its own vertex pool, and the `face * 9` overlay builders read the same
+  wrong buffer. Expansion also makes shading FLAT by construction: each corner
+  carries its own face's normal, so restoring indexing cannot round off a hard
+  edge. Never de-index canonical geometry to satisfy a renderer.
 - **`repair/commit` PREPARES EVERY FALLIBLE OUTPUT BEFORE THE SWAP** — Stage
   4B-1C, the same ordering `holefill/commit` has. The render snapshot, the part
   descriptors, the totals, the bounds and the undo record are all built first, so

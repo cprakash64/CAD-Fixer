@@ -404,11 +404,12 @@ describe('CC01: cancellation observed before any work begins', () => {
 describe('CC06: cancellation is observed inside the face copy and flip', () => {
   /*
    * DEDICATED, not inherited from a pipeline test. Compaction is the phase that
-   * actually writes the candidate's vertices: it copies nine floats and three
-   * indices per surviving face and rewrites the winding of every flipped one. A
-   * pipeline-level test proves the pipeline stopped somewhere; this proves the
-   * copy itself stops, which is the only phase whose cost scales with the
-   * candidate rather than with the source.
+   * actually writes the candidate's buffers: since Stage 4B-1D it marks which
+   * source vertices the survivors still reference, builds the old-to-new remap,
+   * copies the retained positions and writes three remapped indices per
+   * surviving face, rewriting the winding of every flipped one. Every one of
+   * those passes polls on the same batch cadence. A pipeline-level test proves
+   * the pipeline stopped somewhere; this proves the copy itself stops.
    */
   it('stops the compaction pass rather than copying every surviving face', () => {
     const faces = CANCEL_POLL_INTERVAL * 4;

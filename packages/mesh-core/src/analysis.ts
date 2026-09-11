@@ -175,6 +175,104 @@ export function computeVertexNormals(mesh: CanonicalMesh): Float32Array {
 }
 
 /**
+ * THE DRAWABLE TRIANGLE STREAM: three independent corners per face, in face
+ * order, with each corner carrying its own face's normal.
+ *
+ * WHY A RENDER BUFFER IS NOT THE CANONICAL BUFFER. Canonical geometry is
+ * INDEXED — an OBJ or 3MF import shares corners between faces, and since Stage
+ * 4B-1D a repaired candidate does too. A GPU draw needs the opposite: a flat
+ * stream it can walk three vertices at a time. Handing it the vertex TABLE and
+ * asking it to draw non-indexed renders whatever triangles the table's ordering
+ * happens to spell, which for a shared-corner mesh is not the model.
+ *
+ * SO THE EXPANSION HAPPENS HERE, at the render boundary, and never in the
+ * canonical mesh. That is the whole point: display needs a representation the
+ * authoritative geometry must not be forced into.
+ *
+ * FLAT SHADING, AND IT IS A DELIBERATE CHOICE RATHER THAN AN ACCIDENT. Each
+ * corner gets its own face's normal, so a hard edge stays hard. Averaging the
+ * normals of the faces meeting at a shared vertex — what smooth shading means —
+ * would round off exactly the edges a printable part is defined by, and would
+ * make a model look different purely because it was stored with shared corners.
+ * A mesh format carries no smoothing decision that CAD Fixer honours, so the
+ * safe reading is the one that invents nothing.
+ *
+ * A DEGENERATE FACE gets `(0, 0, 1)`. It has no direction, every unit vector is
+ * as wrong as any other, and a zero or `NaN` normal would break lighting for the
+ * whole buffer.
+ */
+export interface DrawableTriangles {
+  /** Interleaved XYZ, three corners per face, drawn non-indexed. */
+  readonly positions: Float32Array;
+  /** Interleaved XYZ, one per corner. Flat: constant across each face. */
+  readonly normals: Float32Array;
+  readonly vertexCount: number;
+}
+
+export function buildDrawableTriangles(mesh: CanonicalMesh): DrawableTriangles {
+  const triangles = triangleCount(mesh);
+  const vertices = vertexCount(mesh);
+  const source = mesh.positions;
+  const positions = new Float32Array(triangles * 9);
+  const normals = new Float32Array(triangles * 9);
+
+  for (let triangle = 0; triangle < triangles; triangle += 1) {
+    const base = triangle * 3;
+    const a = mesh.indices[base] ?? 0;
+    const b = mesh.indices[base + 1] ?? 0;
+    const c = mesh.indices[base + 2] ?? 0;
+    const out = triangle * 9;
+
+    // An out-of-range index cannot occur in validated geometry. Writing zeros
+    // rather than reading past the buffer keeps a corrupt mesh from producing
+    // `undefined` coordinates, and structural validation refuses it upstream.
+    const inRange = a < vertices && b < vertices && c < vertices;
+    const ax = inRange ? (source[a * 3] ?? 0) : 0;
+    const ay = inRange ? (source[a * 3 + 1] ?? 0) : 0;
+    const az = inRange ? (source[a * 3 + 2] ?? 0) : 0;
+    const bx = inRange ? (source[b * 3] ?? 0) : 0;
+    const by = inRange ? (source[b * 3 + 1] ?? 0) : 0;
+    const bz = inRange ? (source[b * 3 + 2] ?? 0) : 0;
+    const cx = inRange ? (source[c * 3] ?? 0) : 0;
+    const cy = inRange ? (source[c * 3 + 1] ?? 0) : 0;
+    const cz = inRange ? (source[c * 3 + 2] ?? 0) : 0;
+
+    positions[out] = ax;
+    positions[out + 1] = ay;
+    positions[out + 2] = az;
+    positions[out + 3] = bx;
+    positions[out + 4] = by;
+    positions[out + 5] = bz;
+    positions[out + 6] = cx;
+    positions[out + 7] = cy;
+    positions[out + 8] = cz;
+
+    // Right-hand rule over the winding order, which is what actually carries
+    // orientation in a triangle mesh.
+    const nx = (by - ay) * (cz - az) - (bz - az) * (cy - ay);
+    const ny = (bz - az) * (cx - ax) - (bx - ax) * (cz - az);
+    const nz = (bx - ax) * (cy - ay) - (by - ay) * (cx - ax);
+    const length = Math.sqrt(nx * nx + ny * ny + nz * nz);
+
+    let ux = 0;
+    let uy = 0;
+    let uz = 1;
+    if (length > 0 && Number.isFinite(length)) {
+      ux = nx / length;
+      uy = ny / length;
+      uz = nz / length;
+    }
+    for (let corner = 0; corner < 3; corner += 1) {
+      normals[out + corner * 3] = ux;
+      normals[out + corner * 3 + 1] = uy;
+      normals[out + corner * 3 + 2] = uz;
+    }
+  }
+
+  return { positions, normals, vertexCount: triangles * 3 };
+}
+
+/**
  * Unit normal of one triangle, or a zero vector when the triangle is
  * degenerate.
  *

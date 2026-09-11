@@ -64,6 +64,24 @@ export function duplicateDefectMesh(): CanonicalMesh {
 }
 
 /**
+ * The same defective tetrahedron, INDEXED: four vertices, five faces.
+ *
+ * MP06's defect over a shared vertex table, because `duplicateDefectMesh` is
+ * soup and soup cannot show what Stage 4B-1D is about. Five faces referencing
+ * four corners is a 3.75:1 sharing ratio, so a candidate rebuilt as soup is
+ * unmistakable: twelve vertices where four went in.
+ */
+export function indexedDuplicateDefectMesh(): CanonicalMesh {
+  const positions = createPositionArray(12);
+  positions.set([0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1]);
+  const indices = createIndexArray(15);
+  // Face 1 repeats face 0 in the same orientation — the one removal the
+  // conservative engine will always take.
+  indices.set([0, 2, 1, 0, 2, 1, 0, 1, 3, 1, 2, 3, 2, 0, 3]);
+  return { positions, indices, metadata: { sourceFormat: 'obj' } };
+}
+
+/**
  * Two triangles that genuinely cross each other.
  *
  * MP07. One lies in the XY plane; the other stands vertically and passes

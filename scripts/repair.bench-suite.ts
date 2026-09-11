@@ -1,13 +1,19 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { it } from 'vitest';
-import { createIndexArray, createPositionArray, triangleCount } from '@cadfixer/mesh-core';
+import {
+  createIndexArray,
+  createPositionArray,
+  triangleCount,
+  vertexCount,
+} from '@cadfixer/mesh-core';
 import type { CanonicalMesh } from '@cadfixer/mesh-core';
 import { uncancellable } from '@cadfixer/shared';
 import { analyseTopology } from '@cadfixer/mesh-topology';
 import {
   executeConservativeRepair,
   planConservativeRepair,
+  rebuildCandidate,
   RepairOperation,
 } from '@cadfixer/mesh-repair';
 
@@ -191,3 +197,159 @@ it('measures conservative repair at realistic sizes', () => {
     );
   }
 }, 1_800_000);
+
+/* ------------------------------- Stage 4B-1D: candidate representation --- */
+
+interface IndexedRow {
+  readonly label: string;
+  readonly sourceVertices: number;
+  readonly sourceFaces: number;
+  readonly sourceBytes: number;
+  readonly candidateVertices: number;
+  readonly candidateFaces: number;
+  readonly candidateBytes: number;
+  /** What the pre-Stage-4B-1D rebuild would have produced: 3 corners per face. */
+  readonly soupVertices: number;
+  readonly soupBytes: number;
+  readonly reductionPercent: number;
+  readonly rebuildMs: number;
+  readonly totalMs: number;
+  readonly acceptance: string;
+}
+
+/**
+ * A regular grid: (n+1)² vertices carrying 2n² triangles, plus one exact
+ * duplicate face.
+ *
+ * THE SHAPE OF A REAL CAD EXPORT, and the shape the old rebuild was worst for.
+ * Vertex sharing rises with n, so the ratio between "the source's own vertices"
+ * and "three per surviving face" is the whole measurement.
+ */
+function indexedGrid(n: number): CanonicalMesh {
+  const positions = createPositionArray((n + 1) * (n + 1) * 3);
+  let write = 0;
+  for (let y = 0; y <= n; y += 1) {
+    for (let x = 0; x <= n; x += 1) {
+      positions[write] = x;
+      positions[write + 1] = y;
+      positions[write + 2] = ((x * 7 + y * 13) % 5) * 0.25;
+      write += 3;
+    }
+  }
+  const faces: number[] = [];
+  const at = (x: number, y: number): number => y * (n + 1) + x;
+  for (let y = 0; y < n; y += 1) {
+    for (let x = 0; x < n; x += 1) {
+      faces.push(at(x, y), at(x + 1, y), at(x, y + 1));
+      faces.push(at(x + 1, y), at(x + 1, y + 1), at(x, y + 1));
+    }
+  }
+  faces.push(at(0, 0), at(1, 0), at(0, 1));
+  const indices = createIndexArray(faces.length);
+  indices.set(faces);
+  return { positions, indices, metadata: { sourceFormat: 'obj' } };
+}
+
+it('measures indexed candidate representation', () => {
+  const rows: IndexedRow[] = [];
+
+  for (const [label, n] of [
+    ['small', 20],
+    ['medium', 120],
+    ['large', 400],
+  ] as const) {
+    const mesh = indexedGrid(n);
+    const faces = triangleCount(mesh);
+
+    const t0 = performance.now();
+    const report = analyseTopology(mesh, {
+      documentId: 'bench',
+      partId: 'part-1',
+      documentRevision: 1,
+      cancellation: uncancellable,
+    }).report;
+
+    const { plan, view, prepared } = planConservativeRepair({
+      mesh,
+      report,
+      documentId: 'bench',
+      partId: 'part-1',
+      sourceRevision: 1,
+      requested: [RepairOperation.RemoveDuplicateFaces],
+    });
+
+    // The rebuild in isolation, measured on its own rather than inferred from
+    // the total: it is the only phase Stage 4B-1D changed.
+    const t1 = performance.now();
+    const rebuilt = rebuildCandidate(mesh, faces, buildRemovalMask(mesh, faces), undefined);
+    const t2 = performance.now();
+
+    const result = executeConservativeRepair({
+      source: mesh,
+      plan,
+      sourceReport: report,
+      cancellation: uncancellable,
+      documentId: 'bench',
+      partId: 'part-1',
+      revision: 1,
+      view,
+      prepared,
+    });
+    const t3 = performance.now();
+
+    const candidate = result.candidate ?? rebuilt.mesh;
+    const survivingFaces = triangleCount(candidate);
+    const soupVertices = survivingFaces * 3;
+    const soupBytes = soupVertices * 3 * 4 + survivingFaces * 3 * 4;
+
+    rows.push({
+      label,
+      sourceVertices: vertexCount(mesh),
+      sourceFaces: faces,
+      sourceBytes: meshBytes(mesh),
+      candidateVertices: vertexCount(candidate),
+      candidateFaces: survivingFaces,
+      candidateBytes: meshBytes(candidate),
+      soupVertices,
+      soupBytes,
+      reductionPercent: (1 - meshBytes(candidate) / soupBytes) * 100,
+      rebuildMs: t2 - t1,
+      totalMs: t3 - t0,
+      acceptance: result.validation.acceptance,
+    });
+  }
+
+  mkdirSync(OUT, { recursive: true });
+  writeFileSync(
+    join(OUT, 'repair-representation.json'),
+    JSON.stringify(
+      {
+        startedAt: new Date().toISOString(),
+        environment: `node ${process.version} ${process.platform}/${process.arch}`,
+        note: 'Stage 4B-1D. `soup*` is what the pre-4B-1D rebuild would have produced for the SAME surviving faces — three independent corners each — computed rather than measured, because the old code no longer exists. No timing assertions.',
+        rows,
+      },
+      null,
+      2,
+    ),
+  );
+
+  process.stdout.write('\nindexed candidate representation\n');
+  for (const row of rows) {
+    process.stdout.write(
+      `  ${row.label.padEnd(6)} source ${String(row.sourceVertices).padStart(7)}V/${String(row.sourceFaces).padStart(7)}F ` +
+        `${(row.sourceBytes / 1024).toFixed(0).padStart(6)} KiB   ` +
+        `candidate ${String(row.candidateVertices).padStart(7)}V ${(row.candidateBytes / 1024).toFixed(0).padStart(6)} KiB   ` +
+        `soup would be ${String(row.soupVertices).padStart(7)}V ${(row.soupBytes / 1024).toFixed(0).padStart(6)} KiB   ` +
+        `${row.reductionPercent.toFixed(1).padStart(5)}% smaller   rebuild ${row.rebuildMs.toFixed(1).padStart(6)}ms   ${row.acceptance}\n`,
+    );
+  }
+}, 1_800_000);
+
+/** The duplicate this fixture carries: its last face repeats its first. */
+function buildRemovalMask(mesh: CanonicalMesh, faceCount: number): Uint8Array {
+  void mesh;
+  const mask = new Uint8Array(faceCount);
+  mask[faceCount - 1] = 1;
+  return mask;
+}

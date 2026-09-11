@@ -793,7 +793,16 @@ describe('CRT01–CRT06: applying is observably atomic', () => {
      * assertion that early preparation still describes the right document.
      */
     const committed = residentPart(result.value.handle, PART);
-    expect(result.value.render.vertexCount).toBe(vertexCount(committed));
+    /*
+     * THREE CORNERS PER FACE, not the vertex table's length — Stage 4B-1D. The
+     * snapshot is the drawable triangle stream, expanded from the candidate's
+     * INDEX buffer, and the candidate is now indexed rather than soup. Asserting
+     * the table's length here would be asserting that the two are the same
+     * thing, which is exactly the assumption that made indexed models render as
+     * a handful of stray triangles.
+     */
+    expect(result.value.render.vertexCount).toBe(triangleCount(committed) * 3);
+    expect(vertexCount(committed)).toBeLessThan(result.value.render.vertexCount);
     expect(result.value.triangleCount).toBe(triangleCount(committed));
     expect(result.value.parts.map((part) => part.partId)).toEqual([PART]);
     expect(result.value.parts[0]?.triangleCount).toBe(triangleCount(committed));
@@ -889,7 +898,8 @@ describe('CRT07–CRT12: undoing is observably atomic', () => {
     expect(repairHistory.stats().retainedBytes).toBe(0);
 
     // CRT12. The snapshot describes the RESTORED document, built before the swap.
-    expect(result.value.render.vertexCount).toBe(vertexCount(restored));
+    // Expanded to three corners per face, as every render snapshot now is.
+    expect(result.value.render.vertexCount).toBe(triangleCount(restored) * 3);
     expect(result.value.triangleCount).toBe(triangleCount(restored) * 2);
     expect(result.value.parts).toHaveLength(2);
     // Both parts report one mesh resource: the sharing is in the answer too.

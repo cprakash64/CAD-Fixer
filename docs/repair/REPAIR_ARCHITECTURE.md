@@ -448,6 +448,77 @@ algorithm's own representation choice, it predates this stage, and undoing now
 returns the original exactly regardless of it. It is recorded here rather than
 fixed silently.
 
+### The candidate's representation — Stage 4B-1D
+
+**Policy B.** The candidate keeps the source's indexed structure: the surviving
+faces' ORIGINAL index triplets, in source face order, over the source's own
+vertices. Only vertices that no surviving face references are dropped, and the
+survivors are renumbered in ascending original-index order. When nothing is
+orphaned — the common case, because most repairs remove a face whose corners
+other faces also use — the remap is the identity and the position buffer is a
+straight copy of the source's bytes.
+
+**What it replaced.** `rebuildCandidate` used to write nine coordinates per
+surviving face and an identity index buffer, on the stated assumption that
+canonical geometry is STL soup. For an STL that was true of the source, so
+nothing was lost and every STL test passed. For an OBJ or a 3MF it was a silent
+representation change: removing ONE duplicate face from a 160,801-vertex grid
+produced a 960,000-vertex candidate describing exactly the same surface — bigger
+canonical geometry, bigger render snapshots, bigger exports, more GPU memory, and
+the index structure the file carried thrown away.
+
+**Why not keep the whole source vertex table.** That was the simpler option and
+it was rejected because it would have CHANGED OBSERVABLE REPAIR SEMANTICS.
+`computeBounds` walks every position slot, so a retained orphan at an extreme
+coordinate would freeze the model's reported bounding box when the faces around
+it are removed; and `topologicalVertexCount`, which is welded per position slot,
+would keep counting a point no triangle touches. The soup rebuild got both of
+those right, and a representation fix is not permitted to change them.
+
+**Nothing is welded.** Two vertices with identical coordinates and different
+indices remain two vertices. Merging them is tolerance welding under another
+name, and it would change the surviving topology this step exists to carry across
+untouched.
+
+**The rebuild decides nothing.** The removal mask and the flip mask arrive
+already decided. A frozen test compares acceptance, per-operation counts,
+regressions and every surviving face's corner COORDINATES against what the
+pre-4B-1D engine produced, across ten fixtures covering every conservative
+operation and every outcome the engine has.
+
+**Measured** (`npm run bench:repair`, an indexed grid with one duplicate face):
+
+| fixture | source                           | candidate            | soup would have been  | smaller |
+| ------- | -------------------------------- | -------------------- | --------------------- | ------- |
+| small   | 441 V / 801 F, 15 KiB            | 441 V, 15 KiB        | 2,400 V, 38 KiB       | 61.2%   |
+| medium  | 14,641 V / 28,801 F, 509 KiB     | 14,641 V, 509 KiB    | 86,400 V, 1,350 KiB   | 62.3%   |
+| large   | 160,801 V / 320,001 F, 5,634 KiB | 160,801 V, 5,634 KiB | 960,000 V, 15,000 KiB | 62.4%   |
+
+The rebuild itself costs 7.9 ms at 320,001 faces. `RepairMemoryEstimate`'s
+`candidateBytes` is the source's own size, and since this stage that is a genuine
+upper bound: previously an indexed source's candidate could be several times the
+figure the preflight promised, so the memory ceiling was protecting against a
+number the pipeline could not honour.
+
+### Rendering an indexed mesh — the boundary this stage had to fix
+
+A `RenderSnapshot` carries no index buffer: the GPU walks the position buffer
+three vertices at a time. `buildRenderSnapshot` used to hand it
+`mesh.positions.slice()`, which is correct exactly when the vertex table IS the
+triangle stream — STL soup, and nothing else. Every indexed OBJ and 3MF import
+was therefore drawn as whatever triangles its vertex POOL happened to spell: a
+four-vertex, four-face tetrahedron rendered as ONE triangle. The change-overlay
+and topology-overlay builders index the same buffer as `face * 9`, so they were
+reading the same wrong thing. No test had ever compared the drawn triangle count
+against the model's, which is how it survived.
+
+`buildDrawableTriangles` materialises the drawable stream from the index buffer
+at the render boundary, and the canonical mesh keeps its own representation. Flat
+shading falls out of that: each corner belongs to exactly one face and carries
+that face's normal, which is bit-identical to what soup produced through
+`computeVertexNormals` and is what stops restored indexing from rounding off a
+hard edge. **Never de-index canonical geometry to satisfy a renderer.**
+
 ### The report cache
 
 `repair/plan` and `repair/create-candidate` reuse the topology report the

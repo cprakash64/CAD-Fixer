@@ -491,7 +491,7 @@ bytes **we** allocate. During a preview these coexist by design:
 | --------------------------------- | ----------- | ------------------------ |
 | M0 canonical geometry             | worker      | 48 n                     |
 | M0 render snapshot                | main thread | 72 n                     |
-| Candidate canonical geometry      | worker      | ≤ 48 n                   |
+| Candidate canonical geometry      | worker      | ≤ 48 n, and ≤ the source |
 | Candidate render snapshot         | main thread | ≤ 72 n                   |
 | Connectivity + compaction scratch | worker      | ≈ 72 n                   |
 | Validation (topology) workspace   | worker      | ≈ 225 n                  |
@@ -1181,3 +1181,66 @@ evidence for a report and a flake as a threshold.
 
 Process RSS, `performance.memory`, and the cost of a multi-step history, none of
 which exists.
+
+# Conservative repair candidate representation (Stage 4B-1D, 2026-09-10)
+
+Until Stage 4B-1D the repaired candidate was rebuilt as triangle soup: nine
+coordinates per surviving face and an identity index buffer, whatever the source
+was. For an STL that was what the source already looked like. For an OBJ or a 3MF
+it meant that removing ONE duplicate face rewrote the whole model's
+representation.
+
+## What the candidate costs, indexed input
+
+`npx vitest run --config vitest.bench.config.ts scripts/repair.bench-suite.ts`,
+node 24 on darwin/arm64. A regular grid — (n+1)² vertices carrying 2n² triangles —
+with one exact duplicate face, which is the sharing profile of a real CAD export.
+The `soup` column is what the pre-4B-1D rebuild would have produced for the SAME
+surviving faces; it is computed rather than measured, because the old code no
+longer exists.
+
+| fixture | source                           | candidate            | soup would have been  | smaller | rebuild |
+| ------- | -------------------------------- | -------------------- | --------------------- | ------- | ------- |
+| small   | 441 V / 801 F, 15 KiB            | 441 V, 15 KiB        | 2,400 V, 38 KiB       | 61.2%   | 0.3 ms  |
+| medium  | 14,641 V / 28,801 F, 509 KiB     | 14,641 V, 509 KiB    | 86,400 V, 1,350 KiB   | 62.3%   | 6.1 ms  |
+| large   | 160,801 V / 320,001 F, 5,634 KiB | 160,801 V, 5,634 KiB | 960,000 V, 15,000 KiB | 62.4%   | 7.9 ms  |
+
+**The reduction is a property of the sharing, not of the fixture size.** All three
+rows land near 62% because a triangle mesh averages close to two triangles per
+vertex; the number would be larger for a denser mesh and smaller for one that is
+nearly soup already. It is quoted from three sizes rather than one for exactly
+that reason.
+
+**Candidate vertices equal source vertices in every row**, so the identity fast
+path is what actually runs: nothing was orphaned, the remap is the identity, and
+the position buffer is one copy of the source's bytes. Compaction is the
+exception, not the rule.
+
+**The memory preflight is now honest.** `RepairMemoryEstimate.candidateBytes` is
+the source's own size and has always been documented as the worst case. Before
+this stage that was false for indexed input — the large row's candidate would
+have been 2.7x the figure the preflight promised — so the ceiling was protecting
+against a number the pipeline could not honour. **The ceiling itself is
+unchanged**: this stage corrects a representation, it does not buy capacity.
+
+## The pipeline timings did not move
+
+`analyse`, `plan` and `execute` at 1 / 10 / 50 MiB are unchanged from the Stage
+4B-1C table above, and `undoRetainedBytes` is unchanged. The rebuild does one
+extra pass over the source's vertices to mark references and one to build the
+remap — 7.9 ms at 320,001 faces, against 15 MiB of buffer it no longer allocates.
+
+## Render snapshots are LARGER for indexed input, and that is the correct number
+
+A render snapshot is drawn non-indexed, so it is three corners per face — 72
+bytes per triangle, exactly as the preview table above has always modelled. For
+an indexed mesh the snapshot is therefore bigger than the canonical mesh, and
+before this stage it was smaller: `buildRenderSnapshot` sent the vertex TABLE and
+the GPU drew it as a triangle stream, which is not a saving but a wrong picture.
+The canonical mesh got smaller and the snapshot got correct; they are separate
+numbers and this stage moved them in opposite directions.
+
+## Not measured here
+
+GPU-side memory as reported by the driver, and any figure for a soup source,
+whose candidate is unchanged by this stage by construction.

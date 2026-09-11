@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { computeBounds, computeVertexNormals, triangleNormal } from './analysis';
+import {
+  buildDrawableTriangles,
+  computeBounds,
+  computeVertexNormals,
+  triangleNormal,
+} from './analysis';
+import { createIndexArray, createPositionArray, vertexCount } from './mesh';
 import type { CanonicalMesh } from './mesh';
 
 /**
@@ -201,5 +207,110 @@ describe('triangleNormal', () => {
     triangleNormal(mesh([0, 0, 0, huge, 0, 0, 0, huge, 0], [0, 1, 2]), 0, out);
 
     for (const value of out) expect(Number.isFinite(value)).toBe(true);
+  });
+});
+
+/* ------------------------------------ Stage 4B-1D: the drawable stream --- */
+
+describe('buildDrawableTriangles', () => {
+  /**
+   * WHAT A NON-INDEXED DRAW ACTUALLY NEEDS, and why reading the vertex table was
+   * never it.
+   *
+   * A `RenderSnapshot` carries no index buffer: the GPU walks the position
+   * buffer three vertices at a time. For STL soup the vertex table IS that
+   * stream, which is why handing it over worked and why nothing noticed when
+   * OBJ and 3MF import arrived carrying genuinely indexed meshes. For those, the
+   * table is a POOL — a tetrahedron's four corners in some order — and drawing
+   * it non-indexed spells one arbitrary triangle out of four.
+   */
+  const TETRAHEDRON: CanonicalMesh = {
+    positions: createPositionArray(12),
+    indices: createIndexArray(12),
+    metadata: {},
+  };
+  TETRAHEDRON.positions.set([0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1]);
+  TETRAHEDRON.indices.set([0, 2, 1, 0, 1, 3, 0, 3, 2, 1, 2, 3]);
+
+  it('expands an indexed mesh into three corners per face', () => {
+    const drawable = buildDrawableTriangles(TETRAHEDRON);
+
+    // FOUR FACES, TWELVE CORNERS. The source's vertex table has four entries;
+    // drawing THAT non-indexed would have produced a single triangle.
+    expect(drawable.vertexCount).toBe(12);
+    expect(drawable.positions.length).toBe(36);
+    expect(vertexCount(TETRAHEDRON)).toBe(4);
+
+    // Face 2 is (0, 3, 2): the origin, then (0,0,1), then (0,1,0).
+    expect([...drawable.positions.slice(18, 27)]).toEqual([0, 0, 0, 0, 0, 1, 0, 1, 0]);
+  });
+
+  it('gives every corner its own face normal, so hard edges stay hard', () => {
+    const drawable = buildDrawableTriangles(TETRAHEDRON);
+
+    for (let face = 0; face < 4; face += 1) {
+      const base = face * 9;
+      const n = drawable.normals.slice(base, base + 3);
+      // Constant across the face — that is what flat shading means.
+      expect([...drawable.normals.slice(base + 3, base + 6)]).toEqual([...n]);
+      expect([...drawable.normals.slice(base + 6, base + 9)]).toEqual([...n]);
+      /*
+       * AND A UNIT VECTOR, to float32 precision. Six places, not twelve: this is
+       * a RENDER buffer and `Float32Array` carries about seven decimal digits,
+       * so a tighter tolerance would be asserting a precision the selected
+       * vertex-attribute format does not have.
+       */
+      const nx = n[0] ?? 0;
+      const ny = n[1] ?? 0;
+      const nz = n[2] ?? 0;
+      expect(Math.sqrt(nx * nx + ny * ny + nz * nz)).toBeCloseTo(1, 6);
+    }
+
+    /*
+     * THE VERTEX THE SHARING WOULD HAVE SMOOTHED. Vertex 0 is a corner of three
+     * faces with three different normals. Averaging them — which is what
+     * per-vertex normals over a shared table produce — would round that corner
+     * off. Here its three appearances disagree, because they belong to three
+     * different faces.
+     */
+    const corner0 = drawable.normals.slice(0, 3).join(',');
+    const corner0Again = drawable.normals.slice(9, 12).join(',');
+    expect(corner0).not.toBe(corner0Again);
+  });
+
+  it('matches what a soup mesh already produced, so nothing looks different', () => {
+    /*
+     * THE REGRESSION GUARD FOR EVERY EXISTING STL. Soup gave each corner its own
+     * position slot, so `computeVertexNormals` accumulated exactly one face
+     * normal per slot and normalised it — flat shading by accident of the
+     * representation. Expansion must reproduce that answer exactly, or every
+     * model already in front of a user changes appearance.
+     */
+    const soup: CanonicalMesh = {
+      positions: createPositionArray(18),
+      indices: createIndexArray(6),
+      metadata: {},
+    };
+    soup.positions.set([0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1]);
+    soup.indices.set([0, 1, 2, 3, 4, 5]);
+
+    const drawable = buildDrawableTriangles(soup);
+    expect([...drawable.positions]).toEqual([...soup.positions]);
+    expect([...drawable.normals]).toEqual([...computeVertexNormals(soup)]);
+  });
+
+  it('gives a degenerate face a finite normal rather than NaN', () => {
+    const degenerate: CanonicalMesh = {
+      positions: createPositionArray(9),
+      indices: createIndexArray(3),
+      metadata: {},
+    };
+    degenerate.positions.set([1, 1, 1, 1, 1, 1, 1, 1, 1]);
+    degenerate.indices.set([0, 1, 2]);
+
+    const drawable = buildDrawableTriangles(degenerate);
+    // The same fallback `computeVertexNormals` uses: any unit vector is as wrong
+    // as any other, and a zero or NaN normal breaks lighting for the whole draw.
+    expect([...drawable.normals]).toEqual([0, 0, 1, 0, 0, 1, 0, 0, 1]);
   });
 });

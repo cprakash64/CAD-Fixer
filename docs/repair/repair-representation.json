@@ -1,0 +1,52 @@
+{
+  "startedAt": "2026-09-10T23:45:37.111Z",
+  "environment": "node v22.22.2 darwin/arm64",
+  "note": "Stage 4B-1D. `soup*` is what the pre-4B-1D rebuild would have produced for the SAME surviving faces — three independent corners each — computed rather than measured, because the old code no longer exists. No timing assertions.",
+  "rows": [
+    {
+      "label": "small",
+      "sourceVertices": 441,
+      "sourceFaces": 801,
+      "sourceBytes": 14904,
+      "candidateVertices": 441,
+      "candidateFaces": 800,
+      "candidateBytes": 14892,
+      "soupVertices": 2400,
+      "soupBytes": 38400,
+      "reductionPercent": 61.21875,
+      "rebuildMs": 0.2695000000003347,
+      "totalMs": 7.355208999999377,
+      "acceptance": "ACCEPTED"
+    },
+    {
+      "label": "medium",
+      "sourceVertices": 14641,
+      "sourceFaces": 28801,
+      "sourceBytes": 521304,
+      "candidateVertices": 14641,
+      "candidateFaces": 28800,
+      "candidateBytes": 521292,
+      "soupVertices": 86400,
+      "soupBytes": 1382400,
+      "reductionPercent": 62.29079861111111,
+      "rebuildMs": 6.134541999999783,
+      "totalMs": 92.61283300000105,
+      "acceptance": "ACCEPTED"
+    },
+    {
+      "label": "large",
+      "sourceVertices": 160801,
+      "sourceFaces": 320001,
+      "sourceBytes": 5769624,
+      "candidateVertices": 160801,
+      "candidateFaces": 320000,
+      "candidateBytes": 5769612,
+      "soupVertices": 960000,
+      "soupBytes": 15360000,
+      "reductionPercent": 62.437421875,
+      "rebuildMs": 7.876249999999345,
+      "totalMs": 454.2290000000012,
+      "acceptance": "ACCEPTED"
+    }
+  ]
+}

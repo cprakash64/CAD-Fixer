@@ -254,3 +254,116 @@ test('§43/§44: a repair and an undo at 1,000 placements return the document to
     description: `1,000 placements — apply ${String(applyMs)} ms, undo ${String(undoMs)} ms, resident ${String(loaded.residentBytes)} bytes`,
   });
 });
+
+/**
+ * CRP19, CRP20, CRP22: REPRESENTATION AND SHARING, ASKED OF THE SAME APPLY.
+ *
+ * Stage 4B-1D made the repaired candidate keep the source's indexed structure.
+ * That raises a question the contract suite cannot answer on its own: a shared
+ * mesh, a real worker, a real render pipeline, and one part repaired — does the
+ * candidate stay compact, does the sibling stay exactly where it was, and does
+ * undo still put them back on one object?
+ *
+ * WHY THE HARNESS. No shipped importer can produce two parts that SHARE one
+ * `CanonicalMesh`, and the shared mesh is the whole point: `withPartRender`
+ * reuses a sibling's buffers when the worker says the parts share, and that path
+ * now carries EXPANDED render buffers over an INDEXED canonical mesh — two
+ * different sizes for the same part, which is exactly where a wrong assumption
+ * would show.
+ */
+test('CRP19, CRP20: repairing a shared indexed mesh keeps the candidate indexed', async ({
+  page,
+}) => {
+  test.setTimeout(300_000);
+  await openHarness(page);
+  const loaded = await loadFixture(page, Fixture.RepairSharedIndexedPairMillimetre);
+  const partA = loaded.partIds[0] ?? '';
+  const partB = loaded.partIds[1] ?? '';
+
+  expect(loaded.partCount).toBe(2);
+  expect(loaded.distinctMeshResources).toBe(1);
+  const before = await digest(page, loaded);
+  const sourceA = before.parts.find((part) => part.partId === partA);
+  // FOUR VERTICES, FIVE FACES: 48 bytes of positions and 60 of indices.
+  expect(sourceA?.positionBytes).toBe(48);
+  expect(sourceA?.indexBytes).toBe(60);
+
+  await selectPart(page, partA);
+  await repairActivePart(page);
+
+  const applied = await readState(page);
+  const appliedDigest = await digest(page, applied);
+  const repairedA = appliedDigest.parts.find((part) => part.partId === partA);
+  const siblingB = appliedDigest.parts.find((part) => part.partId === partB);
+
+  /*
+   * CRP20. THE CANDIDATE IS STILL INDEXED — the assertion this whole stage is
+   * for. One face gone, so the index buffer drops by twelve bytes; the POSITION
+   * buffer does not move at all, because every one of the four corners is still
+   * used by a surviving face.
+   *
+   * Under the soup rebuild this read 144 bytes of positions — twelve vertices
+   * for four faces — and the document grew because one duplicate triangle was
+   * deleted.
+   */
+  expect(repairedA?.positionBytes).toBe(48);
+  expect(repairedA?.indexBytes).toBe(48);
+
+  // CRP19. THE SIBLING WAS NOT TOUCHED, byte for byte and placement included.
+  expect(siblingB?.positionDigest).toBe(sourceA?.positionDigest);
+  expect(siblingB?.indexDigest).toBe(sourceA?.indexDigest);
+  expect(siblingB?.transform).toEqual(
+    before.parts.find((part) => part.partId === partB)?.transform,
+  );
+  // The repair genuinely un-shared, which is what isolating part A means.
+  expect(appliedDigest.distinctMeshes).toBe(2);
+
+  /*
+   * AND WHAT THE DOCUMENT GREW BY IS EXACTLY THE CANDIDATE.
+   *
+   * Repairing one part of a shared pair necessarily un-shares it, so the
+   * document goes from holding one mesh (108 bytes, counted once however many
+   * parts reference it) to holding two: the sibling's original 108 plus the
+   * candidate's 96. That growth is the isolation, not waste.
+   *
+   * THE NUMBER IS THE POINT. Under the soup rebuild the candidate was 144 bytes
+   * of positions plus 48 of indices, so the document went to 300 — and a repair
+   * that DELETED a triangle made the model bigger than it started.
+   */
+  expect(applied.residentBytes).toBe(loaded.residentBytes + 96);
+  expect(applied.residentBytes).toBeLessThan(300);
+
+  /*
+   * THE GPU FOLLOWED THE UN-SHARING: two geometries where there was one, and one
+   * object per part throughout.
+   *
+   * NOT A TRIANGLE COUNT. `renderedTriangles` reports what survived FRUSTUM
+   * CULLING, and applying a repair reframes the camera, so on a two-part
+   * document a sibling can legitimately leave the count. That the expanded
+   * snapshot draws every face of an indexed mesh is asserted where it is
+   * unambiguous — the single-part browser gate in `e2e/conservative-repair.spec.ts`.
+   */
+  await expect
+    .poll(async () => (await readScene(page)).sharedGeometries, { timeout: 60_000 })
+    .toBe(2);
+  expect((await readScene(page)).modelObjects).toBe(2);
+
+  await undoRepair(page, applied.revision ?? 0);
+
+  // CRP22. BACK TO ONE MESH, and to the exact bytes.
+  const restored = await digest(page, await readState(page));
+  expect(restored.distinctMeshes).toBe(1);
+  for (const part of restored.parts) {
+    const original = before.parts.find((entry) => entry.partId === part.partId);
+    expect(part.positionDigest, `${part.partId} positions`).toBe(original?.positionDigest);
+    expect(part.indexDigest, `${part.partId} indices`).toBe(original?.indexDigest);
+  }
+  expect((await readState(page)).residentBytes).toBe(loaded.residentBytes);
+  // ONE GPU GEOMETRY AGAIN, and every geometry created has been released or is
+  // still drawn.
+  await expect
+    .poll(async () => (await readScene(page)).sharedGeometries, { timeout: 60_000 })
+    .toBe(1);
+  const scene = await readScene(page);
+  expect(scene.geometriesCreated - scene.geometriesDisposed).toBe(scene.sharedGeometries);
+});

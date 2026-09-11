@@ -9,7 +9,7 @@ import {
   assertGeometryDocument,
   assertMeshStructure,
   computeBounds,
-  computeVertexNormals,
+  buildDrawableTriangles,
   distinctMeshes,
   documentTriangleCount,
   documentVertexCount,
@@ -220,19 +220,36 @@ function summarise(mesh: CanonicalMesh): MeshValidationSummary {
 /**
  * Builds the buffers the UI needs to draw, from geometry that stays here.
  *
+ * THE SNAPSHOT IS EXPANDED, THE CANONICAL MESH IS NOT — Stage 4B-1D. The draw is
+ * non-indexed, so the buffer holds three corners per face in face order,
+ * materialised by `buildDrawableTriangles` from the mesh's INDEX BUFFER.
+ *
+ * This used to be `mesh.positions.slice()` with no reference to the indices at
+ * all, on the stated assumption that canonical geometry is STL soup numbered
+ * 0,1,2,3,…. That assumption stopped being true when OBJ and 3MF import landed:
+ * an indexed mesh's vertex TABLE is not its triangle stream, so the GPU drew
+ * whatever triangles the table's ordering happened to spell — a four-vertex,
+ * four-face tetrahedron was drawn as ONE triangle. The overlay builders index
+ * this buffer as `face * 9`, so they were reading the same wrong thing. Both are
+ * correct for every format now.
+ *
  * Positions are COPIED rather than transferred: the worker keeps the
  * authoritative array, so handing the original to the main thread would detach
  * it and leave the resident model unusable. That copy is the price of worker-
  * side ownership, and it is accounted for in docs/PERFORMANCE_BASELINE.md.
  *
- * Indices are not sent at all — STL soup indices are 0,1,2,3,… and the GPU
- * assumes exactly that for a non-indexed draw.
+ * NORMALS ARE FLAT, and expansion is what makes that free: each corner belongs
+ * to exactly one face and carries that face's normal. It is also what keeps a
+ * repaired model looking like the model it was — Stage 4B-1D gave repair
+ * candidates the source's shared corners, and smoothing across them would have
+ * rounded off every hard edge purely because the geometry is now stored better.
  */
 export function buildRenderSnapshot(mesh: CanonicalMesh): RenderSnapshot {
+  const drawable = buildDrawableTriangles(mesh);
   return {
-    positions: mesh.positions.slice(),
-    normals: computeVertexNormals(mesh),
-    vertexCount: vertexCount(mesh),
+    positions: drawable.positions,
+    normals: drawable.normals,
+    vertexCount: drawable.vertexCount,
   };
 }
 

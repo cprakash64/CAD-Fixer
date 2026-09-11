@@ -122,3 +122,107 @@ blocked a repair the same pipeline had already made safe. The idempotence test
 caught it. Incremental adjustment of three interacting analyses would have been
 faster and would have been the kind of cleverness that produces plausible,
 wrong answers.
+
+---
+
+## Stage 4B-1D closure — the candidate keeps the source's representation
+
+**Status:** Accepted (Stage 4B-1D). Additive. Nothing above about the
+TRANSACTION changes; what changes is what the candidate mesh looks like.
+
+### What went wrong
+
+`rebuildCandidate` materialised the survivor decision as triangle soup: nine
+coordinates per surviving face and an identity index buffer. The comment said so
+plainly — "SOUP IN, SOUP OUT. The canonical representation is non-indexed
+triangle soup (STL has no shared vertices)" — and when it was written that was
+true of every mesh CAD Fixer could load.
+
+Stage 4A-2B1 made it false. An OBJ or a 3MF import is genuinely indexed, often
+with an order of magnitude more faces than vertices, and repair kept rebuilding
+it as soup. Removing ONE exact duplicate face from a 160,801-vertex grid produced
+a 960,000-vertex candidate describing exactly the same surface: 2.7x the canonical
+bytes, a correspondingly larger render snapshot and export, more GPU memory, and
+the index structure the user's file had carried silently discarded. The memory
+preflight was wrong in the same direction — `candidateBytes` is the source's own
+size, documented as the worst case, and for indexed input the candidate could be
+several times it.
+
+### The decision — Policy B
+
+**The candidate keeps the surviving faces' ORIGINAL index triplets, in source
+face order, over the source's own vertices.** Retained vertices keep their exact
+Float32 bytes. The only vertices removed are those no surviving face references,
+and they are removed by renumbering the survivors in **ascending original index**
+order. When nothing is orphaned the remap is the identity and the position buffer
+is a straight copy of the source's bytes.
+
+Ascending original order rather than first-use order because it makes the
+numbering a function of WHICH vertices survived and nothing else — first-use
+order is equally deterministic and couples the result to face traversal for no
+benefit.
+
+### Why not Policy A — keep the whole source vertex table
+
+Simpler, and rejected, because it would have **changed observable repair
+semantics** rather than only the representation:
+
+- `computeBounds` walks every position slot. A retained orphan at an extreme
+  coordinate would freeze the model's reported bounding box when the faces around
+  it are removed — and the panel's "the bounding box changed, removed faces
+  explain it" disclosure would stop firing.
+- `topologicalVertexCount` is welded per position slot, so an orphan would still
+  be counted as a vertex of a model no triangle touches.
+
+The soup rebuild got both of those right, by accident of being soup. A
+representation fix is not permitted to take them away. Unused vertices ARE
+otherwise legal — `assertMeshStructure` rejects only out-of-range indices, and a
+3MF whose file declares a vertex no triangle uses imports today — so this is a
+choice about repair's own output, not a structural constraint.
+
+### What is explicitly NOT done
+
+**No welding.** Two vertices with identical coordinates and different indices
+stay two vertices. Merging them is tolerance welding under another name, decided
+by no user and qualified by nobody, and it would change the surviving topology.
+
+**No re-deciding.** The removal mask and the flip mask arrive already decided by
+the plan and the winding solver; this step only materialises them. A frozen test
+compares acceptance, per-operation counts, regressions and every surviving face's
+corner COORDINATES against what the pre-4B-1D engine produced, across ten
+fixtures covering every conservative operation and every outcome the engine has.
+Corners rather than indices, because indices are exactly what this stage changes.
+
+**No new capacity.** The conservative-repair size limits are unchanged. The
+preflight's ceiling is now a bound the pipeline can actually honour; that is a
+correction, not headroom.
+
+**Soup stays soup.** A source that is already unindexed gets an unindexed
+candidate. This stage preserves indexing where it exists; it does not invent it
+where it does not.
+
+### The rendering consequence, which had to be fixed for this to be safe
+
+A `RenderSnapshot` carries no index buffer — the GPU walks the position buffer
+three vertices at a time — and `buildRenderSnapshot` handed it
+`mesh.positions.slice()`. That is correct exactly when the vertex table IS the
+triangle stream, which is STL soup and nothing else. **Every indexed OBJ and 3MF
+import has therefore been rendered wrongly since Stage 4A-2B1**, drawn as
+whatever triangles its vertex pool happened to spell; the change-overlay and
+topology-overlay builders index the same buffer as `face * 9` and were reading
+the same wrong thing. No test had compared the drawn triangle count against the
+model's, which is how it survived.
+
+`buildDrawableTriangles` materialises the drawable stream from the index buffer
+at the render boundary. Flat shading falls out of it — each corner belongs to one
+face and carries that face's normal, bit-identical to what soup produced through
+`computeVertexNormals` — which is also what stops restored indexing from
+smoothing a hard edge. Canonical geometry is never de-indexed to satisfy a
+renderer.
+
+### Measured
+
+`npm run bench:repair`, indexed grids with one duplicate face: the candidate is
+61.2% / 62.3% / 62.4% smaller than soup at 801 / 28,801 / 320,001 faces, and the
+rebuild costs 7.9 ms at the largest. Pipeline timings and `undoRetainedBytes` are
+unchanged. Details in `docs/PERFORMANCE_BASELINE.md`.

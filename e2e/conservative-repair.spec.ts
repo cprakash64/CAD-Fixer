@@ -65,6 +65,7 @@ async function apply(page: Page): Promise<void> {
 /** Reads what the viewport actually drew. */
 async function readSceneStats(page: Page): Promise<{
   drawCalls: number;
+  renderedTriangles: number;
   modelObjects: number;
   previewObjects: number;
   overlayObjects: number;
@@ -76,6 +77,7 @@ async function readSceneStats(page: Page): Promise<{
     );
     return {
       drawCalls: Number(canvas?.dataset.drawCalls ?? 0),
+      renderedTriangles: Number(canvas?.dataset.renderedTriangles ?? 0),
       modelObjects: Number(canvas?.dataset.modelObjects ?? 0),
       previewObjects: Number(canvas?.dataset.previewObjects ?? 0),
       overlayObjects: Number(canvas?.dataset.overlayObjects ?? 0),
@@ -865,8 +867,33 @@ test('CRU03: an indexed OBJ survives repair and undo, and exports as it imported
   await apply(page);
   // The repair really did something: the duplicate face is gone.
   await expect.poll(async () => readFact(page, 'health-triangles'), { timeout: 60_000 }).toBe(4);
+
+  /*
+   * CRP02, §61: THE REPAIRED MODEL IS STILL INDEXED — Stage 4B-1D.
+   *
+   * Four corners for four faces. Before Stage 4B-1D this read TWELVE: the
+   * candidate was rebuilt as triangle soup, so removing one duplicate face
+   * tripled the vertex count of a model the user had not otherwise changed, and
+   * every export afterwards carried the flattening.
+   */
+  expect(await readFact(page, 'health-corners')).toBe(4);
+  expect(await readFact(page, 'health-corners')).not.toBe(
+    (await readFact(page, 'health-triangles')) * 3,
+  );
+
   const appliedObj = await exportAs(page, 'obj');
   expect(appliedObj.equals(beforeObj)).toBe(false);
+  /*
+   * §38: AND THE EXPORTED FILE IS NOT BLOATED EITHER. An OBJ writes one `v` line
+   * per canonical vertex, so a de-indexed candidate is visible in the file as
+   * well as in the panel — this is the same claim measured where a user would
+   * actually feel it.
+   */
+  // EIGHT `v` LINES FOR TWO TETRAHEDRA, four each — the conversion dialog writes
+  // the whole document, and the clean sibling contributes four of its own. Under
+  // the soup rebuild the repaired part alone wrote twelve, for sixteen in total.
+  expect(countLines(appliedObj, 'v ')).toBe(8);
+  expect(countLines(appliedObj, 'f ')).toBe(8);
 
   await page.getByTestId('undo-repair').click();
   await expect.poll(async () => readFact(page, 'health-triangles'), { timeout: 60_000 }).toBe(5);
@@ -876,6 +903,8 @@ test('CRU03: an indexed OBJ survives repair and undo, and exports as it imported
    * reconstruction failed, and the one a triangle count cannot make.
    */
   expect(await readFact(page, 'health-corners')).toBe(4);
+
+  expect(countLines(await exportAs(page, 'obj'), 'v ')).toBe(8);
 
   // AND THE FILES ARE THE SAME FILES. Not "the same shape": the same bytes,
   // which is what a user would diff. Both writers, because OBJ is the one that
@@ -939,6 +968,12 @@ test('CRU04: an indexed 3MF survives repair and undo, and exports as it imported
   await preview(page);
   await apply(page);
   await expect.poll(async () => readFact(page, 'health-triangles'), { timeout: 60_000 }).toBe(4);
+  /*
+   * CRP03, §62: STILL INDEXED AFTER APPLY, through the format where indexing is
+   * native. A 3MF `<mesh>` is vertices plus triangles referencing them, so a
+   * de-indexed candidate is a change to the file format's own structure.
+   */
+  expect(await readFact(page, 'health-corners')).toBe(4);
 
   await page.getByTestId('undo-repair').click();
   await expect.poll(async () => readFact(page, 'health-triangles'), { timeout: 60_000 }).toBe(5);
@@ -947,4 +982,75 @@ test('CRU04: an indexed 3MF survives repair and undo, and exports as it imported
   expect(await readFact(page, 'health-corners')).toBe(4);
   // And the archive is the archive: same bytes, so same `<vertices>` block.
   expect((await exportAs(page, '3mf')).equals(before)).toBe(true);
+});
+
+/** Counts the lines of an exported text artifact that start with `prefix`. */
+function countLines(bytes: Buffer, prefix: string): number {
+  let count = 0;
+  for (const line of bytes.toString('utf8').split('\n')) {
+    if (line.startsWith(prefix)) count += 1;
+  }
+  return count;
+}
+
+/**
+ * CRP18, §63: HARD EDGES SURVIVE THE REPAIR — the rendering half of Stage 4B-1D.
+ *
+ * Giving repair candidates the source's shared corners raises a question that
+ * has nothing to do with geometry: a shared vertex belongs to several faces, and
+ * a renderer that averages their normals rounds off exactly the edges a
+ * mechanical part is defined by. A cube would come out looking like a pebble,
+ * purely because CAD Fixer had started storing it properly.
+ *
+ * The answer is that the render snapshot is EXPANDED at the render boundary and
+ * the canonical mesh is not: three corners per face, each carrying its own
+ * face's normal. So this test asserts what the GPU was actually asked to draw —
+ * a count no shading choice can fake — before and after a repair.
+ *
+ * IT ALSO COVERS A DEFECT OLDER THAN THIS STAGE. The snapshot used to be the
+ * vertex TABLE with no index buffer, drawn non-indexed, so every indexed OBJ and
+ * 3MF ever imported was drawn as a few stray triangles out of the vertex pool.
+ * No test had ever compared the drawn triangle count with the model's.
+ */
+test('CRP18: an indexed model draws every triangle, before and after a repair', async ({
+  page,
+}) => {
+  test.setTimeout(180_000);
+  await page.goto('/');
+  /*
+   * ONE PART, DELIBERATELY. `renderer.info.render.triangles` counts what
+   * survived FRUSTUM CULLING, and applying a repair reframes the camera — so on
+   * a multi-part document a distant sibling can legitimately drop out of the
+   * count and a total would be measuring the camera rather than the geometry.
+   * With one part every drawn triangle belongs to the model under repair.
+   */
+  await openFile(page, 'indexed.3mf', threeMfDefectiveTetrahedron());
+  await expect(page.getByTestId('topology-headline')).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByTestId('repair-operations')).toBeVisible({ timeout: 60_000 });
+
+  /*
+   * FIVE TRIANGLES DRAWN FOR A FIVE-TRIANGLE MODEL. The mesh has four vertices,
+   * so drawing the vertex table non-indexed — what the snapshot used to hand the
+   * GPU — would have produced ONE.
+   */
+  await expect
+    .poll(async () => (await readSceneStats(page)).renderedTriangles, { timeout: 60_000 })
+    .toBe(5);
+
+  await preview(page);
+  await apply(page);
+  await expect.poll(async () => readFact(page, 'health-triangles'), { timeout: 60_000 }).toBe(4);
+
+  // ONE FEWER FACE, AND EVERY REMAINING ONE STILL DRAWN — from a candidate that
+  // is now indexed, which is the combination Stage 4B-1D had to make work.
+  await expect
+    .poll(async () => (await readSceneStats(page)).renderedTriangles, { timeout: 60_000 })
+    .toBe(4);
+  expect(await readFact(page, 'health-corners')).toBe(4);
+
+  await page.getByTestId('undo-repair').click();
+  await expect.poll(async () => readFact(page, 'health-triangles'), { timeout: 60_000 }).toBe(5);
+  await expect
+    .poll(async () => (await readSceneStats(page)).renderedTriangles, { timeout: 60_000 })
+    .toBe(5);
 });

@@ -305,7 +305,19 @@ function blockedWinding(conflicts: number, reason: RepairReason): RepairOperatio
  */
 export function estimateRepairMemory(mesh: CanonicalMesh, faceCount: number): RepairMemoryEstimate {
   const authoritativeBytes = mesh.positions.byteLength + mesh.indices.byteLength;
-  // Worst case: nothing is removed, so the candidate is the same size.
+  /*
+   * WORST CASE: NOTHING IS REMOVED, so the candidate is the same size — and
+   * since Stage 4B-1D that is TRUE rather than merely intended.
+   *
+   * The candidate now keeps the source's indexed representation, so it is
+   * bounded above by the source and this is a genuine ceiling. It was not
+   * before: the old rebuild wrote nine coordinates per surviving face, so for
+   * an indexed source the candidate could be SEVERAL TIMES this figure — a
+   * 1,681-vertex, 3,201-face grid produced a candidate roughly 2.3x the size
+   * this line promised. The memory preflight was therefore protecting against a
+   * number the pipeline could not honour, and the closer the source was to the
+   * ceiling the more it under-counted.
+   */
   const candidateBytes = authoritativeBytes;
 
   // Masks and parity state: a handful of bytes per face, not per coordinate.

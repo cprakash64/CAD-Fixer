@@ -389,7 +389,10 @@ describe('AT01–AT05: applying is observably atomic', () => {
      * that the early preparation still describes the right document.
      */
     const committed = residentPart(result.value.handle, PART);
-    expect(result.value.render.vertexCount).toBe(Math.floor(committed.positions.length / 3));
+    // THREE CORNERS PER FACE — Stage 4B-1D. The snapshot is the drawable
+    // triangle stream expanded from the mesh's index buffer, not its vertex
+    // table, and a filled part's mesh is indexed like any other.
+    expect(result.value.render.vertexCount).toBe(triangleCount(committed) * 3);
     expect(result.value.triangleCount).toBe(triangleCount(committed));
     expect(result.value.parts.map((part) => part.partId)).toEqual([PART]);
     expect(result.value.parts[0]?.triangleCount).toBe(triangleCount(committed));
@@ -561,7 +564,7 @@ describe('UT01–UT04: undoing is observably atomic', () => {
      * so this is what proves the early preparation still describes what the
      * caller actually ended up with.
      */
-    expect(result.value.render.vertexCount).toBe(Math.floor(restored.positions.length / 3));
+    expect(result.value.render.vertexCount).toBe(triangleCount(restored) * 3);
     expect(result.value.triangleCount).toBe(triangleCount(restored) * 2);
     expect(result.value.parts).toHaveLength(2);
     // Both parts report the same mesh resource: the sharing is in the answer too.

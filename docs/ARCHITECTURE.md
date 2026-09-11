@@ -353,6 +353,17 @@ toggles visibility between them, sharing one display transform and one camera. N
 handle changes, so a preview cannot be exported, cannot be analysed, and cannot
 survive the model being replaced.
 
+**The repaired candidate keeps the source's representation** — Stage 4B-1D. The
+surviving faces' ORIGINAL index triplets, in source face order, over the source's
+own vertices; only vertices no surviving face references are dropped, renumbered
+in ascending original order; no coordinate is welded and no winding is changed.
+Until Stage 4B-1D the candidate was rebuilt as triangle soup — nine coordinates
+per surviving face — so removing one duplicate face from an indexed OBJ or 3MF
+silently tripled the model's vertex count and threw away the index structure the
+file carried. The render snapshot, which is drawn NON-INDEXED, is expanded from
+the index buffer at the render boundary instead
+([docs/repair/REPAIR_ARCHITECTURE.md](repair/REPAIR_ARCHITECTURE.md)).
+
 **Undo is a forward transaction.** It puts the RETAINED pre-repair mesh back in
 the worker and commits it as a NEW, higher revision — revision numbers only ever
 move forwards, because every staleness guard in the runtime depends on that. The

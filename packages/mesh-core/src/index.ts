@@ -55,7 +55,13 @@ export type {
   DocumentValidationReport,
 } from './document-validation';
 
-export { computeBounds, computeVertexNormals, triangleNormal } from './analysis';
+export {
+  buildDrawableTriangles,
+  computeBounds,
+  computeVertexNormals,
+  triangleNormal,
+} from './analysis';
+export type { DrawableTriangles } from './analysis';
 export type { MeshBounds, Vector3Tuple } from './analysis';
 
 export {
