@@ -569,7 +569,7 @@ global with a constructor could in principle move a result without moving a
 header.
 
 **The closure.** `kernel-differential.test.ts` extracts the pre-B1B1 artifact
-from git at `34efd8b` — read-only, into a temporary directory, no history
+from git at `741e649` — read-only, into a temporary directory, no history
 touched — and runs the **whole frozen Stage 3C corpus** through both artifacts:
 the 24 hand-authored adversarial fixtures and the three regenerated Stage 3A
 shells, 27 in total. Every deterministic field is compared: terminal status,

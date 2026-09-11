@@ -20,7 +20,17 @@ jobs:
     timeout-minutes: 20
 
     steps:
+      # FULL HISTORY, and the unit suite is the reason. The kernel differential
+      # reads its baseline artifact out of git at a fixed historical commit
+      # (`kernel-differential.test.ts`), because a baseline that was REBUILT
+      # would prove the build reproduces itself rather than that behaviour is
+      # unchanged. A shallow clone has one commit, so `git show` cannot find it
+      # and the test fails for lack of history rather than for a real defect.
+      #
+      # The e2e job below stays shallow: nothing it runs reads history.
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-node@v7
         with:

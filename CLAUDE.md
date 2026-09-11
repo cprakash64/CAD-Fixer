@@ -81,6 +81,21 @@ byte-identical. See `docs/adr/0009-exact-topology-recovery.md`.
 welding, no dropping degenerate or duplicate triangles, no reorientation, no
 rescaling, no invented units. See `docs/adr/0007-stl-preservation-policy.md`.
 
+## Git attribution policy
+
+**Never add Claude, Anthropic, an AI model, or an AI tool as a Git author,
+committer, co-author, `Co-Authored-By` trailer, `Generated-By` trailer, or
+equivalent attribution.** All Git commits in this repository must use only the
+user's configured Git identity unless the user explicitly requests otherwise.
+
+Claude Code IS expected to create the commits itself — the prohibition is on
+attribution METADATA, not on who does the work. This is a statement about who
+the repository's contributors are, and it is the user's to make.
+
+This says nothing about prose. Documentation, ADRs and commit bodies may discuss
+Claude Code, `CLAUDE.md` or Anthropic wherever that is the accurate thing to
+write; the rule is about commit trailers and identity fields only.
+
 ## Non-negotiable rules
 
 1. **Production software, not a prototype.** No throwaway code, no "we'll fix it

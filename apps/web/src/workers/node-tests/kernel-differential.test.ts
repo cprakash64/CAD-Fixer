@@ -32,7 +32,7 @@ import { FIXTURES } from '../../../../../experiments/self-intersection/fixtures.
  */
 
 /** The last commit before Stage 4B-1B1 touched the kernel. */
-const BASELINE_COMMIT = '34efd8b92f7164dc837c903611926026e0a2b941';
+const BASELINE_COMMIT = '741e649305424aefd06e0a81ab5aa5de09c59b3a';
 const ARTIFACT_DIRECTORY = 'packages/self-intersection-kernel/artifacts';
 
 interface Kernel {
