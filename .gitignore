@@ -46,3 +46,10 @@ experiments/repair-kernels/geogram/artifacts/geogram-reference
 # sources by the commands in experiments/self-intersection/README.md, and large.
 # What IS committed is the harness, the corpus and the results.
 experiments/self-intersection/artifacts/
+
+# Stage 5C release artifacts. Generated deterministically from a commit by
+# scripts/build-release-artifact.mjs and reproducible from any commit, so a
+# committed copy would be a second authority that could disagree with the build
+# it claims to describe. `site/` is the deployable tree; the manifest beside it
+# describes that tree and is deliberately never part of it.
+artifacts/release/

@@ -648,6 +648,49 @@ This stage changed no geometry, repair, hole-fill, self-intersection,
 import/export, UI, resource-limit or worker code. Nothing about this hosting
 target requires one.
 
+## 27b. Local deployment preparation — IMPLEMENTED (Stage 5C-Hostinger-B0)
+
+Everything hostname-independent is now built, tested and committed, so the
+first VPS mutation stage contains no build-system development.
+
+| Artifact         | Path                                                           | Purpose                                                  |
+| ---------------- | -------------------------------------------------------------- | -------------------------------------------------------- |
+| Release packager | `scripts/build-release-artifact.mjs`                           | `dist` → deployable tree + manifest. Node core only.     |
+| Deployable tree  | `artifacts/release/site/` (generated, ignored)                 | Exactly what nginx serves                                |
+| Manifest         | `artifacts/release/release-manifest.json` (generated, ignored) | Commit, per-file SHA-256, sizes, exclusions, kernel hash |
+| Security headers | `deploy/nginx/cad-fixer-security-headers.conf`                 | The five isolation headers, `always`                     |
+| Site template    | `deploy/nginx/zz-cad-fixer.conf.template`                      | Static vhost, placeholder host                           |
+| Contract tests   | `scripts/hostinger-deployment.test.ts`                         | HV-C01–HV-C20                                            |
+| Runbook          | `docs/release/HOSTINGER_DEPLOYMENT_RUNBOOK.md`                 | Sanitized operator steps                                 |
+| Scripts          | `npm run release:build`, `npm run release:verify`              | No new dependency                                        |
+
+**The packager is fail-closed.** An unrecognised file in `dist` stops the build
+rather than being shipped, forbidden patterns (`.env`, `.pem`, `.git`, `*.ts`,
+`*.test.*`, `node_modules`) are refused outright, and the extension allowlist
+must be extended deliberately. A release artifact is the one place where "copy
+everything and hope" publishes a secret to the internet.
+
+**It copies bytes and nothing else** — no minification, recompression or
+rewriting. Each file is re-hashed after copying and compared with its source, so
+the server provably receives exactly Vite's output minus the exclusions.
+
+**It refuses a dirty tracked tree** unless `--allow-dirty` is passed, because a
+manifest naming a commit it was not built from is worse than no manifest.
+Generated, ignored output does not count as dirty. The kernel SHA-256 is checked
+inside the packager, so the gate cannot be bypassed by skipping a test.
+
+**Measured artifact:** 8 files, **2,569,581 bytes**; 5 source maps excluded,
+**6,526,115 bytes** (71.7 % of the build directory).
+
+**HV-C17 is the load-bearing test.** It parses the template into `location`
+blocks and asserts that every block setting any `add_header` also re-includes
+the security snippet — the concrete defence against nginx dropping COOP and COEP
+from `/assets/`. Comments are stripped before every assertion, because both
+config files _explain_ the traps they avoid and a naive text match would be
+satisfied by the explanation rather than by a directive. That distinction was
+not theoretical: the first version of the CSP assertion failed against its own
+comment.
+
 ## 28. Required before the next stage
 
 1. **A fresh Hostinger snapshot**, created in hPanel and confirmed by the user.

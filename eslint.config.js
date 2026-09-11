@@ -45,6 +45,12 @@ export default tseslint.config(
   {
     ignores: [
       '**/dist/**',
+      // Stage 5C release artifacts: a COPY of the production bundle, emitted by
+      // scripts/build-release-artifact.mjs. The same minified bytes are already
+      // excluded as '**/dist/**'; linting the copy would report thousands of
+      // errors against generated output nobody authored. The PACKAGER itself,
+      // under scripts/, is linted.
+      'artifacts/release/**',
       // The end-to-end harness's own build output. Its SOURCE, under
       // apps/web/e2e-harness/, IS linted; only the emitted bundle is not.
       '**/dist-e2e-harness/**',

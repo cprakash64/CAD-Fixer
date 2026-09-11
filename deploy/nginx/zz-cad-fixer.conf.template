@@ -1,0 +1,69 @@
+# CAD Fixer — staging site, static only.
+#
+# Render `<CAD_FIXER_STAGING_HOST>` and install on the server as:
+#   /etc/nginx/sites-available/zz-cad-fixer
+#   /etc/nginx/sites-enabled/zz-cad-fixer   (symlink, same basename)
+#
+# THE `zz-` PREFIX IS A SAFETY MECHANISM, NOT A NAMING WHIM.
+#
+# The audited server declares NO `default_server` anywhere, so nginx makes the
+# FIRST block loaded for a given listen socket the implicit default, and
+# `include .../sites-enabled/*` loads in glob order. A file named `cad-fixer`
+# would sort BEFORE the existing sites and silently capture every IP-based and
+# unmatched-Host request away from a live product. `conf.d/*.conf` is included
+# earlier still, so this file must never go there.
+#
+# Ordering is DEFENCE IN DEPTH, not the guarantee. The guarantee is the explicit
+# `server_name` below plus the Host-routing checks in the B1 qualification: after
+# install, `nginx -T` must confirm the first block for :80 and :443 is unchanged.
+#
+# This block is HTTP-only on purpose. It is the bootstrap that lets Certbot
+# answer an ACME http-01 challenge for exactly this hostname; Certbot's nginx
+# plugin then adds the TLS listener and the redirect to the same block.
+#
+# MIME types come from the server's global `include mime.types`, which the audit
+# confirmed already maps `application/wasm` and `application/javascript`.
+# Nothing here shadows them.
+
+server {
+    listen 80;
+    # Explicit, single host. NEVER `default_server` — see above.
+    server_name <CAD_FIXER_STAGING_HOST>;
+
+    root /var/www/cad-fixer/current;
+    index index.html;
+
+    # CAD Fixer is a static site: no upstream, no PHP, no CGI, no directory
+    # listing, and no SPA fallback. The product has no client-side router, so a
+    # missing path is a genuine 404 rather than an HTML shell returned under a
+    # JavaScript content type.
+    autoindex off;
+
+    access_log /var/log/nginx/cad-fixer.access.log;
+    error_log /var/log/nginx/cad-fixer.error.log;
+
+    # Applies to every response from a location that sets no header of its own.
+    include /etc/nginx/snippets/cad-fixer-security-headers.conf;
+
+    # The shell is revalidated, so a cached document can never point at hashed
+    # chunks a newer release has replaced. Never `immutable`.
+    location = /index.html {
+        include /etc/nginx/snippets/cad-fixer-security-headers.conf;
+        add_header Cache-Control "no-cache" always;
+        try_files $uri =404;
+    }
+
+    # Every file under /assets/ carries a content hash in its name, so a changed
+    # file is a changed URL and the response may be cached indefinitely.
+    location /assets/ {
+        include /etc/nginx/snippets/cad-fixer-security-headers.conf;
+        add_header Cache-Control "public, max-age=31536000, immutable" always;
+        try_files $uri =404;
+    }
+
+    # Exact file, or a directory index, or 404. No catch-all rewrite to
+    # /index.html.
+    location / {
+        try_files $uri $uri/ =404;
+    }
+}

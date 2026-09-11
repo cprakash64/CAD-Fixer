@@ -16,6 +16,8 @@
     "dev": "npm run dev --workspace @cadfixer/web",
     "prebuild": "npm run check:node",
     "build": "npm run build --workspace @cadfixer/web",
+    "release:build": "node scripts/build-release-artifact.mjs",
+    "release:verify": "vitest run scripts/hostinger-deployment.test.ts",
     "preview": "npm run preview --workspace @cadfixer/web",
     "typecheck": "tsc --noEmit -p tsconfig.json && npm run typecheck --workspaces --if-present",
     "lint": "eslint .",
