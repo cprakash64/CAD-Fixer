@@ -175,8 +175,12 @@ export default tseslint.config(
   // or loader exists. `explicit-function-return-type` is turned off for these
   // files only because JavaScript has no return-type syntax to satisfy it —
   // the types are declared in the accompanying `.d.ts`, which IS checked.
+  //
+  // `scripts/release-server.mjs` is `.mjs` for the same reason: it is the
+  // reference implementation of the production serving contract, so it has to be
+  // runnable with plain `node` and no build step.
   {
-    files: ['scripts/**/*.js', 'experiments/**/*.mjs'],
+    files: ['scripts/**/*.js', 'scripts/**/*.mjs', 'experiments/**/*.mjs'],
     languageOptions: {
       globals: globals.node,
     },
