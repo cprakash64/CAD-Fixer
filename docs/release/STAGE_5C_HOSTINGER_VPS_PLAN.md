@@ -691,6 +691,32 @@ satisfied by the explanation rather than by a directive. That distinction was
 not theoretical: the first version of the CSP assertion failed against its own
 comment.
 
+## 27c. Staging deployment — COMPLETED (Stage 5C-Hostinger-B1)
+
+CAD Fixer is deployed and qualified on the VPS at `fixcad.thelunai.com`, from
+commit `00fc4e25c23b94737bdab947487ccf82bcdaf7c3`. Full evidence:
+[`STAGE_5C_HOSTINGER_B1_STAGING.md`](STAGE_5C_HOSTINGER_B1_STAGING.md).
+
+Every design decision in this plan held up in practice:
+
+- **The `zz-` load-order control worked.** CAD Fixer became neither implicit
+  default — the bare IP still serves the pre-existing application on `:80` and
+  the legacy certificate on `:443`.
+- **The header-snippet re-include worked.** All five headers verified at seven
+  resources including two 404s, first at the HTTP origin before Certbot and
+  again over HTTPS.
+- **`mv -Tf` activation worked**, exercised five times in the rollback
+  rehearsal with no nginx reload.
+- **No MIME change was needed** — `.wasm` served as `application/wasm` from the
+  stock `mime.types`, as predicted from the nginx source.
+
+One thing the plan did not anticipate: **`systemctl reload nginx` fails on this
+host**, because nginx runs as a manually started master while the systemd unit
+is `failed` and `disabled`. Reload was done with `nginx -s reload` (SIGHUP to
+the master), which is graceful and left the master PID unchanged. The unit was
+deliberately not touched — and its consequence, that **nginx will not restart
+after a reboot**, is recorded as pre-existing debt for its own task.
+
 ## 28. Required before the next stage
 
 1. **A fresh Hostinger snapshot**, created in hPanel and confirmed by the user.
