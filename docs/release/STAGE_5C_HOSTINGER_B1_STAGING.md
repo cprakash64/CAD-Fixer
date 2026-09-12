@@ -328,6 +328,73 @@ Until the unit legitimately owns the process, **`nginx -s reload` remains the
 correct reload command**, and the runbook says so rather than aspirationally
 switching to `systemctl reload`.
 
+### 10b.3b Root cause, as far as it is knowable
+
+The privileged bundle reconstructed the timeline:
+
+| When                    | Event                                                               |
+| ----------------------- | ------------------------------------------------------------------- |
+| 2026-04-30 15:07        | System boot                                                         |
+| **2026-06-11 02:25:37** | `nginx.service` **failed (Result: exit-code)** and stayed failed    |
+| 2026-07-25 00:03:58     | nginx started **manually**; that master still serves                |
+| 2026-09-12 08:33        | Reload attempt → _"Unit cannot be reloaded because it is inactive"_ |
+
+The unit is the stock Ubuntu package (`Type=forking`, `PIDFile=/run/nginx.pid`,
+standard `ExecStart`/`ExecReload`/`ExecStop`, no drop-ins), and it reports
+`disabled; preset: enabled` — **Ubuntu ships nginx enabled, so it was explicitly
+disabled at some point.**
+
+**Why it failed in June is not recoverable.** systemd itself reports the journal
+has rotated since the unit was last started, so the original exit is gone. That
+is stated rather than guessed at: an invented root cause would be worse than an
+acknowledged gap, and it is the reason a physical reboot is the only complete
+proof (below).
+
+### 10b.3c Remediation applied
+
+Preconditions checked first, because enabling a unit is only safe if nothing
+else already starts nginx at boot — two masters racing for ports 80 and 443 on a
+host with live sites would be a worse outcome than the problem. Root crontab,
+`/etc/cron.d`, `/etc/rc.local` and every other unit were searched: **no
+competing starter exists.** `nginx -t` passes, so the unit's `ExecStartPre`
+config test will succeed at boot.
+
+```
+systemctl enable nginx        →  boot symlink created
+systemctl reset-failed nginx  →  stale June failure cleared
+```
+
+|              | Before          | After                           |
+| ------------ | --------------- | ------------------------------- |
+| `is-enabled` | `disabled`      | **`enabled`**                   |
+| `is-failed`  | `failed`        | `inactive` (cleared)            |
+| `is-active`  | `failed`        | `inactive`                      |
+| Master PID   | 2722132         | **2722132 — unchanged**         |
+| Master start | Jul 25 00:03:58 | **Jul 25 00:03:58 — unchanged** |
+| `nginx -t`   | PASS            | PASS                            |
+
+Boot symlink: `/etc/systemd/system/multi-user.target.wants/nginx.service`.
+
+**`is-active` reporting `inactive` is correct, not a failure.** systemd does not
+adopt a daemon it did not launch, so the unit will keep reporting inactive for
+as long as the hand-started master serves traffic. Claiming otherwise would be a
+false statement about ownership. All five sites were re-probed immediately
+afterwards and were **unchanged**; nothing was signalled, started or stopped.
+
+### 10b.3d Reboot status — honest classification
+
+`BOOT CONFIGURATION QUALIFIED; PHYSICAL REBOOT SMOKE DEFERRED`
+
+What is now true: the packaged unit is valid, enabled, free of competing
+starters, and its config test passes. Every other service the sites need is
+already enabled with `unless-stopped` containers.
+
+What is **not** proven: that a real boot brings all four sites back. This is
+**not reboot proof and must not be described as such.** The residual risk is
+specific — the June failure's cause is unknown, so it could in principle recur
+at boot — which is exactly why a scheduled reboot is worth more than an
+unplanned one discovering it later.
+
 ### 10b.4 Repeatable remote qualification
 
 B1 proved the deployment correct but only after substituting a hardcoded origin
