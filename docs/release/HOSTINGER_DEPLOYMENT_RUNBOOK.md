@@ -140,16 +140,17 @@ loads earlier still.
 ```bash
 sudo nginx -t                 # FAIL: remove the new files, restore, stop
 sudo nginx -T | grep -nE 'server_name|listen|default_server'
-sudo nginx -s reload          # only after -t passes
+sudo systemctl reload nginx   # only after -t passes; reload, never restart
 ```
 
-> **Reload with `nginx -s reload`, not `systemctl reload nginx`.** On this host
-> nginx runs from a manually started master while `nginx.service` is `disabled`
-> and `failed`, so systemd cannot signal it and `systemctl reload` fails
-> outright. `nginx -s reload` reads `/run/nginx.pid` and sends the master
-> `SIGHUP` — exactly what systemd does internally, and graceful: the master PID
-> is unchanged and only workers are replaced. Change this line back only once
-> the unit legitimately owns the process.
+> **`systemctl reload nginx` is correct as of 2026-09-12.** Earlier in this
+> stage nginx ran from a manually started master while the unit was `disabled`
+> and `failed`, so systemd could not signal it and `nginx -s reload` was the
+> required workaround. The unit has since been enabled and a controlled reboot
+> handed ownership to systemd — `is-active: active`, with the master launched by
+> the unit's own `ExecStart`. If `systemctl reload` ever reports the unit is
+> inactive again, something has restarted nginx outside systemd; diagnose that
+> rather than falling back to `nginx -s reload` permanently.
 
 Confirm from `nginx -T` that the first block for `:80` and `:443` is unchanged.
 Then re-check every existing site against the step-2 baseline. **Any regression

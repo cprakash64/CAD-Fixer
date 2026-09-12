@@ -385,6 +385,11 @@ afterwards and were **unchanged**; nothing was signalled, started or stopped.
 
 `BOOT CONFIGURATION QUALIFIED; PHYSICAL REBOOT SMOKE DEFERRED`
 
+> **SUPERSEDED — the reboot was performed and passed.** See §10c: nginx started
+> automatically under systemd with a new master PID, and every site recovered.
+> The residual risk named below (that the unrecoverable June failure might recur
+> at boot) did not materialise.
+
 What is now true: the packaged unit is valid, enabled, free of competing
 starters, and its config test passes. Every other service the sites need is
 already enabled with `unless-stopped` containers.
@@ -433,6 +438,120 @@ manifest goes stale the moment a new commit lands. That is deliberate — a
 manifest naming the wrong commit is the defect HV-C01 exists to catch — but it
 means the order is always **commit → `release:build` → `release:verify`**, never
 the reverse. The packager reinforces it by refusing a dirty tracked tree.
+
+## 10c. Controlled Reboot Recovery Qualification (Stage B1.5 debt, CLOSED)
+
+B1.5 corrected the boot configuration but could not prove it. A controlled
+reboot was performed on **2026-09-12**, and it closes that debt with direct
+evidence rather than inference.
+
+### 10c.1 A new boot genuinely occurred
+
+|                   |                                           |
+| ----------------- | ----------------------------------------- |
+| Boot before       | **2026-04-30 15:07:39** (134 days uptime) |
+| Boot after        | **2026-09-12 09:39:18**                   |
+| SSH observed down | 09:38:18Z                                 |
+| SSH observed back | 09:39:34Z                                 |
+
+The boot timestamp — not a transient SSH drop — is the proof. Recovery was
+polled on a five-second interval rather than hammered.
+
+### 10c.2 nginx started automatically, and systemd owns it
+
+**This is the gate B1.5 could not deliver.**
+
+|                           | Before reboot                    | After reboot                                             |
+| ------------------------- | -------------------------------- | -------------------------------------------------------- |
+| `is-enabled`              | enabled                          | **enabled**                                              |
+| `is-active`               | **inactive**                     | **active**                                               |
+| Master PID                | 2722132                          | **881**                                                  |
+| Master started            | 2026-07-25 00:03:58              | **2026-09-12 09:39:32** — 14 s after boot                |
+| Master command            | `nginx -c /etc/nginx/nginx.conf` | **`/usr/sbin/nginx -g 'daemon on; master_process on;'`** |
+| `MainPID` tracked by unit | —                                | **881**                                                  |
+
+The command line is the decisive detail: the new master was launched with the
+unit's own `ExecStart`, not the hand-typed invocation that had been serving
+since July. systemd reports `ActiveState=active`, `SubState=running`,
+`MainPID=881`, `ExecMainStartTimestamp=09:39:33` — it is tracking the process it
+started. The manually started master is gone, and **`nginx -s reload` is no
+longer the required workaround.**
+
+A second inference worth stating: the unit runs
+`ExecStartPre=/usr/sbin/nginx -t -q` before `ExecStart`, so **nginx starting at
+all is itself proof that the configuration test passed at boot** — stronger
+evidence than re-running the test afterwards.
+
+Nothing was started by hand. Had nginx failed to come up, the stage would have
+reported `BLOCKED`; starting it manually would have destroyed the only evidence
+the reboot existed to produce.
+
+### 10c.3 Everything else recovered
+
+| Unit                                    | Enabled | Active     |
+| --------------------------------------- | ------- | ---------- |
+| `nginx`                                 | enabled | **active** |
+| `docker`, `docker.socket`, `containerd` | enabled | active     |
+| `postgresql`                            | enabled | active     |
+| `streamlit`                             | enabled | active     |
+| `lunaicad-backend`, `lunaicad-frontend` | enabled | active     |
+
+All six containers back under `unless-stopped`, four reporting `healthy`.
+
+### 10c.4 Every site returned to its exact baseline
+
+Measured 09:40:09Z, ~51 seconds after boot:
+
+| Host                  | Before        | After         | Verdict                             |
+| --------------------- | ------------- | ------------- | ----------------------------------- |
+| `fixcad.thelunai.com` | 301 / 200     | **301 / 200** | recovered                           |
+| site B                | 301 / 200     | 301 / 200     | recovered                           |
+| site B api            | 301 / 404     | 301 / 404     | recovered                           |
+| chat host             | 200 / 200     | 200 / 200     | recovered                           |
+| site A                | 200 / **000** | 200 / **000** | recovered to its pre-existing state |
+| legacy host           | 000 / 000     | 000 / 000     | dead before and after, by design    |
+| bare IP :80           | 200           | 200           | unchanged                           |
+
+Site A's broken HTTPS and the legacy host's absent DNS **predate this stage and
+are not reboot regressions.** Neither was fixed, because fixing them here would
+have meant this was no longer a pure reboot proof.
+
+### 10c.5 CAD Fixer recovery
+
+- `current` still resolves to
+  `releases/00fc4e25c23b94737bdab947487ccf82bcdaf7c3` — **the reboot moved no
+  release pointer** — and `index.html` is readable.
+- HTTPS 200, `<title>CAD Fixer`, certificate valid to 2026-12-11.
+- All five isolation headers present; `Cache-Control: no-cache` on the shell.
+- Real Chromium: **`crossOriginIsolated === true`**, `SharedArrayBuffer` and
+  `Atomics` available, **zero console errors**.
+- `certbot.timer` **active and enabled**, next run 13:57:57Z — renewal survived
+  the reboot.
+
+### 10c.6 Application evidence after reboot
+
+- **Remote end-to-end: 172 passed, 2 skipped, 0 failed** against the live origin
+  using the committed `CAD_FIXER_E2E_BASE_URL` harness — no source patching, and
+  port 4173 verified free so no local server could have answered.
+- **Byte identity: 8 / 8 exact** against the deployed manifest.
+- **Privacy unchanged:** 6 requests, all GET, all same-origin, no request body,
+  no non-GET method, and the Geogram kernel still not fetched at startup.
+
+### 10c.7 Observed recovery timing
+
+Roughly **80 seconds** from SSH loss to SSH return, nginx serving **~14 seconds
+after boot**, and every site confirmed healthy within **~51 seconds of boot**.
+
+This is **one observation on an idle host, not an SLA**, and it is recorded as
+such.
+
+### 10c.8 Debt status
+
+`PHYSICAL REBOOT RECOVERY QUALIFIED`
+
+The B1.5 deferral is **closed**. Boot recovery is no longer inferred from
+configuration; it has been observed end to end, including the pre-existing sites
+that share the machine.
 
 ## 11. Accepted limitations
 
