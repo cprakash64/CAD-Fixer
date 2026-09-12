@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { binaryStl } from './stl-fixtures';
+import { isAppOrigin } from './app-origin';
 
 /**
  * STL export, end to end.
@@ -101,7 +102,7 @@ test('importing and exporting a model sends nothing to the network', async ({ pa
   // export is where a naive implementation would POST the file somewhere.
   const external: string[] = [];
   page.on('request', (request) => {
-    if (!request.url().startsWith('http://localhost:4173')) external.push(request.url());
+    if (!isAppOrigin(request.url())) external.push(request.url());
   });
 
   await page.goto('/');

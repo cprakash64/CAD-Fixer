@@ -1,4 +1,13 @@
 import { defineConfig, devices } from '@playwright/test';
+import { DEFAULT_APP_BASE_URL } from './e2e/app-origin';
+
+/*
+ * DELIBERATELY LOCAL-ONLY. These specs measure main-thread gaps and
+ * cancellation ratios; run against a remote origin they would be measuring
+ * network latency, so CAD_FIXER_E2E_BASE_URL is not honoured here. The constant
+ * is imported rather than repeated so there is one definition of the local
+ * preview origin.
+ */
 
 /**
  * Timing proofs, run SERIALLY.
@@ -27,13 +36,13 @@ export default defineConfig({
   timeout: 600_000,
   reporter: 'list',
   use: {
-    baseURL: 'http://localhost:4173',
+    baseURL: DEFAULT_APP_BASE_URL,
     trace: 'on-first-retry',
   },
   projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
   webServer: {
     command: 'npm run build && npm run preview',
-    url: 'http://localhost:4173',
+    url: DEFAULT_APP_BASE_URL,
     reuseExistingServer: process.env.CI === undefined,
     timeout: 180_000,
   },

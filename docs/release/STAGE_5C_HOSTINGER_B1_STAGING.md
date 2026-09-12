@@ -268,6 +268,105 @@ nginx master `2722132` unchanged since before the deployment · `nginx -t` PASS 
 `certbot.timer` **active** · CAD Fixer certificate valid 89 days · all
 pre-existing certificates untouched · canonical release active.
 
+## 10b. Stage B1.5 — nginx service ownership and repeatable remote qualification
+
+Two issues B1 surfaced, closed here. Neither changed a byte of the deployed
+application.
+
+### 10b.1 nginx would not survive a reboot — diagnosis
+
+| Evidence               | Value                                                                             |
+| ---------------------- | --------------------------------------------------------------------------------- |
+| System boot            | **2026-04-30 15:07**                                                              |
+| nginx master start     | **2026-07-25 00:03:58** — 86 days AFTER boot                                      |
+| Master command         | `nginx -c /etc/nginx/nginx.conf`, PPID 1, root                                    |
+| `/run/nginx.pid`       | matches the running master                                                        |
+| `systemctl is-enabled` | **disabled**                                                                      |
+| `systemctl is-active`  | **failed**                                                                        |
+| Unit file              | `/lib/systemd/system/nginx.service`, **stock package** `nginx 1.24.0-2ubuntu7.17` |
+| Drop-in overrides      | **none** — `/etc/systemd/system/nginx.service.d/` does not exist                  |
+| Local override unit    | **none**                                                                          |
+
+**The master did not come from boot.** It was started by hand almost three
+months after the machine came up, and the unit that would have started it is
+disabled. Classification: **Case A — normal packaged unit, merely disabled**,
+with a stale `failed` state left over. Nothing is customised, so nothing needs
+to be reverse-engineered.
+
+### 10b.2 nginx is the ONLY service that would not return
+
+Every other service the sites depend on is already enabled:
+
+| Unit                                    | Enabled      | Active     |
+| --------------------------------------- | ------------ | ---------- |
+| `docker`, `docker.socket`, `containerd` | enabled      | active     |
+| `postgresql`                            | enabled      | active     |
+| `streamlit`                             | enabled      | active     |
+| `lunaicad-backend`, `lunaicad-frontend` | enabled      | active     |
+| **`nginx`**                             | **disabled** | **failed** |
+
+All six application containers use `restart: unless-stopped`. So after a reboot
+every backend would come back and **only the front door would be missing** —
+which would take all four sites down, not just CAD Fixer.
+
+**CAD Fixer's own recovery is the simplest on the box**: it needs the
+filesystem, nginx, and the certificate files. No upstream service, no container,
+no database, no interpreter. That is a direct consequence of the static-only
+architecture.
+
+### 10b.3 What was NOT done, and why
+
+The running master serves three live sites. `systemctl start nginx` would
+contend for ports 80 and 443 that it already holds, fail, and risk an outage to
+make a status line look tidy. So no `start`, `stop`, `restart`, `kill` or
+`nginx -s quit` was issued, and systemd was not asked to adopt a process it did
+not launch — **systemd does not adopt independently started daemons, and
+claiming an `active` unit while a foreign master owns the ports would be a
+false statement about ownership.**
+
+Until the unit legitimately owns the process, **`nginx -s reload` remains the
+correct reload command**, and the runbook says so rather than aspirationally
+switching to `systemctl reload`.
+
+### 10b.4 Repeatable remote qualification
+
+B1 proved the deployment correct but only after substituting a hardcoded origin
+by hand, which is not a repeatable qualification. The harness now takes
+`CAD_FIXER_E2E_BASE_URL`:
+
+```bash
+CAD_FIXER_E2E_BASE_URL=https://fixcad.thelunai.com npm run test:e2e
+```
+
+- **The local default is untouched.** With no variable set, everything behaves
+  exactly as before, and the preview server is still started.
+- **With an external origin, no local server is built or started** — a suite
+  that silently fell back to localhost would report local results as deployment
+  evidence.
+- **Origins are compared as origins, never as substrings.** `startsWith` would
+  accept `https://fixcad.thelunai.com.attacker.test/` as first-party, which is
+  exactly what a privacy assertion exists to catch. RT04 pins that case.
+- **Malformed or non-HTTP overrides fail closed** rather than defaulting to
+  localhost.
+- `data:` and `blob:` URLs stay a separate, opt-in allowance, preserving the
+  original semantics rather than widening them.
+
+The timing suites deliberately do **not** honour the variable: they measure
+main-thread gaps and cancellation ratios, which over a network would be
+measuring latency.
+
+**Result: the five previously failing specs pass remotely with committed
+behaviour and no source patching — 80/80.** The assertions were not weakened;
+RT01–RT08 exist to prove the classifier still rejects genuine third parties.
+
+### 10b.5 A property of HV-C01 worth knowing
+
+`release:verify` compares the manifest's commit against current `HEAD`, so a
+manifest goes stale the moment a new commit lands. That is deliberate — a
+manifest naming the wrong commit is the defect HV-C01 exists to catch — but it
+means the order is always **commit → `release:build` → `release:verify`**, never
+the reverse. The packager reinforces it by refusing a dirty tracked tree.
+
 ## 11. Accepted limitations
 
 - **The staging hostname is internet-reachable.** It is not access-controlled,

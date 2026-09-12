@@ -1,5 +1,6 @@
 import { expect, test, type Page, type Response } from '@playwright/test';
 import { binaryStl } from './stl-fixtures';
+import { APP_BASE_URL } from './app-origin';
 
 /**
  * BQ23–BQ29, BQ43–BQ54 — THE HOSTING CONTRACT, MEASURED RATHER THAN DECLARED.
@@ -120,7 +121,7 @@ test('BQ29, BQ54: the whole flow is same-origin and sends no geometry anywhere',
   });
 
   const response = await page.goto('/');
-  const origin = new URL(response?.url() ?? 'http://localhost:4173/').origin;
+  const origin = new URL(response?.url() ?? APP_BASE_URL).origin;
 
   await openFile(page, 'small.stl', binaryStl(700).bytes);
   await expect(page.getByTestId('topology-headline')).toBeVisible({ timeout: 60_000 });

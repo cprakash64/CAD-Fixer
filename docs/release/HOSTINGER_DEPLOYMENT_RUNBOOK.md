@@ -31,6 +31,18 @@ npm run release:build      # refuses a dirty tracked tree
 npm run release:verify     # HV-C01–HV-C20
 ```
 
+The order matters: `release:verify` checks the manifest against current `HEAD`,
+so always **commit first, then build, then verify**.
+
+To re-run the product suite against a deployed origin rather than the local
+preview server:
+
+```bash
+CAD_FIXER_E2E_BASE_URL=https://<host> npm run test:e2e
+```
+
+With the variable unset everything runs locally exactly as before.
+
 Produces `artifacts/release/site/` (deployable) and
 `artifacts/release/release-manifest.json` (describes it, never uploaded).
 
@@ -128,8 +140,16 @@ loads earlier still.
 ```bash
 sudo nginx -t                 # FAIL: remove the new files, restore, stop
 sudo nginx -T | grep -nE 'server_name|listen|default_server'
-sudo systemctl reload nginx   # only after -t passes; reload, never restart
+sudo nginx -s reload          # only after -t passes
 ```
+
+> **Reload with `nginx -s reload`, not `systemctl reload nginx`.** On this host
+> nginx runs from a manually started master while `nginx.service` is `disabled`
+> and `failed`, so systemd cannot signal it and `systemctl reload` fails
+> outright. `nginx -s reload` reads `/run/nginx.pid` and sends the master
+> `SIGHUP` — exactly what systemd does internally, and graceful: the master PID
+> is unchanged and only workers are replaced. Change this line back only once
+> the unit legitimately owns the process.
 
 Confirm from `nginx -T` that the first block for `:80` and `:443` is unchanged.
 Then re-check every existing site against the step-2 baseline. **Any regression

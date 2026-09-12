@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { isAppOrigin, isInlineResource } from './app-origin';
 import {
   cleanGridStl,
   crossingTrianglesStl,
@@ -240,11 +241,7 @@ test('SI-P08: the diagnostic sends nothing to the network', async ({ page }) => 
   const offOrigin: string[] = [];
   page.on('request', (request) => {
     const url = request.url();
-    if (
-      !url.startsWith('http://localhost:4173/') &&
-      !url.startsWith('data:') &&
-      !url.startsWith('blob:')
-    ) {
+    if (!isAppOrigin(url) && !isInlineResource(url)) {
       offOrigin.push(url);
     }
     const body = request.postData();

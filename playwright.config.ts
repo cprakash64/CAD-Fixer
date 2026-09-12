@@ -1,4 +1,5 @@
 import { defineConfig, devices } from '@playwright/test';
+import { APP_BASE_URL, IS_LOCAL_APP_ORIGIN } from './e2e/app-origin';
 
 /**
  * End-to-end smoke tests.
@@ -32,14 +33,24 @@ export default defineConfig({
   retries: process.env.CI === undefined ? 0 : 1,
   reporter: process.env.CI === undefined ? 'list' : [['list'], ['html', { open: 'never' }]],
   use: {
-    baseURL: 'http://localhost:4173',
+    baseURL: APP_BASE_URL,
     trace: 'on-first-retry',
   },
   projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
-  webServer: {
-    command: 'npm run build && npm run preview',
-    url: 'http://localhost:4173',
-    reuseExistingServer: process.env.CI === undefined,
-    timeout: 180_000,
-  },
+  /*
+   * The preview server exists only to serve the LOCAL default. When
+   * CAD_FIXER_E2E_BASE_URL points at a real deployment, building and starting a
+   * local server would be wasted work — and worse, a suite that silently fell
+   * back to it would report local results as deployment evidence.
+   */
+  ...(IS_LOCAL_APP_ORIGIN
+    ? {
+        webServer: {
+          command: 'npm run build && npm run preview',
+          url: APP_BASE_URL,
+          reuseExistingServer: process.env.CI === undefined,
+          timeout: 180_000,
+        },
+      }
+    : {}),
 });

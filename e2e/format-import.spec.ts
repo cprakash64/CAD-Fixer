@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { isAppOrigin } from './app-origin';
 import {
   objMultiPart,
   objTriangle,
@@ -255,7 +256,7 @@ test.describe('hostile files are refused in the browser, exactly as in the reade
       await expect.poll(async () => statusText(page), { timeout: 60_000 }).toMatch(expected);
       // Nothing was committed, and nothing off-origin was requested.
       await expect(page.getByTestId('model-empty')).toBeVisible();
-      expect(requests.filter((url) => !url.startsWith('http://localhost:4173'))).toEqual([]);
+      expect(requests.filter((url) => !isAppOrigin(url))).toEqual([]);
     });
   }
 });

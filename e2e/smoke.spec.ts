@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { isAppOrigin } from './app-origin';
 
 /**
  * End-to-end smoke tests against the production build served by `vite preview`.
@@ -126,7 +127,7 @@ test('every workflow says which of the three states it is in', async ({ page }) 
 test('the page issues no network requests beyond its own assets', async ({ page }) => {
   const external: string[] = [];
   page.on('request', (request) => {
-    if (!request.url().startsWith('http://localhost:4173')) external.push(request.url());
+    if (!isAppOrigin(request.url())) external.push(request.url());
   });
 
   await page.goto('/');

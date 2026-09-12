@@ -1,5 +1,6 @@
 import { expect, test, type Download, type Page } from '@playwright/test';
 import { binaryStl } from './stl-fixtures';
+import { isAppOrigin } from './app-origin';
 import {
   objMultiPart,
   objTriangle,
@@ -493,7 +494,7 @@ test('a source import loss survives, and does not move when the target changes',
 test('an unopened material library is disclosed and never fetched', async ({ page }) => {
   const external: string[] = [];
   page.on('request', (request) => {
-    if (!request.url().startsWith('http://localhost:4173')) external.push(request.url());
+    if (!isAppOrigin(request.url())) external.push(request.url());
   });
 
   await page.goto('/');
@@ -927,7 +928,7 @@ test('the whole conversion workflow sends nothing to the network', async ({ page
   const external: string[] = [];
   const withBodies: string[] = [];
   page.on('request', (request) => {
-    if (!request.url().startsWith('http://localhost:4173')) external.push(request.url());
+    if (!isAppOrigin(request.url())) external.push(request.url());
     if ((request.postData() ?? '').length > 0) withBodies.push(request.url());
   });
 
