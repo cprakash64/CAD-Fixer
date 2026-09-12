@@ -477,10 +477,40 @@ since July. systemd reports `ActiveState=active`, `SubState=running`,
 started. The manually started master is gone, and **`nginx -s reload` is no
 longer the required workaround.**
 
-A second inference worth stating: the unit runs
-`ExecStartPre=/usr/sbin/nginx -t -q` before `ExecStart`, so **nginx starting at
-all is itself proof that the configuration test passed at boot** — stronger
-evidence than re-running the test afterwards.
+The privileged status output confirms this directly rather than by inference:
+
+```
+Loaded: loaded (/usr/lib/systemd/system/nginx.service; enabled; preset: enabled)
+Active: active (running) since Sat 2026-09-12 09:39:33 UTC
+Process: 791 ExecStartPre=/usr/sbin/nginx -t -q -g daemon on; master_process on;
+         (code=exited, status=0/SUCCESS)
+Process: 849 ExecStart=/usr/sbin/nginx -g daemon on; master_process on;
+         (code=exited, status=0/SUCCESS)
+Main PID: 881 (nginx)
+ CGroup: /system.slice/nginx.service
+         ├─881 "nginx: master process /usr/sbin/nginx ..."
+         └─883..886 "nginx: worker process"
+
+Sep 12 09:39:32 systemd[1]: Starting nginx.service ...
+Sep 12 09:39:33 systemd[1]: Started nginx.service ...
+```
+
+Two things in that output settle the question beyond the status line:
+
+- **`ExecStartPre` exited `0/SUCCESS`.** The unit runs `nginx -t -q` before
+  `ExecStart`, so the configuration test demonstrably ran and passed **at boot**
+  — observed, not inferred, and stronger evidence than re-running the test
+  afterwards.
+- **The master and all four workers sit inside
+  `/system.slice/nginx.service`.** Cgroup containment is the definitive
+  ownership proof: an independently started process could coincidentally look
+  `active`, but it cannot be inside the unit's cgroup. systemd's own journal
+  records it starting the service at 09:39:32.
+
+`nginx -t` re-run afterwards: PASS. `certbot.timer`: active. The
+`fixcad.thelunai.com` certificate is listed by Certbot as **VALID, 89 days**,
+alongside the pre-existing certificates, which were neither touched nor
+combined with it.
 
 Nothing was started by hand. Had nginx failed to come up, the stage would have
 reported `BLOCKED`; starting it manually would have destroyed the only evidence
