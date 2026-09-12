@@ -124,6 +124,65 @@ symlink switch, so rollback is a pointer change with no rebuild and no
 re-upload. The previously qualified release is retained as the immediate
 rollback target.
 
+## Release record (recorded after the tag)
+
+These facts are only knowable once the release exists, so they are recorded in a
+commit **after** `v0.1.0` rather than back-dated into it. **The tag remains the
+exact release source and has not been moved.**
+
+|                   |                                                                  |
+| ----------------- | ---------------------------------------------------------------- |
+| Release commit    | `2800cec482d57fabafc74678785e2dd37eb4b9db`                       |
+| Tag               | `v0.1.0` (annotated) → the same commit                           |
+| `main` at release | the same commit                                                  |
+| GitHub CI         | run `34688353591` on the exact release SHA — **both jobs green** |
+| GitHub Release    | published as a **pre-release**                                   |
+| Released          | 2026-09-12                                                       |
+
+**Provenance verified end to end**, every identity agreeing on the same SHA:
+
+```
+git tag v0.1.0        →  2800cec4…b9db
+main / origin/main    →  2800cec4…b9db
+release manifest      →  2800cec4…b9db
+server release dir    →  releases/2800cec4…b9db
+current symlink       →  releases/2800cec4…b9db
+bytes served by HTTPS →  8/8 SHA-256 match
+```
+
+The build was produced twice from an isolated worktree at the release commit
+with identical output, and its eight runtime files are **byte-identical to the
+artifact qualified in staging** — so the bytes now public are the bytes that
+were tested, not a rebuild that merely resembles them.
+
+### Final gates
+
+- HTTP→HTTPS 301; TLS valid to 2026-12-11, validated without overrides.
+- Correct content types including **`application/wasm`**; missing asset and
+  source map both **404**.
+- All five isolation headers present at **seven** resources including the
+  WebAssembly module and both 404 responses.
+- `crossOriginIsolated === true`, `SharedArrayBuffer` and `Atomics` available in
+  real Chromium, **zero console errors**.
+- End-to-end suite against the public origin: **172 passed, 2 skipped, 0
+  failed**.
+- Privacy: **6 requests, all GET, all same-origin, no request body**, kernel not
+  fetched at startup.
+- The three pre-existing sites on the same server: **no regression**.
+
+### Rollback
+
+The previously qualified release is retained on the server as the immediate
+rollback target. Rollback is an atomic symlink switch — no rebuild, no
+re-upload, no service restart.
+
+### Accepted infrastructure debt
+
+Recorded, not fixed, and none of it a CAD Fixer product blocker: SSH password
+authentication with root login permitted and no fail2ban; one unrelated
+pre-existing site without working HTTPS; one expired legacy certificate for a
+domain that no longer resolves. These belong to a separate VPS hardening task.
+
 ## Feedback
 
 This is a Technical Preview. If CAD Fixer refuses something it should handle, or
