@@ -17,7 +17,13 @@ is scoped to CAD Fixer's own paths, and nothing touches another vhost.
 - A **fresh** Hostinger snapshot, created in hPanel immediately beforehand. The
   weekly backup is not a checkpoint for this change.
 - `<CAD_FIXER_STAGING_HOST>` chosen, with an `A` record resolving to the VPS.
-- SSH key authentication working for `<SSH_TARGET>`.
+- SSH **key** authentication working for `<SSH_TARGET>`. Password SSH is
+  disabled server-side and there is **no password fallback** — if the key fails,
+  deployment stops. Direct root SSH is also disabled; privileged steps run as the
+  deployment account via `sudo`. fail2ban is active on the SSH jail, so do not
+  retry a failing login repeatedly. If SSH is unreachable entirely, recover
+  through the provider's out-of-band console; see
+  [post-release VPS SSH hardening](POST_RELEASE_VPS_SECURITY_HARDENING.md).
 - A clean tracked tree at `<DEPLOYMENT_SOURCE_SHA>`.
 
 ## 1. Build the artifact locally
