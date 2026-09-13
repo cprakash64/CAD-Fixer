@@ -1,0 +1,139 @@
+name: Beta feedback
+description: Report something that happened while testing the CAD Fixer Technical Preview
+title: '[Beta Feedback] '
+labels: ['beta-feedback', 'needs-triage']
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for testing CAD Fixer.
+
+        **CAD Fixer has no telemetry.** Your model is processed entirely in your
+        browser and never reaches a server — which means we cannot see what
+        happened unless you tell us.
+
+        **This issue will be public.** Do not attach a model unless you are
+        authorised to share it. Almost every useful report needs no model at all.
+
+  - type: checkboxes
+    id: sharing
+    attributes:
+      label: Model sharing
+      options:
+        - label: I understand this issue is public, and I will not attach proprietary or sensitive CAD models unless I am authorised to share them.
+          required: true
+
+  - type: dropdown
+    id: operation
+    attributes:
+      label: What were you doing?
+      options:
+        - Importing a file
+        - Mesh health analysis
+        - Repair preview
+        - Repair Apply
+        - Repair Undo
+        - Opening inventory
+        - Planar fill preview
+        - Fill Apply
+        - Fill Undo
+        - Self-intersection check
+        - Export STL
+        - Export OBJ
+        - Export 3MF
+        - Something else / not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect to happen?
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: What actually happened?
+    validations:
+      required: true
+
+  - type: textarea
+    id: message
+    attributes:
+      label: Exact message CAD Fixer showed
+      description: >
+        The single most useful thing you can give us. Copy the wording exactly
+        rather than paraphrasing — it identifies the precise decision the
+        software made. A screenshot works just as well.
+      placeholder: e.g. "CAD Fixer cannot attempt this opening because it is not flat enough."
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How can we reproduce it?
+      description: The shortest sequence of clicks that shows the problem.
+      placeholder: |
+        1. Import the file
+        2. Click Check
+        3. The panel shows...
+    validations:
+      required: true
+
+  - type: dropdown
+    id: filetype
+    attributes:
+      label: File type
+      options: ['STL', 'OBJ', '3MF', 'Not applicable']
+    validations:
+      required: true
+
+  - type: input
+    id: filesize
+    attributes:
+      label: Roughly how large was the file?
+      placeholder: e.g. 40 MB
+
+  - type: input
+    id: triangles
+    attributes:
+      label: Triangle count, if CAD Fixer displayed one
+      placeholder: e.g. 1,240,000
+
+  - type: input
+    id: browser
+    attributes:
+      label: Browser and version
+      placeholder: e.g. Chrome 151
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: e.g. Windows 11, macOS 15
+    validations:
+      required: true
+
+  - type: input
+    id: memory
+    attributes:
+      label: System memory, if you know it
+      placeholder: e.g. 16 GB
+
+  - type: textarea
+    id: export
+    attributes:
+      label: If you exported a file, did it reopen?
+      description: >
+        In which program, and did the geometry look correct? An export that
+        silently produces a broken file matters much more to us than one that
+        refuses honestly.
+
+  - type: textarea
+    id: anything
+    attributes:
+      label: Anything else
+      description: Screenshots are welcome. Please do not include personal details.

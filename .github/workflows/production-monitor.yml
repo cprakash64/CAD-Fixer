@@ -1,0 +1,84 @@
+# CAD Fixer production availability monitor.
+#
+# Runs OUTSIDE the VPS on purpose: a monitor hosted on the machine it watches
+# cannot report that the machine is gone.
+#
+# This is lightweight availability monitoring, NOT an SLA-grade platform.
+# GitHub's scheduled runs are best-effort and can be delayed or skipped, so
+# treat a missing run as "no information", never as "the site is fine".
+#
+# Needs no secrets: it only makes public HTTP(S) requests. No SSH, no
+# credentials, no deploy key, no VPS access of any kind.
+name: Production monitor
+
+on:
+  schedule:
+    # Every 15 minutes. Best-effort; GitHub does not guarantee punctuality.
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+    inputs:
+      deep:
+        description: 'Also check the Geogram WASM (skipped on the schedule — it is ~1.2 MB)'
+        type: boolean
+        default: false
+
+# Deliberately NOT run on push: CI proves the code is sound, monitoring proves
+# the deployed site is serving. They answer different questions.
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-monitor
+  cancel-in-progress: false
+
+jobs:
+  monitor:
+    name: Check the public Technical Preview
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+
+      # No `npm ci`: the monitor uses Node core modules only, so installing the
+      # project's dependency tree every 15 minutes would be pure waste.
+      - name: Run monitor
+        id: monitor
+        run: |
+          set +e
+          node scripts/monitor-production.mjs ${{ inputs.deep && '--deep' || '' }} | tee monitor-output.txt
+          echo "exit_code=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+
+      - name: Report semantic result
+        run: |
+          RESULT=$(grep -oE 'MONITOR_RESULT=[A-Z_]+' monitor-output.txt | tail -1 | cut -d= -f2)
+          echo "### Production monitor: ${RESULT:-NO_RESULT}" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          cat monitor-output.txt >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+          # The distinction is the whole point of this monitor: a failed run
+          # must say WHICH kind of failure it was. "Production is broken" and
+          # "we could not reach production" call for different responses.
+          case "$RESULT" in
+            PASS)
+              echo "PASS — production reached and serving correctly."
+              exit 0 ;;
+            FAIL)
+              echo "FAIL — production was REACHED and a checked property is wrong."
+              echo "This is a confirmed defect. See the check list above."
+              exit 1 ;;
+            UNKNOWN_UNREACHABLE)
+              echo "UNKNOWN_UNREACHABLE — production could NOT be observed."
+              echo "DNS, TCP, TLS or the request failed after a retry. This is not"
+              echo "evidence that the site is broken, and not evidence that it is"
+              echo "healthy. It may equally be a GitHub runner network problem."
+              exit 1 ;;
+            *)
+              echo "UNKNOWN_UNREACHABLE — the monitor produced no result line."
+              exit 1 ;;
+          esac

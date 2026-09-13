@@ -8,12 +8,30 @@ exported entirely in the browser using Web Workers, WebAssembly, and your own
 CPU and GPU. There is no server-side geometry processing, no upload endpoint,
 and no analytics.
 
-> **Current status: Stage 3B-1 — conservative repair, with validated preview
-> and transactional apply.**
-> You can open a binary or ASCII STL file, inspect it in a real 3D viewport, read
-> a full topology report about it, highlight its defects in 3D, **run a
-> conservative repair with a before/after preview, apply it, undo it**, and
-> export the result — entirely on your own machine.
+## Technical Preview
+
+**Try it: <https://fixcad.thelunai.com>**
+
+CAD Fixer **v0.1.0** is available as a Technical Preview.
+
+- Qualified on **Chromium-based desktop browsers** (Chrome, Edge). Firefox,
+  Safari and mobile are **not** release-qualified.
+- All geometry is processed in your browser. Nothing is uploaded.
+- Deliberately bounded: see
+  [What is and is not implemented](#what-is-and-is-not-implemented).
+
+Feedback is how this preview improves — there is no telemetry, so nothing is
+observed unless you report it. See
+[how to send feedback](docs/beta/TECHNICAL_PREVIEW_FEEDBACK.md), or open a
+[Beta feedback issue](https://github.com/cprakash64/CAD-Fixer/issues/new/choose).
+Please do not attach models you are not authorised to share.
+
+> **Current status: v0.1.0 Technical Preview — released.**
+> You can open an **STL, OBJ or 3MF** file, inspect it in a real 3D viewport,
+> read a full topology report about it, highlight its defects in 3D, **run a
+> conservative repair with a before/after preview, apply it, undo it**, fill one
+> planar opening at a time, run a read-only self-intersection check, and convert
+> or export to any of the three formats — entirely on your own machine.
 >
 > **"Conservative" is the operative word and it is not marketing.** The Repair
 > workflow removes exact duplicate triangles, removes safely-removable degenerate
@@ -24,7 +42,7 @@ and no analytics.
 > Self-intersections and wall thickness are still not checked at all, so nothing
 > in CAD Fixer tells you a model will print.
 >
-> The other four workflows are not implemented. See
+> **Split, Texture and Hollow are not implemented.** See
 > [What is and is not implemented](#what-is-and-is-not-implemented). Nothing in
 > this repository fakes a working feature.
 
