@@ -196,6 +196,31 @@ export default tseslint.config(
     },
   },
 
+  /*
+   * STAGE 6D-B3'S CHROMIUM MEMORY QUALIFICATION HARNESS.
+   *
+   * A Node script that DRIVES a browser, so it legitimately contains code for
+   * two runtimes in one file: the harness itself runs under `node`, and the
+   * bodies passed to `page.evaluate` are serialised and run inside the page,
+   * where `document` and `MutationObserver` are exactly the right globals to
+   * use. The e2e specs have the same shape and do not trip this only because
+   * `no-undef` is off for TypeScript.
+   *
+   * Declared here rather than silenced at the call sites: a file that spans two
+   * runtimes should say so once, in the config, instead of carrying five
+   * disable comments that would also hide a genuine typo.
+   */
+  {
+    files: ['scripts/chromium-memory.qualify.mjs'],
+    languageOptions: {
+      globals: { ...globals.node, ...globals.browser },
+    },
+    rules: {
+      '@typescript-eslint/explicit-function-return-type': 'off',
+      'no-restricted-globals': 'off',
+    },
+  },
+
   // The Stage 3A-3B experimental browser harness.
   //
   // These files run IN A BROWSER — a page and a module Worker — so they need

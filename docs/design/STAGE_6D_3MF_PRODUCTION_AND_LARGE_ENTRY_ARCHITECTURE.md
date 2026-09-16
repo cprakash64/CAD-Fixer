@@ -1138,6 +1138,192 @@ removing the flag: the guard fails.
 - MF-P22 still passes, so early cancellation did not regress while late
   cancellation was fixed.
 
+# Stage 6D-B3 — Chromium memory qualification, and the answer
+
+**Decision: `384 MiB ENTRY LIMIT NOT APPROVED — KEEP 256 MiB`.** Base
+`6de834d0cbc8ef76e5d1a1b3b929b5790975669d`. No production constant changed. The
+evidence is good and it says no.
+
+## Why Node was not enough, and what replaced it
+
+B1 and B2 measured `heapUsed + arrayBuffers` under Node. That is the right
+metric for a parser and the wrong evidence for a browser ceiling, so B3 measured
+the real product path in real Chromium on the real minimum-envelope machine.
+
+`performance.measureUserAgentSpecificMemory()` would have been the single best
+signal — page and workers in one number, broken down by type. **It is NOT
+AVAILABLE** in this Chromium, with cross-origin isolation satisfied and with
+`--enable-experimental-web-platform-features`, `--enable-blink-features=ForceEagerMeasureMemory`
+and `--enable-features=MeasureMemory` all tried. `performance.memory` is no
+substitute: it is quantized for fingerprinting, main-thread only, and heap only
+— it cannot see the ArrayBuffers where most of this workload lives.
+
+Three signals were used instead:
+
+- **Worker isolate**, CDP `Runtime.getHeapUsage` on the geometry worker's own
+  target, reached through `Target.attachToTarget` on the browser session.
+  `usedSize` + `backingStorageSize` is the direct Chromium analogue of the Node
+  metric. Excludes everything outside that isolate.
+- **Page isolate**, the same call on the page target. Where render snapshots
+  land.
+- **Renderer `phys_footprint` and `phys_footprint_peak`**, from macOS
+  `footprint(1)`. A dedicated worker runs on its own thread inside the renderer
+  process, so this covers page and worker together plus V8, Blink and
+  compositor overhead. Excludes the GPU, browser and network processes.
+
+**`phys_footprint_peak` is the number the decision rests on.** It is the
+kernel's own high-water mark, so the peak does not have to be caught by a
+sampler — and a sampler cannot catch it, because the interesting moments are
+inside the worker's synchronous spans and every sample costs a subprocess spawn
+that perturbs the machine being measured. One browser per run, so a peak never
+carries across runs.
+
+Retention figures force a collection in both isolates first
+(`HeapProfiler.collectGarbage`). Without that, `usedSize` reports the decoded
+XML string and the `number[]` scratch as though still live — V8 does not collect
+a worker heap under no pressure — and every "retained" number would be fiction.
+
+## Environment
+
+macOS 27.0 (26A5421a), Apple M1, **8.00 GiB RAM** — the stated minimum envelope,
+not a high-memory CI runner. arm64. Chromium 151.0.7922.34 (Playwright 1.62.1),
+headless. Node v22.22.2. `crossOriginIsolated === true`, `SharedArrayBuffer`
+available, `Atomics` available, `navigator.deviceMemory === 8`,
+`jsHeapSizeLimit` 3,760,000,000 (≈3.5 GiB).
+
+Fixtures generated in Node, written to a temporary directory outside Git, handed
+to the browser through the real file chooser, removed on exit. Nothing committed.
+
+## Measured
+
+| Entry         | Renderer `phys_footprint_peak`        | Runs | Outcome  |
+| ------------- | ------------------------------------- | ---- | -------- |
+| 1.0 MiB       | 142 MiB                               | 1    | imported |
+| 63.2 MiB      | 638 MiB                               | 1    | imported |
+| 125.7 MiB     | 1,127 MiB                             | 1    | imported |
+| **248.0 MiB** | **1,742 / 1,743 / 1,769 / 1,815 MiB** | 4    | imported |
+| **293.7 MiB** | **2,067 / 2,098 / 2,099 MiB**         | 3    | imported |
+| **376.1 MiB** | **2,679 / 2,710 / 3,071 MiB**         | 3    | imported |
+
+Repeatability is tight where it matters: ±2% at 248 MiB, ±1% at 293.7 MiB. At
+376.1 MiB it widens to **±7%, a 392 MiB spread between runs**.
+
+Slope between the two largest in-ceiling points is about **5.6 MiB of renderer
+footprint per MiB of entry**; across the whole ladder it is nearer 7. The
+measured 376.1 MiB point lands where that predicts.
+
+Every size imported successfully with the correct triangle count, no session
+loss, and a small replacement model landing afterwards. **Nothing crashed.**
+That is not the same as safe.
+
+## The gate that fails
+
+`maxImportPeakBytes` is **1,536 MiB** in `memory-budget.ts`. §19 requires the
+measured peak to remain BELOW it with meaningful repeatable margin.
+
+- At 376.1 MiB the measured peak is **2,679–3,071 MiB**, which is **1.7×–2.0×
+  the budget**. There is no margin to size; the figure is on the wrong side of
+  the line.
+- The run-to-run spread alone (392 MiB) is larger than any headroom that could
+  be claimed, which §19 names explicitly as a reason not to approve.
+- A 3.07 GiB renderer on an 8 GiB machine leaves the rest of Chromium, the GPU
+  and network processes, and the operating system to share what remains.
+
+**The string wall is NOT the binding constraint.** Chromium's maximum string
+length measured 536,870,888 bytes, identical to Node's; 384 MiB is 402,653,184
+bytes and decodes fine, leaving **128 MiB of clearance**. Memory is what fails,
+not `MAX_STRING_LENGTH`.
+
+## The finding that outlives this decision
+
+**The modelled import budget does not bound what actually happens in the browser
+for 3MF, and it is out by roughly an order of magnitude.**
+
+`estimateImportPeak` sums current resident, current render, the input buffer,
+and the candidate's resident and render bytes. For the 376.1 MiB case that is
+about **271 MiB**. The renderer actually peaked at **2,679–3,071 MiB**. The
+model does not include the inflated entry, the decoded XML string, the
+`number[]` scratch, the per-element parse garbage, or V8 and Blink overhead —
+which together are almost all of it.
+
+The consequence is not confined to 384 MiB: **at today's approved 256 MiB
+ceiling, a 248 MiB entry already peaks the renderer at ~1.75 GiB, above the
+1,536 MiB budget.** The ceiling that ships is itself less comfortable on an
+8 GiB machine than the budget suggests. B3 is not authorised to lower it and
+does not propose doing so — but the gap between the model and the measurement is
+now recorded, and it should inform whatever comes next rather than being
+rediscovered later.
+
+## Cancellation at these sizes
+
+B2 holds, and cleanly. Post-inflate cancellation with the phase proven at
+`parsing model`:
+
+| Entry     | postCancelTailMs | Committed? | Peak footprint |
+| --------- | ---------------- | ---------- | -------------- |
+| 293.7 MiB | **287 ms**       | no         | 1,001 MiB      |
+| 376.1 MiB | **372 ms**       | no         | 1,263 MiB      |
+
+Sub-second at both, nothing committed, worker alive, replacement landed.
+Cancelling early also caps the peak at roughly half the completed-import figure,
+which is the point of cancelling.
+
+## Retention
+
+No leak. After a completed 125.7 MiB import and a forced collection the worker
+holds 159.6 MiB; after replacing it with a 1 MiB model the worker returns to
+**2.6 MiB** and the page to 9.0 MiB, with renderer footprint falling from
+1,098 MiB to 497 MiB. The same shape holds at 248 MiB. Sequential imports
+stabilise rather than accumulating.
+
+## What was not changed
+
+- `maxEntryBytes` stays **256 MiB**. The refusal was re-verified against the
+  restored build in a real browser: a 293.7 MiB entry is refused with
+  `A file inside this archive expands to 294 MiB; CAD Fixer's per-entry
+expansion limit is 256 MiB.`, and the renderer peaks at **125 MiB** because
+  nothing is inflated.
+- `maxArchiveBytes`, `maxTotalUncompressedBytes`, `maxCompressionRatio`,
+  `maxEntries`, `maxImportPeakBytes` and every document ceiling: unchanged.
+- B1's single-destination inflate and B2's interruptible import: unchanged and
+  re-smoked (1.22×; 67 ms).
+
+**320 or 352 MiB were not adopted as a consolation.** The brief forbids picking
+an intermediate opportunistically without authorisation, and the measurements do
+not single one out: the curve is smooth, so any intermediate value is a point on
+the same line rather than a threshold the evidence identifies.
+
+## What this means for BETA-002
+
+The observed 297 MiB entry class needs about **2.1 GiB of renderer footprint**
+to import as the reader is currently built. Raising a constant cannot make that
+safe on the supported envelope; it would only move where the failure happens.
+
+**The remaining route to BETA-002 is Option B — streaming import**, whose floor
+was measured in the architecture stage at **0.20× the entry** for inflate plus
+incremental decode retaining nothing, against the current whole-string path. A
+streaming reader is the only design measured so far that could bring a 297 MiB
+entry inside the envelope, and it is what the 3MF specification itself
+anticipates when it motivates the production extension by noting a monolithic
+model part "could be more that 500MB in size".
+
+That is now a decision with evidence behind it rather than a preference.
+
+## Reproduction
+
+```bash
+npm run build && npm run preview          # serve the production build
+npm run qualify:chromium-memory -- --sizes 128,250
+CADFIXER_QUALIFY_RUNS=3 npm run qualify:chromium-memory -- --sizes 250
+CADFIXER_QUALIFY_MODE=cancel npm run qualify:chromium-memory -- --sizes 250
+```
+
+Sizes above 256 MiB require a **local qualification build** with
+`maxEntryBytes` temporarily raised; that edit is never committed, and the
+measurements above were taken with `main`'s constant restored and verified
+byte-identical afterwards. The harness is macOS-specific for the footprint
+signal (`footprint(1)`); the isolate signals work anywhere Chromium's CDP does.
+
 # Acceptance targets
 
 ## BETA-001

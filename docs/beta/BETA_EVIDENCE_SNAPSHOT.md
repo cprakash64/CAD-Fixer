@@ -19,6 +19,11 @@ permanent regression coverage at
 neither tester's own file has been seen, and neither tester-specific status has
 moved. **The tag is unchanged and nothing has been redeployed.**
 
+**Qualification stage: 6D-B3.** The per-entry ceiling was measured in real
+Chromium on the 8 GiB minimum-envelope machine and **384 MiB was NOT approved**;
+`maxEntryBytes` remains 256 MiB. BETA-002's status below is updated accordingly.
+No constant changed, nothing deployed, tag untouched.
+
 **Retest stage: 6D.** Repository at `9e793dc`, tag `v0.1.1` unchanged at
 `9e793dc68810b9f9df2f39684259612f75eb3a54`. Both findings were retested by their
 original reporters against the deployed v0.1.1 Technical Preview, and both now
@@ -144,6 +149,38 @@ If beta evidence shows that slicers routinely declare the extension without
 using it, this is the decision to revisit, as a product decision rather than a
 quiet loosening.
 
+### Stage 6D-B3 — the policy question is now answered, and the answer is no
+
+The architectural question this record left open — whether 256 MiB is the right
+ceiling — was settled by measurement rather than argument. Chromium 151 on the
+8 GiB minimum-envelope machine, three signals, repeated runs:
+
+| Entry                               | Renderer peak footprint | Runs |
+| ----------------------------------- | ----------------------- | ---- |
+| 248.0 MiB (today's ceiling)         | 1,742–1,815 MiB         | 4    |
+| 293.7 MiB (**this report's class**) | 2,067–2,099 MiB         | 3    |
+| 376.1 MiB (a 384 MiB ceiling)       | 2,679–3,071 MiB         | 3    |
+
+**`384 MiB ENTRY LIMIT NOT APPROVED — KEEP 256 MiB.`** At 376 MiB the renderer
+peaks at 1.7×–2.0× the 1,536 MiB import budget, and the run-to-run spread alone
+(392 MiB) exceeds any margin that could be claimed. The V8 string wall is not
+what fails — 384 MiB clears it by 128 MiB — memory is.
+
+**The file class in this report needs about 2.1 GiB of renderer footprint** to
+import as the reader is currently built. Raising a constant cannot make that
+safe on the supported envelope; it would only move where the failure happens.
+The remaining route is **streaming import**, whose measured floor is 0.20× the
+entry against the current whole-string path.
+
+**PRODUCT-LEVEL STATUS: the 297 MiB entry class remains outside the supported
+envelope, and the refusal stands as correct.** It is now a refusal backed by
+measured evidence rather than by an inherited constant, which is what this
+record asked for.
+
+**TESTER-SPECIFIC STATUS: awaiting retest.** The tester's own file has still
+never been seen. Nothing here is a claim about whether their particular package
+imports — only about the entry class it reported.
+
 ### Information still needed
 
 Nothing further is needed to classify or to design. The remaining questions are
@@ -161,15 +198,15 @@ the tester is authorized to share it — never required, never uploaded anywhere
 
 ## BETA-002 — 3MF refused as too large below the expected raw size
 
-| Field          | Value                                                                   |
-| -------------- | ----------------------------------------------------------------------- |
-| Category       | `RESOURCE_LIMIT`                                                        |
-| Severity       | S3 — a correct refusal whose ceiling is owed justification              |
-| Reproducible   | yes — the metric and both numbers are now known                         |
-| Frequency      | 1 tester                                                                |
-| Workaround     | re-export at lower mesh density, or as STL                              |
-| Roadmap area   | large-entry resource architecture                                       |
-| Classification | **CONFIRMED PER-ENTRY EXPANSION LIMIT — ARCHITECTURAL POLICY QUESTION** |
+| Field          | Value                                                                       |
+| -------------- | --------------------------------------------------------------------------- |
+| Category       | `RESOURCE_LIMIT`                                                            |
+| Severity       | S3 — a correct refusal whose ceiling is owed justification                  |
+| Reproducible   | yes — the metric and both numbers are now known                             |
+| Frequency      | 1 tester                                                                    |
+| Workaround     | re-export at lower mesh density, or as STL                                  |
+| Roadmap area   | large-entry resource architecture                                           |
+| Classification | **CONFIRMED PER-ENTRY EXPANSION LIMIT — CEILING QUALIFIED, RAISE REJECTED** |
 
 ### What the user saw
 

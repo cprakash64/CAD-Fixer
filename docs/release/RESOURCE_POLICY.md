@@ -45,6 +45,50 @@ renderable and exportable while being too large for the self-intersection check 
 for a hole fill. Feature-level refusal is the honest answer; rejecting an
 otherwise useful model is not.
 
+## Stage 6D-B3: the 3MF per-entry ceiling, measured in Chromium
+
+**`maxEntryBytes` stays at 256 MiB.** A proposal to raise it to 384 MiB — to
+cover a 297 MiB entry a beta tester reported — was measured and rejected.
+
+Measured on the stated minimum host (macOS 27, Apple M1, **8 GiB**, Chromium
+151, cross-origin isolated), using the renderer process's macOS
+`phys_footprint_peak` plus CDP heap and ArrayBuffer readings from the geometry
+worker's own isolate. `performance.measureUserAgentSpecificMemory()` is not
+available in this Chromium and `performance.memory` is quantized, main-thread
+only and heap only, so neither could carry the decision.
+
+| 3MF entry (expanded)        | Renderer peak footprint |
+| --------------------------- | ----------------------- |
+| 248 MiB — today's ceiling   | 1,742–1,815 MiB         |
+| 294 MiB                     | 2,067–2,099 MiB         |
+| 376 MiB — a 384 MiB ceiling | 2,679–3,071 MiB         |
+
+At 376 MiB the renderer peaks at **1.7×–2.0× the 1,536 MiB import budget**, and
+the run-to-run spread (392 MiB) is larger than any margin that could be claimed.
+Every size imported without crashing; not crashing once is not the same as safe.
+
+**Two things this measurement establishes beyond the rejected proposal:**
+
+- **The modelled import budget does not bound real browser memory for 3MF.**
+  `estimateImportPeak` predicts ~271 MiB for the 376 MiB case against a measured
+  2.7–3.1 GiB, because it models neither the inflated entry, the decoded XML
+  string, the parser's scratch arrays, nor V8 and Blink overhead. The two
+  numbers answer different questions and only one of them is what the machine
+  experiences.
+- **At the shipped 256 MiB ceiling a 248 MiB entry already peaks around
+  1.75 GiB**, above that same budget. The ceiling that ships is less comfortable
+  on an 8 GiB host than the budget suggests. It was not lowered — that would
+  need its own evidence and its own decision — but it is no longer an unexamined
+  number.
+
+**The V8 string wall is not the binding constraint here.** Chromium's maximum
+string length measured 536,870,888 bytes, identical to Node's, so 384 MiB
+(402,653,184 bytes) clears it by 128 MiB. 448 MiB also decodes; 512 MiB cannot
+exist as a string at all. Memory is what fails first, well before any of that.
+
+Reproduce with `npm run qualify:chromium-memory`. Sizes above the ceiling need a
+local qualification build; that edit is never committed.
+
 ## The host question, answered
 
 **Can an 8 GiB machine be a supported MVP host? YES**, for one active workspace,
