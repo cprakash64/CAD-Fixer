@@ -487,13 +487,14 @@ it('measures the whole read3mf path end to end', async () => {
 /* ------------------------------------------------- what the shape costs -- */
 
 /**
- * PROTOTYPES, NOT PROPOSALS, and nothing here is production code.
+ * WHAT EACH DUPLICATION COSTS, measured against the production path.
  *
- * Two of the three duplications measured above are structural rather than
- * incidental, and an architecture stage has to know what removing them would
- * actually be worth before it can weigh that against the complexity. These are
- * local re-implementations of the same stages with one duplication removed
- * each, measured on the same fixture in the same process.
+ * Written in Stage 6D as prototypes of changes not yet made. Since Stage
+ * 6D-B1 the FIRST of them has shipped: `readZipEntry` fills one preallocated
+ * destination, so the `current` variant and the `single` prototype now measure
+ * the same shape and should agree — which is the cheapest possible check that
+ * production actually got what the prototype promised. The `stream` variant
+ * remains a prototype and is the Track B-2 floor.
  */
 
 /** Inflate straight into ONE buffer sized from the directory's declaration. */
@@ -571,7 +572,7 @@ it('measures what removing each duplication would be worth', async () => {
         }),
       );
       process.stdout.write(
-        `   chunk list + concat      floor ${mib(current.floorHeld)} peak ${mib(current.peakHeld)} MiB  ` +
+        `   production readZipEntry   floor ${mib(current.floorHeld)} peak ${mib(current.peakHeld)} MiB  ` +
           `${current.ms.toFixed(0)} ms  = ${((current.peakHeld - current.floorHeld) / entryBytes).toFixed(2)}x\n`,
       );
       void current.value.byteLength;

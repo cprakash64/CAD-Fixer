@@ -123,21 +123,29 @@ describe('the total budget is spent across every entry of one archive', () => {
 
   it('ZT04: three entries, each safe alone, refused on the one that crosses', async () => {
     /*
-     * THE DECLARATIONS LIE, so this exercises the RUNTIME accounting.
+     * THE BUDGET IS NARROWER THAN THE DIRECTORY'S LIMITS, which is what makes
+     * this a test of the RUNTIME accounting rather than of the declared-total
+     * check. `ZipReadOptions.budget` is independent of `limits` precisely so a
+     * caller can spend one allowance across several `readZipEntry` calls — the
+     * shape 3MF import already uses and the shape multi-model-part reading
+     * needs.
      *
-     * With honest sizes the directory check refuses this archive before a byte
-     * is inflated, which is the better outcome and is asserted separately
-     * below. The attack worth testing here is the one that gets past that:
-     * three entries that each claim to be a single byte.
+     * STAGE 6D-B1 CHANGED HOW THIS IS WRITTEN, NOT WHAT IT PROVES. It used to
+     * reach the runtime path by declaring each 4 KiB entry as one byte. A
+     * preallocated destination now catches that lie at the first chunk, which
+     * is a better answer and is asserted as `ZT05`. The proposition here —
+     * three entries individually fine and collectively not — needs honest
+     * metadata to be about the budget at all.
      */
     const archive = await buildZip([
-      { name: 'a.bin', content: payload(4 * KIB, 1), method: 8, declaredUncompressedSize: 1 },
-      { name: 'b.bin', content: payload(4 * KIB, 2), method: 8, declaredUncompressedSize: 1 },
-      { name: 'c.bin', content: payload(4 * KIB, 3), method: 8, declaredUncompressedSize: 1 },
+      { name: 'a.bin', content: payload(4 * KIB, 1), method: 8 },
+      { name: 'b.bin', content: payload(4 * KIB, 2), method: 8 },
+      { name: 'c.bin', content: payload(4 * KIB, 3), method: 8 },
     ]);
-    // Each entry is comfortably inside the per-entry cap and the ratio cap.
-    const limits: ZipLimits = { ...limitsWithTotal(10 * KIB), maxEntryBytes: 8 * KIB };
-    const budget = createInflationBudget(limits);
+    // Each entry is comfortably inside the per-entry cap and the ratio cap, and
+    // the declared total of 12 KiB is inside the directory's own ceiling.
+    const limits: ZipLimits = { ...limitsWithTotal(16 * KIB), maxEntryBytes: 8 * KIB };
+    const budget: InflationBudget = { maxTotalBytes: 10 * KIB, totalProducedBytes: 0 };
     const entries = readZipDirectory(archive, limits);
 
     const read = async (index: number): Promise<Uint8Array> => {
@@ -171,8 +179,19 @@ describe('the total budget is spent across every entry of one archive', () => {
     /*
      * THE DECLARATION SAYS EACH ENTRY IS ONE BYTE. The up-front check on the
      * declared totals therefore passes, and every ceiling before inflation is
-     * satisfied. Only the running count of bytes actually produced can catch
-     * this, which is the whole reason it exists.
+     * satisfied. Only something counting what is actually produced can catch
+     * this, which is the whole reason a runtime check exists.
+     *
+     * STAGE 6D-B1 MADE THAT CHECK FIRE EARLIER AND SAY MORE. It used to be the
+     * cumulative budget, which meant the lie was only caught once the archive
+     * had produced 5 KiB across two entries — the lie itself went unremarked,
+     * and the user was told the archive was too large when the truth was that
+     * it contradicts itself. A destination sized from the declaration catches
+     * it on the FIRST chunk of the FIRST entry, and names what is actually
+     * wrong.
+     *
+     * The category changes with it, and correctly: this is a MALFORMED_FILE,
+     * not a RESOURCE_LIMIT_EXCEEDED. Nothing here is near any ceiling.
      */
     const archive = await buildZip([
       { name: 'a.bin', content: payload(4 * KIB, 1), method: 8, declaredUncompressedSize: 1 },
@@ -186,9 +205,12 @@ describe('the total budget is spent across every entry of one archive', () => {
 
     await expectRefusal(
       async () => readAll(archive, limits, budget),
-      AppErrorCode.ResourceLimitExceeded,
-      ImportRefusal.ZipTotalTooLarge,
+      AppErrorCode.MalformedFile,
+      ImportRefusal.ZipDeclaredSizeOverrun,
     );
+    // AND IT STOPPED BEFORE PRODUCING ANYTHING. The refusal precedes the write,
+    // so not one byte of the lying entry was retained or charged.
+    expect(budget.totalProducedBytes).toBe(0);
   });
 
   it('refuses an honestly-declared oversized archive before inflating anything', async () => {
@@ -270,7 +292,18 @@ describe('the reader is abandoned when the budget fires', () => {
       }
     }
 
-    const archive = await buildZip([{ name: 'a.bin', content: payload(64, 1), method: 8 }]);
+    /*
+     * THE DECLARED SIZE IS THE BUDGET'S, so the budget is what binds.
+     *
+     * Since Stage 6D-B1 the destination is sized from the declaration, so an
+     * entry declaring 64 bytes would be refused on its first 1 KiB chunk as a
+     * declared-size overrun — a true answer to a different question. This test
+     * is about the BUDGET abandoning a stream, so the declaration is made large
+     * enough that the budget is the first ceiling reached.
+     */
+    const archive = await buildZip([
+      { name: 'a.bin', content: payload(64, 1), method: 8, declaredUncompressedSize: 4 * KIB },
+    ]);
     const limits = limitsWithTotal(4 * KIB);
     const budget = createInflationBudget(limits);
     const entry = readZipDirectory(archive, limits)[0];

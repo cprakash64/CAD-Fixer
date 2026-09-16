@@ -862,6 +862,132 @@ sequencing preference, not a dependency: neither track blocks the other.
 
 ---
 
+# Stage 6D-B1 — implemented
+
+**Landed. `readZipEntry` fills one preallocated destination. No ceiling moved.**
+Base `b6c0b77b0177245f3e9c93b59b9cf3f3c3140e99`. The decision above is unchanged
+by this section; what follows is what the implementation actually measured.
+
+## What changed
+
+`readZipEntry`'s DEFLATE path allocates one `Uint8Array` sized from the central
+directory's declared uncompressed size and writes each chunk into it on arrival.
+The chunk array and the concatenating copy are gone. The STORED path is
+untouched — it was already zero-copy, returning a view into the archive, and
+allocating a destination for it would have added the very copy this stage
+removes.
+
+Two typed refusals are new, and they are the price of using a number the archive
+supplies:
+
+- `ZIP_DECLARED_SIZE_OVERRUN` — the stream produced more than the entry
+  declared. `MALFORMED_FILE`, not a resource limit: the sizes involved may be
+  nowhere near a ceiling, and what is wrong is that the archive contradicts
+  itself. The buffer is never grown and a second one is never allocated.
+- `ZIP_DECLARED_SIZE_SHORTFALL` — the stream ended early. Returning
+  `subarray(0, produced)` was the tempting wrong answer: it presents truncated
+  data as a successful read, and a preallocated buffer's untouched tail is
+  zeroes the entry never contained.
+
+The declared size is proven `<= maxEntryBytes` **inside `readZipEntry`**, not
+inherited from `readZipDirectory`, because a caller may read the directory under
+different limits and an allocation must not depend on that having matched.
+
+## Measured, before and after
+
+Apple M1, 8 GiB, node v22.22.2, one size per process, `--expose-gc`, each
+stage's floor taken after a forced collection. The `after readZipEntry` column
+is the absolute `arrayBuffers` reading minus the fixture's, which is the
+unconfounded number: it counts off-heap buffers only.
+
+| Entry     | Inflate peak, before | after     | Retained after inflate, before → after | Inflate time, before → after |
+| --------- | -------------------- | --------- | -------------------------------------- | ---------------------------- |
+| 125.7 MiB | 2.12×                | **1.35×** | 264 MiB (2.10×) → **141 MiB (1.12×)**  | 286 ms → **223 ms**          |
+| 250.0 MiB | 2.01×                | **1.22×** | 500 MiB (2.00×) → **292 MiB (1.17×)**  | 927 ms → **373 ms**          |
+| 295.4 MiB | 2.09×                | **1.20×** | 615 MiB (2.08×) → **323 MiB (1.09×)**  | 720 ms → **590 ms**          |
+
+The 295.4 MiB row is measured with a **benchmark-only injected ceiling**; the
+production constant was not touched to obtain it.
+
+The parse-stage peak moves too, and NOT CONSISTENTLY — worth stating rather than
+quoting only the favourable rows: 477 → 358 MiB at 125.7 MiB and 951 → 820 MiB
+at 250 MiB, but 874 → 1,015 MiB at 295.4 MiB. That stage is dominated by
+short-lived per-element garbage — one attribute record and its decoded strings
+per XML element — so its reading is heap OCCUPANCY at whatever moment the
+collector happened to be in, and it varies by more than this change does.
+**B1 makes no claim about the parse stage.** The inflate stage is what it
+changed, and that number is stable across every size and every repeat.
+
+Reducing the parse peak is a separate, measured opportunity: the retained
+`number[]` scratch is 65–193 MiB across the ladder, and replacing it with
+growable typed arrays is a candidate for its own substage.
+
+**The production path now measures what the prototype promised.** Run
+side by side on one fixture from one floor at 295.4 MiB, the shipped
+`readZipEntry` measures 1.20× and the standalone preallocation prototype 1.19×.
+
+**Time did not regress; it improved**, most at 250 MiB where the concatenating
+copy was largest — 927 ms to 373 ms, about 2.5×.
+
+## An integrity check the reader never had
+
+This reader verifies no CRC. Before B1 a truncated entry returned short bytes
+that looked like a successful read, and the damage surfaced much later as
+malformed XML — telling the user their MODEL was broken when the ARCHIVE was.
+The shortfall refusal is the first check that catches this, and it names the
+right thing.
+
+## What this strengthened in the bomb model
+
+A directory that UNDERSTATES a size used to buy a full `maxEntryBytes` allowance
+regardless of what it declared, because nothing compared the two. It is now
+refused at the first chunk past its own declaration. The 3MF suite's lying-bomb
+fixture — an 8 MiB entry declaring 1,024 bytes under a 64 KiB cap — is the
+measure: the bound on what that archive can make CAD Fixer hold fell from
+`maxEntryBytes` to the entry's own declaration, a factor of sixty-four there and
+far more at production limits.
+
+The runtime `InflationBudget` is unchanged and remains authoritative, charged
+from bytes actually produced. It is now harder to REACH for a lying directory,
+which is a strengthening rather than a relaxation, and it remains the ceiling
+that does not trust the archive at all.
+
+## What did not change
+
+- **No resource constant moved.** `DEFAULT_ZIP_LIMITS` is byte-identical to
+  `b6c0b77`: 512 MiB archive, 4,096 entries, **256 MiB per entry**, 512 MiB
+  total, 200:1, 512-byte paths.
+- 3MF semantics: baseline imports, the production-extension refusal, the
+  dangling-reference refusal and every resource message are unchanged, verified
+  in Node and in a browser.
+- Cancellation opportunities inside the inflate loop are preserved exactly.
+
+## Tests whose outcome legitimately changed
+
+Three, each updated to assert the NEW behaviour precisely rather than loosened:
+
+- **ZT04** reached the runtime accounting by declaring each 4 KiB entry as one
+  byte. That lie is now caught at the first chunk, so the test uses honest
+  metadata and a budget narrower than the directory's limits — which is the
+  supported shape, and the one multi-model-part reading will need. Its
+  proposition, three entries individually fine and collectively not, is intact.
+- **ZT05** keeps its proposition — a lying directory is stopped at runtime — and
+  asserts the earlier, more specific refusal, plus that not one byte was charged.
+- **The 3MF lying-bomb fixture** now asserts `ZIP_DECLARED_SIZE_OVERRUN` and
+  reads `declared` out of the refusal's own details, so it cannot pass while the
+  bound silently reverts to `maxEntryBytes`.
+
+## The gap B1 did not close
+
+**`model/import` is still not interruptible**, so the uninterruptible tail
+measured in §B.9 is exactly as it was: decode, parse, materialise and expand
+still poll a flag that cannot change. B1 shortened the inflate stage; it did not
+make the rest of the import stoppable. That is Stage 6D-B2 and it is unchanged
+by this work.
+
+**384 MiB is not approved.** B3 still requires B2 and browser-worker headroom
+measurement after both.
+
 # Acceptance targets
 
 ## BETA-001

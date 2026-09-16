@@ -746,9 +746,23 @@ describe('MF-P16/MF-P17/MF-P18: container attacks', () => {
   });
 
   it('refuses a bomb that LIES about its size, while inflating', async () => {
-    // The declared ratio looks fine, so the declaration check passes and the
-    // mid-inflation budget is what catches it. A reader that checked only the
-    // header would allocate the whole thing.
+    /*
+     * The declared ratio looks fine, so every pre-inflation check passes and
+     * something watching the stream has to catch it. A reader that trusted only
+     * the header would allocate the whole thing.
+     *
+     * STAGE 6D-B1 MADE THAT CATCH TIGHTER, AND THE ASSERTION FOLLOWS IT.
+     * Inflation now fills one destination sized from the DECLARED size, so the
+     * lie is refused on the first chunk that passes 1,024 bytes rather than
+     * after 64 KiB had accumulated in a chunk list. The bound on what this
+     * archive can make CAD Fixer hold therefore fell from `maxEntryBytes` to
+     * the entry's own declaration — a factor of sixty-four here, and far more
+     * at production limits.
+     *
+     * The CATEGORY moves with it, correctly. Nothing about 8 MiB is near a
+     * ceiling once the archive has said 1,024: the file contradicts itself, so
+     * it is MALFORMED_FILE rather than RESOURCE_LIMIT_EXCEEDED.
+     */
     const bytes = await buildZip([
       {
         name: '3D/3dmodel.model',
@@ -758,14 +772,23 @@ describe('MF-P16/MF-P17/MF-P18: container attacks', () => {
       },
     ]);
 
-    await expectRefusal(
-      () =>
-        read3mf(bytes, testReadContext(), {
-          zipLimits: { ...DEFAULT_ZIP_LIMITS, maxEntryBytes: 64 * 1024 },
-        }),
-      AppErrorCode.ResourceLimitExceeded,
-      ImportRefusal.ZipEntryTooLarge,
-    );
+    let caught: unknown;
+    try {
+      await read3mf(bytes, testReadContext(), {
+        zipLimits: { ...DEFAULT_ZIP_LIMITS, maxEntryBytes: 64 * 1024 },
+      });
+    } catch (cause) {
+      caught = cause;
+    }
+
+    expect(isAppError(caught), 'expected a typed AppError').toBe(true);
+    if (!isAppError(caught)) return;
+    expect(caught.code).toBe(AppErrorCode.MalformedFile);
+    expect(refusalOf(caught)).toBe(ImportRefusal.ZipDeclaredSizeOverrun);
+    // THE BOUND WAS THE DECLARATION, NOT THE CAP. Asserted from the refusal's
+    // own details so this cannot pass while the ceiling silently reverts to
+    // `maxEntryBytes`.
+    expect(caught.details.declared).toBe(1_024);
   });
 
   it('MF-P18: refuses an encrypted entry', async () => {

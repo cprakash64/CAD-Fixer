@@ -1289,3 +1289,55 @@ describe('PMP reaches nothing', () => {
     }
   });
 });
+
+describe('ZIP-B1-T10: the inflation path keeps exactly one destination', () => {
+  /*
+   * STRUCTURAL, AND DELIBERATELY SO.
+   *
+   * `zip-inflation.test.ts` proves the OUTPUT is correct, including under a
+   * decompressor that reuses its chunk buffer — which a concatenating
+   * implementation could not survive. What no behavioural test can prove is
+   * that no SECOND full-size buffer exists, because accumulate-then-concatenate
+   * produces byte-identical results. This is the assertion that fails if
+   * someone reintroduces that shape while keeping every other test green.
+   *
+   * IT LIVES HERE, not beside the behavioural tests, because reading a source
+   * file needs `node:fs` and `@cadfixer/file-formats` compiles with `lib:
+   * ES2023` and no Node types — deliberately, so a codec cannot quietly acquire
+   * a platform dependency. This suite is tooling-scoped and already asserts
+   * boundary properties from source.
+   */
+  const source = readFileSync(
+    join(REPO_ROOT, 'packages', 'file-formats', 'src', 'threemf', 'zip.ts'),
+    'utf8',
+  );
+  const body = source.slice(source.indexOf('export async function readZipEntry'));
+
+  it('retains no array of inflated chunks', () => {
+    expect(body).not.toMatch(/chunks\s*:\s*Uint8Array\[\]/);
+    expect(body).not.toMatch(/\.push\(chunk\)/);
+  });
+
+  it('allocates exactly one output buffer', () => {
+    /*
+     * A FORWARD GUARD, and honestly less than the two above.
+     *
+     * The pre-B1 implementation also contained exactly one `new Uint8Array(` —
+     * its second full-size buffer was the chunk ARRAY, which the assertions
+     * above are what actually catch. This one bounds the future: it fails if a
+     * later change reaches for a second destination, for example to grow past a
+     * declared size instead of refusing.
+     */
+    expect(body.match(/new Uint8Array\(/g) ?? []).toHaveLength(1);
+  });
+
+  it('proves the declared size is within the entry cap before allocating', () => {
+    // The allocation takes its size from attacker-controlled metadata, so the
+    // ceiling has to be applied in THIS function rather than inherited from
+    // whatever limits the directory happened to be read under.
+    const allocation = body.indexOf('new Uint8Array(');
+    const check = body.indexOf('declared > limits.maxEntryBytes');
+    expect(check).toBeGreaterThan(-1);
+    expect(check).toBeLessThan(allocation);
+  });
+});

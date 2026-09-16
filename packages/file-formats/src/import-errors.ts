@@ -71,6 +71,28 @@ export const ImportRefusal = {
    * that no single entry can trigger on its own.
    */
   ZipTotalTooLarge: 'ZIP_TOTAL_UNCOMPRESSED_TOO_LARGE',
+  /**
+   * An entry produced MORE bytes than its central directory declared.
+   *
+   * STAGE 6D-B1. Inflation now fills one destination sized from the declared
+   * uncompressed size, so a stream that keeps producing past that size has
+   * contradicted the archive's own metadata. One of the two is wrong and there
+   * is no way to tell which, so neither is trusted.
+   *
+   * SEPARATE FROM `ZipEntryTooLarge`, which says the archive asked for more
+   * than CAD Fixer will extract. This one says the archive disagrees with
+   * ITSELF, and the sizes involved may be far below every ceiling.
+   */
+  ZipDeclaredSizeOverrun: 'ZIP_DECLARED_SIZE_OVERRUN',
+  /**
+   * An entry's stream ended BEFORE its declared uncompressed size.
+   *
+   * STAGE 6D-B1. Truncated or corrupt entry data. Previously this returned
+   * short bytes that looked like a successful read, and the damage surfaced
+   * much later as malformed XML — which told the user their model was broken
+   * when the archive was.
+   */
+  ZipDeclaredSizeShortfall: 'ZIP_DECLARED_SIZE_SHORTFALL',
   ZipEncrypted: 'ZIP_ENCRYPTED_ENTRY',
   ZipUnsupportedMethod: 'ZIP_UNSUPPORTED_COMPRESSION_METHOD',
   ZipUnsafePath: 'ZIP_UNSAFE_PATH',

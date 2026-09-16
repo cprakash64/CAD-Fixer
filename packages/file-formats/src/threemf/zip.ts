@@ -313,6 +313,33 @@ export interface ZipReadOptions {
  * chunk that takes the total past budget, so peak memory is the limit rather
  * than whatever the archive claimed. The research measured a 65,362-byte entry
  * that inflates to 67,108,864 bytes — 1027:1 — and this refuses it twice.
+ *
+ * ONE DESTINATION, ALLOCATED ONCE — Stage 6D-B1.
+ *
+ * This used to retain every inflated chunk in an array and then allocate a
+ * second, full-size buffer to concatenate them into. Both were live at the
+ * moment of the copy, so reading an entry cost TWICE the entry — measured at
+ * 2.0–2.1× across 128, 250, 295 and 377 MiB fixtures, which is 615 MiB of live
+ * buffers for an entry the size of the one BETA-002 reported.
+ *
+ * Filling one preallocated destination measures 1.09–1.17× of the entry on the
+ * same fixtures, and is never slower: the concatenating copy stops existing, so
+ * inflation of a 250 MiB entry fell from 927 ms to 373 ms. Numbers and method
+ * are in docs/design, reproducible with `npm run bench:large-entry`.
+ *
+ * THE DECLARED SIZE IS ATTACKER-CONTROLLED AND IS TREATED THAT WAY. It is used
+ * for the allocation ONLY after it has been proven to be within
+ * `maxEntryBytes` — re-checked HERE rather than inherited from
+ * `readZipDirectory`, because a caller may read the directory under different
+ * limits and an allocation must not depend on that having matched. It is never
+ * treated as proof of what the stream will actually produce: `InflationBudget`
+ * still counts real bytes, chunk by chunk, and a stream that disagrees with the
+ * declaration in EITHER direction is refused rather than reconciled.
+ *
+ * That disagreement check is also the first integrity check this reader has
+ * ever had. No CRC is verified, so a truncated entry previously returned short
+ * bytes that looked like a successful read and surfaced later as malformed XML
+ * — telling the user their model was broken when the archive was.
  */
 export async function readZipEntry(
   bytes: Uint8Array,
@@ -359,16 +386,33 @@ export async function readZipEntry(
     return compressed;
   }
 
-  const chunks: Uint8Array[] = [];
+  /*
+   * PROVEN BEFORE THE ALLOCATION, not after and not elsewhere.
+   *
+   * `readZipDirectory` already applies this ceiling, but it is applied again
+   * here because THIS is the line that turns the number into an allocation.
+   * A caller that read the directory under wider limits — the Stage 6D
+   * benchmark does exactly that — must not be able to hand this function a
+   * declared size it is then asked to allocate.
+   */
+  const declared = entry.uncompressedSize;
+  if (declared > limits.maxEntryBytes) {
+    throw importTooLarge(
+      ImportRefusal.ZipEntryTooLarge,
+      `A file inside this archive expands to ${formatBytes(declared)}; CAD Fixer's per-entry expansion limit is ${formatBytes(limits.maxEntryBytes)}.`,
+      { declared, limit: limits.maxEntryBytes },
+    );
+  }
+
+  const out = new Uint8Array(declared);
   let produced = 0;
   for await (const chunk of options.inflateRaw(compressed)) {
     /*
      * EVERY CHECK IS ON THE PROSPECTIVE TOTAL, BEFORE THE CHUNK IS RETAINED.
      *
-     * Accounting first and checking afterwards keeps the offending chunk alive
-     * in `chunks` for as long as it takes to throw, and — worse — makes the
-     * peak one chunk larger than the limit says it is. Refusing before the
-     * push means the budget is the actual bound on what this holds.
+     * Accounting first and checking afterwards would make the peak one chunk
+     * larger than the limit says it is. Refusing before the write means the
+     * budget is the actual bound on what this holds.
      *
      * Throwing here also abandons the stream: leaving the `for await` calls the
      * async iterator's `return()`, whose `finally` cancels the underlying
@@ -394,18 +438,48 @@ export async function readZipEntry(
         { limit: limits.maxCompressionRatio },
       );
     }
+    /*
+     * THE ARCHIVE HAS CONTRADICTED ITSELF, and neither side is believed.
+     *
+     * Checked AFTER the resource ceilings so that an entry which is both over
+     * budget and over its declaration still reports the ceiling it crossed —
+     * the resource ceilings are policy the user can act on, and this is a
+     * statement about the file. Checked BEFORE the write, because the write is
+     * what would go out of bounds.
+     *
+     * The buffer is NOT grown and a second one is NOT allocated: growing would
+     * hand an attacker the doubling this change exists to remove, and it would
+     * mean the declared size bounded nothing at all.
+     */
+    if (prospectiveEntry > declared) {
+      throw importMalformed(
+        ImportRefusal.ZipDeclaredSizeOverrun,
+        'A file inside this archive contains more data than the archive says it does, so CAD Fixer will not read it.',
+        { declared, atLeast: prospectiveEntry },
+      );
+    }
 
+    out.set(chunk, produced);
     produced = prospectiveEntry;
     budget.totalProducedBytes = prospectiveTotal;
-    chunks.push(chunk);
     options.throwIfCancelled?.();
   }
 
-  const out = new Uint8Array(produced);
-  let at = 0;
-  for (const chunk of chunks) {
-    out.set(chunk, at);
-    at += chunk.byteLength;
+  /*
+   * A SHORT STREAM IS A CORRUPT ENTRY, NOT A SMALL ONE.
+   *
+   * Returning `out.subarray(0, produced)` here would be the tempting answer and
+   * the wrong one: it presents truncated data as a successful read, and the
+   * failure then appears somewhere downstream as malformed content. `subarray`
+   * would also be a second view over a buffer whose tail is zeroes, which is
+   * data the entry never contained.
+   */
+  if (produced !== declared) {
+    throw importMalformed(
+      ImportRefusal.ZipDeclaredSizeShortfall,
+      'A file inside this archive is smaller than the archive says it is, so CAD Fixer will not read it.',
+      { declared, produced },
+    );
   }
   return out;
 }
