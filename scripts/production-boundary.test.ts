@@ -1341,3 +1341,45 @@ describe('ZIP-B1-T10: the inflation path keeps exactly one destination', () => {
     expect(check).toBeLessThan(allocation);
   });
 });
+
+describe('B2: model/import is dispatched as an interruptible operation', () => {
+  /*
+   * THE CHEAP GUARD BEHIND AN EXPENSIVE PROOF.
+   *
+   * MF-P24 proves in a real browser that a cancel requested AFTER inflation is
+   * honoured, and MF-P25 proves the page is cross-origin isolated so the shared
+   * control word actually exists. Both live in the TIMING project, which is a
+   * separate command and runs in neither `npm run verify` nor `npm run
+   * test:e2e` — so a change that dropped `interruptible: true` would go green
+   * through both and only fail whenever someone next ran the timing suite by
+   * hand.
+   *
+   * What it guards is not a style preference. Without the flag no
+   * `SharedArrayBuffer` is allocated, the worker's token is backed only by a
+   * `cancel` MESSAGE, and every poll across the whole post-inflate synchronous
+   * span — decode, XML safety scan, element scan, materialisation, expansion —
+   * reads a flag that cannot change. Measured before the fix: a cancel at the
+   * parsing phase was ignored entirely and the document was committed anyway,
+   * 4,545 ms later, for a 250 MiB-class fixture.
+   */
+  const source = readFileSync(
+    join(REPO_ROOT, 'apps', 'web', 'src', 'runtime', 'geometry-client.ts'),
+    'utf8',
+  );
+
+  it('requests a shared cancellation signal for model/import', () => {
+    const at = source.indexOf("'model/import'");
+    expect(at, 'model/import must be dispatched from geometry-client').toBeGreaterThan(-1);
+    // The dispatch call ends at the first `);` after the operation name.
+    const call = source.slice(at, source.indexOf('  }', at));
+    expect(call).toContain('interruptible: true');
+  });
+
+  it('still transfers the file buffer rather than copying it', () => {
+    // Guarded together because they live on the same options object, and an
+    // edit that added one by replacing the other would otherwise be invisible.
+    const at = source.indexOf("'model/import'");
+    const call = source.slice(at, source.indexOf('  }', at));
+    expect(call).toContain('transfer: [bytes]');
+  });
+});

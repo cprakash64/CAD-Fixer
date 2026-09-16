@@ -209,7 +209,26 @@ export class GeometryClient {
     return this.coordinator.dispatch(
       'model/import',
       budget === undefined ? { bytes, fileName } : { bytes, fileName, budget },
-      { onProgress, transfer: [bytes] },
+      /*
+       * INTERRUPTIBLE — Stage 6D-B2, and this was a real defect rather than an
+       * omission of a nicety.
+       *
+       * Import is not "a few awaited phases". After inflation it is one long
+       * SYNCHRONOUS span: decode, the XML safety scan, the element scan,
+       * materialisation, expansion and the structural gates. A `cancel` message
+       * cannot be read during any of that, because reading it needs the worker
+       * to return to its event loop — so every `throwIfCancelled` in `read3mf`
+       * and the poll `parseModelXml` runs every 65,536 elements were polling a
+       * flag that could not change. Cancelling after inflation did nothing at
+       * all, and the measured uninterruptible tail was about 4.0 s for a
+       * 250 MiB entry.
+       *
+       * MF-P22 could not catch this: it arms Cancel before the import starts,
+       * so the cancel lands during inflation — which IS awaited, chunk by chunk
+       * — and the ratio stayed low however large the file grew. MF-P24 cancels
+       * only after inflation has provably finished.
+       */
+      { onProgress, transfer: [bytes], interruptible: true },
     );
   }
 

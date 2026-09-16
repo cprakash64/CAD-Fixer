@@ -58,6 +58,7 @@ export {
   parseModelXml,
   read3mf,
   THREE_MF_UNITS,
+  ThreeMfImportPhase,
 } from './threemf/threemf-reader';
 export type { ThreeMfLimits } from './threemf/threemf-reader';
 export { threeMfReader } from './threemf/codec';

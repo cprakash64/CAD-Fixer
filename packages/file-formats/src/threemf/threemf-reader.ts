@@ -124,6 +124,30 @@ export const DEFAULT_3MF_LIMITS: ThreeMfLimits = Object.freeze({
   maxTrianglesPerObject: DEFAULT_DOCUMENT_LIMITS.maxTotalTriangles,
 });
 
+/**
+ * THE PHASES A 3MF IMPORT REPORTS, named rather than spelled inline.
+ *
+ * These travel on the existing progress mechanism as the `note`, which is what
+ * the interface already renders and what Stage 6D-B2's MF-P24 keys on. Naming
+ * them is what lets a test assert the SYMBOL the worker actually emits instead
+ * of a copy of the sentence: a test that hard-codes `'parsing model'` drifts
+ * silently the day the wording changes, and MF-P24's whole proof is that
+ * cancellation was requested in a specific phase.
+ *
+ * `Parsing` IS THE POST-INFLATE BOUNDARY, and that is the one that matters.
+ * It is reported after `readZipEntry` has returned and before the decode, so
+ * observing it is proof that inflation finished.
+ */
+export const ThreeMfImportPhase = {
+  ReadingPackage: 'reading package',
+  Decompressing: 'decompressing',
+  Parsing: 'parsing model',
+  BuildingDocument: 'building document',
+  Complete: 'complete',
+} as const;
+
+export type ThreeMfImportPhase = (typeof ThreeMfImportPhase)[keyof typeof ThreeMfImportPhase];
+
 /** The canonical model part path, and the fallback the research allowed. */
 const MODEL_PART = '3d/3dmodel.model';
 
@@ -776,24 +800,56 @@ export function parseModelXml(
 }
 
 /**
+ * Elements copied between cancellation polls in the materialisation loops.
+ *
+ * MATCHES `scanXml`'S INTERVAL, deliberately: 65,536 is the number this
+ * codebase already uses for "often enough to stop promptly, rarely enough to
+ * cost nothing", and a second, different interval would be a second thing to
+ * reason about. The loops are blocked rather than tested per element so the
+ * inner copy stays a tight loop with no branch in it.
+ */
+const MATERIALISE_POLL_ELEMENTS = 65_536;
+
+/**
  * Materialises each object's canonical buffers ONCE, shared by every placement.
  *
  * This is where structural sharing is created: every part that resolves to this
  * object receives the SAME `CanonicalMesh` object, so N placements cost N
  * transforms rather than N copies of the geometry.
+ *
+ * POLLED SINCE STAGE 6D-B2. These loops are bounded only by the document's
+ * ceilings, not by anything this file knows, so "it was 71 ms on the fixture I
+ * measured" is not a reason to leave them uninterruptible — the same loops run
+ * over twenty million triangles' worth of scratch at the document ceiling.
+ * `onPoll` is injected rather than imported because this package knows nothing
+ * about cancellation tokens, exactly as `decodeText` and `inflateRaw` are
+ * injected.
  */
-function materialiseMeshes(model: ParsedModel, stats?: ThreeMfExpansionStats): void {
+function materialiseMeshes(
+  model: ParsedModel,
+  stats?: ThreeMfExpansionStats,
+  onPoll?: () => void,
+): void {
   for (const object of model.objects.values()) {
     if (object.triangles.length === 0) continue;
+    onPoll?.();
     if (stats !== undefined) stats.meshResourcesMaterialised += 1;
     const positions = createPositionArray(object.positions.length);
     // ONE ASSIGNMENT PER COMPONENT — the single Float64-to-Float32 conversion.
-    for (let index = 0; index < object.positions.length; index += 1) {
-      positions[index] = object.positions[index] ?? 0;
+    for (let from = 0; from < object.positions.length; from += MATERIALISE_POLL_ELEMENTS) {
+      const upto = Math.min(from + MATERIALISE_POLL_ELEMENTS, object.positions.length);
+      for (let index = from; index < upto; index += 1) {
+        positions[index] = object.positions[index] ?? 0;
+      }
+      onPoll?.();
     }
     const indices = createIndexArray(object.triangles.length);
-    for (let index = 0; index < object.triangles.length; index += 1) {
-      indices[index] = object.triangles[index] ?? 0;
+    for (let from = 0; from < object.triangles.length; from += MATERIALISE_POLL_ELEMENTS) {
+      const upto = Math.min(from + MATERIALISE_POLL_ELEMENTS, object.triangles.length);
+      for (let index = from; index < upto; index += 1) {
+        indices[index] = object.triangles[index] ?? 0;
+      }
+      onPoll?.();
     }
     object.mesh = { positions, indices, metadata: { sourceFormat: MeshFormatId.ThreeMf } };
   }
@@ -832,6 +888,7 @@ function expandBuild(
   model: ParsedModel,
   limits: ThreeMfLimits,
   stats?: ThreeMfExpansionStats,
+  onPoll?: () => void,
 ): ExpandedBuild {
   const parts: GeometryPart[] = [];
   let expandedFromComponents = false;
@@ -884,6 +941,17 @@ function expandBuild(
         { objectId: objectId.slice(0, 64) },
       );
     }
+
+    /*
+     * POLLED PER WALK STEP — Stage 6D-B2.
+     *
+     * Bounded by construction: `maxParts` caps emitted parts and
+     * `maxComponentDepth` caps recursion, so this runs at most a few thousand
+     * times and costs a flag read each. It is here rather than only at the leaf
+     * because a hostile component graph can spend its time in the walk without
+     * emitting a part.
+     */
+    onPoll?.();
 
     const mesh = object.mesh;
     if (mesh !== undefined) {
@@ -1046,12 +1114,12 @@ export async function read3mf(
     throw internalRefusal('3MF import needs a decompressor, and none was provided.');
   }
 
-  context.progress.report(0, 'reading package');
+  context.progress.report(0, ThreeMfImportPhase.ReadingPackage);
   const entries = readZipDirectory(bytes, zipLimits);
   throwIfCancelled(context.cancellation);
 
   const modelEntry = findModelEntry(entries);
-  context.progress.report(0.1, 'decompressing');
+  context.progress.report(0.1, ThreeMfImportPhase.Decompressing);
 
   /*
    * ONE BUDGET FOR THE WHOLE ARCHIVE, created here and passed to every entry
@@ -1072,21 +1140,37 @@ export async function read3mf(
   const modelBytes = await readZipEntry(bytes, modelEntry, zipOptions);
   throwIfCancelled(context.cancellation);
 
-  context.progress.report(0.3, 'parsing model');
+  context.progress.report(0.3, ThreeMfImportPhase.Parsing);
   const xml = context.decodeText(modelBytes);
   throwIfCancelled(context.cancellation);
 
   const model = parseModelXml(xml, limits, xmlLimits, () => {
-    // Polled between elements. The scanner is synchronous, so this cannot
-    // interrupt it on its own — the disposable worker's termination is the
-    // hard bound. See docs/ARCHITECTURE.md.
+    /*
+     * POLLED EVERY 65,536 ELEMENTS, AND SINCE STAGE 6D-B2 THAT POLL IS REAL.
+     *
+     * This site existed from the beginning and did nothing: `model/import` was
+     * not dispatched as interruptible, so the token it reads was backed only by
+     * a `cancel` MESSAGE — and a message cannot be delivered while this
+     * synchronous scan is running, because delivering it needs the worker's
+     * event loop. The flag could not change, so polling it could not help.
+     * Import now carries a `SharedArrayBuffer` control word that the main
+     * thread writes with `Atomics.store`, which this observes mid-scan.
+     */
     throwIfCancelled(context.cancellation);
   });
   throwIfCancelled(context.cancellation);
 
-  context.progress.report(0.75, 'building document');
-  materialiseMeshes(model, options.stats);
-  const { parts, expandedFromComponents } = expandBuild(model, limits, options.stats);
+  context.progress.report(0.75, ThreeMfImportPhase.BuildingDocument);
+  /*
+   * BOTH ARE POLLED SINCE STAGE 6D-B2. They were the last two long loops in
+   * this reader with no cancellation site at all: a cancel arriving here used
+   * to wait for the whole of materialisation and expansion.
+   */
+  const poll = (): void => {
+    throwIfCancelled(context.cancellation);
+  };
+  materialiseMeshes(model, options.stats, poll);
+  const { parts, expandedFromComponents } = expandBuild(model, limits, options.stats, poll);
   throwIfCancelled(context.cancellation);
 
   if (parts.length === 0) {
@@ -1181,6 +1265,6 @@ export async function read3mf(
       ? EMPTY_COMPATIBILITY
       : { unsupported: unsupportedFeatures, externalReferences: [] };
 
-  context.progress.report(1, 'complete');
+  context.progress.report(1, ThreeMfImportPhase.Complete);
   return { document, encoding: '3mf', warnings, compatibility };
 }

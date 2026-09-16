@@ -988,6 +988,156 @@ by this work.
 **384 MiB is not approved.** B3 still requires B2 and browser-worker headroom
 measurement after both.
 
+# Stage 6D-B2 — implemented
+
+**Landed. `model/import` is dispatched as an interruptible operation, and the
+two long loops that had no cancellation site now have one. No ceiling moved.**
+Base `3473b67521359aa5a203a9f77948fbc1c90e40e2`. The decisions above are
+unchanged by this section; what follows is the defect, the fix and what was
+measured.
+
+## The defect, traced rather than inferred
+
+`GeometryClient.importModel` dispatched `model/import` with
+`{ onProgress, transfer: [bytes] }` and no `interruptible: true`. That single
+omission propagates all the way down:
+
+```
+importModel                 no `interruptible`
+  GeometryCoordinator.dispatch
+    signal = options.interruptible === true && isSharedCancellationSupported()
+           = undefined                                  ← no SharedArrayBuffer
+    postMessage({ …, cancellation: undefined })         ← no control word sent
+      GeometryWorkerHost.run(…, cancellationBuffer = undefined)
+        cancellation = source.token                     ← MESSAGE-backed only
+```
+
+`source` is a plain `CancellationSource` flipped by the worker's `cancel`
+message handler, and that handler runs on the worker's event loop. After
+inflation, `read3mf` is one unbroken synchronous span — decode, the XML safety
+scan, the element scan, materialisation, expansion — and the worker does not
+return to its event loop once during it. The `cancel` message therefore sits
+unread in the queue, `source.cancel()` is never called, and the flag every poll
+along that span reads **cannot change**. `worker-host`'s post-handler
+`if (cancellation.isCancelled)` check loses the same race: the result is posted
+in the same macrotask, before the queued `cancel` is ever dequeued.
+
+So the polls were not merely coarse. They were unreachable. Cancelling a 3MF
+import after inflation did nothing whatsoever and the document was committed.
+
+**MF-P22 could not have caught this**, and that is worth stating plainly: it
+arms Cancel before the import starts, so the cancel lands during inflation —
+which is an awaited chunk loop and was always interruptible — and its ratio
+stayed comfortably under its threshold however large the file grew.
+
+## The fix
+
+- **`model/import` now dispatches `interruptible: true`.** One option, the
+  existing Stage 3B machinery, no second cancellation framework. The coordinator
+  allocates a fresh `SharedArrayBuffer` per operation, writes it with
+  `Atomics.store` before posting the `cancel` message, releases it on the
+  terminal message, and never reuses one — all already proven by
+  `interruptible-dispatch.test.ts` for any interruptible operation, so
+  `model/import` inherits per-operation freshness, stale-cancel isolation,
+  idempotent double-cancel and signal release without new code.
+- **`materialiseMeshes` and `expandBuild` gained poll sites.** They were the
+  last two long loops in the reader with none at all. The copy loops are
+  BLOCKED at 65,536 elements — the interval `scanXml` already uses — so the
+  inner copy stays a tight loop with no per-element branch; `expandBuild` polls
+  once per walk step, bounded by `maxParts` and `maxComponentDepth`.
+- **The reader's phases are named** (`ThreeMfImportPhase`) and exported, and the
+  progress block carries the raw phase as `data-phase`. `describeImportDetail`
+  maps a note to a sentence for a person, which means the phase stops being
+  observable the moment it is rendered — and MF-P24's whole proof is _which_
+  phase was on screen when Cancel was clicked. Asserting that against display
+  copy would make the proof drift the day the wording changed.
+
+## Phase audit
+
+Measured on the fixture ladder, 250 MiB entry, quiet machine.
+
+| Phase                    | Duration  | Cancellation observable?                           |
+| ------------------------ | --------- | -------------------------------------------------- |
+| `readZipDirectory`       | ~1 ms     | after; nothing allocated during                    |
+| `readZipEntry` (inflate) | ~430 ms   | **per chunk**, awaited — unchanged by B2           |
+| `decodeText`             | ~90 ms    | before and after; **not during** — one sync call   |
+| `describeUnsafeXml`      | ~90 ms    | **not during** — whole-text regex inside `scanXml` |
+| `scanXml` / parse        | ~3,300 ms | **every 65,536 elements** — real since B2          |
+| `materialiseMeshes`      | ~40 ms    | **every 65,536 elements** — new in B2              |
+| `expandBuild`            | ~25 ms    | **per walk step** — new in B2                      |
+| `assertMeshStructure`    | ~165 ms   | once per DISTINCT mesh                             |
+| `assertGeometryDocument` | ~145 ms   | not during                                         |
+
+## Post-cancel tail: before and after
+
+`postCancelTailMs` is measured from the Cancel click to the terminal state
+observed by the page — not from import start. Every reading below was taken with
+the cancel provably landing at `ThreeMfImportPhase.Parsing`, i.e. after
+inflation returned.
+
+| Fixture                  | Before                                         | After      |
+| ------------------------ | ---------------------------------------------- | ---------- |
+| 600,000 triangles        | **1,632 ms — and the import committed anyway** | **64 ms**  |
+| 745,000 (~128 MiB XML)   | **1,969 ms — committed anyway**                | **65 ms**  |
+| 1,455,000 (~250 MiB XML) | **4,545 ms — committed anyway**                | **154 ms** |
+
+The "before" column is the important one and it is worse than a slow tail: the
+cancellation was not late, it was **ignored**. The status list read
+`Loaded late-cancel.3mf: 1,455,000 triangles (3MF)` after a Cancel that had been
+clicked four and a half seconds earlier.
+
+Under heavy load (average 37) MF-P24 measured 142 ms at the default size, so the
+figure degrades with the machine, as expected, and stays an order of magnitude
+below the old behaviour.
+
+## What is still synchronous, stated rather than hidden
+
+A cancel arriving inside `decodeText` or `describeUnsafeXml` waits for that call
+to finish. Measured at the 250 MiB entry ceiling that is **about 90 ms each, so
+at most ~180 ms back to back** — bounded by one decode of one entry, and below
+the tail already contributed by the validation gates. **B2 does not claim
+streaming cancellation**, and turning the decode into a streaming one is Track
+B-2's rewrite, not this stage's.
+
+`assertMeshStructure` (~165 ms) and `assertGeometryDocument` (~145 ms) sit in
+`mesh-core`, which has no cancellation concept. They were measured rather than
+assumed and left alone: threading a token through the structural gates would not
+move the worst case, which is already set by decode plus safety scan. They do
+scale with triangle count, so at the STL input ceiling they would be larger —
+recorded here as known debt rather than fixed speculatively.
+
+## Tests
+
+| Id       | Where                          | Proves                                                              |
+| -------- | ------------------------------ | ------------------------------------------------------------------- |
+| MF-P24   | `format-import.timing.spec.ts` | cancel at `Parsing` is honoured; nothing committed; worker reusable |
+| MF-P25   | same                           | the page is cross-origin isolated, so the shared word really exists |
+| MF-P26   | same                           | replacement-import race: A never commits, B does                    |
+| B2-P1–P6 | `threemf-cancellation.test.ts` | each long loop consults the real token; phase vocabulary and order  |
+| B2 guard | `production-boundary.test.ts`  | `model/import` still requests the signal, in the UNIT suite         |
+
+**B2-P2 and B2-P3 discriminate.** They assert on `ThreeMfExpansionStats` rather
+than on "was it cancelled", because `read3mf` calls `throwIfCancelled` after
+expansion anyway — a test asserting only the outcome passes with both new polls
+deleted. Verified by deleting them: B2-P2 fails `expected 1 to be +0` and B2-P3
+fails with no cancellation at all.
+
+**The boundary guard exists because MF-P24 and MF-P25 live in the TIMING
+project**, which runs in neither `npm run verify` nor `npm run test:e2e`. A
+change dropping `interruptible: true` would go green through both. Verified by
+removing the flag: the guard fails.
+
+## What did not change
+
+- **No resource constant moved.** `maxEntryBytes` is still 256 MiB; every ZIP,
+  XML and document ceiling is untouched.
+- **B1's memory improvement is intact**: `readZipEntry` re-measured at **1.22×**
+  the entry for a 250 MiB fixture, matching the B1 figure exactly.
+- No Production Extension work. No topology, repair, hole-fill,
+  self-intersection, export or viewport change.
+- MF-P22 still passes, so early cancellation did not regress while late
+  cancellation was fixed.
+
 # Acceptance targets
 
 ## BETA-001

@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { ThreeMfImportPhase } from '@cadfixer/file-formats';
 import { objLarge, threeMfLarge } from './format-fixtures';
 
 /**
@@ -234,4 +235,263 @@ test('MF-P22: a large 3MF import can be cancelled, and cancelling is faster', as
     cancelMs / completeMs,
     `cancelled in ${String(cancelMs)}ms against ${String(completeMs)}ms uncancelled`,
   ).toBeLessThan(0.8);
+});
+
+/* ---------------------------------------------------------------- MF-P24 -- */
+
+/**
+ * MF-P24 — CANCELLATION REQUESTED AFTER INFLATION HAS COMPLETED.
+ *
+ * THE TEST MF-P22 COULD NOT BE. MF-P22 arms Cancel before the import starts, so
+ * the cancel lands during inflation — which is an awaited chunk loop, and was
+ * always interruptible. Its ratio therefore stayed low however large the file
+ * grew, and it passed throughout the period when cancelling a 3MF import after
+ * inflation did nothing at all.
+ *
+ * What made it do nothing: `model/import` was not dispatched as an
+ * interruptible operation, so the worker's cancellation token was backed only
+ * by a `cancel` MESSAGE. Everything after inflation — decode, the XML safety
+ * scan, the element scan, materialisation, expansion, the structural gates — is
+ * one synchronous span, and a message cannot be delivered while it runs. Every
+ * `throwIfCancelled` along that span was reading a flag that could not change.
+ * Measured uninterruptible tail: about 4.0 s for a 250 MiB entry.
+ *
+ * THE PHASE IS ASSERTED, NOT ASSUMED. The proof is worthless unless the cancel
+ * provably landed after inflation, so the page records which phase was on
+ * screen at the moment it clicked, and the assertion is against
+ * `ThreeMfImportPhase.Parsing` — the SYMBOL the reader emits, imported from the
+ * reader rather than copied as a string, so the two cannot drift.
+ * `ThreeMfImportPhase.Parsing` is reported after `readZipEntry` returns and
+ * before the decode begins, which is exactly the boundary this test needs.
+ */
+
+/**
+ * Arms a watcher that clicks Cancel the first time the import reports `phase`.
+ *
+ * ARMED BEFORE THE FILE IS HANDED TO THE PAGE, and that ordering is the whole
+ * reason this is two functions instead of one. Playwright's `setFiles` does not
+ * resolve until the page has taken the buffer, which for a hundred-megabyte
+ * fixture is several seconds — long enough that an observer installed after it
+ * can miss the entire import. `armCancel` is called before `openFile` for the
+ * same reason.
+ *
+ * A `MutationObserver` rather than Playwright polling, for the reason recorded
+ * on `armCancel`: Playwright's loop can lose the race on a fast machine, and a
+ * test that silently misses its own window still passes.
+ */
+async function armCancelAtPhase(page: Page, phase: string): Promise<void> {
+  await page.evaluate((target: string) => {
+    // THE RAW PHASE, not the sentence rendered beside it. See the note on
+    // `data-phase` in ImportDropZone.
+    const phaseNow = (): string =>
+      document.querySelector('[data-testid="import-progress"]')?.getAttribute('data-phase') ?? '';
+    const cancelButton = (): HTMLButtonElement | null =>
+      document.querySelector<HTMLButtonElement>('[data-testid="cancel-import"]');
+
+    const state: { phaseAtCancel: string; cancelledAtMs: number; settledAtMs: number } = {
+      phaseAtCancel: '',
+      cancelledAtMs: 0,
+      settledAtMs: 0,
+    };
+    const seen: string[] = [];
+
+    const attempt = (): boolean => {
+      const current = phaseNow();
+      if (current !== '' && seen[seen.length - 1] !== current) seen.push(current);
+      if (current !== target) return false;
+      const button = cancelButton();
+      if (button === null) return false;
+      state.phaseAtCancel = current;
+      state.cancelledAtMs = performance.now();
+      button.click();
+      return true;
+    };
+
+    /*
+     * `attributes` IS REQUIRED HERE, and its absence is a silent failure rather
+     * than a loud one. The phase lives in an ATTRIBUTE that React updates in
+     * place, so a `childList`-only observer sees the progress block appear and
+     * then never fires again — the watcher waits out its own timeout while the
+     * phase it is looking for comes and goes.
+     */
+    const observer = new MutationObserver(() => {
+      if (state.cancelledAtMs !== 0) {
+        // Already cancelled: now watch for the session to settle.
+        if (document.querySelector('[data-testid="import-progress"]') === null) {
+          state.settledAtMs = performance.now();
+          observer.disconnect();
+        }
+        return;
+      }
+      attempt();
+    });
+    observer.observe(document.body, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ['data-phase'],
+    });
+
+    Object.assign(globalThis, {
+      __lateCancel: (): {
+        phaseAtCancel: string;
+        cancelledAtMs: number;
+        settledAtMs: number;
+        phasesSeen: string[];
+      } => ({ ...state, phasesSeen: [...seen] }),
+    });
+  }, phase);
+}
+
+interface LateCancelReading {
+  readonly phaseAtCancel: string;
+  readonly cancelledAtMs: number;
+  readonly settledAtMs: number;
+  readonly phasesSeen: string[];
+}
+
+async function readLateCancel(page: Page): Promise<LateCancelReading> {
+  return page.evaluate(() =>
+    (globalThis as unknown as { __lateCancel: () => LateCancelReading }).__lateCancel(),
+  );
+}
+
+test('MF-P24: a 3MF import cancelled AFTER inflation stops during parsing', async ({ page }) => {
+  test.setTimeout(600_000);
+  await page.goto('/');
+
+  /*
+   * BIG ENOUGH THAT PARSING IS THE LONG PHASE. At this size inflation is a few
+   * hundred milliseconds and the element scan is seconds, so the window in
+   * which the detail reads `parsing model` is wide, and a cancel that lands
+   * inside it is unambiguously post-inflate.
+   */
+  /*
+   * SIZE IS OVERRIDABLE FOR LOCAL QUALIFICATION, and the default is what CI
+   * runs. 600,000 triangles is roughly 108 MiB of model XML — already past the
+   * hundred-megabyte class, and large enough that the element scan runs for
+   * well over a second, so the window in which the phase reads `parsing model`
+   * is wide. The 128 MiB and 250 MiB measurements recorded in docs/design were
+   * taken by raising this; they are not pinned here because a multi-minute
+   * fixture in the default suite buys no additional proposition.
+   */
+  const triangles = Number(process.env.CADFIXER_MFP24_TRIANGLES ?? '600000');
+  const bytes = threeMfLarge(triangles);
+
+  await armCancelAtPhase(page, ThreeMfImportPhase.Parsing);
+  await openFile(page, 'late-cancel.3mf', bytes);
+
+  // The import must reach a terminal state; the watcher records when.
+  await expect(page.getByTestId('import-progress')).toHaveCount(0, { timeout: 240_000 });
+  const observed = await readLateCancel(page);
+
+  // Printed BEFORE the assertions: a diagnostic that only appears when the
+  // test passes is unavailable exactly when it is needed.
+  const tailMs = observed.settledAtMs - observed.cancelledAtMs;
+  process.stdout.write(
+    `\n[MF-P24] phases=${observed.phasesSeen.join('|')} ` +
+      `triangles=${String(triangles)} ` +
+      `phaseAtCancel="${observed.phaseAtCancel}" postCancelTailMs=${tailMs.toFixed(0)}\n`,
+  );
+
+  /* 1. THE CANCEL LANDED AFTER INFLATION. Without this the rest proves nothing. */
+  expect(observed.phaseAtCancel, `phases seen: ${observed.phasesSeen.join(' -> ')}`).toBe(
+    ThreeMfImportPhase.Parsing,
+  );
+  // And inflation is a phase this import genuinely passed THROUGH, not skipped.
+  expect(observed.phasesSeen).toContain(ThreeMfImportPhase.Decompressing);
+
+  /* 2. IT WAS OBSERVED AS A CANCELLATION, not as a failure or a success. */
+  await expect(page.getByTestId('status-list')).toContainText('cancelled');
+
+  /* 3. NOTHING WAS COMMITTED. A cancelled import is not a partial import. */
+  await expect(page.getByTestId('fact-triangles')).toHaveCount(0);
+
+  /* 4. THE WORKER SURVIVED, which is the difference between cancelling an
+   *    operation and killing the authoritative session. */
+  await expect(page.getByTestId('session-lost')).toHaveCount(0);
+
+  /* 5. AND IT IS STILL USABLE. */
+  await openFile(page, 'after-cancel.3mf', threeMfLarge(64));
+  await expect(page.getByTestId('fact-triangles')).toHaveText('64', { timeout: 120_000 });
+
+  /*
+   * A GENEROUS CEILING, DELIBERATELY. The functional assertions above are the
+   * proof and they carry no wall clock at all; this exists only to fail if the
+   * dispatch regresses to a message-backed token, which would put the tail back
+   * into the multi-second range. Controlled measurements are recorded in
+   * docs/design rather than pinned here.
+   */
+  expect(
+    tailMs,
+    `post-cancel tail ${tailMs.toFixed(0)}ms at phase "${observed.phaseAtCancel}"`,
+  ).toBeLessThan(2_000);
+});
+
+/* ---------------------------------------------------------------- MF-P25 -- */
+
+test('MF-P25: the page is cross-origin isolated, so import really gets a shared word', async ({
+  page,
+}) => {
+  await page.goto('/');
+
+  /*
+   * THE PRECONDITION MF-P24 SILENTLY DEPENDS ON.
+   *
+   * `interruptible: true` is a REQUEST: the coordinator allocates a control
+   * word only where `SharedArrayBuffer` and `Atomics` exist, and a
+   * `SharedArrayBuffer` requires cross-origin isolation. A deployment that lost
+   * its COOP/COEP headers would silently fall back to the message-backed token
+   * — the exact defect Stage 6D-B2 fixed — and MF-P24 would then be the only
+   * thing standing between that and a release. Asserting the environment
+   * directly makes the regression legible instead of leaving it to be inferred
+   * from a timing number.
+   */
+  const capabilities = await page.evaluate(() => ({
+    crossOriginIsolated: globalThis.crossOriginIsolated,
+    sharedArrayBuffer: typeof SharedArrayBuffer,
+    atomics: typeof Atomics,
+  }));
+
+  expect(capabilities.crossOriginIsolated).toBe(true);
+  expect(capabilities.sharedArrayBuffer).toBe('function');
+  expect(capabilities.atomics).toBe('object');
+});
+
+/* ---------------------------------------------------------------- MF-P26 -- */
+
+test('MF-P26: a replacement import commits while the one it replaced does not', async ({
+  page,
+}) => {
+  test.setTimeout(600_000);
+  await page.goto('/');
+
+  /*
+   * THE RACE THAT ACTUALLY HAPPENS, rather than an artificial cancel call.
+   *
+   * A user opens a large file, waits, gets impatient and opens a different one.
+   * The first import is abandoned mid-parse and the second must be the one that
+   * lands. Two mechanisms have to hold at once and they are independent:
+   * cancellation stops the abandoned work, and the stale-result guard stops it
+   * committing if it finishes anyway. Neither replaces the other.
+   */
+  const big = threeMfLarge(600_000);
+  const small = threeMfLarge(128);
+
+  await armCancelAtPhase(page, ThreeMfImportPhase.Parsing);
+  await openFile(page, 'abandoned.3mf', big);
+  await expect(page.getByTestId('import-progress')).toHaveCount(0, { timeout: 240_000 });
+
+  const observed = await readLateCancel(page);
+  expect(observed.phaseAtCancel).toBe(ThreeMfImportPhase.Parsing);
+
+  // The replacement lands, and it is the one on screen.
+  await openFile(page, 'replacement.3mf', small);
+  await expect(page.getByTestId('fact-triangles')).toHaveText('128', { timeout: 120_000 });
+  await expect(page.getByTestId('fact-filename')).toHaveText('replacement.3mf');
+
+  // The abandoned import never became the model, and never overwrote the one
+  // that did.
+  await expect(page.getByTestId('fact-triangles')).not.toHaveText('600,000');
+  await expect(page.getByTestId('session-lost')).toHaveCount(0);
 });

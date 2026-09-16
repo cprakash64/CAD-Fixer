@@ -4,13 +4,19 @@ import { getHeapStatistics } from 'node:v8';
 import { performance } from 'node:perf_hooks';
 import { it } from 'vitest';
 import { uncancellable } from '@cadfixer/shared';
-import { distinctMeshes, documentTriangleCount } from '@cadfixer/mesh-core';
+import {
+  assertGeometryDocument,
+  assertMeshStructure,
+  distinctMeshes,
+  documentTriangleCount,
+} from '@cadfixer/mesh-core';
 import {
   DEFAULT_3MF_LIMITS,
   DEFAULT_IMPORT_BUDGET,
   DEFAULT_XML_LIMITS,
   DEFAULT_ZIP_LIMITS,
   createInflationBudget,
+  describeUnsafeXml,
   parseModelXml,
   read3mf,
   readZipDirectory,
@@ -747,4 +753,108 @@ it('measures a multi-model-part package read sequentially', async () => {
       `   peak / largest part  = ${((peak - fixtureHeld) / largestPart).toFixed(2)}x\n` +
       `   peak / reachable sum = ${((peak - fixtureHeld) / reachable).toFixed(2)}x\n`,
   );
+}, 1_800_000);
+
+/* ------------------------------------------------ stage 6D-B2: phases -- */
+
+/**
+ * HOW LONG EACH IMPORT PHASE RUNS, which is what decides where a cancellation
+ * poll is worth adding.
+ *
+ * Stage 6D-B2 needs this before touching anything: a poll inside a phase that
+ * takes four milliseconds costs maintenance and buys nothing, and a phase that
+ * runs for seconds without one is the whole defect. Measured rather than
+ * guessed.
+ *
+ * `read3mf`'s own progress notes bracket the phases it does not export, so the
+ * timestamps below decompose the whole import without instrumenting production
+ * code.
+ */
+it('measures how long each 3MF import phase runs', async () => {
+  for (const sizeMb of parseSizes()) {
+    const targetBytes = Math.floor(sizeMb * 1024 * 1024);
+    global.gc?.();
+
+    const built = buildLargeModelXml(targetBytes);
+    const entryBytes = built.buffer.byteLength;
+    const archive = buildZip([
+      { name: '[Content_Types].xml', content: Buffer.from(CONTENT_TYPES, 'utf8') },
+      { name: '_rels/.rels', content: Buffer.from(RELS, 'utf8') },
+      { name: '3D/3dmodel.model', content: built.buffer },
+    ]);
+    const bytes = new Uint8Array(archive);
+    const zipLimits = limitsWithEntryCap(Math.max(entryBytes + 1024, 256 * 1024 * 1024));
+
+    // Phase boundaries, taken from read3mf's own progress reports.
+    const marks: { note: string; at: number }[] = [];
+    const started = performance.now();
+    await read3mf(
+      bytes,
+      {
+        ...context,
+        progress: {
+          report: (_fraction: number, note?: string): void => {
+            if (note !== undefined) marks.push({ note, at: performance.now() });
+          },
+        },
+      },
+      { zipLimits },
+    );
+    const total = performance.now() - started;
+
+    const spans: string[] = [];
+    let previous = started;
+    for (const mark of marks) {
+      spans.push(`${mark.note}: ${(mark.at - previous).toFixed(0)} ms`);
+      previous = mark.at;
+    }
+
+    /* -- the sub-phases the progress notes cannot separate ----------------- */
+    const modelEntry = readZipDirectory(bytes, zipLimits).find(
+      (entry) => entry.name.toLowerCase() === '3d/3dmodel.model',
+    );
+    if (modelEntry === undefined) throw new Error('fixture lost its model part');
+    const modelBytes = await readZipEntry(bytes, modelEntry, {
+      limits: zipLimits,
+      inflateRaw,
+      budget: createInflationBudget(zipLimits),
+    });
+
+    let at = performance.now();
+    const xml = decodeUtf8(modelBytes);
+    const decodeMs = performance.now() - at;
+
+    at = performance.now();
+    const unsafe = describeUnsafeXml(xml);
+    const safetyMs = performance.now() - at;
+
+    at = performance.now();
+    parseModelXml(xml, DEFAULT_3MF_LIMITS, DEFAULT_XML_LIMITS);
+    const parseMs = performance.now() - at;
+
+    /* -- the gates the worker runs AFTER read3mf returns ------------------ */
+    const parsed = await read3mf(bytes, context, { zipLimits });
+    at = performance.now();
+    for (const mesh of distinctMeshes(parsed.document)) assertMeshStructure(mesh, 'bench');
+    const meshGateMs = performance.now() - at;
+
+    at = performance.now();
+    assertGeometryDocument(parsed.document, 'bench');
+    const documentGateMs = performance.now() - at;
+
+    process.stdout.write(
+      `   assertMeshStructure    ${meshGateMs.toFixed(0)} ms   (polled once per DISTINCT mesh)\n` +
+        `   assertGeometryDocument ${documentGateMs.toFixed(0)} ms   (no poll inside)\n`,
+    );
+
+    process.stdout.write(
+      `\n── phases, entry ${(entryBytes / (1024 * 1024)).toFixed(1)} MiB, ` +
+        `${built.triangles.toLocaleString('en-US')} triangles ──\n` +
+        `   progress spans: ${spans.join(', ')}\n` +
+        `   total read3mf ${total.toFixed(0)} ms\n` +
+        `   decodeText        ${decodeMs.toFixed(0)} ms   (synchronous, whole buffer)\n` +
+        `   describeUnsafeXml ${safetyMs.toFixed(0)} ms   (synchronous, whole text; unsafe=${String(unsafe)})\n` +
+        `   parseModelXml     ${parseMs.toFixed(0)} ms   (polls every 65,536 elements)\n`,
+    );
+  }
 }, 1_800_000);

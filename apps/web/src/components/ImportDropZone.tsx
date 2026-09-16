@@ -154,7 +154,25 @@ export function ImportDropZone(): ReactNode {
       ) : null}
 
       {isImporting ? (
-        <div className="import__progress" data-testid="import-progress">
+        <div
+          className="import__progress"
+          data-testid="import-progress"
+          /*
+           * THE WORKER'S OWN PHASE, as a symbol rather than as the copy beside
+           * it.
+           *
+           * `describeImportDetail` deliberately maps a reader's internal note to
+           * a sentence for a person, which means the phase itself stops being
+           * observable from outside the moment it is rendered. Stage 6D-B2's
+           * MF-P24 has to prove a cancel was requested AFTER inflation, and
+           * proving that against display copy would make the proof drift the day
+           * the wording changed. This carries the raw note — `parsing model`,
+           * not `reading the model part` — so a test compares the SYMBOL the
+           * reader emits. It is diagnostic metadata, never displayed, and
+           * absent when the reader reports no note.
+           */
+          {...(importProgress.note === undefined ? {} : { 'data-phase': importProgress.note })}
+        >
           <div className="import__progress-row">
             <span data-testid="import-phase">
               {describePhase(importProgress.state)}
