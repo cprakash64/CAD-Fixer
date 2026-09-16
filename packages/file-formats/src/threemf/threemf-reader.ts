@@ -58,6 +58,7 @@ import {
   type ZipReadOptions,
 } from './zip';
 import { DEFAULT_XML_LIMITS, readAttrs, scanXml, type XmlLimits } from './xml-scan';
+import { ModelPartRole } from './package-graph';
 
 /**
  * THE PRODUCTION 3MF READER — core mesh subset.
@@ -269,17 +270,31 @@ function namespacePrefixes(attrs: Readonly<Record<string, string>>): ReadonlyMap
  * the same attribute — so matching the spelling would miss the file and matching
  * a bare `path` would catch an attribute from some unrelated namespace.
  */
+export function productionPathValueOf(
+  attrs: Readonly<Record<string, string>>,
+  prefixes: ReadonlyMap<string, string>,
+): string | undefined {
+  for (const [key, value] of Object.entries(attrs)) {
+    const colon = key.indexOf(':');
+    if (colon === -1) continue;
+    if (key.slice(colon + 1) !== 'path') continue;
+    if (prefixes.get(key.slice(0, colon)) === PRODUCTION_NAMESPACE) return value;
+  }
+  return undefined;
+}
+
+/**
+ * Whether this element carries a production-extension path.
+ *
+ * DELEGATES rather than repeating the walk, so detection and extraction can
+ * never disagree about what counts as a production path — a file refused as
+ * cross-part by one rule and read by the other would be the worst of both.
+ */
 function productionPathOf(
   attrs: Readonly<Record<string, string>>,
   prefixes: ReadonlyMap<string, string>,
 ): boolean {
-  for (const key of Object.keys(attrs)) {
-    const colon = key.indexOf(':');
-    if (colon === -1) continue;
-    if (key.slice(colon + 1) !== 'path') continue;
-    if (prefixes.get(key.slice(0, colon)) === PRODUCTION_NAMESPACE) return true;
-  }
-  return false;
+  return productionPathValueOf(attrs, prefixes) !== undefined;
 }
 
 const TEXTURE_ELEMENTS: readonly string[] = Object.freeze(['texture2d', 'texture2dgroup']);
@@ -299,6 +314,14 @@ interface ParsedModel {
   readonly objects: Map<string, ObjectRecord>;
   readonly build: { readonly objectId: string; readonly transform: PartTransform }[];
   readonly unsupported: Set<string>;
+  /**
+   * The role this part was parsed AS.
+   *
+   * Carried on the result so a consumer cannot lose track of whether the build
+   * it is holding is the package's build or a referenced part's ignorable one.
+   * `expandBuild` must only ever walk the root's.
+   */
+  readonly role: ModelPartRole;
 }
 
 function localName(name: string): string {
@@ -370,11 +393,29 @@ function readIndex(raw: string | undefined, objectId: string): number {
 }
 
 /** Parses the model XML into resources and build items. No expansion yet. */
+/**
+ * What a parse needs to know beyond the bytes.
+ *
+ * `role` EXISTS SO THE PARSER CAN BE TOLD WHICH PART IT IS READING — Stage
+ * 6D-A1. The specification treats the two differently: the root part carries
+ * the package's only valid build section, and a REFERENCED part is required to
+ * carry an empty one, with consumers obliged to ignore any entries it does
+ * have. Today's parser refuses a model with no build items, which is right for
+ * the only part it ever opens and wrong for a conformant referenced part — so a
+ * referenced part could not be parsed at all.
+ *
+ * NOTHING IN PRODUCTION PASSES `Referenced` YET. `read3mf` opens the root and
+ * nothing else, and every production-extension package is still refused. The
+ * default is `Root`, so every existing caller is unaffected and root validation
+ * is untouched: the `no build items` refusal still fires exactly where it did.
+ */
 export function parseModelXml(
   xml: string,
   limits: ThreeMfLimits = DEFAULT_3MF_LIMITS,
   xmlLimits: XmlLimits = DEFAULT_XML_LIMITS,
   onElements?: (count: number) => void,
+  /** Defaults to `Root`, which is the only role production uses in Stage 6D-A1. */
+  role: ModelPartRole = ModelPartRole.Root,
 ): ParsedModel {
   let unit: string | undefined;
   const objects = new Map<string, ObjectRecord>();
@@ -767,7 +808,21 @@ export function parseModelXml(
       );
     }
   }
-  if (build.length === 0) {
+  /*
+   * THE BUILD SECTION IS THE ROOT PART'S, AND ONLY THE ROOT PART'S.
+   *
+   * A referenced model part is required by the specification to carry an EMPTY
+   * build section, and every consumer is required to ignore its entries. So an
+   * empty build is malformed in the root and entirely ordinary in a referenced
+   * part, and a single rule cannot be right for both.
+   *
+   * ROOT VALIDATION IS UNCHANGED. `role` defaults to `Root` and production
+   * passes nothing else in Stage 6D-A1, so this refusal fires exactly where it
+   * fired before. What changed is that a referenced part can now be parsed at
+   * all — previously it could not, which was the first blocker A2 would have
+   * hit.
+   */
+  if (role === ModelPartRole.Root && build.length === 0) {
     throw importMalformed(
       ImportRefusal.ThreeMfNoBuildItems,
       'This 3MF file contains no build items, so there is nothing to show.',
@@ -796,7 +851,7 @@ export function parseModelXml(
     }
   }
 
-  return { unit, objects, build, unsupported };
+  return { unit, objects, build, unsupported, role };
 }
 
 /**

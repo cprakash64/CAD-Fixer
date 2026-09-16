@@ -63,6 +63,33 @@ export {
 export type { ThreeMfLimits } from './threemf/threemf-reader';
 export { threeMfReader } from './threemf/codec';
 
+/*
+ * STAGE 6D-A1 PACKAGE-GRAPH FOUNDATION.
+ *
+ * Exported so the resolver and the registry can be tested and so Stage 6D-A2
+ * can build on them. NOTHING IN PRODUCTION CONSTRUCTS A GRAPH OR RESOLVES A
+ * PACKAGE PATH YET: `read3mf` still opens exactly one model part and still
+ * refuses every production-extension package. The compatibility boundary moves
+ * in A2, after the resource-budget reconciliation Stage 6D-B3 showed is owed.
+ */
+export {
+  canonicalisePackagePath,
+  modelPartKeyOfEntry,
+  objectKeyEquals,
+  objectKeyToString,
+  PackagePathRefusal,
+  resolvePackageModelPath,
+} from './threemf/package-path';
+export type { ModelPartKey, ObjectKey, ResolvedModelPart } from './threemf/package-path';
+export { ModelPartRole, PackageModelGraph } from './threemf/package-graph';
+export type {
+  CrossPartObjectReference,
+  ModelPart,
+  ModelPartLoader,
+  PackageGraphFailure,
+  PackageModelGraphOptions,
+} from './threemf/package-graph';
+
 export {
   DEFAULT_MAX_INTAKE_BYTES,
   extractExtension,

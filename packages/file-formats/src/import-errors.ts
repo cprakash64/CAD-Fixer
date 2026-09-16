@@ -144,6 +144,29 @@ export const ImportRefusal = {
    * file is broken sends them to look for damage that is not there, and the
    * fault is ours.
    */
+  /**
+   * A production-extension `path` that is not a well-formed package reference.
+   *
+   * STAGE 6D-A1. Distinct from `ThreeMfModelPartNotFound`: this says the
+   * REFERENCE is wrong — traversal, a drive letter, a URL scheme, a control
+   * character, no leading slash. `details.reasonDetail` names which rule.
+   */
+  ThreeMfMalformedModelPartPath: 'THREEMF_MALFORMED_MODEL_PART_PATH',
+  /**
+   * A well-formed package reference naming an entry the archive does not hold.
+   *
+   * STAGE 6D-A1, and deliberately NOT folded into the malformed case. One is a
+   * hostile or corrupt reference, the other an incomplete package; a user can
+   * act on the second and not the first.
+   */
+  ThreeMfModelPartNotFound: 'THREEMF_MODEL_PART_NOT_FOUND',
+  /**
+   * A geometry reference naming a package part that is not a model.
+   *
+   * UNSUPPORTED rather than malformed: referencing a thumbnail or a texture is
+   * legal in the package, and what CAD Fixer cannot do is read one as geometry.
+   */
+  ThreeMfModelPartNotAModel: 'THREEMF_MODEL_PART_NOT_A_MODEL',
   ThreeMfMultiModelPart: 'THREEMF_MULTI_MODEL_PART_UNSUPPORTED',
   /**
    * The package DECLARES that it requires an extension CAD Fixer does not

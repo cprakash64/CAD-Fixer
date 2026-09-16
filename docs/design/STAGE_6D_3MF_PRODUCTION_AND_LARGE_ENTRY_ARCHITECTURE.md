@@ -1324,6 +1324,126 @@ measurements above were taken with `main`'s constant restored and verified
 byte-identical afterwards. The harness is macOS-specific for the footprint
 signal (`footprint(1)`); the isolate signals work anywhere Chromium's CDP does.
 
+# Stage 6D-A1 — package graph foundation
+
+**Landed. Types, a resolver and a registry. NO NEW PRODUCT CAPABILITY.** Base
+`6905f1138ddbb64e873818df2bddc9ebf0299753`. Every production-extension package
+that was refused before A1 is refused after it, with the same code and the same
+message.
+
+## The single-part assumptions, enumerated
+
+`read3mf` picks one entry and never revisits the choice, and from that point
+`objectId` silently means "object in the one part that happens to be loaded".
+The sites:
+
+| Site                                  | The assumption                                                                                     |
+| ------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `findModelEntry`                      | `3d/3dmodel.model`, else the first `*.model`. One entry, chosen once.                              |
+| `ParsedModel.objects: Map<string, …>` | Keyed by bare `objectId`; the map IS the package's object space.                                   |
+| `ThreeMfDuplicateObjectId`            | Duplicate detection is package-wide because the map is. Correct in one part, wrong across parts.   |
+| post-scan component validation        | `objects.has(component.objectId)` against that one map.                                            |
+| post-scan build validation            | `objects.has(item.objectId)`, same map.                                                            |
+| `materialiseMeshes`                   | Walks one `ParsedModel`.                                                                           |
+| `expandBuild` / `walk`                | `model.objects.get(objectId)`; the cycle set holds bare ids.                                       |
+| `expandBuild` budget counters         | Triangle, vertex and part totals are per-`ParsedModel`, so they would restart per part.            |
+| `ThreeMfNoBuildItems`                 | Refuses an empty build — right for the root, and it made a conformant referenced part unparseable. |
+
+A1 addresses the last one and introduces the identity that makes the rest
+fixable. It does not change any of them, because changing them without
+cross-part resolution would produce half-support.
+
+## What A1 adds
+
+**`ModelPartKey`** — a branded canonical package identity. Not a filesystem
+path, not a URL: the archive entry's own name reduced to one canonical spelling
+so two references to one part share one parse. Branded for the same reason
+`PartId` is: an unvalidated attacker-supplied string must not reach the lookup
+that decides which bytes get parsed.
+
+**`ObjectKey = (ModelPartKey, objectId)`** — because two model parts may each
+declare `id="1"`, legally and by design. Resolving `B.model:1` against
+`A.model`'s table would place a mesh that is valid, plausible and not what the
+file said. The document invariant THE PART IS PART OF THE IDENTITY, one level
+further out.
+
+**`canonicalisePackagePath` / `resolvePackageModelPath`** — a resolver with its
+own contract, deliberately NOT `describeUnsafePath`. The two grammars differ on
+the most security-relevant character there is: an entry name must not begin with
+`/` and a package reference must. Sharing a helper would mean a rule tightened
+for one silently loosening the other. A test pins the disagreement, and a second
+pins that it is narrow — every traversal and scheme rule is refused by both.
+
+**`PackageModelGraph`** — the registry, generic over the parse result, enforcing
+three rules by construction:
+
+- **Parse once per canonical part**, including for concurrent callers. A package
+  may place one referenced object fifty times; `ensurePart` is a get-or-parse
+  and is the only way in.
+- **Reachability decides what is read.** There is no `loadAll`, and a test
+  asserts the absence of one. An unreferenced `.model` is never opened, never
+  inflated, never charged.
+- **One budget per package.** The graph HOLDS the archive's single
+  `InflationBudget`. A per-part budget is a per-part FULL allowance, which is how
+  twenty parts would extract twenty times the ceiling.
+
+**`ModelPartRole`** — `Root` or `Referenced`, defaulting to `Root`. The
+specification treats them differently: the root carries the package's only valid
+build section, `path` on a component is root-only, and consumers must ignore a
+referenced part's build entries. `parseModelXml` can now be told which it is
+reading; root validation is byte-identical, and the empty-build refusal still
+fires exactly where it did.
+
+## What A1 deliberately does NOT decide
+
+**`maxModelParts` has no production value.** The plumbing exists so A2 cannot
+forget the ceiling; the number is A2's to justify with evidence. Stage 6D-B3
+established that a resource value without measurement behind it is not a policy,
+and inventing one here would be exactly that. A caller that passes nothing gets
+no ceiling, and A1 has no production caller.
+
+**Cross-part units are not reconciled.** `ModelPart` retains each part's
+declared unit independently and nothing compares them. A3 must be able to see a
+disagreement in order to refuse it; adopting the root's here would destroy the
+evidence that one existed.
+
+**Transforms are untouched.** `CrossPartObjectReference` carries source part,
+target part, object id and the component's own Float64 3×4 transform. Nothing is
+baked, composed or narrowed.
+
+## THE DEBT A2 MUST CLEAR FIRST
+
+**`estimateImportPeak` and `maxImportPeakBytes` MUST NOT be used as the safety
+gate for multi-model-part loading.**
+
+Stage 6D-B3 measured this directly in Chromium: for a 376 MiB entry the model
+predicts about **271 MiB** and the renderer actually peaked at
+**2,679–3,071 MiB** — out by roughly an order of magnitude, because it models
+neither the inflated entry, the decoded XML string, the parser's scratch arrays,
+nor V8 and Blink overhead. At the shipped 256 MiB ceiling a 248 MiB entry
+already peaks around 1.75 GiB, above the 1,536 MiB budget.
+
+A2 makes the importer read MORE parts. Gating that on a model already known to
+under-predict by 10× would be building a safety argument on a number measured to
+be wrong. **Stage 6D-R1 — reconcile 3MF import resource budgeting with measured
+Chromium memory — is owed before A2 loads a second model part.** A1 changes
+nothing about the existing model and draws nothing from it.
+
+## Product behaviour at the end of A1
+
+Unchanged, and asserted from this stage's own tests rather than only from the
+existing suite:
+
+- a component with `p:path` → `UNSUPPORTED_FILE` / `THREEMF_MULTI_MODEL_PART_UNSUPPORTED`
+- a build item with `p:path` → the same
+- `requiredextensions="p"`, Case C included → `UNSUPPORTED_FILE` / `THREEMF_UNSUPPORTED_EXTENSION`
+- a same-part dangling component → `MALFORMED_FILE` / `THREEMF_MISSING_OBJECT_REFERENCE`, **never** routed through package-part lookup
+- an archive holding a second, unreferenced `.model` → imports exactly as a single-part package
+
+The production-extension fixtures in those tests contain a **real, resolvable**
+second model part, so the refusal is meaningful: if the foundation ever became
+reachable from production, that is the entry it would follow.
+
 # Acceptance targets
 
 ## BETA-001
