@@ -40,7 +40,8 @@
     "test:e2e:harness": "playwright test --config playwright.harness.config.ts",
     "bench:formats": "vitest run --config vitest.bench.config.ts scripts/format-import.bench-suite.ts",
     "bench:export": "vitest run --config vitest.bench.config.ts scripts/format-export.bench-suite.ts",
-    "bench:hole-fill": "vitest run --config vitest.bench.config.ts scripts/hole-fill.bench-suite.ts"
+    "bench:hole-fill": "vitest run --config vitest.bench.config.ts scripts/hole-fill.bench-suite.ts",
+    "bench:large-entry": "vitest run --config vitest.bench.config.ts scripts/large-entry.bench-suite.ts"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

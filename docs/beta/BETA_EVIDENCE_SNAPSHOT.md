@@ -19,6 +19,15 @@ permanent regression coverage at
 neither tester's own file has been seen, and neither tester-specific status has
 moved. **The tag is unchanged and nothing has been redeployed.**
 
+**Retest stage: 6D.** Repository at `9e793dc`, tag `v0.1.1` unchanged at
+`9e793dc68810b9f9df2f39684259612f75eb3a54`. Both findings were retested by their
+original reporters against the deployed v0.1.1 Technical Preview, and both now
+produce a diagnostic specific enough to classify. **Both classifications below
+move from provisional to CONFIRMED.** Stage 6D is architecture and measurement
+only: no ceiling moved, no reader changed, nothing was deployed, and no tag was
+touched. The resulting design is recorded in
+`docs/design/STAGE_6D_3MF_PRODUCTION_AND_LARGE_ENTRY_ARCHITECTURE.md`.
+
 ---
 
 ## BETA-001 — 3MF component reference resolves to no object
@@ -27,12 +36,12 @@ moved. **The tag is unchanged and nothing has been redeployed.**
 | -------------- | ----------------------------------------------------------- |
 | Category       | `IMPORT_FAILURE`                                            |
 | Root cluster   | `3MF_COMPONENT_REFERENCE`                                   |
-| Severity       | S3 provisional — see "Why provisional" below                |
-| Reproducible   | yes, synthetically; the tester's own file has not been seen |
+| Severity       | **S2** — a standards-valid class of file cannot be imported |
+| Reproducible   | yes, on a real producer-authored package and synthetically  |
 | Frequency      | 1 tester                                                    |
 | Workaround     | re-export the model as STL, or as a single-part 3MF         |
 | Roadmap area   | 3MF import interoperability                                 |
-| Classification | **LIKELY VALID REFUSAL — ACTUAL FILE REQUIRED**             |
+| Classification | **CONFIRMED PRODUCTION-EXTENSION LIMITATION**               |
 
 ### What the user saw
 
@@ -73,14 +82,34 @@ with the reported provenance: multi-material slicer projects commonly use this
 extension. **It is a hypothesis about the tester's file, not a finding about
 it.**
 
-### Why provisional
+### Stage 6D retest — no longer provisional
 
-If the tester's file is malformed, this is `KNOWN_LIMITATION / IMPORT
-INTEROPERABILITY` at S3 and the refusal stands. If it is a valid
-production-extension package, this is an interoperability gap at S2 — a class of
-standards-compliant file that cannot be imported at all, and that is reported to
-the user as a broken file rather than as an unsupported feature. The two are
-distinguished by the file, and by nothing else available here.
+The tester re-ran the same file against the deployed v0.1.1 and reported the
+message verbatim:
+
+> `This 3MF requires the 3MF production extension, which stores referenced objects in several model parts. CAD Fixer does not support that extension yet. Try exporting a plain 3MF, or an STL, from the tool that made it.`
+
+That sentence is emitted from exactly one place —
+`parseModelXml`'s `requiredextensions` check, when a declared prefix resolves to
+`http://schemas.microsoft.com/3dmanufacturing/production/2015/06` — so the
+file's shape is now known rather than hypothesised: **it declares the production
+extension as required.** The 6B-C1 correction did its job; what remains is the
+gap the correction was honest about.
+
+Combined with the source-code evidence in `3MF_INTEROPERABILITY_RC.md` — Bambu
+Studio, OrcaSlicer and PrusaSlicer all couple the declaration to actually moving
+the meshes out of the root model part — this is **Case B** of that document's
+truth table, not Case C. The geometry is in other model parts, and no amount of
+loosening the declaration check would import it.
+
+**Classification: `CONFIRMED PRODUCTION-EXTENSION LIMITATION`.** Severity rises
+to S2: this is a class of standards-compliant file that cannot be imported at
+all. The refusal remains correct and truthful; it is the capability that is
+missing.
+
+**What this does NOT reopen.** The Stage 6B-C1 decision to honour
+`requiredextensions` strictly stands. This file uses the extension, so Case C
+— declared but unused — is still unobserved in the wild.
 
 ### What Stage 6B-C1 changed
 
@@ -117,25 +146,30 @@ quiet loosening.
 
 ### Information still needed
 
-- The actual `.3mf`, or a sanitized structural dump of it, **only if the tester
-  is authorized to share it**. Never required; never uploaded anywhere.
-- Failing that: does `3D/3dmodel.model` contain `p:path` attributes, and does
-  the archive contain more than one `.model` entry? Either answer settles it.
-- Whether the file opens in the slicer that produced it, and in which tool.
+Nothing further is needed to classify or to design. The remaining questions are
+qualification questions, answerable from structural metadata alone and only if
+the tester is authorized to share it — never required, never uploaded anywhere:
+
+- The archive's entry listing: how many `.model` parts, and their declared
+  uncompressed sizes. This sizes the Track B budget for Track A packages.
+- Whether any non-root model part declares a `unit` differing from the root's.
+- Whether the package uses the production **alternatives** namespace
+  (`.../production/alternatives/2021/04`), which substitutes geometry and is
+  therefore not ignorable.
 
 ---
 
 ## BETA-002 — 3MF refused as too large below the expected raw size
 
-| Field          | Value                                        |
-| -------------- | -------------------------------------------- |
-| Category       | `RESOURCE_LIMIT` + `UI_CONFUSION`            |
-| Severity       | S3 provisional                               |
-| Reproducible   | not yet — exact wording and file unavailable |
-| Frequency      | 1 tester                                     |
-| Workaround     | unknown until the metric that fired is known |
-| Roadmap area   | resource-limit disclosure                    |
-| Classification | **INSUFFICIENT INFORMATION**                 |
+| Field          | Value                                                                   |
+| -------------- | ----------------------------------------------------------------------- |
+| Category       | `RESOURCE_LIMIT`                                                        |
+| Severity       | S3 — a correct refusal whose ceiling is owed justification              |
+| Reproducible   | yes — the metric and both numbers are now known                         |
+| Frequency      | 1 tester                                                                |
+| Workaround     | re-export at lower mesh density, or as STL                              |
+| Roadmap area   | large-entry resource architecture                                       |
+| Classification | **CONFIRMED PER-ENTRY EXPANSION LIMIT — ARCHITECTURAL POLICY QUESTION** |
 
 ### What the user saw
 
@@ -203,10 +237,53 @@ ceilings has a genuine security argument behind it and a genuine
 false-positive risk, and it is recorded here as an architectural decision owed
 rather than patched in a messaging stage.
 
+### Stage 6D retest — the metric is now known
+
+The tester re-ran the file against the deployed v0.1.1, whose 6B-C1 messaging
+change names the metric and both numbers. The reported message, verbatim:
+
+> `A file inside this archive expands to 297 MiB; CAD Fixer's per-entry expansion limit is 256 MiB.`
+
+That sentence is emitted from exactly one place —
+`readZipDirectory`'s `maxEntryBytes` check against the central directory's
+DECLARED uncompressed size — so the finding is now specific:
+
+- The ceiling that fired is **`maxEntryBytes` = 256 MiB**, per entry.
+- It is **not** `maxTotalUncompressedBytes`, **not** `maxCompressionRatio`, and
+  **not** the unread-entry accounting described above. The unread-entry question
+  raised by the 6B-D1 investigation is real and still open, but it is **not what
+  happened to this file**, and Stage 6D deliberately assesses the two
+  separately.
+- **The raw `.3mf` being under 50 MB is irrelevant to this refusal.** The
+  archive is compressed; one entry inside it declares 297 MiB expanded. A ~12:1
+  model XML — the ratio measured across the Stage 6D fixture ladder — puts a
+  ~25 MiB archive over a 256 MiB per-entry ceiling with room to spare. This is
+  not a raw-file-size defect and must not be recorded as one.
+
+**The refusal is correct under the current ceiling, and the message is now
+truthful and specific.** What is NOT established is that 256 MiB is the right
+ceiling. It was inherited from ADR 0013 and has never been justified by a
+memory measurement.
+
+**Classification: `CONFIRMED PER-ENTRY EXPANSION LIMIT — ARCHITECTURAL POLICY
+QUESTION`.**
+
+Stage 6D measured the memory path this ceiling protects, at 128 / 256 / 297 /
+384 MiB, and found that the dominant cost is not the entry but the SHAPE of the
+code that reads it: `readZipEntry` holds the inflated chunk list and the
+concatenated output simultaneously, costing **2.0–2.1× the entry** where 1.0×
+would do. The full analysis, the measurements and the chosen architecture are in
+`docs/design/STAGE_6D_3MF_PRODUCTION_AND_LARGE_ENTRY_ARCHITECTURE.md`. **No
+ceiling was moved in Stage 6D.**
+
 ### Information still needed
 
-- **The exact wording.** It identifies the ceiling uniquely; every one of the
-  candidate messages is distinct.
-- The archive's entry listing — names and declared uncompressed sizes. This is
-  structural metadata, not geometry, and is enough on its own.
-- Whether the same file imports after being re-exported as a plain 3MF.
+Nothing further is needed to classify. For qualification, and only if the tester
+is authorized to share it — structural metadata only, never geometry, never
+uploaded anywhere:
+
+- The archive's entry listing: names and declared uncompressed sizes. It would
+  confirm that the 297 MiB entry is the model part rather than a slicer blob
+  that CAD Fixer never opens — which would make this the unread-entry question
+  after all, and change the answer.
+- Whether the same file imports after being re-exported at lower mesh density.
