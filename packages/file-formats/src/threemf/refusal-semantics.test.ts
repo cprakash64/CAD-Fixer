@@ -232,6 +232,38 @@ describe('3MF-C2: a valid production-extension package', () => {
     expect(refusal.reason).toBe(ImportRefusal.ThreeMfMultiModelPart);
   });
 
+  /**
+   * THE SHAPE REAL PRODUCER OUTPUT ACTUALLY HAS — Stage v0.1.1 RC1.
+   *
+   * A production-extension package commonly has an EMPTY root `<resources/>`:
+   * the root model is a manifest of build items pointing into other model
+   * parts, and every mesh lives elsewhere. This is the structure observed in
+   * the 3MF production-extension fixture carried in PrusaSlicer's own
+   * repository, reproduced here as a tiny synthetic equivalent rather than by
+   * vendoring a third-party file.
+   *
+   * Under v0.1.0 this exact shape was refused as MALFORMED_FILE — "this 3MF
+   * file builds an object which does not exist" — which is the BETA-001 defect
+   * reproduced on real producer output rather than on a constructed case.
+   */
+  it('classifies an empty-root manifest with an item path as unsupported, not malformed', async () => {
+    const manifestRoot = `<?xml version="1.0" encoding="UTF-8"?>
+<model unit="millimeter" xml:lang="en-US" xmlns="${CORE_NS}" xmlns:p="${PRODUCTION_NS}">
+ <resources/>
+ <build>
+  <item objectid="2" p:path="/3D/Objects/object_1.model" transform="1 0 0 0 1 0 0 0 1 50 50 0"/>
+ </build>
+</model>`;
+
+    const refusal = await refusalFor(async () =>
+      read3mf(await packageWith(manifestRoot, [OBJECT_PART]), testReadContext()),
+    );
+
+    expect(refusal.code).toBe(AppErrorCode.UnsupportedFile);
+    expect(refusal.reason).toBe(ImportRefusal.ThreeMfMultiModelPart);
+    expect(refusal.message).not.toContain('does not exist');
+  });
+
   it('recognises a production path on a build item too', async () => {
     const onItem = `<?xml version="1.0" encoding="UTF-8"?>
 <model unit="millimeter" xmlns="${CORE_NS}" xmlns:p="${PRODUCTION_NS}">
