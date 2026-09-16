@@ -1,3 +1,4 @@
+import { formatCount } from '@cadfixer/shared';
 import { ImportRefusal, importMalformed, importTooLarge } from '../import-errors';
 /*
  * `xmlSafeText` LIVES IN A LEAF MODULE, not here.
@@ -254,7 +255,7 @@ export function scanXml(
     if (elements > limits.maxElements) {
       throw importTooLarge(
         ImportRefusal.XmlTooManyElements,
-        'This 3MF file contains more XML elements than CAD Fixer will read.',
+        `This 3MF file contains more than ${formatCount(limits.maxElements)} XML elements, which is CAD Fixer's limit.`,
         { limit: limits.maxElements },
       );
     }
@@ -263,7 +264,7 @@ export function scanXml(
       if (depth > limits.maxDepth) {
         throw importTooLarge(
           ImportRefusal.XmlTooDeep,
-          'This 3MF file nests XML more deeply than CAD Fixer will read.',
+          `This 3MF file nests XML ${formatCount(depth)} levels deep; CAD Fixer's limit is ${formatCount(limits.maxDepth)} levels.`,
           { depth, limit: limits.maxDepth },
         );
       }
@@ -308,8 +309,8 @@ export function readAttrs(
     if (raw.length > limits.maxAttributeLength) {
       throw importTooLarge(
         ImportRefusal.XmlAttributeTooLong,
-        'This 3MF file contains an XML attribute longer than CAD Fixer will read.',
-        { attribute: key.slice(0, 64), limit: limits.maxAttributeLength },
+        `This 3MF file contains an XML attribute of ${formatCount(raw.length)} characters; CAD Fixer's limit is ${formatCount(limits.maxAttributeLength)} characters.`,
+        { attribute: key.slice(0, 64), length: raw.length, limit: limits.maxAttributeLength },
       );
     }
     out[key] = decodeXmlText(raw);

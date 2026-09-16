@@ -23,6 +23,8 @@ import {
   zipEncryptedEntry,
   zipOverTotalBudget,
   zipWithTraversalPath,
+  threeMfProductionExtension,
+  threeMfDanglingComponent,
 } from './format-fixtures';
 import { binaryStl } from './stl-fixtures';
 
@@ -234,7 +236,13 @@ test('reports a 3MF texture it did not read, and fetches nothing', async ({ page
 test.describe('hostile files are refused in the browser, exactly as in the reader tests', () => {
   for (const [label, name, build, expected] of [
     ['a ZIP traversal path', 'traversal.3mf', zipWithTraversalPath, /unsafe file path/i],
-    ['a compression bomb', 'bomb.3mf', zipCompressionBomb, /compressed far beyond/i],
+    [
+      'a compression bomb',
+      'bomb.3mf',
+      zipCompressionBomb,
+      // The ratio and the ceiling, both in the sentence — Stage 6B-C1.
+      /expands at [\d,]+:1; CAD Fixer's compression-ratio limit is 200:1/i,
+    ],
     ['an encrypted entry', 'locked.3mf', zipEncryptedEntry, /encrypted/i],
     ['a DOCTYPE declaration', 'xxe.3mf', threeMfWithDoctype, /document type definition/i],
     [
@@ -351,10 +359,60 @@ test('a failed 3MF import leaves the loaded model untouched', async ({ page }) =
   await openFile(page, 'bomb.3mf', zipCompressionBomb());
   await expect
     .poll(async () => statusText(page), { timeout: 60_000 })
-    .toMatch(/compressed far beyond/i);
+    .toMatch(/expands at [\d,]+:1; CAD Fixer's compression-ratio limit is 200:1/i);
 
   await expect(page.getByTestId('fact-parts')).toHaveText('2');
   expect((await readScene(page)).modelObjects).toBe(2);
+});
+
+/* ------------------------------------------- truthful refusal semantics -- */
+
+test.describe('a valid file CAD Fixer cannot read is not called a broken one', () => {
+  /*
+   * STAGE 6B-C1, IN A REAL BROWSER.
+   *
+   * A beta tester was told their working multi-material 3MF "contains a
+   * component that refers to an object which does not exist". The file was not
+   * damaged; CAD Fixer reads one model part and that one does not hold the
+   * object. These two tests are the pair that has to stay distinguishable.
+   */
+  test('a production-extension 3MF is refused as unsupported, not as malformed', async ({
+    page,
+  }) => {
+    await openFile(page, 'good.3mf', threeMfTwoParts());
+    await expect(page.getByTestId('fact-parts')).toHaveText('2', { timeout: 30_000 });
+    const before = await readScene(page);
+
+    await openFile(page, 'multipart.3mf', threeMfProductionExtension());
+    await expect
+      .poll(async () => statusText(page), { timeout: 60_000 })
+      .toMatch(/several model parts/i);
+
+    // It must NOT accuse the file of being broken.
+    const shown = await statusText(page);
+    expect(shown).toMatch(/does not support/i);
+    expect(shown).not.toMatch(/does not exist/i);
+
+    // TRANSACTIONAL: the open model is untouched and nothing was drawn.
+    await expect(page.getByTestId('fact-parts')).toHaveText('2');
+    await expect(page.getByTestId('fact-filename')).toHaveText('good.3mf');
+    const after = await readScene(page);
+    expect(after.modelObjects).toBe(before.modelObjects);
+    expect(after.geometriesCreated).toBe(before.geometriesCreated);
+
+    // And a valid file still imports afterwards.
+    await openFile(page, 'next.3mf', threeMfSharedPlacements(4));
+    await expect(page.getByTestId('fact-parts')).toHaveText('4', { timeout: 60_000 });
+  });
+
+  test('a genuinely dangling component is still refused, and now says where', async ({ page }) => {
+    await openFile(page, 'dangling.3mf', threeMfDanglingComponent());
+    await expect
+      .poll(async () => statusText(page), { timeout: 60_000 })
+      .toMatch(/Object 17, component 2 refers to missing object 42/i);
+
+    await expect(page.getByTestId('model-empty')).toBeVisible();
+  });
 });
 
 /* ------------------------------------------------------- resource bounds -- */
@@ -381,7 +439,7 @@ test.describe('a document that cannot be held is refused without disturbing the 
     await openFile(page, 'toomany.3mf', threeMfPlacements(4_097));
     await expect
       .poll(async () => statusText(page), { timeout: 120_000 })
-      .toMatch(/more parts than CAD Fixer will hold/i);
+      .toMatch(/expands to more than 4,096 parts, which is CAD Fixer's limit/i);
 
     // THE PREVIOUS MODEL IS UNTOUCHED: same parts, same selection, same scene.
     await expect(page.getByTestId('fact-parts')).toHaveText('2');
@@ -408,7 +466,14 @@ test.describe('a document that cannot be held is refused without disturbing the 
     await openFile(page, 'oversized.3mf', zipOverTotalBudget());
     await expect
       .poll(async () => statusText(page), { timeout: 120_000 })
-      .toMatch(/more data in total than CAD Fixer will extract/i);
+      /*
+       * BOTH SIZES IN ONE SENTENCE — the whole point of Stage 6B-C1. A beta
+       * tester read "too large" on a file that was small on disk and had no way
+       * to learn the ceiling was about expanded bytes.
+       */
+      .toMatch(
+        /on disk but expands to [\d.]+ [KMG]iB in total; CAD Fixer's total expansion limit is 512 MiB/i,
+      );
 
     await expect(page.getByTestId('fact-parts')).toHaveText('2');
     await expect(page.getByTestId('fact-filename')).toHaveText('good.3mf');

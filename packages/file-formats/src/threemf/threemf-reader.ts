@@ -14,6 +14,7 @@ import {
 } from '@cadfixer/mesh-core';
 import {
   diagnostic,
+  formatCount,
   isLengthUnit,
   throwIfCancelled,
   type Diagnostic,
@@ -39,7 +40,13 @@ import {
   type DocumentReadResult,
   type ImportCompatibility,
 } from '../document-reader';
-import { ImportRefusal, importMalformed, importTooLarge, internalRefusal } from '../import-errors';
+import {
+  ImportRefusal,
+  importMalformed,
+  importTooLarge,
+  importUnsupported,
+  internalRefusal,
+} from '../import-errors';
 import {
   createInflationBudget,
   DEFAULT_ZIP_LIMITS,
@@ -183,6 +190,74 @@ function isResourceId(value: string): boolean {
   return Number(value) <= MAX_RESOURCE_ID;
 }
 
+/**
+ * THE ONE NAMESPACE CAD FIXER IMPLEMENTS.
+ *
+ * Everything the reader understands — objects, meshes, components, build items,
+ * units — is 3MF core. An element or attribute from any other namespace belongs
+ * to an extension, and CAD Fixer implements none of them.
+ */
+const CORE_NAMESPACE = 'http://schemas.microsoft.com/3dmanufacturing/core/2015/02';
+
+/**
+ * The 3MF PRODUCTION EXTENSION, which is what a `p:path` component reference
+ * belongs to.
+ *
+ * Named separately from the generic unsupported-extension case only so the
+ * refusal can say what the file is actually doing — storing its objects in
+ * several model parts — rather than naming a URI at the user.
+ */
+const PRODUCTION_NAMESPACE = 'http://schemas.microsoft.com/3dmanufacturing/production/2015/06';
+
+/**
+ * A reference that leaves this model part.
+ *
+ * Recorded during the scan and acted on AFTER it, so that the unsupported
+ * classification is reached before the missing-object one. See the ordering
+ * note at the post-scan validation.
+ */
+interface CrossPartReference {
+  /** `component` or `item` — which construct carried the path. */
+  readonly kind: string;
+  /** The object the reference names, in the part it points AT. */
+  readonly objectId: string;
+}
+
+/**
+ * Maps namespace prefixes declared on an element to their URIs.
+ *
+ * Only `<model>` is inspected, which is where a 3MF declares its namespaces and
+ * is the document element, so the map is complete before any component is read.
+ */
+function namespacePrefixes(attrs: Readonly<Record<string, string>>): ReadonlyMap<string, string> {
+  const prefixes = new Map<string, string>();
+  for (const [key, value] of Object.entries(attrs)) {
+    if (key.startsWith('xmlns:')) prefixes.set(key.slice('xmlns:'.length), value);
+  }
+  return prefixes;
+}
+
+/**
+ * Finds a `path` attribute belonging to the production extension.
+ *
+ * RESOLVED THROUGH THE PREFIX MAP, not matched on the literal text `p:path`.
+ * The prefix is the author's to choose — `p`, `prod` and `production` are all
+ * the same attribute — so matching the spelling would miss the file and matching
+ * a bare `path` would catch an attribute from some unrelated namespace.
+ */
+function productionPathOf(
+  attrs: Readonly<Record<string, string>>,
+  prefixes: ReadonlyMap<string, string>,
+): boolean {
+  for (const key of Object.keys(attrs)) {
+    const colon = key.indexOf(':');
+    if (colon === -1) continue;
+    if (key.slice(colon + 1) !== 'path') continue;
+    if (prefixes.get(key.slice(0, colon)) === PRODUCTION_NAMESPACE) return true;
+  }
+  return false;
+}
+
 const TEXTURE_ELEMENTS: readonly string[] = Object.freeze(['texture2d', 'texture2dgroup']);
 
 interface ObjectRecord {
@@ -295,6 +370,15 @@ export function parseModelXml(
   let current: ObjectRecord | undefined;
   let inBuild = false;
   /*
+   * NAMESPACE STATE, declared on `<model>` and read by every reference below.
+   *
+   * `<model>` is the document element, so this is populated before the first
+   * component is seen. An empty map simply means nothing resolves to an
+   * extension, which is the correct reading of a file that declares none.
+   */
+  let prefixes: ReadonlyMap<string, string> = new Map<string, string>();
+  let crossPart: CrossPartReference | undefined;
+  /*
    * Held on an object rather than in a local, because the assignment happens
    * inside the scanner's callback: TypeScript's control-flow analysis cannot
    * see across that boundary and would narrow a plain `let` to its initial
@@ -311,6 +395,40 @@ export function parseModelXml(
         if (local === 'model') {
           seen.model = true;
           const attrs = readAttrs(attributeText, xmlLimits);
+          prefixes = namespacePrefixes(attrs);
+          /*
+           * A DECLARED REQUIREMENT IS REFUSED BEFORE THE BODY IS READ.
+           *
+           * `requiredextensions` is the format's own way of saying the file
+           * cannot be understood without those semantics. Reading the parts we
+           * happen to recognise and presenting the result as the user's model
+           * would be incomplete geometry reported as success — so this is
+           * checked at the document element, which is as early as it can be
+           * known, and nothing after it runs.
+           *
+           * The attribute holds PREFIXES, not URIs, so each is resolved through
+           * the namespace map. A prefix that resolves to nothing is refused
+           * too: an unresolvable requirement is a requirement whose semantics
+           * are unknown, and guessing is the one thing this must not do.
+           */
+          const required = attrs.requiredextensions;
+          if (required !== undefined) {
+            for (const prefix of required.split(/\s+/)) {
+              if (prefix === '') continue;
+              const namespace = prefixes.get(prefix);
+              if (namespace === CORE_NAMESPACE) continue;
+              throw importUnsupported(
+                ImportRefusal.ThreeMfUnsupportedExtension,
+                namespace === PRODUCTION_NAMESPACE
+                  ? 'This 3MF requires the 3MF production extension, which stores referenced objects in several model parts. CAD Fixer does not support that extension yet. Try exporting a plain 3MF, or an STL, from the tool that made it.'
+                  : 'This 3MF requires a 3MF extension that CAD Fixer does not support yet. Try exporting a plain 3MF, or an STL, from the tool that made it.',
+                {
+                  extension: (namespace ?? prefix).slice(0, 128),
+                  resolved: namespace !== undefined,
+                },
+              );
+            }
+          }
           unit = attrs.unit;
           if (unit !== undefined && !THREE_MF_UNITS.includes(unit)) {
             throw importMalformed(
@@ -335,6 +453,9 @@ export function parseModelXml(
               ImportRefusal.ThreeMfMalformedStructure,
               'This 3MF file contains a build item that names no object.',
             );
+          }
+          if (crossPart === undefined && productionPathOf(attrs, prefixes)) {
+            crossPart = { kind: 'item', objectId: objectId.slice(0, 64) };
           }
           build.push({ objectId, transform: parseTransform(attrs.transform) });
           return;
@@ -412,8 +533,8 @@ export function parseModelXml(
           if (objects.size > limits.maxObjects) {
             throw importTooLarge(
               ImportRefusal.ThreeMfTooManyObjects,
-              'This 3MF file declares more objects than CAD Fixer will hold.',
-              { limit: limits.maxObjects },
+              `This 3MF file declares ${formatCount(objects.size)} objects; CAD Fixer's limit is ${formatCount(limits.maxObjects)} objects.`,
+              { declared: objects.size, limit: limits.maxObjects },
             );
           }
           current = selfClosing ? undefined : record;
@@ -460,8 +581,8 @@ export function parseModelXml(
           if (current.positions.length / 3 > limits.maxVerticesPerObject) {
             throw importTooLarge(
               ImportRefusal.ThreeMfTooManyVertices,
-              'This 3MF file contains an object with more vertices than CAD Fixer will hold.',
-              { limit: limits.maxVerticesPerObject },
+              `An object in this 3MF file contains ${formatCount(current.positions.length / 3)} vertices; CAD Fixer's limit is ${formatCount(limits.maxVerticesPerObject)} vertices for one object.`,
+              { declared: current.positions.length / 3, limit: limits.maxVerticesPerObject },
             );
           }
           return;
@@ -497,8 +618,8 @@ export function parseModelXml(
           if (current.triangles.length / 3 > limits.maxTrianglesPerObject) {
             throw importTooLarge(
               ImportRefusal.ThreeMfTooManyTriangles,
-              'This 3MF file contains an object with more triangles than CAD Fixer will hold.',
-              { limit: limits.maxTrianglesPerObject },
+              `An object in this 3MF file contains ${formatCount(current.triangles.length / 3)} triangles; CAD Fixer's limit is ${formatCount(limits.maxTrianglesPerObject)} triangles for one object.`,
+              { declared: current.triangles.length / 3, limit: limits.maxTrianglesPerObject },
             );
           }
           return;
@@ -512,6 +633,17 @@ export function parseModelXml(
               ImportRefusal.ThreeMfMalformedStructure,
               'This 3MF file contains a component that names no object.',
             );
+          }
+          /*
+           * THE EVIDENCE IS RECORDED, NOT ACTED ON HERE.
+           *
+           * Throwing at this point would work, but it would make the ordering
+           * that matters — unsupported before missing-object — an accident of
+           * where the two checks happen to sit. Deferring it puts both in one
+           * place, in a stated order, with a test on the order.
+           */
+          if (crossPart === undefined && productionPathOf(attrs, prefixes)) {
+            crossPart = { kind: 'component', objectId: objectId.slice(0, 64) };
           }
           current.components.push({ objectId, transform: parseTransform(attrs.transform) });
         }
@@ -534,6 +666,27 @@ export function parseModelXml(
   }
 
   /*
+   * UNSUPPORTED BEFORE MALFORMED. THE ORDER IS THE POINT OF THIS BLOCK.
+   *
+   * A component carrying a production-extension path names an object in ANOTHER
+   * model part. CAD Fixer opens one model part, so that object is absent from
+   * the table below and the missing-object check would fire on it — which is
+   * how a valid file exported by a consumer slicer came to be reported to its
+   * owner as containing a reference to an object that does not exist.
+   *
+   * Placing this first is what makes the two answers distinguishable. It is not
+   * a refinement of the message: the CATEGORY changes too, from "your file is
+   * broken" to "CAD Fixer cannot read this yet", and only one of those is true.
+   */
+  if (crossPart !== undefined) {
+    throw importUnsupported(
+      ImportRefusal.ThreeMfMultiModelPart,
+      'This 3MF stores referenced objects in several model parts, using a 3MF extension that CAD Fixer does not support yet. Try exporting a plain 3MF, or an STL, from the tool that made it.',
+      { via: crossPart.kind, objectId: crossPart.objectId },
+    );
+  }
+
+  /*
    * STRUCTURAL VALIDATION, after the shape is known.
    *
    * Index bounds cannot be checked while scanning: a `<triangle>` may legally
@@ -551,14 +704,34 @@ export function parseModelXml(
         );
       }
     }
-    for (const component of object.components) {
-      if (!objects.has(component.objectId)) {
-        throw importMalformed(
-          ImportRefusal.ThreeMfMissingObject,
-          'This 3MF file contains a component that refers to an object which does not exist.',
-          { objectId: component.objectId.slice(0, 64) },
-        );
-      }
+    for (let at = 0; at < object.components.length; at += 1) {
+      const component = object.components[at];
+      if (component === undefined) continue;
+      if (objects.has(component.objectId)) continue;
+      /*
+       * THE IDS REACH THE SENTENCE ONLY IF THEY ARE IDS.
+       *
+       * `isResourceId` is the same lexical gate `pid` goes through, and it is
+       * applied here because an object id is UNTRUSTED text: a file may put a
+       * kilobyte of anything in it. A well-formed id is at most ten digits and
+       * says exactly where to look; anything else is described in `details` and
+       * kept out of the prose, so no refusal can be made to carry arbitrary
+       * file content.
+       */
+      const missing = component.objectId;
+      const holder = object.id;
+      const locatable = isResourceId(missing) && isResourceId(holder);
+      throw importMalformed(
+        ImportRefusal.ThreeMfMissingObject,
+        locatable
+          ? `This 3MF file contains a component that refers to an object which does not exist. Object ${holder}, component ${String(at + 1)} refers to missing object ${missing}.`
+          : 'This 3MF file contains a component that refers to an object which does not exist.',
+        {
+          objectId: missing.slice(0, 64),
+          referencingObjectId: holder.slice(0, 64),
+          componentIndex: at + 1,
+        },
+      );
     }
   }
   for (const item of build) {
@@ -690,7 +863,7 @@ function expandBuild(
     if (depth > limits.maxComponentDepth) {
       throw importTooLarge(
         ImportRefusal.ThreeMfComponentTooDeep,
-        'This 3MF file nests components more deeply than CAD Fixer will expand.',
+        `This 3MF file nests components ${formatCount(depth)} levels deep; CAD Fixer's limit is ${formatCount(limits.maxComponentDepth)} levels.`,
         { depth, limit: limits.maxComponentDepth },
       );
     }
@@ -736,7 +909,7 @@ function expandBuild(
       if (parts.length >= limits.maxParts) {
         throw importTooLarge(
           ImportRefusal.ThreeMfTooManyParts,
-          'This 3MF file expands to more parts than CAD Fixer will hold.',
+          `This 3MF file expands to more than ${formatCount(limits.maxParts)} parts, which is CAD Fixer's limit.`,
           { limit: limits.maxParts, emitted: parts.length },
         );
       }
@@ -745,16 +918,24 @@ function expandBuild(
       if (prospectiveTriangles > DEFAULT_DOCUMENT_LIMITS.maxTotalTriangles) {
         throw importTooLarge(
           ImportRefusal.ThreeMfTooManyTriangles,
-          'This 3MF file expands to more triangles than CAD Fixer will hold.',
-          { limit: DEFAULT_DOCUMENT_LIMITS.maxTotalTriangles, emitted: parts.length },
+          `Placing every part of this 3MF file would produce ${formatCount(prospectiveTriangles)} triangles in total; CAD Fixer's limit is ${formatCount(DEFAULT_DOCUMENT_LIMITS.maxTotalTriangles)} triangles.`,
+          {
+            produced: prospectiveTriangles,
+            limit: DEFAULT_DOCUMENT_LIMITS.maxTotalTriangles,
+            emitted: parts.length,
+          },
         );
       }
       const prospectiveVertices = totalVertices + vertexCount(mesh);
       if (prospectiveVertices > DEFAULT_DOCUMENT_LIMITS.maxTotalVertices) {
         throw importTooLarge(
           ImportRefusal.ThreeMfTooManyVertices,
-          'This 3MF file expands to more vertices than CAD Fixer will hold.',
-          { limit: DEFAULT_DOCUMENT_LIMITS.maxTotalVertices, emitted: parts.length },
+          `Placing every part of this 3MF file would produce ${formatCount(prospectiveVertices)} vertices in total; CAD Fixer's limit is ${formatCount(DEFAULT_DOCUMENT_LIMITS.maxTotalVertices)} vertices.`,
+          {
+            produced: prospectiveVertices,
+            limit: DEFAULT_DOCUMENT_LIMITS.maxTotalVertices,
+            emitted: parts.length,
+          },
         );
       }
       totalTriangles = prospectiveTriangles;

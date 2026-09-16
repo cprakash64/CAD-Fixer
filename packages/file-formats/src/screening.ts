@@ -1,3 +1,4 @@
+import { formatBytes } from '@cadfixer/shared';
 import { SUPPORTED_EXTENSIONS, SUPPORTED_FORMATS, type MeshFormatId } from './formats';
 
 /**
@@ -123,13 +124,9 @@ export function screenFile(
     return {
       accepted: false,
       reason: FileRejectionReason.TooLarge,
-      message: `That file is larger than the ${formatMebibytes(maxBytes)} intake limit.`,
+      message: `This file is ${formatBytes(input.size)}; CAD Fixer's intake limit is ${formatBytes(maxBytes)}.`,
     };
   }
 
   return { accepted: true, claimedFormat, extension };
-}
-
-function formatMebibytes(bytes: number): string {
-  return `${String(Math.round(bytes / (1024 * 1024)))} MiB`;
 }

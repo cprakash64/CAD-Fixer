@@ -1,3 +1,4 @@
+import { formatBytes, formatCount, formatRatio } from '@cadfixer/shared';
 import { ImportRefusal, importMalformed, importTooLarge } from '../import-errors';
 
 /**
@@ -112,7 +113,7 @@ export function readZipDirectory(
   if (bytes.byteLength > limits.maxArchiveBytes) {
     throw importTooLarge(
       ImportRefusal.ZipArchiveTooLarge,
-      'This archive is larger than CAD Fixer will open.',
+      `This archive is ${formatBytes(bytes.byteLength)}; CAD Fixer's archive limit is ${formatBytes(limits.maxArchiveBytes)}.`,
       { bytes: bytes.byteLength, limit: limits.maxArchiveBytes },
     );
   }
@@ -130,7 +131,7 @@ export function readZipDirectory(
   if (entryCount > limits.maxEntries) {
     throw importTooLarge(
       ImportRefusal.ZipTooManyEntries,
-      'This archive contains more entries than CAD Fixer will open.',
+      `This archive contains ${formatCount(entryCount)} entries; CAD Fixer's limit is ${formatCount(limits.maxEntries)} entries.`,
       { entries: entryCount, limit: limits.maxEntries },
     );
   }
@@ -198,7 +199,7 @@ export function readZipDirectory(
     if (uncompressedSize > limits.maxEntryBytes) {
       throw importTooLarge(
         ImportRefusal.ZipEntryTooLarge,
-        'This archive contains a file larger than CAD Fixer will extract.',
+        `A file inside this archive expands to ${formatBytes(uncompressedSize)}; CAD Fixer's per-entry expansion limit is ${formatBytes(limits.maxEntryBytes)}.`,
         { declared: uncompressedSize, limit: limits.maxEntryBytes },
       );
     }
@@ -212,8 +213,12 @@ export function readZipDirectory(
     if (declaredTotal > limits.maxTotalUncompressedBytes) {
       throw importTooLarge(
         ImportRefusal.ZipTotalTooLarge,
-        'This archive expands to more data in total than CAD Fixer will extract.',
-        { declared: declaredTotal, limit: limits.maxTotalUncompressedBytes },
+        `This archive is ${formatBytes(bytes.byteLength)} on disk but expands to ${formatBytes(declaredTotal)} in total; CAD Fixer's total expansion limit is ${formatBytes(limits.maxTotalUncompressedBytes)}. The limit is on expanded data, not on the size of the file.`,
+        {
+          archiveBytes: bytes.byteLength,
+          declared: declaredTotal,
+          limit: limits.maxTotalUncompressedBytes,
+        },
       );
     }
     /*
@@ -225,7 +230,7 @@ export function readZipDirectory(
     if (compressedSize > 0 && uncompressedSize / compressedSize > limits.maxCompressionRatio) {
       throw importTooLarge(
         ImportRefusal.ZipRatioExceeded,
-        'This archive is compressed far beyond what CAD Fixer will expand.',
+        `A file inside this archive expands at ${formatRatio(uncompressedSize, compressedSize)}; CAD Fixer's compression-ratio limit is ${formatCount(limits.maxCompressionRatio)}:1.`,
         { ratio: Math.round(uncompressedSize / compressedSize), limit: limits.maxCompressionRatio },
       );
     }
@@ -332,7 +337,7 @@ export async function readZipEntry(
   const refuseTotal = (prospective: number): never => {
     throw importTooLarge(
       ImportRefusal.ZipTotalTooLarge,
-      'This archive expands to more data in total than CAD Fixer will extract.',
+      `This archive expands beyond the ${formatBytes(budget.maxTotalBytes)} of data CAD Fixer will extract in total. That limit is on expanded data, not on the size of the file.`,
       { produced: prospective, limit: budget.maxTotalBytes, entry: entry.name.slice(0, 128) },
     );
   };
@@ -341,7 +346,8 @@ export async function readZipEntry(
     if (compressed.byteLength > limits.maxEntryBytes) {
       throw importTooLarge(
         ImportRefusal.ZipEntryTooLarge,
-        'This archive contains a file larger than CAD Fixer will extract.',
+        `A file inside this archive is ${formatBytes(compressed.byteLength)}; CAD Fixer's per-entry expansion limit is ${formatBytes(limits.maxEntryBytes)}.`,
+        { declared: compressed.byteLength, limit: limits.maxEntryBytes },
       );
     }
     // A STORED ENTRY STILL SPENDS THE BUDGET. Its bytes are output the same way
@@ -372,7 +378,7 @@ export async function readZipEntry(
     if (prospectiveEntry > limits.maxEntryBytes) {
       throw importTooLarge(
         ImportRefusal.ZipEntryTooLarge,
-        'This archive expands to more data than CAD Fixer will extract.',
+        `A file inside this archive expands beyond CAD Fixer's per-entry expansion limit of ${formatBytes(limits.maxEntryBytes)}.`,
         { limit: limits.maxEntryBytes },
       );
     }
@@ -384,7 +390,7 @@ export async function readZipEntry(
     ) {
       throw importTooLarge(
         ImportRefusal.ZipRatioExceeded,
-        'This archive is compressed far beyond what CAD Fixer will expand.',
+        `A file inside this archive expands beyond CAD Fixer's compression-ratio limit of ${formatCount(limits.maxCompressionRatio)}:1.`,
         { limit: limits.maxCompressionRatio },
       );
     }

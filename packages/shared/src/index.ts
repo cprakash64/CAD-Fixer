@@ -36,6 +36,8 @@ export type { CancellationToken } from './cancellation';
 export { createOperationId, resetOperationIdSequenceForTesting } from './ids';
 export type { OperationId } from './ids';
 
+export { formatBytes, formatCount, formatRatio } from './quantities';
+
 export { isLengthUnit, LengthUnit, millimetresPerUnit, unitConversionFactor } from './units';
 
 export { assertNever } from './assert';

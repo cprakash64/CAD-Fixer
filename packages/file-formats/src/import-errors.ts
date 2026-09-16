@@ -107,6 +107,33 @@ export const ImportRefusal = {
   ThreeMfTooManyTriangles: 'THREEMF_TOO_MANY_TRIANGLES',
   ThreeMfTooManyVertices: 'THREEMF_TOO_MANY_VERTICES',
   ThreeMfNoBuildItems: 'THREEMF_NO_BUILD_ITEMS',
+  /**
+   * THE FILE IS VALID AND CAD FIXER CANNOT READ IT — a distinct fact from
+   * either of its neighbours.
+   *
+   * A `<component>` carrying a production-extension `path` names an object in
+   * ANOTHER model part of the package. CAD Fixer opens exactly one model part,
+   * so that object is genuinely absent from the table it resolves against, and
+   * the reference check could not tell the difference: a perfectly good file
+   * exported by a consumer slicer was reported to its owner as containing a
+   * reference to an object that does not exist.
+   *
+   * `UNSUPPORTED_FILE`, never `MALFORMED_FILE`. Telling someone their working
+   * file is broken sends them to look for damage that is not there, and the
+   * fault is ours.
+   */
+  ThreeMfMultiModelPart: 'THREEMF_MULTI_MODEL_PART_UNSUPPORTED',
+  /**
+   * The package DECLARES that it requires an extension CAD Fixer does not
+   * implement.
+   *
+   * Refused rather than read as baseline 3MF: `requiredextensions` is the
+   * format's own way of saying the file cannot be understood without those
+   * semantics, and importing the parts we happen to recognise would be exactly
+   * the incomplete geometry reported as success that this product exists not to
+   * produce.
+   */
+  ThreeMfUnsupportedExtension: 'THREEMF_UNSUPPORTED_EXTENSION',
   ThreeMfMalformedStructure: 'THREEMF_MALFORMED_STRUCTURE',
   /**
    * A resource id that is not one.

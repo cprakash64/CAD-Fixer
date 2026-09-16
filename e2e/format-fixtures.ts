@@ -493,6 +493,60 @@ export function zipOverTotalBudget(): Buffer {
   );
 }
 
+/* --------------------------------------- valid but unsupported packages -- */
+
+const PRODUCTION_NS = 'http://schemas.microsoft.com/3dmanufacturing/production/2015/06';
+const CORE_NS = 'http://schemas.microsoft.com/3dmanufacturing/core/2015/02';
+
+/**
+ * A VALID multi-model-part package, of the shape a consumer slicer emits for a
+ * multi-material project.
+ *
+ * The root model holds only a component; the geometry lives in a second model
+ * part, named by the production extension's `path` attribute. CAD Fixer reads
+ * one model part, so it cannot build this — and Stage 6B-C1 is about saying
+ * that rather than calling the file broken.
+ */
+export function threeMfProductionExtension(): Buffer {
+  const root = `<?xml version="1.0" encoding="UTF-8"?>
+<model unit="millimeter" xmlns="${CORE_NS}" xmlns:p="${PRODUCTION_NS}">
+ <resources>
+  <object id="2" type="model"><components>
+   <component p:path="/3D/Objects/object_1.model" objectid="1"/>
+  </components></object>
+ </resources>
+ <build><item objectid="2"/></build>
+</model>`;
+
+  const objectPart = `<?xml version="1.0" encoding="UTF-8"?>
+<model unit="millimeter" xmlns="${CORE_NS}">
+ <resources><object id="1" type="model">${tetrahedronMesh()}</object></resources>
+ <build/>
+</model>`;
+
+  return buildZip([
+    { name: '[Content_Types].xml', content: CONTENT_TYPES },
+    { name: '_rels/.rels', content: RELS },
+    { name: '3D/3dmodel.model', content: root },
+    { name: '3D/Objects/object_1.model', content: objectPart },
+  ]);
+}
+
+/** A genuinely dangling component reference: object 17's second component. */
+export function threeMfDanglingComponent(): Buffer {
+  return threeMf(
+    modelXml({
+      unit: 'millimeter',
+      resources:
+        `<object id="1" type="model">${tetrahedronMesh()}</object>` +
+        '<object id="17" type="model"><components>' +
+        '<component objectid="1"/><component objectid="42"/>' +
+        '</components></object>',
+      build: '<item objectid="17"/>',
+    }),
+  );
+}
+
 /* ------------------------------------------------------ hostile archives -- */
 
 export function zipWithTraversalPath(): Buffer {

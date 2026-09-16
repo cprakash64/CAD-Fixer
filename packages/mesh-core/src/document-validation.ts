@@ -1,4 +1,10 @@
-import { geometryValidationFailed, isLengthUnit, type ErrorDetails } from '@cadfixer/shared';
+import {
+  formatBytes,
+  formatCount,
+  geometryValidationFailed,
+  isLengthUnit,
+  type ErrorDetails,
+} from '@cadfixer/shared';
 import { meshByteLength } from './mesh';
 import {
   DEFAULT_DOCUMENT_LIMITS,
@@ -118,7 +124,7 @@ export function validateGeometryDocument(
   if (partCount > limits.maxParts) {
     issues.push({
       code: DocumentValidationCode.TooManyParts,
-      message: 'This document declares more parts than CAD Fixer will hold.',
+      message: `This document declares ${formatCount(partCount)} parts; CAD Fixer's limit is ${formatCount(limits.maxParts)} parts.`,
       details: { partCount, limit: limits.maxParts },
     });
   }
@@ -213,21 +219,21 @@ export function validateGeometryDocument(
   if (triangles > limits.maxTotalTriangles) {
     issues.push({
       code: DocumentValidationCode.TooManyTriangles,
-      message: 'This document contains more triangles than CAD Fixer will hold.',
+      message: `This document contains ${formatCount(triangles)} triangles; CAD Fixer's limit is ${formatCount(limits.maxTotalTriangles)} triangles.`,
       details: { triangleCount: triangles, limit: limits.maxTotalTriangles },
     });
   }
   if (vertices > limits.maxTotalVertices) {
     issues.push({
       code: DocumentValidationCode.TooManyVertices,
-      message: 'This document contains more vertices than CAD Fixer will hold.',
+      message: `This document contains ${formatCount(vertices)} vertices; CAD Fixer's limit is ${formatCount(limits.maxTotalVertices)} vertices.`,
       details: { vertexCount: vertices, limit: limits.maxTotalVertices },
     });
   }
   if (geometryBytes > limits.maxTotalGeometryBytes) {
     issues.push({
       code: DocumentValidationCode.TooManyBytes,
-      message: 'This document contains more geometry than CAD Fixer will hold in one session.',
+      message: `This document holds ${formatBytes(geometryBytes)} of geometry; CAD Fixer's limit is ${formatBytes(limits.maxTotalGeometryBytes)} in one session.`,
       details: { geometryBytes, limit: limits.maxTotalGeometryBytes },
     });
   }
