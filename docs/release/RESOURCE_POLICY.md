@@ -45,6 +45,66 @@ renderable and exportable while being too large for the self-intersection check 
 for a hole fill. Feature-level refusal is the honest answer; rejecting an
 otherwise useful model is not.
 
+## Stage 6D-R1: what the import budget is, and what actually enforces safety
+
+**`maxImportPeakBytes` is not a measurement of process memory and must not be
+read as one.** `estimateImportPeak` sums five quantities CAD Fixer chooses to
+allocate — current resident geometry, current render buffers, the input file
+buffer, and the candidate's resident and render bytes — and compares the total
+against 1,536 MiB.
+
+Two audit findings bound what it can mean:
+
+- **It runs after the peak it names.** Its only call site is
+  `commitImportedDocument`, which executes once the reader has returned. The
+  archive is already inflated, the XML string built, the parser scratch
+  allocated and the geometry materialised. It guards the render snapshot and the
+  commit, not the transient peak.
+- **3MF and OBJ never consult `ImportBudget` at all.** `maxEstimatedPeakBytes`,
+  `maxTriangles`, `maxVertices` and `maxOutputBytes` are used only by the STL
+  readers.
+
+Measured against four fixture shapes inside current limits, its error spans two
+orders of magnitude **and changes sign**: it under-predicts geometry-dense
+content by 2.0–3.3x and text-heavy content by 3.6–6.0x, and **over-predicts
+placement-heavy content by 81x** — one mesh placed 200 times costs 9 MiB and is
+modelled at 733 MiB, because resident and render bytes are computed from the
+summed triangle count while shared geometry is stored once. No single correction
+factor repairs an estimator wrong in both directions.
+
+A separate defect is recorded and deliberately not fixed: `currentRenderBytes`
+is documented as the snapshot _already held_ and receives the _candidate's_
+triangle count, so those bytes are counted twice. The error is conservative —
+it can only over-refuse — and correcting it would change import eligibility,
+which an architecture stage must not do quietly.
+
+**Decision: process footprint is a qualification metric, not a runtime
+enforcement metric.** Safety rests on the deterministic caps that are known
+before the allocation they bound and are already implemented: 256 MiB per entry,
+512 MiB declared package expansion, one runtime `InflationBudget` per archive
+charged per chunk, 200:1 compression ratio, 4,096 entries, and the document's
+object, triangle, vertex and part ceilings. `estimateImportPeak` is retired from
+the enforcement role; the code migration is a separate step and no behaviour
+changed in R1.
+
+### Multi-model-part budgeting
+
+Sequential model parts do **not** cost the sum of their entries. Five sequential
+128 MiB parts measured a peak of 616.7 MiB at part one and **577.0 MiB at part
+five** — transient memory is released between parts and later parts reuse the
+space. In Chromium, two 242 MiB imports back to back peak at
+**1,923–1,994 MiB** against 1,742–1,815 MiB for a single 248 MiB entry: a second
+part adds about 10%, not 100%.
+
+**No new ceiling is needed.** The existing 512 MiB package total already bounds
+the worst case to two parts at the per-entry maximum, which is the case measured
+above. Many smaller parts are strictly milder — eight 64 MiB parts peak at
+649 MiB. `maxModelParts` therefore has no production value: `maxEntries`, the
+reachable expansion budget and the document's part ceiling already bound it.
+
+Reproduce with `npm run bench:resource-model` and
+`CADFIXER_QUALIFY_MODE=sequence npm run qualify:chromium-memory`.
+
 ## Stage 6D-B3: the 3MF per-entry ceiling, measured in Chromium
 
 **`maxEntryBytes` stays at 256 MiB.** A proposal to raise it to 384 MiB — to

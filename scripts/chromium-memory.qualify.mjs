@@ -481,11 +481,23 @@ async function run() {
         await settle(page, pageSession, worker);
         const settledAfter = await sample('after settle (gc)', pageSession, worker, rendererPid);
 
-        // REPLACEMENT: a small model must land, and the session must stay usable.
-        await openFixture(page, small.path);
+        /*
+         * REPLACEMENT. In `import` and `cancel` modes this is a small model,
+         * proving the session stays usable and memory comes back.
+         *
+         * `sequence` MODE MAKES IT THE SAME SIZE, which is Stage 6D-R1's browser
+         * proxy for multi-part loading: during the second import the FIRST
+         * document is still resident — the store holds it until the new one
+         * commits — so the renderer is carrying retained canonical geometry plus
+         * a full second transient, which is exactly the shape A2 produces. It is
+         * a conservative proxy, because the product also still holds the first
+         * RENDER snapshot and A2 would not.
+         */
+        const replacement = mode === 'sequence' ? fixture.path : small.path;
+        await openFixture(page, replacement);
         const replaced = await page
           .getByTestId('fact-triangles')
-          .waitFor({ state: 'visible', timeout: 120_000 })
+          .waitFor({ state: 'visible', timeout: 300_000 })
           .then(() => true)
           .catch(() => false);
         await settle(page, pageSession, worker);

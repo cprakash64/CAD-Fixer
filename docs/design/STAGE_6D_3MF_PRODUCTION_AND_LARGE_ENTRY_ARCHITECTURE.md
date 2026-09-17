@@ -1444,6 +1444,215 @@ The production-extension fixtures in those tests contain a **real, resolvable**
 second model part, so the refusal is meaningful: if the foundation ever became
 reachable from production, that is the entry it would follow.
 
+# Stage 6D-R1 — reconciling the import resource model
+
+**Decision: `RESOURCE MODEL QUALIFIED FOR A2`.** Base
+`a5a2cb4e5214e282f65a8aabcfb4953280d0945e`. **No product behaviour changed.**
+The safety role moves from an estimator to the deterministic caps that already
+exist, and the estimator's status is settled rather than left ambiguous.
+
+## What the estimator actually is
+
+`estimateImportPeak` sums five terms — current resident, current render, input
+buffer, candidate resident, candidate render — and `checkImportPeak` compares
+the total against `maxImportPeakBytes` (1,536 MiB). Two facts from the audit
+matter more than the arithmetic:
+
+**It runs AFTER the peak it names.** The only call site is
+`commitImportedDocument`, which executes once `read3mf` has already returned a
+parsed document. By then the archive has been inflated, the XML string built,
+the parser scratch allocated and the canonical geometry materialised. It cannot
+gate the transient peak because the transient peak has already happened; what it
+actually guards is the render snapshot and the commit.
+
+**For 3MF it is the ONLY budget, because the other one is never consulted.**
+`ImportBudget` — `maxEstimatedPeakBytes`, `maxTriangles`, `maxVertices`,
+`maxOutputBytes` — is used exclusively by the STL readers via `checkAllocation`
+and `checkInputSize`. Neither the 3MF reader nor the OBJ reader references
+`context.budget` at all.
+
+### Domain coverage
+
+| Memory domain                   | Modelled?                  | How                          |
+| ------------------------------- | -------------------------- | ---------------------------- |
+| A raw archive bytes             | **yes**                    | `inputBuffer`                |
+| B inflated entry                | **no**                     | —                            |
+| C decoded XML string            | **no**                     | —                            |
+| D parser transient              | **no**                     | —                            |
+| E geometry scratch (`number[]`) | **no**                     | —                            |
+| F canonical geometry            | **yes**                    | `candidateResident`          |
+| G render snapshot               | **yes** (twice, see below) | `candidateRender`            |
+| H worker/V8/Blink baseline      | **no**                     | —                            |
+| I renderer process footprint    | **no**                     | out of scope by construction |
+
+B, C, D and E are the domains B1 measured as dominant, and they are precisely
+the ones absent.
+
+### A double-count, reported and not fixed
+
+`currentRenderBytes` is documented as "bytes of render snapshot already held by
+the main thread" and is passed `renderBytesFor(documentTriangles)` — the
+CANDIDATE's triangle count, not the outgoing document's. The candidate's render
+bytes are therefore counted twice.
+
+The error is conservative: it inflates the estimate, so it can only refuse work,
+never admit it. It is reported here rather than corrected because R1 is an
+architecture stage and changing it would alter import eligibility.
+
+## Measured error, and why recalibration cannot fix it
+
+`npm run bench:resource-model`, Node, `heapUsed + arrayBuffers` with forced
+collection between readings. Four fixture families, all inside current
+production limits.
+
+| Fixture            | entry     | measured peak | modelled | error           |
+| ------------------ | --------- | ------------- | -------- | --------------- |
+| F1 geometry-dense  | 63.9 MiB  | 315.4 MiB     | 97.0     | **3.25x under** |
+| F1 geometry-dense  | 128.9 MiB | 411.3 MiB     | 193.9    | **2.12x under** |
+| F1 geometry-dense  | 201.9 MiB | 616.7 MiB     | 303.0    | **2.04x under** |
+| F2 text-heavy      | 64.5 MiB  | 157.0 MiB     | 26.2     | **5.99x under** |
+| F2 text-heavy      | 128.5 MiB | 189.4 MiB     | 51.7     | **3.67x under** |
+| F2 text-heavy      | 200.5 MiB | 290.5 MiB     | 80.3     | **3.62x under** |
+| F3 object-heavy    | 43.1 MiB  | 88.8 MiB      | 68.6     | 1.30x under     |
+| F3 object-heavy    | 135.0 MiB | 253.3 MiB     | 222.8    | 1.14x under     |
+| F4 placement-heavy | 2.5 MiB   | 9.1 MiB       | 732.7    | **81x OVER**    |
+
+**The error spans two orders of magnitude and changes SIGN with content shape.**
+F4 is the case that settles it: one mesh placed 200 times costs 9 MiB and is
+modelled at 733 MiB, because the model computes resident and render bytes from
+the SUMMED triangle count while shared geometry is stored once. A file with
+roughly 11 million summed triangles over shared placements would be refused
+today while costing a few megabytes.
+
+No scalar recalibration repairs an estimator that is 81x pessimistic on one
+shape and 6x optimistic on another. The error is driven by which shape, not by
+size.
+
+## What does predict the peak
+
+Across every family and size measured, **peak / entryExpandedBytes** ranges
+**1.45x to 5.07x**. That quantity has the property the current model lacks:
+`entryExpandedBytes` is the ZIP directory's declared uncompressed size, known
+BEFORE anything is inflated and already bounded by `maxEntryBytes`.
+
+The retained side needs no estimator at all — canonical geometry is already
+bounded deterministically and incrementally by the per-object vertex and
+triangle caps and by the document's total ceilings, checked before each part is
+appended.
+
+## Multi-part: the peak plateaus
+
+The architectural claim was that A2's peak is the LARGEST part's transient plus
+accumulated canonical geometry, not the sum of every part's XML. It had never
+been measured. It holds.
+
+**Node, five sequential ~128 MiB parts, each result retained:**
+
+| Part | Peak          | Growth over part 1 |
+| ---- | ------------- | ------------------ |
+| 1    | 616.7 MiB     | —                  |
+| 2    | 790.2 MiB     | +173.5             |
+| 3    | 700.3 MiB     | +83.6              |
+| 4    | 635.4 MiB     | +18.7              |
+| 5    | **577.0 MiB** | **-39.7**          |
+
+Accumulating transient would predict about +515 MiB of growth; canonical
+geometry alone predicts about +179 MiB. Measured growth was **negative** —
+later parts reuse space earlier ones released.
+
+**Chromium, two same-size imports back to back** (the first document is still
+resident while the second parses, which is A2's shape and is conservative
+because the product also still holds the first render snapshot):
+
+| Entry, twice  | Renderer `phys_footprint_peak`        |
+| ------------- | ------------------------------------- |
+| 63.2 MiB      | 649 MiB                               |
+| 125.7 MiB     | 1,094 MiB                             |
+| 197.5 MiB     | 1,616 MiB                             |
+| **242.0 MiB** | **1,923 / 1,948 / 1,977 / 1,994 MiB** |
+
+Against B3's **1,742–1,815 MiB for a single 248 MiB entry**, a second part of
+the same size adds roughly **10%**, not 100%.
+
+### How the lifetime gate was proven, and how it was not
+
+Subtracting "held after the document is dropped" from "held while alive" turned
+out **not** to resolve retention: at 128 MiB it attributed **0.0 MiB** to a
+document that demonstrably held 44.8 MiB of canonical geometry, and reported
+memory as held after the only reference was gone. `gc()` performs a major
+collection but does not reliably compact or return pages, and any lifetime claim
+built on those subtractions would be built on noise. That method is recorded as
+rejected.
+
+The plateau test is the one that survives: if inflated bytes, decoded strings or
+scratch arrays stayed reachable, peak would climb by roughly one entry per part.
+It does not climb at all.
+
+## The resource contract for A2
+
+Enforcement moves to caps that are deterministic, known before the allocation
+they bound, and already implemented:
+
+| Metric                                 | Value                              | Where enforced                          |
+| -------------------------------------- | ---------------------------------- | --------------------------------------- |
+| per-entry expanded                     | **256 MiB**                        | ZIP directory, and per chunk at runtime |
+| package declared expanded              | **512 MiB**                        | ZIP directory                           |
+| reachable expanded                     | 512 MiB, via ONE `InflationBudget` | per chunk at runtime                    |
+| compression ratio                      | 200:1                              | declared and per chunk                  |
+| entries                                | 4,096                              | ZIP directory                           |
+| objects / triangles / vertices / parts | existing document ceilings         | expansion, **package-wide**             |
+| model parts                            | no separate ceiling — see below    | —                                       |
+
+Plus the lifetime rules A1 already encodes: one model part parsed at a time, one
+package-wide budget, transient memory released before the next part opens, and
+cancellation between parts as well as inside each parse.
+
+**No new ceiling is required.** The 512 MiB package total already bounds the
+worst case to two parts at the per-entry maximum, and that case measures
+1,923–1,994 MiB — which is the number A2 must live with. Many smaller parts are
+strictly milder: eight 64 MiB parts carry a smaller largest-transient and the
+same total geometry.
+
+**`maxModelParts` stays without a production value.** `maxEntries` (4,096) bounds
+how many `.model` entries can exist, the 512 MiB reachable budget bounds how much
+they can expand to, and the document's part and triangle ceilings bound what they
+can produce. A separate count ceiling would add a fourth bound with no measured
+case that the first three miss.
+
+### Counters that must move to the graph in A2
+
+`expandBuild` maintains `totalTriangles` and `totalVertices` per `ParsedModel`,
+and `parts.length` is per expansion. All three would reset per model part, so
+A2 must own them on `PackageModelGraph`. `maxTotalGeometryBytes` is charged per
+DISTINCT mesh at the document gate and is already package-wide.
+
+## Import-budget API decision: **D3 — retire as enforcement**
+
+Process footprint is a **qualification** metric, not a runtime enforcement
+metric. `estimateImportPeak` cannot become one: its inputs arrive after the peak,
+its coverage omits the dominant domains, and its error changes sign with content
+shape.
+
+Retiring it from that role is a behaviour change and is therefore **not made in
+R1**, which is an architecture stage. The direction is decided; the migration is
+a separate, explicit step. Until then it remains in place, where its conservative
+double-count means it can only over-refuse.
+
+## The 256 MiB ceiling, reassessed
+
+Unchanged, and not reopened. B3's single-entry measurement (1,742–1,815 MiB at
+248 MiB) stands, and R1 adds that the multi-part worst case reaches
+1,923–1,994 MiB — about 10% more. On the 8 GiB minimum host that is a renderer
+approaching 2 GiB, which is materially below the 2.7–3.1 GiB that caused 384 MiB
+to be rejected, and above the 1,536 MiB the old model claimed to allow.
+
+**`384 MiB ENTRY LIMIT NOT APPROVED` remains in force.** R1 finding that
+`maxImportPeakBytes` was misnamed is not a reason to revisit it; that decision
+rests on measured renderer footprint, which R1 did not change.
+
+Whether 256 MiB should itself be reduced is a separate question with its own
+evidence, and R1 neither answers nor prejudges it.
+
 # Acceptance targets
 
 ## BETA-001
