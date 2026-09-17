@@ -5,16 +5,24 @@ import { AppErrorCode, isAppError } from '@cadfixer/shared';
 // hard-coding a byte count that would drift from the algorithms.
 import { estimateTopologyWorkspaceBytes } from '@cadfixer/mesh-topology';
 import {
+  createIndexArray,
+  createPositionArray,
+  MAX_IMPORT_GEOMETRY_BYTES,
+  MAX_UNSHARED_IMPORT_TRIANGLES,
+  measureImportGeometry,
+  RENDER_BYTES_PER_TRIANGLE,
+  UNSHARED_IMPORT_BYTES_PER_TRIANGLE,
+  type CanonicalMesh,
+  type GeometryDocument,
+  type ImportGeometryCost,
+} from '@cadfixer/mesh-core';
+import {
   checkExportPeak,
-  checkImportPeak,
-  checkResident,
+  checkImportGeometry,
   DEFAULT_SESSION_MEMORY_BUDGET,
   estimateExportPeak,
-  estimateImportPeak,
-  renderBytesFor,
   requestAnalysisWorkspace,
   requestRepairPeak,
-  residentBytesFor,
 } from './memory-budget';
 
 /**
@@ -30,131 +38,178 @@ function expectLimitError(result: unknown): void {
   expect(result.code).toBe(AppErrorCode.ResourceLimitExceeded);
 }
 
-describe('byte models', () => {
-  it('models resident geometry as positions plus indices', () => {
-    // One triangle: 3 vertices x 3 floats x 4 bytes + 3 indices x 4 bytes.
-    expect(residentBytesFor(1)).toBe(36 + 12);
+/* ---------------------------------------- Stage 6D-R3: the import gate --- */
+
+/** A soup mesh of `triangles` faces: no shared corners, exactly as STL stores. */
+function soup(triangles: number): CanonicalMesh {
+  return {
+    positions: createPositionArray(triangles * 9),
+    indices: createIndexArray(triangles * 3),
+    metadata: {},
+  };
+}
+
+/** An indexed mesh: `vertices` shared corners referenced by `triangles` faces. */
+function indexed(triangles: number, vertices: number): CanonicalMesh {
+  return {
+    positions: createPositionArray(vertices * 3),
+    indices: createIndexArray(triangles * 3),
+    metadata: {},
+  };
+}
+
+function documentOf(...meshes: readonly CanonicalMesh[]): GeometryDocument {
+  return {
+    parts: meshes.map((mesh, index) => ({
+      id: `part-${String(index)}` as GeometryDocument['parts'][number]['id'],
+      mesh,
+      transform: [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0] as const,
+    })),
+  };
+}
+
+/** A document that places ONE mesh `count` times, which is what 3MF produces. */
+function placements(mesh: CanonicalMesh, count: number): GeometryDocument {
+  return documentOf(...Array.from({ length: count }, () => mesh));
+}
+
+describe('import geometry cost', () => {
+  it('counts canonical buffers and the render snapshot separately', () => {
+    const cost = measureImportGeometry(documentOf(soup(1)));
+
+    // 36 bytes of positions + 12 of indices, then 72 of render buffers.
+    expect(cost.canonicalBytes).toBe(48);
+    expect(cost.renderSnapshotBytes).toBe(RENDER_BYTES_PER_TRIANGLE);
+    expect(cost.totalBytes).toBe(UNSHARED_IMPORT_BYTES_PER_TRIANGLE);
   });
 
-  it('models a render snapshot as positions plus normals, non-indexed', () => {
-    // No index buffer is sent, so it is exactly two position-sized arrays.
-    expect(renderBytesFor(1)).toBe(36 * 2);
+  it('charges a shared mesh ONCE however many times it is placed', () => {
+    // THE DEFECT THAT RETIRED THE OLD ESTIMATOR. It computed both terms from the
+    // SUMMED triangle count, so this document — 2,000 placements of one mesh,
+    // two million summed triangles, ONE stored mesh — was charged two million
+    // triangles twice over and refused while costing 120 KiB.
+    const mesh = soup(1_000);
+    const one = measureImportGeometry(documentOf(mesh));
+    const many = measureImportGeometry(placements(mesh, 2_000));
+
+    expect(many.totalBytes).toBe(one.totalBytes);
+    expect(many.distinctMeshCount).toBe(1);
+    expect(many.distinctTriangleCount).toBe(1_000);
+    expect(checkImportGeometry(many)).toBeUndefined();
   });
 
-  it('matches the measured shape of a 2.1M-triangle model', () => {
-    const triangles = 2_097_150;
-    const mib = (bytes: number): number => Math.round(bytes / (1024 * 1024));
+  it('counts distinct meshes separately even when they are the same size', () => {
+    const cost = measureImportGeometry(documentOf(soup(1_000), soup(1_000)));
 
-    expect(mib(residentBytesFor(triangles))).toBe(96);
-    expect(mib(renderBytesFor(triangles))).toBe(144);
+    expect(cost.distinctMeshCount).toBe(2);
+    expect(cost.distinctTriangleCount).toBe(2_000);
+  });
+
+  it('charges an indexed mesh less to store and exactly as much to draw', () => {
+    // The draw is non-indexed, so sharing corners makes a mesh cheaper to hold
+    // and not one byte cheaper to render. A gate that only counted canonical
+    // bytes would miss the larger of the two terms.
+    const cost = measureImportGeometry(documentOf(indexed(1_000, 502)));
+
+    expect(cost.canonicalBytes).toBe(502 * 12 + 1_000 * 12);
+    expect(cost.renderSnapshotBytes).toBe(1_000 * RENDER_BYTES_PER_TRIANGLE);
   });
 });
 
-describe('import peak', () => {
-  it('counts the outgoing model, the input, and the candidate together', () => {
-    // All three are live at once — that is what makes replacement
-    // transactional, and it is the moment memory is tightest.
-    const estimate = estimateImportPeak({
-      currentResidentBytes: 1000,
-      currentRenderBytes: 2000,
-      inputBytes: 500,
-      candidateTriangles: 1,
-    });
-
-    expect(estimate.modelledPeakBytes).toBe(1000 + 2000 + 500 + 48 + 72);
-    expect(estimate.breakdown.candidateResident).toBe(48);
+describe('import geometry gate', () => {
+  it('accepts a document exactly at the ceiling and refuses one byte past it', () => {
+    const at: ImportGeometryCost = {
+      canonicalBytes: MAX_IMPORT_GEOMETRY_BYTES,
+      renderSnapshotBytes: 0,
+      totalBytes: MAX_IMPORT_GEOMETRY_BYTES,
+      distinctMeshCount: 1,
+      distinctTriangleCount: 1,
+    };
+    expect(checkImportGeometry(at)).toBeUndefined();
+    expectLimitError(checkImportGeometry({ ...at, renderSnapshotBytes: 1 }));
   });
 
-  it('accepts a realistic large replacement', () => {
-    const estimate = estimateImportPeak({
-      currentResidentBytes: residentBytesFor(2_097_150),
-      currentRenderBytes: renderBytesFor(2_097_150),
-      inputBytes: 100 * 1024 * 1024,
-      candidateTriangles: 2_097_150,
+  it('names the metric, the value and the limit in the refusal', () => {
+    // §32. "This would use more memory than CAD Fixer allows" told a user
+    // nothing they could act on and presented an estimate as memory.
+    const result = checkImportGeometry({
+      canonicalBytes: 600 * 1024 * 1024,
+      renderSnapshotBytes: 400 * 1024 * 1024,
+      totalBytes: 1000 * 1024 * 1024,
+      distinctMeshCount: 1,
+      distinctTriangleCount: 20_000_000,
     });
 
-    expect(checkImportPeak(estimate)).toBeUndefined();
-  });
-
-  it('refuses a replacement that would exceed the session peak', () => {
-    const estimate = estimateImportPeak({
-      currentResidentBytes: residentBytesFor(10_000_000),
-      currentRenderBytes: renderBytesFor(10_000_000),
-      inputBytes: 500 * 1024 * 1024,
-      candidateTriangles: 10_000_000,
-    });
-
-    expectLimitError(checkImportPeak(estimate));
-  });
-
-  it('reports the breakdown so a refusal is explainable', () => {
-    const estimate = estimateImportPeak({
-      currentResidentBytes: residentBytesFor(10_000_000),
-      currentRenderBytes: renderBytesFor(10_000_000),
-      inputBytes: 500 * 1024 * 1024,
-      candidateTriangles: 10_000_000,
-    });
-    const result = checkImportPeak(estimate);
-
-    if (!isAppError(result)) {
-      expect.unreachable('expected a rejection');
-    }
-    expect(result.details.candidateResident).toBe(residentBytesFor(10_000_000));
-    expect(result.details.limit).toBe(DEFAULT_SESSION_MEMORY_BUDGET.maxImportPeakBytes);
+    if (!isAppError(result)) expect.unreachable('expected a refusal');
+    expect(result.message).toContain('1,000 MiB');
+    expect(result.message).toContain('768 MiB');
+    expect(result.details.limit).toBe(DEFAULT_SESSION_MEMORY_BUDGET.maxImportGeometryBytes);
+    expect(result.details.renderSnapshotBytes).toBe(400 * 1024 * 1024);
     // Counts and bytes only — never geometry.
     for (const value of Object.values(result.details)) {
       expect(['number', 'string']).toContain(typeof value);
     }
   });
-});
 
-describe('overflow and non-finite protection', () => {
-  it('treats a non-finite term as unbounded rather than letting it pass', () => {
-    // NaN compares false against every limit, so without an explicit guard a
-    // corrupted term would silently authorise any allocation.
-    const estimate = estimateImportPeak({
-      currentResidentBytes: Number.NaN,
-      currentRenderBytes: 0,
-      inputBytes: 0,
-      candidateTriangles: 1,
-    });
-
-    expect(estimate.modelledPeakBytes).toBe(Number.POSITIVE_INFINITY);
-    expectLimitError(checkImportPeak(estimate));
+  it('does not consult what is already resident', () => {
+    // §34. The gate has no term for the outgoing document, so the same candidate
+    // must reach the same verdict whatever the workspace already holds. There is
+    // no parameter through which the current document could enter.
+    const mesh = soup(1_000_000);
+    expect(checkImportGeometry(measureImportGeometry(documentOf(mesh)))).toBeUndefined();
+    expect(checkImportGeometry(measureImportGeometry(documentOf(mesh)))).toBeUndefined();
   });
 
-  it('treats a negative term as unbounded', () => {
-    const estimate = estimateImportPeak({
-      currentResidentBytes: -1,
-      currentRenderBytes: 0,
-      inputBytes: 0,
-      candidateTriangles: 1,
-    });
-
-    expectLimitError(checkImportPeak(estimate));
+  it('treats a non-finite or negative term as unbounded', () => {
+    // NaN compares false against every limit, so an unguarded term would
+    // silently authorise any allocation.
+    expectLimitError(
+      checkImportGeometry({
+        canonicalBytes: Number.NaN,
+        renderSnapshotBytes: 0,
+        totalBytes: Number.NaN,
+        distinctMeshCount: 1,
+        distinctTriangleCount: 1,
+      }),
+    );
+    expectLimitError(
+      checkImportGeometry({
+        canonicalBytes: -1,
+        renderSnapshotBytes: 0,
+        totalBytes: -1,
+        distinctMeshCount: 1,
+        distinctTriangleCount: 1,
+      }),
+    );
   });
 
-  it('stays exact for the largest triangle counts the import budget permits', () => {
-    // 20M triangles is the import ceiling. The byte model must remain an exact
-    // integer well inside 2^53, or the comparisons above mean nothing.
-    const bytes = residentBytesFor(20_000_000) + renderBytesFor(20_000_000);
+  it('stays exact at the largest counts the document ceiling permits', () => {
+    // 20M triangles is the document ceiling. The byte model must remain an exact
+    // integer well inside 2^53, or every comparison above means nothing.
+    const bytes = 20_000_000 * UNSHARED_IMPORT_BYTES_PER_TRIANGLE;
 
     expect(Number.isSafeInteger(bytes)).toBe(true);
     expect(bytes).toBeLessThan(Number.MAX_SAFE_INTEGER);
   });
 });
 
-describe('resident and render ceilings', () => {
-  it('accepts a model inside both ceilings', () => {
-    expect(checkResident(residentBytesFor(2_097_150), renderBytesFor(2_097_150))).toBeUndefined();
+describe('the unshared-triangle ceiling the STL readers use', () => {
+  it('is DERIVED from the byte ceiling rather than written down twice', () => {
+    expect(MAX_UNSHARED_IMPORT_TRIANGLES).toBe(
+      Math.floor(MAX_IMPORT_GEOMETRY_BYTES / UNSHARED_IMPORT_BYTES_PER_TRIANGLE),
+    );
   });
 
-  it('refuses resident geometry beyond the ceiling', () => {
-    expectLimitError(checkResident(DEFAULT_SESSION_MEMORY_BUDGET.maxResidentBytes + 1, 0));
-  });
+  it('admits a soup mesh at the ceiling and refuses the next triangle', () => {
+    // The pre-gate and the common gate must agree exactly. If the reader's
+    // ceiling were looser, a file would be fully parsed and then refused: all of
+    // the work and none of the protection. If it were tighter, the reader would
+    // refuse files the gate would have taken.
+    const at = measureImportGeometry(documentOf(soup(MAX_UNSHARED_IMPORT_TRIANGLES)));
+    const past = measureImportGeometry(documentOf(soup(MAX_UNSHARED_IMPORT_TRIANGLES + 1)));
 
-  it('refuses render buffers beyond the ceiling', () => {
-    expectLimitError(checkResident(0, DEFAULT_SESSION_MEMORY_BUDGET.maxRenderBytes + 1));
+    expect(checkImportGeometry(at)).toBeUndefined();
+    expectLimitError(checkImportGeometry(past));
   });
 });
 
@@ -324,11 +379,17 @@ describe('every declared ceiling is enforced by something', () => {
    *
    * Stage 5A's resource audit found two of them. `maxResidentBytes` and
    * `maxExportPeakBytes` are declared here and have no production call site:
-   * `checkResident`, `checkExportPeak`, `estimateExportPeak` and
-   * `residentBytesFor` are reached only by this file. The bytes ARE bounded —
-   * resident geometry by `mesh-core`'s `maxTotalGeometryBytes` at the same 768
-   * MiB, and export by `export-contract.ts`'s own incrementally-enforced
-   * `maxOutputBytes` / `maxSerialisedBytes` — so this was drift, not a hole.
+   * `checkExportPeak` and `estimateExportPeak` are reached only by this file.
+   * The bytes ARE bounded — resident geometry by `mesh-core`'s
+   * `maxTotalGeometryBytes` at the same 768 MiB, and export by
+   * `export-contract.ts`'s own incrementally-enforced `maxOutputBytes` /
+   * `maxSerialisedBytes` — so this was drift, not a hole.
+   *
+   * STAGE 6D-R3 REMOVED THE THIRD. `maxRenderBytes` was declared, was enforced
+   * by nothing, and was reached only by `checkResident`, which had no production
+   * caller either. Render bytes are now a TERM of `maxImportGeometryBytes`,
+   * checked before the snapshot is built, so the dead constant and its dead
+   * checker are gone rather than exempted.
    *
    * This test exists so the drift cannot grow. Every field is either enforced
    * from production through one of this module's own request/check functions, or
@@ -343,14 +404,10 @@ describe('every declared ceiling is enforced by something', () => {
     // Enforced by file-formats export-contract maxOutputBytes (256 MiB) and
     // maxSerialisedBytes (512 MiB), both checked before a chunk is retained.
     maxExportPeakBytes: 'file-formats export-contract maxOutputBytes',
-    // The render snapshot is main-thread and disposable; its size is a
-    // consequence of the resident triangle count, which the document gate above
-    // already bounds. `renderBytesFor` is used to REPORT it, not to gate it.
-    maxRenderBytes: 'bounded transitively by the resident document gate',
   };
 
   const ENFORCED_FROM_PRODUCTION: readonly string[] = [
-    'maxImportPeakBytes',
+    'maxImportGeometryBytes',
     'maxAnalysisWorkspaceBytes',
     'maxRepairPeakBytes',
   ];

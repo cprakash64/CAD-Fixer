@@ -2,14 +2,18 @@ import { deflateRawSync } from 'node:zlib';
 import { performance } from 'node:perf_hooks';
 import { it } from 'vitest';
 import { uncancellable } from '@cadfixer/shared';
-import { distinctMeshes, documentTriangleCount, documentVertexCount } from '@cadfixer/mesh-core';
+import {
+  distinctMeshes,
+  documentTriangleCount,
+  documentVertexCount,
+  measureImportGeometry,
+} from '@cadfixer/mesh-core';
 import {
   DEFAULT_IMPORT_BUDGET,
   read3mf,
   type DocumentReadResult,
   type FormatReadContext,
 } from '@cadfixer/file-formats';
-import { estimateImportPeak, renderBytesFor } from '@cadfixer/geometry-runtime';
 
 /**
  * STAGE 6D-R1 — WHAT THE IMPORT RESOURCE MODEL ACTUALLY COVERS.
@@ -428,16 +432,17 @@ async function measure(fixture: Fixture): Promise<DomainReading> {
   }
 
   /*
-   * THE PRODUCTION MODEL, evaluated on exactly this import, so the comparison
-   * is against what the product would actually have computed rather than
-   * against a reconstruction of it.
+   * THE PRODUCTION GATE TERM, evaluated on exactly this import.
+   *
+   * SINCE STAGE 6D-R3 THIS IS NOT A PEAK PREDICTION AND THE RATIO BELOW IS NOT
+   * AN ERROR. `estimateImportPeak` claimed to predict the transient peak and was
+   * measured wrong by up to 81x in both directions; `measureImportGeometry`
+   * claims only what the document will HOLD. The ratio is therefore the
+   * expansion between retained geometry and transient peak — which is the
+   * quantity the ceiling is calibrated against, and which this suite exists to
+   * keep visible.
    */
-  const modelled = estimateImportPeak({
-    currentResidentBytes: 0,
-    currentRenderBytes: renderBytesFor(documentTriangles),
-    inputBytes: fixture.bytes.byteLength,
-    candidateTriangles: documentTriangles,
-  }).modelledPeakBytes;
+  const modelled = measureImportGeometry(result.document).totalBytes;
 
   const retained = (await collected()) - floor;
   void documentVertexCount(result.document);
@@ -462,8 +467,8 @@ function report(reading: DomainReading): void {
       `      triangles ${reading.documentTriangles.toLocaleString('en-US').padStart(12)}  ` +
       `canonical ${mib(reading.canonicalBytes)} MiB\n` +
       `      MEASURED peak ${mib(reading.importPeak)} MiB   ` +
-      `MODELLED ${mib(reading.modelled)} MiB   ` +
-      `under-prediction ${ratio.toFixed(2)}x\n` +
+      `GATE TERM ${mib(reading.modelled)} MiB   ` +
+      `peak/gate ${ratio.toFixed(2)}x\n` +
       `      retained after gc ${mib(reading.retained)} MiB   ${reading.elapsedMs.toFixed(0)} ms\n`,
   );
 }

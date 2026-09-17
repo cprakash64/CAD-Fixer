@@ -1383,3 +1383,112 @@ describe('B2: model/import is dispatched as an interruptible operation', () => {
     expect(call).toContain('transfer: [bytes]');
   });
 });
+
+/** Every shipped `.ts` or `.tsx` under `apps/web/src` and `packages`, tests aside. */
+function shippedSources(): string[] {
+  const roots = [join(REPO_ROOT, 'apps', 'web', 'src'), join(REPO_ROOT, 'packages')];
+  return roots
+    .filter((root) => existsSync(root))
+    .flatMap((root) => sourceFilesUnder(root))
+    .filter((file) => !/\.test\.(ts|tsx)$/.test(file));
+}
+
+describe('R3: the import resource gate has one call site, above the snapshot', () => {
+  /*
+   * WHY SOURCE ORDER IS THE PROPERTY.
+   *
+   * `checkImportGeometry` bounds the render snapshot. A gate that ran AFTER
+   * `buildDocumentRenderSnapshot` would still refuse the commit, still return a
+   * typed error, and still pass every unit test — having already allocated the
+   * hundreds of megabytes it exists to prevent. Nothing about the returned value
+   * distinguishes the two orderings, so the ordering is asserted directly.
+   *
+   * And ONE call site, because a second producer of documents is a second place
+   * the gate can be forgotten — the same reason `commitImportedDocument` was
+   * extracted in Stage 4A-2B1.
+   */
+  const source = readFileSync(
+    join(REPO_ROOT, 'apps', 'web', 'src', 'workers', 'stl-handlers.ts'),
+    'utf8',
+  );
+
+  it('runs the gate before the render snapshot is built', () => {
+    const gate = source.indexOf('checkImportGeometry(cost)');
+    const snapshot = source.indexOf('buildDocumentRenderSnapshot(document)');
+    const commit = source.indexOf('residentDocuments.commit(document)');
+
+    expect(gate, 'the import gate must be called').toBeGreaterThan(-1);
+    expect(snapshot, 'the render snapshot must be built').toBeGreaterThan(-1);
+    expect(gate).toBeLessThan(snapshot);
+    expect(snapshot).toBeLessThan(commit);
+  });
+
+  it('calls the gate exactly once, from commitImportedDocument', () => {
+    expect(source.match(/checkImportGeometry\(/g) ?? []).toHaveLength(1);
+    const commitAt = source.indexOf('export function commitImportedDocument');
+    expect(source.indexOf('checkImportGeometry(cost)')).toBeGreaterThan(commitAt);
+  });
+
+  it('keeps the retired estimator out of production', () => {
+    /*
+     * NAMED SO THEY CANNOT RETURN QUIETLY. `estimateImportPeak` ran after the
+     * peak it named, charged summed triangles so shared placements were billed
+     * once per placement, and received the CANDIDATE's triangle count as the
+     * OUTGOING document's render bytes. `checkResident` and `maxRenderBytes`
+     * were never called from production at all.
+     */
+    const RETIRED = [
+      'estimateImportPeak',
+      'checkImportPeak',
+      'maxImportPeakBytes',
+      'checkResident',
+      'maxRenderBytes',
+      'residentBytesFor',
+      'renderBytesFor',
+    ];
+    for (const file of shippedSources()) {
+      const text = readFileSync(file, 'utf8');
+      for (const symbol of RETIRED) {
+        // Prose may discuss them; an identifier followed by `(` or `:` is a use.
+        expect(
+          new RegExp(`\\b${symbol}\\s*[(:]`).test(text),
+          `${relative(REPO_ROOT, file)} still uses ${symbol}`,
+        ).toBe(false);
+      }
+    }
+  });
+});
+
+describe('R3: the automatic boundary listing is size-gated before it walks', () => {
+  /*
+   * THE ONLY AUTOMATIC POST-IMPORT OPERATION THAT HAD NO PREFLIGHT. Its cost
+   * scales with boundary COMPONENTS, of which a mesh of loose triangles has one
+   * per FACE, so it is not bounded by anything a geometry gate can see: two
+   * 100 MiB binary STL files with identical triangle counts measured 1,055 MiB
+   * and 2,650 MiB of Chromium renderer footprint.
+   *
+   * The guard has to precede `extractBoundaryLoops` for the same reason the
+   * import gate has to precede the snapshot — refusing afterwards is not
+   * refusing.
+   */
+  const source = readFileSync(
+    join(REPO_ROOT, 'apps', 'web', 'src', 'workers', 'hole-fill-handlers.ts'),
+    'utf8',
+  );
+
+  it('checks the part size before extracting boundary loops', () => {
+    const guard = source.indexOf('partFaceCount > HOLE_FILL_MAX_PART_FACES');
+    const walk = source.indexOf('extractBoundaryLoops(part.mesh');
+
+    expect(guard, 'the listing must be size-gated').toBeGreaterThan(-1);
+    expect(walk).toBeGreaterThan(-1);
+    expect(guard).toBeLessThan(walk);
+  });
+
+  it('reports a skipped walk as `inventoried: false`, never as a zero count alone', () => {
+    // `loopCount: 0` with no other signal would tell a user their model has no
+    // open boundaries on the strength of a check that never ran.
+    expect(source).toContain('inventoried: false');
+    expect(source).toContain('inventoried: true');
+  });
+});

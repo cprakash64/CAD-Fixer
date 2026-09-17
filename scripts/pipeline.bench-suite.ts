@@ -4,6 +4,7 @@ import { uncancellable } from '@cadfixer/shared';
 import {
   computeBounds,
   computeVertexNormals,
+  RENDER_BYTES_PER_TRIANGLE,
   triangleCount,
   validateMeshStructure,
 } from '@cadfixer/mesh-core';
@@ -22,9 +23,7 @@ import {
 } from '@cadfixer/mesh-topology';
 import {
   DEFAULT_SESSION_MEMORY_BUDGET,
-  renderBytesFor,
   requestAnalysisWorkspace,
-  residentBytesFor,
 } from '@cadfixer/geometry-runtime';
 
 /**
@@ -242,8 +241,8 @@ it('measures the whole local pipeline across representative sizes', async () => 
         `  topology TOTAL           ${ms(analysisMs)}`,
         `  binary export            ${ms(exportMs)}`,
         '',
-        `  resident canonical       ${mib(residentBytes)}   (estimator ${mib(residentBytesFor(faceCount))})`,
-        `  render snapshot          ${mib(renderBytes)}   (estimator ${mib(renderBytesFor(faceCount))})`,
+        `  resident canonical       ${mib(residentBytes)}`,
+        `  render snapshot          ${mib(renderBytes)}   (gate term ${mib(faceCount * RENDER_BYTES_PER_TRIANGLE)})`,
         `  topology scratch (est.)  ${mib(workspaceBytes)}`,
         `  bounded detail           ${mib(detailBytes)}   (ceiling ${mib(estimateDetailBytes(result.detail.sampleLimit))})`,
         `  modelled application peak ${mib(modelledPeak)}`,

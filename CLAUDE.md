@@ -211,6 +211,8 @@ npm run bench:formats  # OBJ + 3MF import at 1/10/50 MiB (NOT in CI)
 npm run bench:export   # OBJ + 3MF export, sizes and placement counts (NOT in CI)
 npm run bench:repair-browser # repair workflow timings in a real browser (NOT in CI)
 npm run bench:hole-fill # hole-fill phase timings and broadphase reduction (NOT in CI)
+npm run bench:boundary-listing # automatic boundary-walk cost by shape (NOT in CI)
+npm run qualify:import-phases  # Chromium footprint, ATTRIBUTED BY PHASE (NOT in CI)
 npm run check:node     # runtime version guard; also runs before test/build/verify
 ```
 
@@ -368,6 +370,51 @@ believing it.
   names, material references and file names render as text. No
   `dangerouslySetInnerHTML`, and no error message may carry archive, XML or OBJ
   content into markup.
+
+## Import resource invariants (Stage 6D-R3)
+
+- **THE GATE MEASURES WHAT THE DOCUMENT WILL HOLD; IT PREDICTS NOTHING.**
+  `measureImportGeometry` sums, ONCE PER DISTINCT MESH, the canonical buffers the
+  reader produced and the render snapshot `buildDrawableTriangles` is about to
+  allocate — 72 bytes a triangle, because the draw is NON-INDEXED and sharing
+  corners makes a mesh cheaper to store and not one byte cheaper to draw.
+  `checkImportGeometry` compares that against `MAX_IMPORT_GEOMETRY_BYTES`
+  (768 MiB) in `commitImportedDocument`, immediately before the snapshot is
+  built. One call site, all three formats.
+- **`estimateImportPeak`, `checkImportPeak`, `maxImportPeakBytes`,
+  `checkResident`, `maxRenderBytes`, `residentBytesFor` and `renderBytesFor` ARE
+  DELETED AND MAY NOT COME BACK.** The estimator ran AFTER the transient peak it
+  named, charged SUMMED triangles so a thousand placements of one mesh were
+  billed a thousand times, and passed the CANDIDATE's triangle count as the
+  outgoing document's render bytes. Measured error spanned two orders of
+  magnitude and CHANGED SIGN with content shape.
+- **THE CONSTANT LIVES IN `mesh-core/import-cost.ts`, BESIDE THE ALLOCATION IT
+  BOUNDS**, with the Chromium measurements that produced it written above it. A
+  `9 * 4 * 2` restated in the budget module would be a second answer to "how big
+  is a render snapshot", and the first time the snapshot gained a buffer the gate
+  would quietly stop bounding it.
+- **THE CURRENT DOCUMENT IS NOT A TERM, AND THAT IS MEASURED.** A large
+  replacement does not stack: the outgoing buffers are released as the successor
+  commits. There is no parameter through which resident state could enter, and a
+  test asserts the same candidate reaches the same verdict twice.
+- **THE STL PRE-GATE IS DERIVED, NEVER A SECOND NUMBER.**
+  `DEFAULT_IMPORT_BUDGET.maxUnsharedImportTriangles` reads
+  `MAX_UNSHARED_IMPORT_TRIANGLES`, which is
+  `MAX_IMPORT_GEOMETRY_BYTES / 120`. STL never welds, so the cost is fixed by the
+  declared count — four bytes at offset 80 — and the refusal lands before the
+  first array. 6,710,886 triangles, a 320.00 MiB binary file exactly. A ceiling
+  of its own here would mean a file fully parsed and THEN refused: all of the
+  work and none of the protection. OBJ and 3MF cannot be pre-gated, because their
+  triangle count is a fact about contents rather than length.
+- **A RESOURCE REFUSAL NAMES THE METRIC, THE VALUE AND THE LIMIT.** "This would
+  use more memory than CAD Fixer allows for one session" named none of the three
+  and presented an estimate as memory. That sentence is gone from the import gate
+  and from `requestAnalysisWorkspace`, which now says how many triangles the part
+  has and how much working memory that needs.
+- **THE GATE DOES NOT BOUND THE PARSE TRANSIENT and does not pretend to.** The
+  inflated 3MF entry, the decoded XML string and the readers' scratch arrays are
+  bounded by the per-entry and package inflation budgets, which Stage 6D-B3
+  measured and this stage did not reopen.
 
 ## Export invariants (Stage 4A-2B2)
 
@@ -749,6 +796,18 @@ validated`, and the qualifier naming what was NOT examined travels with it.
 - **THE INVENTORY IS CAPPED AND THE COUNT IS NOT.** 256 rows, an exact
   `loopCount`, and the truncation disclosed in words with both numbers. Only the
   SELECTED opening's rim ever crosses to the page.
+- **THE WALK IS NOT RUN AT ALL ABOVE `HOLE_FILL_MAX_PART_FACES`** — Stage 6D-R3.
+  This listing is AUTOMATIC on every import and was the only automatic
+  post-import operation with no resource preflight of any kind. Its cost scales
+  with boundary COMPONENTS, of which a mesh of loose triangles has one per FACE:
+  measured at 692–1,011 bytes per face on that shape, and in Chromium as two
+  100 MiB binary STL files with IDENTICAL triangle counts reaching 1,055 MiB and
+  2,650 MiB of renderer footprint. Above the fill ceiling no opening could be
+  filled whichever one was chosen, so the inventory would be unusable anyway.
+  **`inventoried: false` IS NOT `loopCount: 0`**: the state is a distinct
+  `HoleFillInventoryState.NotInventoried` and the panel says CAD Fixer did not
+  LOOK, because reporting "no open boundaries" on the strength of a check that
+  never ran is exactly the class of claim this interface forbids.
 - **THE FILL WORKER IS BUILT ONLY WHEN PREVIEW IS PRESSED.** Opening the app, the
   panel, the listing and a selection construct no `Worker` at all.
 - **ALL HOLE-FILL COPY LIVES IN `apps/web/src/state/hole-fill-presentation.ts`**,

@@ -1,4 +1,5 @@
-import { resourceLimitExceeded, type AppError } from '@cadfixer/shared';
+import { MAX_UNSHARED_IMPORT_TRIANGLES } from '@cadfixer/mesh-core';
+import { formatCount, resourceLimitExceeded, type AppError } from '@cadfixer/shared';
 
 /**
  * Resource limits applied to an import, in one place rather than as magic
@@ -13,6 +14,22 @@ export interface ImportBudget {
   readonly maxInputBytes: number;
   /** Largest triangle count that may be materialised. */
   readonly maxTriangles: number;
+  /**
+   * Largest triangle count an UNSHARED-CORNER parse may materialise.
+   *
+   * THE FORMAT-SPECIFIC HALF OF THE STAGE 6D-R3 IMPORT GATE, and the only
+   * ceiling here that is derived from another package rather than chosen. STL
+   * preserves the file's triangle stream and never welds, so its canonical
+   * bytes AND the render snapshot that follows are both exactly proportional to
+   * the triangle count — which a binary STL's LENGTH already states. That makes
+   * this the one import where the resource decision can be taken before a single
+   * array is allocated, rather than after the reader has returned.
+   *
+   * DERIVED FROM `MAX_IMPORT_GEOMETRY_BYTES`, never written twice. A number of
+   * its own here would drift from the common gate and a file would be fully
+   * parsed only to be refused: all of the work and none of the protection.
+   */
+  readonly maxUnsharedImportTriangles: number;
   /** Largest vertex count that may be materialised. */
   readonly maxVertices: number;
   /** Combined byte size of the typed arrays a parse may allocate. */
@@ -35,13 +52,17 @@ export interface ImportBudget {
  * for its own audience, and claiming no limit at all would be a lie — the tab
  * dies first.
  *
- * The output and peak ceilings are what actually bind on large inputs, because
- * a triangle costs far more in memory than it does on disk. See
- * docs/PERFORMANCE_BASELINE.md for the measured expansion factor.
+ * SINCE STAGE 6D-R3 `maxUnsharedImportTriangles` IS WHAT BINDS ON A LARGE STL,
+ * at 6,710,886 triangles — a 320 MiB binary file. The output and peak ceilings
+ * above it remain because they bound the ARRAY the engine would have to
+ * allocate, which is a different failure and needs its own typed refusal. See
+ * docs/PERFORMANCE_BASELINE.md for the measured expansion factor and
+ * docs/release/RESOURCE_POLICY.md for the measurements behind the new one.
  */
 export const DEFAULT_IMPORT_BUDGET: ImportBudget = {
   maxInputBytes: 512 * 1024 * 1024,
   maxTriangles: 20_000_000,
+  maxUnsharedImportTriangles: MAX_UNSHARED_IMPORT_TRIANGLES,
   maxVertices: 60_000_000,
   maxOutputBytes: 1024 * 1024 * 1024,
   maxEstimatedPeakBytes: 1536 * 1024 * 1024,
@@ -143,6 +164,22 @@ export function checkAllocation(
       'This model has more triangles than CAD Fixer can load.',
       plan.triangles,
       budget.maxTriangles,
+    );
+  }
+  /*
+   * REFUSED BEFORE THE FIRST ARRAY. `planAllocation` describes an UNSHARED-corner
+   * parse — `vertices = triangles * 3` — which is exactly what the STL readers
+   * produce, so the geometry this file would cost to open is fully determined
+   * here. The common gate in `commitImportedDocument` would reach the same
+   * verdict, hundreds of megabytes later.
+   */
+  if (plan.triangles > budget.maxUnsharedImportTriangles) {
+    return reject(
+      `This model has ${formatCount(plan.triangles)} triangles; CAD Fixer's limit for a ` +
+        `file that stores every triangle separately is ` +
+        `${formatCount(budget.maxUnsharedImportTriangles)}.`,
+      plan.triangles,
+      budget.maxUnsharedImportTriangles,
     );
   }
   if (plan.vertices > budget.maxVertices) {

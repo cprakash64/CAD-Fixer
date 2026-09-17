@@ -22,6 +22,7 @@ import {
   describeOpeningCount,
   describeOpeningSize,
   describePartSizeRefusal,
+  describeUninventoriedPart,
   describeTruncatedInventory,
 } from '../state/hole-fill-presentation';
 import {
@@ -159,6 +160,17 @@ export function OpenBoundaryPanel(): ReactNode {
             </div>
           ) : null}
         </div>
+      ) : null}
+
+      {/* THE WALK WAS NOT PERFORMED, and that is what this says — Stage 6D-R3.
+          Deliberately NOT "no openings found": nothing looked. The listing is the
+          largest allocation an import can trigger on its own and its cost scales
+          with boundary components, so it is skipped for a part no opening could
+          be filled in. */}
+      {inventory.state === HoleFillInventoryState.NotInventoried ? (
+        <p className="repair__error-message" data-testid="hole-fill-not-inventoried">
+          {describeUninventoriedPart(inventory.partFaceCount)}
+        </p>
       ) : null}
 
       {inventory.state === HoleFillInventoryState.Ready ? (

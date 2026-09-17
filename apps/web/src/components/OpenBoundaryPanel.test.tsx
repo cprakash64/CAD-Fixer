@@ -115,12 +115,18 @@ function listOpenings(
   store: WorkspaceStore,
   handle: DocumentHandle,
   rows: readonly HoleBoundaryRow[] = [FILLABLE, REFUSED],
-  extra: { loopCount?: number; truncated?: boolean; partFaceCount?: number } = {},
+  extra: {
+    loopCount?: number;
+    truncated?: boolean;
+    partFaceCount?: number;
+    inventoried?: boolean;
+  } = {},
 ): void {
   const token = store.beginHoleFillListing(handle, PART);
   store.commitHoleFillListing(token, {
     handle,
     partId: PART,
+    inventoried: extra.inventoried ?? true,
     loopCount: extra.loopCount ?? rows.length,
     rows,
     truncated: extra.truncated ?? false,
@@ -328,6 +334,29 @@ describe('HA04, HA06: what the panel offers, and when', () => {
       /nothing has changed yet/i,
     );
     // And Preview is gone: there is one candidate at a time.
+    expect(screen.queryByTestId('preview-fill')).toBeNull();
+  });
+
+  it('says the openings were not looked for, and shows no list, above the ceiling', () => {
+    /*
+     * STAGE 6D-R3. The walk is the largest allocation an import can trigger by
+     * itself, so it is skipped for a part nothing could be filled in — and the
+     * panel must say that rather than render an empty, reassuring list.
+     */
+    renderPanel((configured) => {
+      const handle = loadModel(configured, [partDescriptor(PART, 6_291_454)]);
+      listOpenings(configured, handle, [], {
+        inventoried: false,
+        loopCount: 0,
+        partFaceCount: 6_291_454,
+      });
+    });
+
+    expect(screen.getByTestId('hole-fill-not-inventoried')).toHaveTextContent('6,291,454');
+    // No count, no list, no selection: nothing here describes the part's
+    // boundaries, because nothing looked at them.
+    expect(screen.queryByTestId('hole-fill-count')).toBeNull();
+    expect(screen.queryAllByRole('radio')).toHaveLength(0);
     expect(screen.queryByTestId('preview-fill')).toBeNull();
   });
 

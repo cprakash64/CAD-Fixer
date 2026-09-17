@@ -390,6 +390,18 @@ export const HoleFillInventoryState = {
   Unavailable: 'unavailable',
   Listing: 'listing',
   Ready: 'ready',
+  /**
+   * The walk was not performed, because this part is too large to fill anyway.
+   *
+   * DISTINCT FROM `Ready` WITH A ZERO COUNT — Stage 6D-R3. The listing is the
+   * largest allocation an import can trigger automatically and its cost scales
+   * with boundary COMPONENTS, of which a mesh of loose triangles has one per
+   * face. Above `HOLE_FILL_MAX_PART_FACES` no opening could be filled, so the
+   * walk is skipped — and a skipped walk found nothing, which is not the same
+   * as finding nothing. Reporting it as `Ready, loopCount: 0` would tell a user
+   * their model has no openings on the strength of a check that never ran.
+   */
+  NotInventoried: 'not-inventoried',
   Failed: 'failed',
 } as const;
 
@@ -2037,6 +2049,8 @@ export class WorkspaceStore {
     listing: {
       readonly handle: DocumentHandle;
       readonly partId: string;
+      /** False when the worker skipped the walk. See `NotInventoried`. */
+      readonly inventoried: boolean;
       readonly loopCount: number;
       readonly rows: readonly HoleBoundaryRow[];
       readonly truncated: boolean;
@@ -2051,7 +2065,9 @@ export class WorkspaceStore {
         handle: listing.handle,
         partId: listing.partId,
         inventory: {
-          state: HoleFillInventoryState.Ready,
+          state: listing.inventoried
+            ? HoleFillInventoryState.Ready
+            : HoleFillInventoryState.NotInventoried,
           loopCount: listing.loopCount,
           rows: listing.rows,
           truncated: listing.truncated,

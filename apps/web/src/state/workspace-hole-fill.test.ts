@@ -153,6 +153,7 @@ function readyStore(): WorkspaceStore {
   const listing = store.beginHoleFillListing(handle(1), PART);
   store.commitHoleFillListing(listing, {
     handle: handle(1),
+    inventoried: true,
     partId: PART,
     loopCount: 2,
     rows: ROWS,
@@ -183,6 +184,7 @@ describe('the inventory', () => {
     expect(store.getSnapshot().holeFill.inventory.state).toBe(HoleFillInventoryState.Listing);
 
     store.commitHoleFillListing(listing, {
+      inventoried: true,
       handle: handle(1),
       partId: PART,
       loopCount: 20_165,
@@ -209,6 +211,7 @@ describe('the inventory', () => {
       store.commitHoleFillListing(stale, {
         handle: handle(1),
         partId: PART,
+        inventoried: true,
         loopCount: 99,
         rows: [],
         truncated: false,
@@ -560,6 +563,7 @@ describe('ONE undo history', () => {
     // Now a fill supersedes the repair.
     const listing = store.beginHoleFillListing(handle(2), PART);
     store.commitHoleFillListing(listing, {
+      inventoried: true,
       handle: handle(2),
       partId: PART,
       loopCount: 1,
@@ -628,6 +632,7 @@ describe('lifecycle: nothing survives a context change', () => {
     store.commitImport(token, model([descriptor(PART), descriptor(SIBLING)]));
     const listing = store.beginHoleFillListing(handle(1), PART);
     store.commitHoleFillListing(listing, {
+      inventoried: true,
       handle: handle(1),
       partId: PART,
       loopCount: 2,
@@ -840,6 +845,7 @@ describe('US09: the render snapshot follows the document back into sharing', () 
     // exactly as the panel does.
     const listing = store.beginHoleFillListing(handle(1), PART);
     store.commitHoleFillListing(listing, {
+      inventoried: true,
       handle: handle(1),
       partId: PART,
       loopCount: 2,
@@ -952,5 +958,41 @@ describe('US09: the render snapshot follows the document back into sharing', () 
 
     expect(buffersOf(store, PART)).toBe(fresh);
     expect(buffersOf(store, SIBLING)).toBe(SHARED_POSITIONS);
+  });
+});
+
+/* ------------------- Stage 6D-R3: a walk that did not run is its own state -- */
+
+describe('an uninventoried part', () => {
+  it('is NOT reported as a part with no openings', () => {
+    /*
+     * `Ready` with `loopCount: 0` is a claim: this part has no open boundaries.
+     * When the worker skips the walk — above the fill ceiling, where the
+     * allocation is unbounded and every row would be unusable — nothing checked,
+     * so the state has to be different or the interface will make a claim the
+     * product never established.
+     */
+    const store = new WorkspaceStore();
+    const token = store.beginImport('big.stl');
+    store.commitImport(token, model([descriptor(PART)]));
+
+    const listing = store.beginHoleFillListing(handle(1), PART);
+    expect(
+      store.commitHoleFillListing(listing, {
+        handle: handle(1),
+        partId: PART,
+        inventoried: false,
+        loopCount: 0,
+        rows: [],
+        truncated: false,
+        partFaceCount: 6_291_454,
+      }),
+    ).toBe(true);
+
+    const inventory = store.getSnapshot().holeFill.inventory;
+    expect(inventory.state).toBe(HoleFillInventoryState.NotInventoried);
+    expect(inventory.state).not.toBe(HoleFillInventoryState.Ready);
+    expect(inventory.partFaceCount).toBe(6_291_454);
+    expect(inventory.rows).toHaveLength(0);
   });
 });

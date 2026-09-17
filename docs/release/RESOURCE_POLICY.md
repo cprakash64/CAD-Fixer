@@ -9,6 +9,7 @@ ends up either refusing work it could do or attempting work it cannot finish.
   work on a supported host. It is smaller, and it is a statement about evidence.
 
 Qualified in Stage 5B at commit `8a800b5e137602008eced0aef3fd9beee5bcfe9c`.
+Import resource bounds re-derived and re-qualified in Stage 6D-R3.
 
 ## Structural ceilings (frozen)
 
@@ -18,7 +19,8 @@ All enforced **before** the allocation they protect against.
 | -------------------------------- | ----------------------------------------------- | ---------------------------------------------- |
 | Input bytes, any format          | 512 MiB                                         | `budget.ts`, `obj/limits.ts`, `threemf/zip.ts` |
 | STL triangles                    | 20,000,000                                      | `checkAllocation`                              |
-| STL import peak                  | 1,536 MiB → **binds first, at ≈12M triangles**  | `checkImportPeak`                              |
+| Import geometry, any format      | **768 MiB** distinct canonical + render bytes   | `checkImportGeometry`                          |
+| Unshared (STL) triangles         | **6,710,886 → a 320.00 MiB binary file**        | `checkAllocation`, before the first array      |
 | OBJ line / objects / groups      | 65,536 each                                     | `obj/limits.ts`                                |
 | OBJ vertices                     | 40,000,000                                      | `obj/limits.ts`                                |
 | OBJ face vertices                | 3 — n-gons refused, never fanned                | `obj-reader.ts`                                |
@@ -30,7 +32,8 @@ All enforced **before** the allocation they protect against.
 | Document parts                   | 4,096                                           | `document.ts`                                  |
 | Document triangles / vertices    | 20,000,000 / 60,000,000                         | `document-validation.ts`                       |
 | Document geometry bytes          | 768 MiB                                         | `document-validation.ts`                       |
-| Topology workspace               | 1,024 MiB → **≈4.8M faces**                     | `requestAnalysisWorkspace`                     |
+| Topology workspace               | 1,024 MiB → **4,549,753 unshared faces**        | `requestAnalysisWorkspace`                     |
+| Boundary-loop listing            | not run above **250,000 faces**                 | `holeFillListLoopsHandler`                     |
 | Self-intersection automatic band | 25,000 faces                                    | `policy.ts`                                    |
 | Self-intersection hard ceiling   | 250,000 faces                                   | `policy.ts`                                    |
 | Conservative repair peak         | 1,024 MiB                                       | `requestRepairPeak`                            |
@@ -45,31 +48,80 @@ renderable and exportable while being too large for the self-intersection check 
 for a hole fill. Feature-level refusal is the honest answer; rejecting an
 otherwise useful model is not.
 
-## Stage 6D-R2: the import-peak gate stays, for now
+## Stage 6D-R3: the import-peak gate is gone, and so is an unbounded walk
 
-Stage 6D-R1 decided that `estimateImportPeak` should stop being an enforcement
-gate. **Stage 6D-R2 tried to make that operational and reverted it.** The gate
-is inaccurate, but it is also the only thing that caps binary STL below the
-512 MiB input ceiling: as shipped it admits STL up to about **317 MiB**
-(6.66 million triangles).
+**`estimateImportPeak`, `checkImportPeak` and `maxImportPeakBytes` are deleted.**
+So are `checkResident`, `maxRenderBytes`, `residentBytesFor` and
+`renderBytesFor`. What replaces them is narrower and true.
 
-Replacing it with a correct render-snapshot gate would have admitted STL up to
-512 MiB. On the 8 GiB minimum host that reaches **6.2 GiB** of renderer
-footprint. The gate therefore remains until a replacement bounds STL too.
+### The gate
 
-**Recorded, not yet acted on:**
+```text
+importGeometryBytes(document)
+  = Σ over DISTINCT meshes ( canonical bytes + 72 × triangles )
+  ≤ 768 MiB
+```
 
-- Binary STL that is accepted today reaches about **4.9–5.0 GiB** of renderer
-  footprint at 300 MiB, and 2.7 GiB at 100 MiB. These are whole-session figures
-  that include the automatic topology analysis. They sit well above the ~2 GiB
-  qualified for 3MF.
-- `maxRenderBytes` (768 MiB) is declared and enforced by nothing.
-- The gate's refusal, _"This would use more memory than CAD Fixer allows for
-  one session"_, names no metric and presents an estimate as memory.
-- Documents that place one mesh many times can still be refused falsely.
+Canonical buffers plus the render snapshot that is about to be built from them,
+**counted once per distinct mesh**. Enforced in `commitImportedDocument`,
+immediately before `buildDocumentRenderSnapshot`, for all three formats. Binary
+STL additionally gets a pre-parse ceiling **derived** from the same constant —
+6,710,886 triangles, a 320.00 MiB file — because STL never welds, so its cost is
+fixed by the declared count before any array exists.
 
-Reproduce with `npm run qualify:stl-footprint -- 100,300,511` against
-`npm run preview`.
+### The finding that mattered more than the gate
+
+**`holefill/list-loops` runs automatically after every import and had no
+resource preflight at all.** Its cost scales with boundary COMPONENTS, of which
+a mesh of loose triangles has one per face. Two 100 MiB binary STL files with
+identical triangle counts, differing only in whether their triangles meet,
+measured **2,650 MiB** and **1,055 MiB** of renderer footprint.
+
+The walk is now skipped above `HOLE_FILL_MAX_PART_FACES` (250,000) — the ceiling
+above which no opening could be filled anyway — and the interface says the
+openings were **not looked for**, never that there are none.
+
+### Measured on the minimum host, before and after
+
+macOS 27, Apple M1, **8 GiB**, production build, binary STL of loose triangles.
+Renderer `phys_footprint_peak` for the whole user action.
+
+| Binary STL | Triangles | Before    | After         |
+| ---------- | --------- | --------- | ------------- |
+| 100 MiB    | 2.10M     | 2,650 MiB | **850 MiB**   |
+| 200 MiB    | 4.19M     | 4,236 MiB | **1,593 MiB** |
+| 300 MiB    | 6.29M     | 4,919 MiB | **1,116 MiB** |
+
+The target was **about 2 GiB**, and it is not a new judgement: Stage 6D-B3
+rejected 2,679–3,071 MiB on this host and Stage 6D-R1 qualified 1,923–1,994 MiB,
+so the line was already drawn between roughly 2.0 and 2.7 GiB.
+
+### What changed for users
+
+- **Newly accepted:** documents that place one mesh many times. A 0.1 MiB 3MF
+  placing one 4,800-triangle object 4,096 times was refused by the old gate at a
+  measured 77 MiB of footprint. Also indexed OBJ and 3MF above the old line, and
+  binary STL between 317.36 and 320.00 MiB.
+- **Newly refused:** a document whose DISTINCT geometry exceeds 768 MiB where
+  the old arithmetic happened to admit it — reachable for an OBJ or 3MF carrying
+  more than about 6.7M unshared triangles in a small archive.
+- **Changed for every large model:** a part above 250,000 triangles no longer
+  lists its open boundaries. None of them could have been filled.
+
+### Refusals now name the metric, the value and the limit
+
+> Opening this model would need 1,000 MiB of geometry and render buffers; CAD
+> Fixer's limit is 768 MiB.
+
+> This part has 6,291,454 triangles, which needs 1.4 GiB of working memory; CAD
+> Fixer's limit for this is 1 GiB.
+
+The second replaced _"This would use more memory than CAD Fixer allows for one
+session"_, which R2 recorded as misleading and R3 measured being shown to a user
+whose model had simply grown past the topology ceiling.
+
+Reproduce with `npm run qualify:import-phases -- stl:100,stl:200,stl:300`
+against `npm run preview`, and `npm run bench:boundary-listing`.
 
 ## Stage 6D-R1: what the import budget is, and what actually enforces safety
 

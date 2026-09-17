@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { BoundaryLoopRefusal, HoleFillStatus } from '@cadfixer/geometry-runtime';
+import {
+  BoundaryLoopRefusal,
+  HOLE_FILL_MAX_PART_FACES,
+  HoleFillStatus,
+} from '@cadfixer/geometry-runtime';
 import { REPAIR_FORBIDDEN_TERMS } from './repair-presentation';
 import { FORBIDDEN_TERMS } from './topology-presentation';
 import {
@@ -25,6 +29,7 @@ import {
   describeOpeningSize,
   describePartSizeRefusal,
   describeTruncatedInventory,
+  describeUninventoriedPart,
   presentHoleFillStatus,
 } from './hole-fill-presentation';
 
@@ -75,6 +80,7 @@ function everySentence(): readonly string[] {
     describeOpeningCount(20_165),
     describeTruncatedInventory(256, 20_165),
     describePartSizeRefusal(400_000),
+    describeUninventoriedPart(400_000),
     describeApplied(1, 1),
     describeApplied(3, 510),
   ];
@@ -365,5 +371,31 @@ describe('the listing wording', () => {
     expect(text).toContain('250,000');
     expect(text.toLowerCase()).toContain('adds no points');
     expect(text.toLowerCase()).toContain('no fill-all');
+  });
+});
+
+/* ------------------------- Stage 6D-R3: a skipped walk says it was skipped -- */
+
+describe('a part whose openings were not looked for', () => {
+  it('states what was not done, and never that there are none', () => {
+    /*
+     * THE LISTING IS SKIPPED ABOVE THE FILL CEILING because it is the largest
+     * allocation an import can trigger on its own. A user must be able to tell
+     * "CAD Fixer found no openings" from "CAD Fixer did not look", and only one
+     * of those two is a claim about their model.
+     */
+    const sentence = describeUninventoriedPart(6_291_454);
+
+    expect(sentence).toContain('6,291,454');
+    expect(sentence).toContain(HOLE_FILL_MAX_PART_FACES.toLocaleString());
+    expect(sentence).toContain('did not look');
+    expect(sentence.toLowerCase()).not.toContain('no open');
+    expect(sentence.toLowerCase()).not.toContain('found');
+  });
+
+  it('says the rest of the product is unaffected', () => {
+    // A resource refusal for one feature is not a verdict on the model. The
+    // document stays loaded, viewable and exportable.
+    expect(describeUninventoriedPart(6_291_454)).toContain('unaffected');
   });
 });

@@ -75,6 +75,43 @@ export const holeFillListLoopsHandler: OperationHandler<'holefill/list-loops'> =
     const part = residentDocuments.resolvePart(payload.handle, payload.partId as PartId);
     if (isAppError(part)) throw part;
 
+    const partFaceCount = triangleCount(part.mesh);
+
+    /*
+     * THE WALK IS NOT STARTED FOR A PART NOTHING COULD BE FILLED IN — Stage
+     * 6D-R3, and this is an EXISTING ceiling applied earlier rather than a new
+     * one. Above `HOLE_FILL_MAX_PART_FACES` every opening is refused whichever
+     * one is chosen, so the inventory it would produce is a list nobody can act
+     * on.
+     *
+     * IT IS ALSO THE LARGEST UNBOUNDED ALLOCATION LEFT AFTER AN IMPORT. This
+     * listing runs AUTOMATICALLY, on the active part, at any size, and
+     * `extractBoundaryLoops` keeps per-COMPONENT bookkeeping — a map entry, a
+     * member list and a summary object with an identity string for each. A mesh
+     * of loose triangles has one boundary component per FACE, so the cost is not
+     * bounded by anything the geometry gate can see. Measured in Node at
+     * 691-1,034 bytes per face on that shape, and in Chromium as the difference
+     * between two 100 MiB binary STL files with IDENTICAL triangle counts: 1,055
+     * MiB of renderer footprint when the triangles meet, 2,650 MiB when they do
+     * not. Capping the walk at the fill ceiling bounds it at about 250 MiB.
+     *
+     * `inventoried: false` is the honest answer. Returning `loopCount: 0` would
+     * read as "this part has no openings", which is a claim this never checked.
+     */
+    if (partFaceCount > HOLE_FILL_MAX_PART_FACES) {
+      return Promise.resolve({
+        value: {
+          handle: payload.handle,
+          partId: part.id,
+          inventoried: false,
+          loopCount: 0,
+          loops: [],
+          truncated: false,
+          partFaceCount,
+        },
+      });
+    }
+
     const set = extractBoundaryLoops(part.mesh, {
       maxLoopVertices: HOLE_FILL_MAX_BOUNDARY_VERTICES,
       onBatch: () => {
@@ -106,6 +143,7 @@ export const holeFillListLoopsHandler: OperationHandler<'holefill/list-loops'> =
       value: {
         handle: payload.handle,
         partId: part.id,
+        inventoried: true,
         loopCount: set.loops.length,
         loops,
         truncated: set.loops.length > loops.length,
@@ -115,7 +153,7 @@ export const holeFillListLoopsHandler: OperationHandler<'holefill/list-loops'> =
          * chosen; the interface can say so from this number instead of
          * building a worker and copying the part to be told the same thing.
          */
-        partFaceCount: triangleCount(part.mesh),
+        partFaceCount,
       },
     });
   } catch (cause) {

@@ -44,7 +44,9 @@
     "bench:large-entry": "vitest run --config vitest.bench.config.ts scripts/large-entry.bench-suite.ts",
     "qualify:chromium-memory": "node scripts/chromium-memory.qualify.mjs",
     "bench:resource-model": "vitest run --config vitest.bench.config.ts scripts/resource-model.bench-suite.ts",
-    "qualify:stl-footprint": "node scripts/stl-footprint.qualify.mjs"
+    "qualify:stl-footprint": "node scripts/stl-footprint.qualify.mjs",
+    "qualify:import-phases": "node scripts/import-phases.qualify.mjs",
+    "bench:boundary-listing": "vitest run --config vitest.bench.config.ts scripts/boundary-listing.bench-suite.ts"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

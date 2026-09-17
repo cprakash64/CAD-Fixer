@@ -1,6 +1,13 @@
 /**
  * STAGE 6D-R2 — STL RENDERER FOOTPRINT QUALIFICATION.
  *
+ * SUPERSEDED BY `import-phases.qualify.mjs`, and kept because it is the exact
+ * harness R2's recorded numbers came from. It reports ONE peak for the whole
+ * session and cannot say which phase reached it — which is precisely the gap
+ * that hid Stage 6D-R3's finding, that most of the footprint belonged to an
+ * automatic boundary walk rather than to the import. Use the phase harness for
+ * new measurements; use this one only to reproduce R2's table.
+ *
  * NOT A TEST AND NOT PART OF ANY SUITE. A standalone harness, run by hand
  * against a production build served by `npm run preview`, that imports binary
  * STL files of chosen sizes through the real file chooser and reports the

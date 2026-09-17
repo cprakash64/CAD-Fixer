@@ -120,7 +120,6 @@ const harnessImportHandler: OperationHandler<'model/import'> = (payload, context
         formatId: 'harness',
         encoding: 'synthetic',
         // The fixture id is all that crossed; the geometry was built in here.
-        inputBytes: source.byteLength,
         warnings: [],
         compatibility: EMPTY_COMPATIBILITY,
       },

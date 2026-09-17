@@ -61,6 +61,16 @@ export {
   computeVertexNormals,
   triangleNormal,
 } from './analysis';
+
+export {
+  drawableTriangleBytes,
+  MAX_IMPORT_GEOMETRY_BYTES,
+  MAX_UNSHARED_IMPORT_TRIANGLES,
+  measureImportGeometry,
+  RENDER_BYTES_PER_TRIANGLE,
+  UNSHARED_IMPORT_BYTES_PER_TRIANGLE,
+} from './import-cost';
+export type { ImportGeometryCost } from './import-cost';
 export type { DrawableTriangles } from './analysis';
 export type { MeshBounds, Vector3Tuple } from './analysis';
 

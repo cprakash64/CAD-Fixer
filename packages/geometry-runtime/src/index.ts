@@ -104,15 +104,11 @@ export { BoundaryKind, PrintabilityStatus, SelfIntersectionStatus, VolumeStatus 
 
 export {
   checkExportPeak,
-  checkImportPeak,
-  checkResident,
+  checkImportGeometry,
   DEFAULT_SESSION_MEMORY_BUDGET,
   estimateExportPeak,
-  estimateImportPeak,
-  renderBytesFor,
   requestAnalysisWorkspace,
   requestRepairPeak,
-  residentBytesFor,
 } from './memory-budget';
 export type { MemoryEstimate, SessionMemoryBudget } from './memory-budget';
 

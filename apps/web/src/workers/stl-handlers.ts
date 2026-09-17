@@ -13,6 +13,7 @@ import {
   distinctMeshes,
   documentTriangleCount,
   documentVertexCount,
+  measureImportGeometry,
   transformBounds,
   triangleCount,
   unionBounds,
@@ -45,13 +46,11 @@ import {
   TopologyReportCache,
 } from '@cadfixer/geometry-runtime';
 import {
-  checkImportPeak,
+  checkImportGeometry,
   documentByteLength,
-  estimateImportPeak,
   isDocument,
   isPart,
   requestAnalysisWorkspace,
-  renderBytesFor,
   ResidentDocumentStore,
   type DocumentRenderSnapshot,
   type MeshValidationSummary,
@@ -196,6 +195,7 @@ function resolveBudget(overrides: Readonly<Record<string, number>> | undefined):
   return {
     maxInputBytes: lower('maxInputBytes'),
     maxTriangles: lower('maxTriangles'),
+    maxUnsharedImportTriangles: lower('maxUnsharedImportTriangles'),
     maxVertices: lower('maxVertices'),
     maxOutputBytes: lower('maxOutputBytes'),
     maxEstimatedPeakBytes: lower('maxEstimatedPeakBytes'),
@@ -537,7 +537,6 @@ export const modelImportHandler: OperationHandler<'model/import'> = async (paylo
       operation,
       formatId: identified.formatId,
       encoding: parsed.encoding,
-      inputBytes: bytes.byteLength,
       warnings: parsed.warnings,
       compatibility: parsed.compatibility,
     },
@@ -555,13 +554,6 @@ export interface DocumentCommitInput {
   readonly formatId: string;
   /** As actually detected. Reported, never guessed. */
   readonly encoding: string;
-  /**
-   * Size of the source buffer, for the session memory preflight.
-   *
-   * The input, the outgoing document and the candidate are all live at once
-   * during a replacement, which is the moment memory is tightest.
-   */
-  readonly inputBytes: number;
   readonly warnings: readonly Diagnostic[];
   /** What the reader recognised in the source and did not carry across. */
   readonly compatibility: ImportCompatibility;
@@ -599,18 +591,27 @@ export function commitImportedDocument(
 
   context.reportProgress(VALIDATE_SHARE, 'preparing');
 
-  // SESSION BUDGET. A format's own budget already cleared the candidate's
-  // arrays in isolation; this asks the different question of whether the
-  // candidate fits ALONGSIDE what is still resident.
-  const residentNow = residentDocuments.stats();
+  /*
+   * THE RESOURCE GATE — Stage 6D-R3, and it is the LAST THING BEFORE THE
+   * SNAPSHOT because the snapshot is what it prevents.
+   *
+   * It bounds the geometry this document costs to open: its canonical buffers
+   * plus the render snapshot `buildDocumentRenderSnapshot` is about to allocate
+   * from them, counted once per DISTINCT mesh. Both terms are facts about the
+   * document in hand, not predictions about the process — and the ceiling they
+   * are compared against was calibrated against measured Chromium footprint on
+   * the stated minimum host.
+   *
+   * WHAT IT REPLACED. `estimateImportPeak` / `checkImportPeak` summed five
+   * quantities and called the total a session memory peak. It ran after the
+   * transient peak it named, computed geometry from the SUMMED triangle count so
+   * a thousand placements of one mesh were charged a thousand times, and counted
+   * the candidate's render bytes twice. See ADR 0018's sibling in
+   * docs/design/STAGE_6D_3MF_PRODUCTION_AND_LARGE_ENTRY_ARCHITECTURE.md.
+   */
   const documentTriangles = documentTriangleCount(document);
-  const peak = estimateImportPeak({
-    currentResidentBytes: residentNow.totalBytes,
-    currentRenderBytes: renderBytesFor(documentTriangles),
-    inputBytes: input.inputBytes,
-    candidateTriangles: documentTriangles,
-  });
-  const overBudget = checkImportPeak(peak);
+  const cost = measureImportGeometry(document);
+  const overBudget = checkImportGeometry(cost);
   if (overBudget) throw overBudget;
 
   const bounds = documentBounds(document);

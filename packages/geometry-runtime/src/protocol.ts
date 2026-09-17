@@ -240,7 +240,18 @@ export interface BoundaryLoopSummary {
 export interface ListBoundaryLoopsResult {
   readonly handle: DocumentHandle;
   readonly partId: string;
-  /** Exact count, even when `loops` was capped. */
+  /**
+   * Whether the boundary walk was performed at all.
+   *
+   * FALSE IS NOT "NO OPENINGS" — Stage 6D-R3. A part above
+   * `HOLE_FILL_MAX_PART_FACES` cannot have any opening filled, so the walk is
+   * not started: it is the largest unbounded allocation an import can trigger,
+   * and it would produce an inventory nobody could act on. When this is false
+   * `loopCount` is zero because nothing counted, and the interface must say that
+   * rather than report a model with openings as a model without.
+   */
+  readonly inventoried: boolean;
+  /** Exact count, even when `loops` was capped. Zero when not `inventoried`. */
   readonly loopCount: number;
   readonly loops: readonly BoundaryLoopSummary[];
   readonly truncated: boolean;

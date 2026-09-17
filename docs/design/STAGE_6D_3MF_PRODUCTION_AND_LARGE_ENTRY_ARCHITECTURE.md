@@ -1787,6 +1787,273 @@ shipped gate holds it today, or explicitly justify moving that line. It should
 separate import from automatic analysis in the measurement, so the ~5 GiB STL
 figure can be attributed.
 
+# Stage 6D-R3 — the deterministic import gate
+
+**Decision: `DETERMINISTIC IMPORT GATE QUALIFIED`.** Base
+`8022c1881652e0b2f384c23b0425d275304478b5`. **Product behaviour changed**, in
+three ways, all of them listed below and all of them qualified in Chromium on
+the stated minimum host.
+
+R2 left two facts that looked irreconcilable: the import-peak estimator is not a
+truthful memory model, and removing it would admit binary STL up to 512 MiB at
+6.2 GiB of renderer footprint. R3 measured the phases separately and the
+apparent contradiction dissolved — **most of what R2 measured was not the
+import at all.**
+
+## The finding that reorganised the stage
+
+R2 measured one number per session and could not attribute it. This stage reads
+the renderer's `phys_footprint_peak` — which is MONOTONIC over a process's life
+— at DOM transitions the application already exposes, so differencing the
+checkpoints attributes each phase's incremental high-water mark directly.
+
+The first ladder said the automatic topology analysis was not the problem:
+
+| Binary STL, loose triangles | Triangles | import phase | analysis Δ | session peak | automatic analysis |
+| --------------------------- | --------- | ------------ | ---------- | ------------ | ------------------ |
+| 60 MiB                      | 1.26M     | 1,376 MiB    | +221       | 1,597 MiB    | report produced    |
+| 100 MiB                     | 2.10M     | 1,859 MiB    | +791       | 2,650 MiB    | report produced    |
+| 150 MiB                     | 3.15M     | 3,420 MiB    | **+0**     | 3,420 MiB    | report produced    |
+| 200 MiB                     | 4.19M     | 3,926 MiB    | +310       | 4,236 MiB    | report produced    |
+| 250 MiB                     | 5.24M     | 3,977 MiB    | +180       | 4,157 MiB    | **refused**        |
+| 300 MiB                     | 6.29M     | 4,919 MiB    | **+0**     | 4,919 MiB    | **refused**        |
+
+**At 250 MiB and above the analysis never runs** — `estimateTopologyWorkspaceBytes`
+exceeds the 1,024 MiB workspace ceiling above 4,549,753 soup triangles, which is
+a 216.9 MiB binary STL — and the peak is 4 GiB anyway. R2's 4,925 MiB at 300 MiB
+is reproduced here at 4,919 MiB, and none of it is diagnostics.
+
+Nor was it the parser. The two sizes today's gate refuses go through the whole
+read and stop before the render snapshot:
+
+| Refused at the gate | Our own buffers         | Measured  | Ratio    |
+| ------------------- | ----------------------- | --------- | -------- |
+| 340 MiB, 7.13M      | 340 + 245 + 82 = 667    | 738 MiB   | **1.11** |
+| 511 MiB, 10.72M     | 511 + 368 + 123 = 1,002 | 1,074 MiB | **1.07** |
+
+Parsing costs what it allocates, to within a tenth. So the entire expansion sat
+between "the reader returned" and "the model is on screen".
+
+## What was actually in there: an ungated automatic walk
+
+**`holefill/list-loops` runs automatically after every import**, on the active
+part, at any size, and it was the only automatic post-import operation with **no
+resource preflight of any kind**. `extractBoundaryLoops` keeps a map entry, a
+member list and a summary object carrying an identity STRING for every boundary
+COMPONENT — and a mesh of loose triangles has one component per FACE.
+
+Two 100 MiB binary STL files with the SAME triangle count, differing only in
+whether their triangles meet:
+
+| 100 MiB binary STL, 2.10M triangles | Boundary components | Session peak  |
+| ----------------------------------- | ------------------- | ------------- |
+| loose triangles                     | 2,097,150           | **2,650 MiB** |
+| welded grid                         | 1                   | **1,055 MiB** |
+
+`npm run bench:boundary-listing` attributes it in Node, on the same shapes:
+
+| Shape           | Faces     | Components | Listing holds | Per face |
+| --------------- | --------- | ---------- | ------------- | -------- |
+| loose triangles | 200,000   | 200,000    | 192.9 MiB     | 1,011 B  |
+| loose triangles | 500,000   | 500,000    | 408.8 MiB     | 857 B    |
+| loose triangles | 1,000,000 | 1,000,000  | 659.8 MiB     | 692 B    |
+| welded grid     | 200,344   | 1          | 22.9 MiB      | 120 B    |
+| welded grid     | 1,001,112 | 1          | 0.0 MiB       | 0 B      |
+
+A third shape separates the two variables: 100,000 welded patches of 24
+triangles — 2.4M triangles, 100,000 components — peaked at 1,183 MiB, about
+700 bytes per COMPONENT above the welded line. The cost tracks components, not
+triangles.
+
+**This is why no gate on geometry could ever have bounded what R2 measured.**
+Two files of identical size, format, triangle count and canonical byte count
+differ by 2.5x in renderer footprint, and the difference is a JavaScript object
+graph whose size is a fact about topology that nothing can know before walking
+it.
+
+## The walk is now capped by a ceiling that already existed
+
+`HOLE_FILL_MAX_PART_FACES` is 250,000. Above it **no opening can be filled**,
+whichever one is chosen — so the inventory the walk produces is a list every row
+of which is unusable. The handler now checks the part's triangle count and does
+not start the walk, which bounds the allocation at about 250 MiB.
+
+This is an existing ceiling applied EARLIER, not a new number. What is new is
+the answer the interface gives: `inventoried: false`, a distinct
+`HoleFillInventoryState.NotInventoried`, and a sentence that says CAD Fixer did
+not look. **`loopCount: 0` with `state: Ready` would have told the user their
+model has no open boundaries on the strength of a check that never ran**, which
+is the class of claim this product's interface rules exist to prevent.
+
+## The gate: geometry a document costs to open
+
+`measureImportGeometry(document)` sums, **once per DISTINCT mesh**, the
+canonical buffers the reader produced and the render snapshot
+`buildDrawableTriangles` is about to allocate from them. It lives in
+`mesh-core/import-cost.ts`, beside the function whose allocation it measures, so
+the predicate and the allocation cannot drift.
+
+```text
+importGeometryBytes(document)
+  = Σ over DISTINCT meshes ( meshByteLength(mesh) + 72 × triangleCount(mesh) )
+  ≤ MAX_IMPORT_GEOMETRY_BYTES = 768 MiB
+```
+
+Both terms are facts about the document in hand. Neither is a prediction about
+the process, and the refusal says so: _"Opening this model would need 1,000 MiB
+of geometry and render buffers; CAD Fixer's limit is 768 MiB."_
+
+### Why 768 MiB
+
+Measured on the stated minimum host — macOS 27, Apple M1, 8 GiB, against a
+production build — on binary STL whose triangles MEET, which is what a real
+print model looks like:
+
+| Gate term | Triangles | Renderer peak |
+| --------- | --------- | ------------- |
+| 240 MiB   | 2.10M     | 1,055 MiB     |
+| 480 MiB   | 4.20M     | 1,503 MiB     |
+| 720 MiB   | 6.29M     | 1,890 MiB     |
+
+That is `638 + 1.74 × cost` MiB, linear across the range, so 768 MiB predicts
+about **1,975 MiB**.
+
+**That target is not a new judgement.** Stage 6D-B3 REJECTED a 3MF ceiling
+measuring 2,679–3,071 MiB on this host; Stage 6D-R1 QUALIFIED the multi-part
+worst case at 1,923–1,994 MiB. The accepted/rejected line had already been drawn
+between about 2.0 and 2.7 GiB by decisions in force. This ceiling puts all three
+formats inside the band that was already qualified rather than inventing a fresh
+envelope for STL.
+
+**THOSE THREE MEASUREMENTS WERE TAKEN BEFORE THE LISTING WAS CAPPED, and the
+ceiling is therefore conservative by a term that no longer exists.** They
+include a boundary walk over the whole part — for a welded mesh that is one
+component, so the object graph is trivial, but the walk's own typed arrays are
+roughly 150 bytes per face regardless of shape. The shipped build skips it above
+250,000 faces, so every point measures below the line that selected the number.
+That is recorded rather than re-fitted: a ceiling derived from a curve the
+product has since moved BELOW is safe in the direction a ceiling should be
+safe, and re-solving it against the improvement would spend the margin the
+improvement bought.
+
+**The coincidence with the retired `maxRenderBytes` is a coincidence.** That
+constant was also 768 MiB, was enforced by nothing, and bounded a different
+quantity. This number was solved from the table above and would have been
+adopted whatever the dead constant said.
+
+### It holds across formats and representations
+
+The line was fitted on STL alone. Evaluated against an indexed OBJ — a different
+format, a different canonical representation, half as many vertices as triangles:
+
+| Fixture                              | Gate term | Predicted | **Measured** |
+| ------------------------------------ | --------- | --------- | ------------ |
+| OBJ, 2.00M triangles, 1.00M vertices | 173 MiB   | 939 MiB   | **928 MiB**  |
+
+1.2% out, across a format boundary. That is the evidence that the metric is the
+right one: it is not an STL curve wearing a general name.
+
+### Where it runs, and what it cannot bound
+
+`commitImportedDocument`, immediately before `buildDocumentRenderSnapshot` —
+one call site, shared by all three formats, and it is the LAST THING before the
+allocation it prevents.
+
+The canonical buffers ARE already allocated when it runs, and **no gate can be
+earlier for an indexed format**: an OBJ's or a 3MF's triangle count is a fact
+about its CONTENTS, not its length. Those buffers are bounded independently, by
+each reader's own limits and by the document gate.
+
+**Binary STL is the one exception and it gets its own pre-gate.** STL never
+welds, so both terms are fixed by the declared triangle count — four bytes at
+offset 80. `DEFAULT_IMPORT_BUDGET.maxUnsharedImportTriangles` is **DERIVED**
+from `MAX_IMPORT_GEOMETRY_BYTES`, never written down twice, and refuses before
+the first array exists. At 120 bytes per unshared triangle it is **6,710,886
+triangles**, which is a **320.00 MiB** binary file exactly.
+
+**It does not bound the parse transient**, and does not pretend to: the inflated
+3MF entry, the decoded XML string and the reader's scratch arrays are bounded by
+B1's and B3's entry ceilings, which this stage did not reopen.
+
+## The current document is deliberately not a term
+
+Measured, not assumed. Replacing a large model with another large model does not
+stack: the outgoing document's buffers are released as the successor commits,
+and the second import's peak is its own. Adding the outgoing document would make
+the gate refuse a file because of what the user happened to open before it —
+which is exactly what the retired estimator did, and with the wrong document's
+triangle count at that.
+
+There is therefore no parameter through which resident state could enter
+`checkImportGeometry`, and a test asserts the same candidate reaches the same
+verdict twice over.
+
+## What the estimator got wrong, restated against the replacement
+
+| Defect                                                             | Replacement                                                         |
+| ------------------------------------------------------------------ | ------------------------------------------------------------------- |
+| Ran after the transient peak it named                              | Names no peak. Bounds retained geometry, before the render snapshot |
+| Charged summed triangles, so placements multiplied shared geometry | Counted once per DISTINCT mesh                                      |
+| `currentRenderBytes` received the CANDIDATE's count                | No current-document term at all                                     |
+| Assumed soup, so an indexed mesh was over-charged                  | `meshByteLength` reads the actual buffers                           |
+| Refusal named no metric and no numbers                             | Names the metric, the value and the limit                           |
+
+## Product behaviour change
+
+**Newly accepted.** Documents that place one mesh many times. A 0.1 MiB 3MF
+placing one 4,800-triangle object 4,096 times — 19.66M summed triangles, ONE
+stored mesh — was refused by the old gate and measured a 77 MiB renderer
+footprint doing it. It now imports. Also: indexed OBJ and 3MF above the old
+line, which charged them as though they stored no shared corners; and binary STL
+between 317.36 MiB and 320.00 MiB.
+
+**Newly refused.** A document whose DISTINCT geometry exceeds 768 MiB where the
+old arithmetic happened to admit it — reachable for a 3MF or OBJ carrying more
+than about 6.7M unshared triangles in a small archive with nothing resident. The
+binary STL line is essentially where it was: 317.36 MiB before, 320.00 MiB now.
+
+**Changed for every large model.** A part above 250,000 triangles no longer
+shows an inventory of its open boundaries. It shows a sentence saying CAD Fixer
+did not look for them, and why. No opening on such a part could be filled before
+this change either.
+
+## Qualification of the shipped gate
+
+Same harness, same host, production build, after the change:
+
+| Binary STL, loose triangles    | Triangles | Gate term | Before    | **After**            | Whole browser |
+| ------------------------------ | --------- | --------- | --------- | -------------------- | ------------- |
+| 100 MiB                        | 2.10M     | 240 MiB   | 2,650 MiB | **850 MiB**          | 1,128 MiB     |
+| 200 MiB                        | 4.19M     | 480 MiB   | 4,236 MiB | **1,593 MiB**        | 2,014 MiB     |
+| 300 MiB                        | 6.29M     | 720 MiB   | 4,919 MiB | **1,116 MiB**        | 1,681 MiB     |
+| 320.00 MiB — the exact ceiling | 6,710,884 | 768 MiB   | refused   | **1,182 MiB**        | 1,775 MiB     |
+| 321 MiB — one file past it     | 6,731,856 | —         | refused   | **383 MiB, refused** | 465 MiB       |
+
+Import time at 100 MiB fell from 28.5 s to 10.0 s as well: the walk was spending
+seconds building an object graph to be thrown away.
+
+**THE WORST POINT IS NOT THE LARGEST FILE.** 200 MiB peaks higher than 320 MiB
+because the automatic topology analysis still runs below 4,549,753 unshared
+triangles and is refused above it. The maximum over the whole admissible range
+sits just under that boundary, at roughly 1.7 GiB — inside the qualified band,
+and the reason the band was chosen rather than the largest file's number.
+
+**A REFUSAL IS NOW CHEAP, WHICH IT WAS NOT.** The 321 MiB file peaks at 383 MiB
+— the input buffer and nothing else — because the STL pre-gate refuses before
+the first array. Under the old gate a refused 340 MiB file had already been
+fully parsed and peaked at 738 MiB.
+
+## What R3 did NOT do
+
+- **It did not reopen the 256 MiB 3MF entry ceiling.** B3's decision stands.
+- **It did not change the topology workspace ceiling.** 1,024 MiB, refusing
+  above 4,549,753 soup triangles, exactly as before. The measurements show it is
+  not the dominant term, so there was nothing to justify moving.
+- **It did not change what automatic analysis runs.** Topology still runs
+  automatically for the active part, and self-intersection still only below
+  25,000 faces — which is why the diagnostic never appears in any figure above.
+- **It did not touch A1, BETA-001 or BETA-002.**
+
 # Acceptance targets
 
 ## BETA-001

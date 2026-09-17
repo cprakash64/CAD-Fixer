@@ -99,6 +99,33 @@ function fakePort(): FakePort {
   };
 }
 
+/**
+ * `count` isolated triangles: one boundary component per FACE.
+ *
+ * The worst shape for the listing by construction, and the one the size gate
+ * exists for. Laid out on a grid whose spacing exceeds the triangles' own size,
+ * so exact-coordinate topology shares nothing.
+ */
+function looseTriangles(count: number): CanonicalMesh {
+  const positions = new Float32Array(count * 9);
+  const indices = new Uint32Array(count * 3);
+  for (let t = 0; t < count; t += 1) {
+    const x = (t % 512) * 0.5;
+    const y = Math.floor(t / 512) * 0.5;
+    const p = t * 9;
+    positions[p] = x;
+    positions[p + 1] = y;
+    positions[p + 3] = x + 0.25;
+    positions[p + 4] = y;
+    positions[p + 6] = x;
+    positions[p + 7] = y + 0.25;
+    indices[t * 3] = t * 3;
+    indices[t * 3 + 1] = t * 3 + 1;
+    indices[t * 3 + 2] = t * 3 + 2;
+  }
+  return { positions, indices, metadata: {} };
+}
+
 function install(mesh: CanonicalMesh): DocumentHandle {
   return residentDocuments.commit(singlePartDocument(mesh));
 }
@@ -211,6 +238,49 @@ describe('listing boundary loops', () => {
     const serialised = JSON.stringify(outcome.value);
     expect(serialised).not.toContain('positions');
     expect(serialised).not.toContain('vertices');
+  });
+
+  /* ------------------------------ Stage 6D-R3: the walk is size-gated --- */
+
+  it('does not walk a part above the fill ceiling, and says the walk did not run', async () => {
+    /*
+     * THE LARGEST UNBOUNDED ALLOCATION AN IMPORT COULD TRIGGER. This listing is
+     * automatic, and `extractBoundaryLoops` keeps a map entry, a member list and
+     * a summary object with an identity string for every boundary COMPONENT — of
+     * which a mesh of loose triangles has one per FACE. Measured at 692-1,011
+     * bytes per face on that shape.
+     *
+     * Above `HOLE_FILL_MAX_PART_FACES` no opening could be filled whichever one
+     * was chosen, so the walk buys nothing and is skipped.
+     */
+    const faces = HOLE_FILL_MAX_PART_FACES + 1;
+    const handle = install(looseTriangles(faces));
+    const outcome = await holeFillListLoopsHandler({ handle, partId: PART }, context());
+
+    expect(outcome.value.inventoried).toBe(false);
+    expect(outcome.value.loops).toHaveLength(0);
+    expect(outcome.value.truncated).toBe(false);
+    expect(outcome.value.partFaceCount).toBe(faces);
+    // ZERO BECAUSE NOTHING COUNTED. `inventoried` is what distinguishes this
+    // from a part that genuinely has no openings, and the interface reads it.
+    expect(outcome.value.loopCount).toBe(0);
+  });
+
+  it('walks a part exactly at the ceiling', async () => {
+    // The gate and the fill ceiling must agree exactly: a part that CAN be
+    // filled must have its openings listed, or the workflow would offer nothing
+    // to select on a model it is willing to work on.
+    const handle = install(looseTriangles(HOLE_FILL_MAX_PART_FACES));
+    const outcome = await holeFillListLoopsHandler({ handle, partId: PART }, context());
+
+    expect(outcome.value.inventoried).toBe(true);
+    expect(outcome.value.loopCount).toBe(HOLE_FILL_MAX_PART_FACES);
+  });
+
+  it('reports `inventoried` whenever the walk did run', async () => {
+    const handle = install(hp02QuadHole());
+    const outcome = await holeFillListLoopsHandler({ handle, partId: PART }, context());
+    expect(outcome.value.inventoried).toBe(true);
   });
 
   it('refuses a part the document does not have', async () => {

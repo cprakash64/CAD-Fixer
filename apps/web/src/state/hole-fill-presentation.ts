@@ -442,6 +442,24 @@ export function presentHoleFillStatus(status: HoleFillStatus): PresentedHoleFill
 
 /* ------------------------------------------------------------- resources -- */
 
+/**
+ * Why a part above the ceiling has no inventory at all — Stage 6D-R3.
+ *
+ * IT SAYS WHAT WAS NOT DONE, and does not say the part has no openings. Walking
+ * the boundaries of a part nothing can be filled in is the largest allocation an
+ * import triggers on its own, and it produces a list every row of which would be
+ * unusable. Not doing it is the right answer; pretending it came back empty is
+ * not.
+ */
+export function describeUninventoriedPart(partFaceCount: number): string {
+  return (
+    `This part has ${partFaceCount.toLocaleString()} triangles. Automatic filling runs on parts ` +
+    `of up to ${HOLE_FILL_MAX_PART_FACES.toLocaleString()}, so CAD Fixer did not look for this ` +
+    `part's open boundaries — it cannot fill any of them. Nothing here says whether the part has ` +
+    `any. Everything else CAD Fixer does is unaffected.`
+  );
+}
+
 /** Stated BEFORE anything runs, from the part's own triangle count. */
 export function describePartSizeRefusal(partFaceCount: number): string {
   return (

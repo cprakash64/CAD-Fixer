@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { AppErrorCode, CancellationSource, isAppError, uncancellable } from '@cadfixer/shared';
-import { triangleCount, validateMeshStructure, vertexCount } from '@cadfixer/mesh-core';
+import {
+  MAX_UNSHARED_IMPORT_TRIANGLES,
+  triangleCount,
+  validateMeshStructure,
+  vertexCount,
+} from '@cadfixer/mesh-core';
 import { DEFAULT_IMPORT_BUDGET, type ImportBudget } from '../budget';
 import type { FormatReadContext } from '../context';
 import { StlEncoding } from './detect';
@@ -684,6 +689,44 @@ describe('resource budget', () => {
       expect(caught.details.operation).toBe('stl/import/binary');
       expect(caught.details.triangleCount).toBe(3);
     }
+  });
+
+  /* ------------------------------- Stage 6D-R3: the unshared pre-gate --- */
+
+  it('refuses a binary file above the unshared-triangle ceiling, before allocating', async () => {
+    // THE ONE IMPORT WHERE THE RESOURCE DECISION PRECEDES THE PARSE. STL never
+    // welds, so the geometry AND the render snapshot a file will cost are both
+    // fixed by its declared triangle count — which is 4 bytes at offset 80.
+    const bytes = buildBinaryStl([UNIT_TRIANGLE, UNIT_TRIANGLE, UNIT_TRIANGLE]);
+    const context = testContext({ budget: tinyBudget({ maxUnsharedImportTriangles: 2 }) });
+
+    try {
+      await readStl(bytes, context);
+      expect.unreachable('expected the unshared-triangle ceiling to refuse this');
+    } catch (caught) {
+      expect(isAppError(caught)).toBe(true);
+      if (!isAppError(caught)) return;
+      expect(caught.code).toBe(AppErrorCode.ResourceLimitExceeded);
+      expect(caught.details.limit).toBe(2);
+      expect(caught.details.triangleCount).toBe(3);
+      // §32: the metric, the value and the ceiling, all in the sentence.
+      expect(caught.message).toContain('3 triangles');
+      expect(caught.message).toContain('2');
+    }
+  });
+
+  it('applies the same ceiling to the ASCII path', async () => {
+    const bytes = buildAsciiStl([UNIT_TRIANGLE, UNIT_TRIANGLE, UNIT_TRIANGLE]);
+    const context = testContext({ budget: tinyBudget({ maxUnsharedImportTriangles: 2 }) });
+
+    await expectAppError(() => readStl(bytes, context), AppErrorCode.ResourceLimitExceeded);
+  });
+
+  it('takes its ceiling from mesh-core rather than restating one', () => {
+    // A number of its own here would drift from the common gate, and a file
+    // would be fully parsed only to be refused after the fact — all of the work
+    // and none of the protection.
+    expect(DEFAULT_IMPORT_BUDGET.maxUnsharedImportTriangles).toBe(MAX_UNSHARED_IMPORT_TRIANGLES);
   });
 
   it('rejects a binary file exceeding the output byte budget', async () => {

@@ -139,6 +139,7 @@ export function useHoleFillWorkflow(): HoleFillControls {
           store.commitHoleFillListing(token, {
             handle: result.handle,
             partId: result.partId,
+            inventoried: result.inventoried,
             loopCount: result.loopCount,
             rows: toRows(result.loops),
             truncated: result.truncated,

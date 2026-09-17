@@ -28,11 +28,15 @@ import type { ModelPartKey } from './package-path';
  *      per-part budget is a per-part FULL allowance, which is how a package
  *      with twenty parts extracts twenty times the ceiling.
  *
- * WHAT THIS DOES NOT SETTLE. Stage 6D-B3 measured the existing import-memory
- * model against real Chromium and found it under-predicts by roughly an order
- * of magnitude for 3MF. `maxImportPeakBytes` therefore must NOT be treated as
- * the safety gate for loading additional parts. That reconciliation is Stage
- * 6D-R1 and is owed before A2 reads a second part.
+ * WHAT BOUNDS A MULTI-PART LOAD. Stage 6D-B3 measured the import-peak estimator
+ * against real Chromium and found it under-predicted by roughly an order of
+ * magnitude for 3MF; Stage 6D-R3 deleted it. What A2 must gate on instead is
+ * already in place and is enforced per allocation rather than modelled: the
+ * per-entry and package-wide inflation budgets held HERE, the document's own
+ * object, triangle, vertex and part ceilings, and `checkImportGeometry` — which
+ * bounds canonical plus render bytes per DISTINCT mesh before the render
+ * snapshot is built, so repeated placements of one shared object are charged
+ * once however many parts described them.
  */
 
 /**
