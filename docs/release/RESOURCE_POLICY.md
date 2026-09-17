@@ -45,6 +45,32 @@ renderable and exportable while being too large for the self-intersection check 
 for a hole fill. Feature-level refusal is the honest answer; rejecting an
 otherwise useful model is not.
 
+## Stage 6D-R2: the import-peak gate stays, for now
+
+Stage 6D-R1 decided that `estimateImportPeak` should stop being an enforcement
+gate. **Stage 6D-R2 tried to make that operational and reverted it.** The gate
+is inaccurate, but it is also the only thing that caps binary STL below the
+512 MiB input ceiling: as shipped it admits STL up to about **317 MiB**
+(6.66 million triangles).
+
+Replacing it with a correct render-snapshot gate would have admitted STL up to
+512 MiB. On the 8 GiB minimum host that reaches **6.2 GiB** of renderer
+footprint. The gate therefore remains until a replacement bounds STL too.
+
+**Recorded, not yet acted on:**
+
+- Binary STL that is accepted today reaches about **4.9–5.0 GiB** of renderer
+  footprint at 300 MiB, and 2.7 GiB at 100 MiB. These are whole-session figures
+  that include the automatic topology analysis. They sit well above the ~2 GiB
+  qualified for 3MF.
+- `maxRenderBytes` (768 MiB) is declared and enforced by nothing.
+- The gate's refusal, _"This would use more memory than CAD Fixer allows for
+  one session"_, names no metric and presents an estimate as memory.
+- Documents that place one mesh many times can still be refused falsely.
+
+Reproduce with `npm run qualify:stl-footprint -- 100,300,511` against
+`npm run preview`.
+
 ## Stage 6D-R1: what the import budget is, and what actually enforces safety
 
 **`maxImportPeakBytes` is not a measurement of process memory and must not be

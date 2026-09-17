@@ -636,17 +636,32 @@ it('R1: after a part is materialised, only its canonical geometry stays reachabl
     // The archive is live from here on, in every reading below.
     const floor = await collected();
 
-    let result: DocumentReadResult | undefined = await read3mf(fixture.bytes, context);
-    const holding = (await collected()) - floor;
+    /*
+     * THE DOCUMENT LIVES ONLY INSIDE THIS CALL. Returning is what drops the
+     * last reference, so everything the document kept alive is unreachable by
+     * the time `dropped` is read — the same effect as assigning `undefined`,
+     * without an assignment the linter correctly reports as never read.
+     */
+    const holdAndMeasure = async (): Promise<{
+      holding: number;
+      canonical: number;
+      triangles: number;
+    }> => {
+      const result = await read3mf(fixture.bytes, context);
+      const holdingNow = (await collected()) - floor;
+      let canonicalBytes = 0;
+      for (const mesh of distinctMeshes(result.document)) {
+        canonicalBytes += mesh.positions.byteLength + mesh.indices.byteLength;
+      }
+      return {
+        holding: holdingNow,
+        canonical: canonicalBytes,
+        triangles: documentTriangleCount(result.document),
+      };
+    };
+    const { holding, canonical, triangles } = await holdAndMeasure();
 
-    let canonical = 0;
-    for (const mesh of distinctMeshes(result.document)) {
-      canonical += mesh.positions.byteLength + mesh.indices.byteLength;
-    }
-    const triangles = documentTriangleCount(result.document);
-
-    // DROP IT. Whatever the document was keeping alive becomes unreachable.
-    result = undefined;
+    // DROPPED: the only reference went out of scope when the call returned.
     const dropped = (await collected()) - floor;
 
     process.stdout.write(

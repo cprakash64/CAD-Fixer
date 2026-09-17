@@ -1653,6 +1653,140 @@ rests on measured renderer footprint, which R1 did not change.
 Whether 256 MiB should itself be reduced is a separate question with its own
 evidence, and R1 neither answers nor prejudges it.
 
+# Stage 6D-R2 — retiring the import-peak gate: BLOCKED
+
+**Decision: `A2 BLOCKED — RENDER/RESOURCE GATE REPLACEMENT REQUIRED`.** Base
+`fc7b7472a12043ca1859766e9c962644b504afd8`. **No product behaviour changed.** A
+migration was implemented, qualified in Chromium, found unsafe, and reverted.
+What is committed is the evidence and the tooling that produced it.
+
+## What the gate actually is, reconfirmed
+
+`checkImportPeak` has exactly one production call site,
+`commitImportedDocument`, and that function is shared by **all three formats**
+— STL, OBJ and 3MF all reach it through `modelImportHandler`. It runs after the
+reader has returned: the archive is inflated, the XML decoded, the scratch built
+and the canonical geometry materialised. It sits immediately before
+`documentBounds`, `buildDocumentRenderSnapshot` and `residentDocuments.commit`.
+
+| Term                   | Already allocated at the gate?   | What it measures                | Accurate?                                        |
+| ---------------------- | -------------------------------- | ------------------------------- | ------------------------------------------------ |
+| `inputBuffer`          | yes — the file buffer is live    | the file                        | yes, but nothing the gate can prevent            |
+| `currentResidentBytes` | yes — earlier documents          | resident store                  | yes                                              |
+| `candidateResident`    | **yes** — geometry already built | `48 x summed triangles`         | **no**: assumes soup, and sums shared placements |
+| `candidateRender`      | no — built after the gate        | `72 x summed triangles`         | **no**: the snapshot is built per DISTINCT mesh  |
+| `currentRenderBytes`   | —                                | should be the outgoing snapshot | **no — CONFIRMED DOUBLE-COUNT**                  |
+
+**`currentRenderBytes` is CONFIRMED WRONG-DOCUMENT ACCOUNTING.** Its contract
+says "bytes of render snapshot already held by the main thread"; the call site
+passes `renderBytesFor(documentTriangleCount(document))`, where `document` is the
+candidate. The candidate's render bytes are therefore counted twice.
+
+**The render snapshot is exactly 72 bytes per triangle of each DISTINCT mesh.**
+`buildDocumentRenderSnapshot` builds one snapshot per distinct `CanonicalMesh`
+and `buildDrawableTriangles` allocates `triangles * 9` floats of positions and
+the same of normals. Shared placements share the buffers.
+
+**`maxRenderBytes` (768 MiB) is enforced by nothing.** `checkResident` has no
+production call site.
+
+## The migration that was tried
+
+`checkImportPeak` was replaced with `checkRenderSnapshot`: 72 bytes per triangle
+of each distinct mesh, compared against the existing `maxRenderBytes` before the
+snapshot is built. It measured the right allocation, fixed the shared-placement
+false refusal — 4,000 placements of one 2,100-triangle mesh, 8.4 million summed
+triangles, imported with one canonical mesh — and passed every unit test.
+
+**It was unsafe, and the reason is STL, not 3MF.**
+
+The retired formula is also the only thing capping binary STL below the 512 MiB
+input cap. Solved against its own arithmetic:
+
+| Gate                                      | Largest binary STL admitted                                  |
+| ----------------------------------------- | ------------------------------------------------------------ |
+| `checkImportPeak`, as shipped             | **317.4 MiB** (6,655,424 triangles)                          |
+| the same with only the double-count fixed | 451.8 MiB (9,474,192 triangles)                              |
+| `checkRenderSnapshot` at 768 MiB          | **512 MiB input cap** — a 10.7M-triangle snapshot is 737 MiB |
+
+## Chromium, 8 GiB minimum host
+
+`npm run qualify:stl-footprint`. Renderer `phys_footprint_peak` for the whole
+session: import, the automatic analysis the application starts afterwards, the
+render upload and a small replacement import. **It is not the import alone, and
+this stage did not separate the two.**
+
+With the gate removed:
+
+| Binary STL | Triangles | Quiet (load 5–9) | Loaded (load 25–62) |
+| ---------- | --------- | ---------------- | ------------------- |
+| 100 MiB    | 2.10M     | **2,733 MiB**    | 2,721 MiB           |
+| 200 MiB    | 4.19M     | —                | 4,075 MiB           |
+| 300 MiB    | 6.29M     | **4,925 MiB**    | 4,914 MiB           |
+| 340 MiB    | 7.13M     | —                | 5,572 MiB           |
+| 460 MiB    | 9.65M     | —                | 6,223 MiB           |
+| 511 MiB    | 10.72M    | **6,245 MiB**    | 6,441 MiB           |
+
+Every import completed, every replacement landed, no session was lost. **A
+6.2 GiB renderer on an 8 GiB machine is not safe**, and it is far above the
+2.7–3.1 GiB that caused 384 MiB to be rejected in B3. Load does not explain it:
+quiet and loaded runs agree within 3%.
+
+With the gate restored, the same build refuses 340 MiB and 511 MiB (renderer
+peaks 738–1,075 MiB) and imports 300 MiB (peak 5,001 MiB).
+
+The brief's own stop condition applied — the existing deterministic caps do not
+stop this growth — so the migration was reverted.
+
+## A pre-existing finding this stage cannot resolve
+
+**Binary STL that v0.1.1 already accepts reaches about 5 GiB of renderer
+footprint.** A 300 MiB file measured 4,925 MiB quiet and 5,001 MiB on the
+restored build; a 100 MiB file measured 2,733 MiB. That is well above the ~2 GiB
+envelope R1 qualified for 3MF. STL packs a triangle into 50 bytes where 3MF XML
+spends about 178, so the same input ceiling produces several times the geometry.
+
+What this number includes has not been separated: the automatic topology
+analysis runs after import and has its own 1,024 MiB workspace ceiling. Whether
+this belongs to import eligibility, to analysis admission, or to the stated
+8 GiB host claim is a decision this stage is not in a position to take. It is
+recorded so it is not rediscovered.
+
+## Other findings
+
+**The refusal text is misleading.** The gate's refusal reads _"This would use
+more memory than CAD Fixer allows for one session."_ It names no metric and no
+numbers, and it presents a modelled allocation estimate as memory. It is left
+unchanged here because the gate itself is due for replacement, and rewording it
+now would be churn against a message that should not survive that replacement.
+
+**The shared-placement false refusal remains.** A document placing one mesh
+thousands of times can still be refused while costing a few megabytes. It is
+fixable only together with a gate that also bounds STL, so it waits for one.
+
+## Corrections to Stage 6D-R1
+
+- **R1's `npm run verify` did not pass.** It stopped at lint on
+  `no-useless-assignment` in `scripts/resource-model.bench-suite.ts`. The tests
+  and build were run separately and passed, and the filtered output hid the lint
+  failure. The cause is fixed in this stage: the lifetime measurement now drops
+  its reference by returning from a helper, not by assigning `undefined`.
+- **The retention subtraction R1 rejected is sound.** With the reference
+  genuinely out of scope it attributes **exactly 1.00x canonical geometry** to a
+  document, at 128.9 MiB and at 250.7 MiB. R1's zero reading came from the
+  measurement code keeping the result reachable, not from the method. This
+  confirms R1's lifetime conclusion directly, alongside the plateau test.
+
+## What R3 must deliver before A2
+
+A replacement for `checkImportPeak` that bounds the quantity that actually
+drives renderer footprint across all three formats — geometry that becomes
+canonical and renderable — derived from Chromium measurements, enforced before
+the allocation, and naming its metric and numbers. It has to hold STL where the
+shipped gate holds it today, or explicitly justify moving that line. It should
+separate import from automatic analysis in the measurement, so the ~5 GiB STL
+figure can be attributed.
+
 # Acceptance targets
 
 ## BETA-001
