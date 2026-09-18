@@ -503,9 +503,12 @@ const CORE_NS = 'http://schemas.microsoft.com/3dmanufacturing/core/2015/02';
  * multi-material project.
  *
  * The root model holds only a component; the geometry lives in a second model
- * part, named by the production extension's `path` attribute. CAD Fixer reads
- * one model part, so it cannot build this — and Stage 6B-C1 is about saying
- * that rather than calling the file broken.
+ * part, named by the production extension's `path` attribute.
+ *
+ * STAGE 6D-A2 MADE THIS IMPORT. Stage 6B-C1 used it to prove that a valid file
+ * is not described as a broken one — a refusal that named the extension rather
+ * than accusing the file. A2 supplies the better answer to the same
+ * requirement, so the fixture now proves the geometry arrives.
  */
 export function threeMfProductionExtension(): Buffer {
   const root = `<?xml version="1.0" encoding="UTF-8"?>
@@ -580,4 +583,27 @@ export function threeMfComponentCycle(): Buffer {
       build: '<item objectid="1"/>',
     }),
   );
+}
+
+/**
+ * A production-extension package whose referenced model part is not in the
+ * archive.
+ *
+ * THE INCOMPLETE-PACKAGE CASE, kept distinct from the malformed-reference one:
+ * the `path` is perfectly well formed and the entry it names simply is not
+ * there. Stage 6D-A2 refuses it as `THREEMF_MODEL_PART_NOT_FOUND`, which is a
+ * statement about the archive rather than about the reference.
+ */
+export function threeMfMissingModelPart(): Buffer {
+  const root = `<?xml version="1.0" encoding="UTF-8"?>
+<model unit="millimeter" xmlns="${CORE_NS}" xmlns:p="${PRODUCTION_NS}">
+ <resources/>
+ <build><item objectid="1" p:path="/3D/Objects/absent.model"/></build>
+</model>`;
+
+  return buildZip([
+    { name: '[Content_Types].xml', content: CONTENT_TYPES },
+    { name: '_rels/.rels', content: RELS },
+    { name: '3D/3dmodel.model', content: root },
+  ]);
 }

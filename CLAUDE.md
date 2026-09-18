@@ -41,9 +41,18 @@ returns that format's reader, every reader produces a `GeometryDocument`, and
 `commitImportedDocument` is the one transaction that installs it. See
 `docs/adr/0015-production-obj-and-3mf-import.md`.
 
+Stage 6D-A2 made 3MF read the REACHABLE subset of the PRODUCTION EXTENSION: a
+root build item or component may carry a `p:path` naming another `.model` part
+of the package, and the object it names is resolved in THAT part. See the Stage
+6D-A2 section of
+`docs/design/STAGE_6D_3MF_PRODUCTION_AND_LARGE_ENTRY_ARCHITECTURE.md`.
+
 NOT implemented, and not to be implemented unless a task explicitly asks:
 tolerance welding, NON-PLANAR hole filling, batch or "fill all" hole filling,
-booleans, remeshing, UNIT CONVERSION of any kind, OBJ polygons, MTL resolution, 3MF textures or materials, exported normals
+booleans, remeshing, UNIT CONVERSION of any kind, OBJ polygons, MTL resolution,
+3MF production ALTERNATIVES or model-resolution switching, 3MF Secure Content,
+encrypted model parts, a `p:path` on a reference outside the root model part,
+3MF textures or materials, exported normals
 or texture coordinates, exported 3MF group or property resources, reconstruction
 of an imported 3MF's component hierarchy, splitting, connectors, texturing,
 hollowing, drainage holes, wall-thickness analysis, inter-part overlap
@@ -212,6 +221,7 @@ npm run bench:export   # OBJ + 3MF export, sizes and placement counts (NOT in CI
 npm run bench:repair-browser # repair workflow timings in a real browser (NOT in CI)
 npm run bench:hole-fill # hole-fill phase timings and broadphase reduction (NOT in CI)
 npm run bench:boundary-listing # automatic boundary-walk cost by shape (NOT in CI)
+npm run qualify:threemf-corpus # real producer 3MF files; CADFIXER_CORPUS=<dir>, ships no data
 npm run qualify:import-phases  # Chromium footprint, ATTRIBUTED BY PHASE (NOT in CI)
 npm run check:node     # runtime version guard; also runs before test/build/verify
 ```
@@ -415,6 +425,68 @@ believing it.
   inflated 3MF entry, the decoded XML string and the readers' scratch arrays are
   bounded by the per-entry and package inflation budgets, which Stage 6D-B3
   measured and this stage did not reopen.
+
+## Multi-model-part invariants (Stage 6D-A2)
+
+- **THE ROOT'S BUILD IS THE ONLY BUILD.** A referenced part's build section is
+  parsed into its record and NEVER walked: the specification requires consumers
+  to ignore it, and a child's build describes how that part looks ON ITS OWN, so
+  walking one would invent placements the package never asked for. Its build is
+  not validated either — refusing a package over entries no consumer reads would
+  reject files every conformant reader accepts.
+- **REACHABILITY DECIDES WHAT IS OPENED.** A `.model` entry nothing references
+  is never inflated, never parsed and never charged. There is no `loadAll`. A
+  test puts a MALFORMED spare part in an otherwise valid package: if reachability
+  were not the rule the package would be refused rather than imported.
+- **THE IDENTITY IS `(ModelPartKey, objectId)`, NEVER A BARE ID.** Object ids are
+  unique within a model part, not within a package, so `id="1"` in two parts is
+  ordinary 3MF. A bare-id lookup produces a document of the right SHAPE with the
+  wrong geometry in it, and a bare-id cycle path refuses an ordinary package as a
+  loop. Both directions are tested with marker meshes.
+- **NO FALLBACK, IN EITHER DIRECTION.** A cross-part reference is NEVER retried
+  against the referring part's table, and a same-part reference never reaches the
+  package resolver. The test for the first has the root declare an object with
+  the same id the cross-part reference asks for, so a fallback would find it and
+  import the wrong geometry as a success.
+- **`THREEMF_MISSING_MODEL_PART_OBJECT` IS NOT `THREEMF_MISSING_OBJECT_REFERENCE`.**
+  One is a package whose parts disagree; the other is a broken object graph
+  inside one file. They send a user to different places, so they are not one
+  code.
+- **A `p:path` OUTSIDE THE ROOT PART IS REFUSED, not followed and not ignored.**
+  The extension permits a path-bearing reference only in the root. Following it
+  would import geometry the specification says no consumer should reach;
+  ignoring it would silently drop a placement the file asked for.
+- **EVERY PACKAGE TOTAL IS THE PACKAGE'S.** Triangles, vertices, parts, component
+  depth and the inflation budget are each ONE quantity across every reachable
+  model part, and none resets at a part boundary. Stage 6D-R1 recorded the
+  counters resetting per parsed model as the defect A2 had to fix: two parts each
+  just inside the ceiling would have passed while producing twice it.
+  `ThreeMfLimits.maxTotalTriangles` / `maxTotalVertices` exist so the
+  package-wide property is provable at four triangles instead of twenty million;
+  a test keeps them equal to the document's.
+- **ONE MODEL PART IS OPEN AT A TIME.** `open -> inflate -> decode -> parse ->
+materialise -> RELEASE -> next`. The entry buffer and the decoded XML are
+  locals of the part loader, and `materialiseMeshes` CLEARS the parser's Float64
+  scratch once the canonical buffers exist — with one part that only inflated the
+  peak, with a package it would accumulate, because every loaded part stays
+  reachable until the import ends.
+- **THE WALK IS STRICTLY SEQUENTIAL**, and a boundary test forbids `Promise.all`.
+  Ordering: the document's part order must be the file's traversal order, not the
+  order loads settled. Lifetime: concurrent branches would open several model
+  parts at once.
+- **REACHABLE PARTS MUST AGREE ABOUT THE UNIT**, and a disagreement is
+  UNSUPPORTED rather than malformed — nothing in such a package is
+  self-contradictory, and honouring it would mean rescaling, which CAD Fixer
+  never does. An absent `unit` compares as MILLIMETRE, because the specification
+  defaults the attribute. Unreachable parts are never compared.
+- **`requiredextensions="p"` NO LONGER REFUSES, AND NOTHING ELSE CHANGED.** Every
+  other extension is still refused on declaration, by the root AND by any
+  referenced part. `THREEMF_MULTI_MODEL_PART_UNSUPPORTED` was REMOVED: it named
+  the sentence "CAD Fixer does not support that extension yet", which stopped
+  being true, and a code with no producer would invite the sentence back.
+- **NO PRODUCTION METADATA IS INTERPRETED EXCEPT `path`.** `p:UUID` is ignored
+  because it cannot affect geometry, transform, placement, unit or which
+  representation is selected. Broadening that list needs its own reasoning.
 
 ## Export invariants (Stage 4A-2B2)
 

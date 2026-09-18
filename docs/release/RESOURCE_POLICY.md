@@ -48,6 +48,67 @@ renderable and exportable while being too large for the self-intersection check 
 for a hole fill. Feature-level refusal is the honest answer; rejecting an
 otherwise useful model is not.
 
+## Stage 6D-A2: the package-wide accounting is now operational
+
+Until Stage 6D-A2 a 3MF import read exactly one model part, so "package-wide"
+and "per model part" were the same number and nothing could tell them apart. A
+package now loads every model part its root build can reach, and the distinction
+became real.
+
+**Nothing moved. What changed is the SCOPE of what already existed.**
+
+| Ceiling                     | Value      | Scope after A2                          |
+| --------------------------- | ---------- | --------------------------------------- |
+| per-entry expanded          | 256 MiB    | each `.model`, as before                |
+| package expanded, per chunk | 512 MiB    | **one budget, every reachable entry**   |
+| compression ratio           | 200:1      | unchanged                               |
+| archive entries             | 4,096      | unchanged                               |
+| document triangles          | 20,000,000 | **summed across reachable model parts** |
+| document vertices           | 60,000,000 | **summed across reachable model parts** |
+| document parts              | 4,096      | **placements from every model part**    |
+| import geometry             | 768 MiB    | per DISTINCT mesh, wherever it was read |
+| component depth             | 16         | **one budget, not reset at a boundary** |
+
+Stage 6D-R1 recorded that the triangle and vertex counters reset per parsed
+model, so a package of two parts each just inside the ceiling would have passed
+while producing twice it. There is now one walk over the package and therefore
+one of each total.
+
+**`maxModelParts` still has no production value**, and that is Stage 6D-R1's
+decision standing: the entry ceiling, the one package-wide inflation budget and
+the document's part and triangle ceilings already bound a multi-part load.
+
+### Measured in Chromium, on the 8 GiB minimum host
+
+Production-extension packages, renderer `phys_footprint_peak` for the complete
+user action:
+
+| Package                            | Expanded each | Triangles | Renderer peak   | Whole browser |
+| ---------------------------------- | ------------- | --------- | --------------- | ------------- |
+| MP-S — 2 parts x 400,000 triangles | ~71 MiB       | 800,000   | 494 MiB         | 680 MiB       |
+| MP-L — 2 parts x 1,200,000         | ~214 MiB      | 2,400,000 | 1,236–1,254 MiB | 1,552 MiB     |
+| MP-N — 4 parts x 600,000           | ~107 MiB      | 2,400,000 | 1,024 MiB       | 1,322 MiB     |
+
+**MP-L is two parts within a byte of the 256 MiB per-entry ceiling**, 428 MiB
+against the 512 MiB package total. It peaks at 1,236–1,254 MiB — **below the
+1,742–1,815 MiB Stage 6D-B3 measured for a SINGLE 248 MiB entry**, and far below
+the 1,923–1,994 MiB Stage 6D-R1 measured for two such entries imported back to
+back. The transient really is released between parts.
+
+**MP-N carries the same 2,400,000 triangles as MP-L over twice as many parts and
+peaks LOWER**, at 1,024 MiB. That is the lifetime property stated as a
+measurement: the peak tracks the LARGEST model part's transient, not the sum of
+them, so many smaller parts are strictly milder than few larger ones.
+
+**Retention**: replacing an MP-L document with a 5 MiB STL added **14 MiB** to
+the peak and landed. No monotonic growth attributable to stale model-part parser
+state. The settled figure stays near 1 GiB, which is the allocator not returning
+pages rather than anything the reader holds.
+
+`npm run qualify:import-phases -- 3mf-package:2:1200000` reproduces it. The real
+producer corpus is run with `CADFIXER_CORPUS=<dir> npm run qualify:threemf-corpus`,
+which ships no fixtures — the repository stays dataless.
+
 ## Stage 6D-R3: the import-peak gate is gone, and so is an unbounded walk
 
 **`estimateImportPeak`, `checkImportPeak` and `maxImportPeakBytes` are deleted.**

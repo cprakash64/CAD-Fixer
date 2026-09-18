@@ -289,31 +289,31 @@ describe('A1: the root part still imports exactly as it did', () => {
   });
 });
 
-describe('A1: the compatibility boundary has NOT moved', () => {
+describe('A2: the compatibility boundary MOVED, and only where it was meant to', () => {
   /*
-   * THE POINT OF THIS BLOCK IS THAT NOTHING NEW IMPORTS.
+   * THIS BLOCK USED TO ASSERT THAT NOTHING NEW IMPORTED.
    *
-   * Stage 6D-A1 adds types, a resolver and a registry. The specific failure it
-   * has to guard against is HALF-SUPPORT: foundation code existing, one
-   * reference happening to resolve, another being quietly skipped, and an
-   * import succeeding with geometry missing. A truncated import reported as a
-   * success is worse than the refusal it replaced.
+   * Stage 6D-A1 was foundation only — types, a resolver and a registry — and the
+   * specific failure it guarded against was HALF-SUPPORT: foundation code
+   * existing, one reference happening to resolve, another being quietly skipped,
+   * and an import succeeding with geometry missing. A truncated import reported
+   * as a success is worse than the refusal it replaced.
    *
-   * These re-assert the v0.1.1 behaviour BETA-001 triggers, from this stage's
-   * own file, so a change here that accidentally wired the foundation into
-   * production fails next to the code that did it rather than only in a suite
-   * someone might not run.
+   * Stage 6D-A2 wired the foundation to production, so the assertions invert —
+   * but the property they protect does not. Each case below now pins what the
+   * package ACTUALLY PRODUCES, so a regression to half-support fails here: an
+   * import that silently dropped the referenced geometry would produce the wrong
+   * part count or the wrong mesh, not a passing test.
    */
   const PRODUCTION_NS = 'http://schemas.microsoft.com/3dmanufacturing/production/2015/06';
 
-  async function importing(model: string): Promise<{ code: string; reason: unknown }> {
-    const archive = await buildZip([
+  async function packageOf(model: string): Promise<Uint8Array> {
+    return buildZip([
       { name: '[Content_Types].xml', content: CONTENT_TYPES, method: 8 },
       { name: '_rels/.rels', content: RELS, method: 8 },
       { name: '3D/3dmodel.model', content: model, method: 8 },
-      // A REAL SECOND MODEL PART, present and resolvable. If the foundation
-      // ever became reachable from production, this is what it would follow —
-      // so its presence is what makes the refusal meaningful.
+      // A REAL SECOND MODEL PART, present and resolvable. It is what the
+      // references below actually follow.
       {
         name: '3D/Objects/object_1.model',
         content: modelXml({
@@ -323,63 +323,80 @@ describe('A1: the compatibility boundary has NOT moved', () => {
         method: 8,
       },
     ]);
+  }
+
+  async function refusalFrom(model: string): Promise<{ code: string; reason: unknown }> {
     try {
-      await read3mf(archive, testReadContext());
+      await read3mf(await packageOf(model), testReadContext());
     } catch (error) {
       if (!isAppError(error)) throw error;
       return { code: error.code, reason: refusalOf(error) };
     }
-    throw new Error('expected a refusal: A1 supports no new production-extension packages');
+    throw new Error('expected a refusal');
   }
 
-  it('a component with a production path is still refused as unsupported', async () => {
+  it('a component with a production path now imports the referenced object', async () => {
     const model =
       '<?xml version="1.0" encoding="UTF-8"?>' +
       `<model unit="millimeter" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02" xmlns:p="${PRODUCTION_NS}">` +
       '<resources>' +
-      `<object id="1" type="model">${TETRAHEDRON_MESH}</object>` +
       '<object id="2" type="model"><components>' +
       '<component objectid="1" p:path="/3D/Objects/object_1.model"/>' +
       '</components></object>' +
       '</resources><build><item objectid="2"/></build></model>';
 
-    const refused = await importing(model);
-    expect(refused.code).toBe(AppErrorCode.UnsupportedFile);
-    expect(refused.reason).toBe(ImportRefusal.ThreeMfMultiModelPart);
+    const result = await read3mf(await packageOf(model), testReadContext());
+    // THE ROOT DECLARES NO MESH. One part here means the child's geometry
+    // arrived; zero would mean it was skipped and the import lied.
+    expect(result.document.parts).toHaveLength(1);
+    expect(result.document.parts[0]?.mesh.positions).toHaveLength(12);
   });
 
-  it('a build item with a production path is still refused as unsupported', async () => {
+  it('a build item with a production path now imports the referenced object', async () => {
     const model =
       '<?xml version="1.0" encoding="UTF-8"?>' +
       `<model unit="millimeter" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02" xmlns:p="${PRODUCTION_NS}">` +
-      `<resources><object id="1" type="model">${TETRAHEDRON_MESH}</object></resources>` +
+      '<resources/>' +
       '<build><item objectid="1" p:path="/3D/Objects/object_1.model"/></build></model>';
 
-    const refused = await importing(model);
-    expect(refused.code).toBe(AppErrorCode.UnsupportedFile);
-    expect(refused.reason).toBe(ImportRefusal.ThreeMfMultiModelPart);
+    const result = await read3mf(await packageOf(model), testReadContext());
+    expect(result.document.parts).toHaveLength(1);
+    expect(result.document.parts[0]?.mesh.positions).toHaveLength(12);
   });
 
-  it('a declared production requirement is still refused, Case C included', async () => {
-    // The v0.1.1 strict `requiredextensions` decision, unchanged by A1.
+  it('a declared production requirement no longer refuses, Case C included', async () => {
     const model =
       '<?xml version="1.0" encoding="UTF-8"?>' +
       `<model unit="millimeter" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02" xmlns:p="${PRODUCTION_NS}" requiredextensions="p">` +
       `<resources><object id="1" type="model">${TETRAHEDRON_MESH}</object></resources>` +
       '<build><item objectid="1"/></build></model>';
 
-    const refused = await importing(model);
+    const result = await read3mf(await packageOf(model), testReadContext());
+    expect(result.document.parts).toHaveLength(1);
+  });
+
+  it('an extension that is NOT production is still refused on declaration', async () => {
+    // The transition is per extension. Nothing about unknown-extension handling
+    // was weakened.
+    const model =
+      '<?xml version="1.0" encoding="UTF-8"?>' +
+      '<model unit="millimeter" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02" ' +
+      'xmlns:z="http://example.invalid/unknown/2099" requiredextensions="z">' +
+      `<resources><object id="1" type="model">${TETRAHEDRON_MESH}</object></resources>` +
+      '<build><item objectid="1"/></build></model>';
+
+    const refused = await refusalFrom(model);
     expect(refused.code).toBe(AppErrorCode.UnsupportedFile);
     expect(refused.reason).toBe(ImportRefusal.ThreeMfUnsupportedExtension);
   });
 
   it('a same-part dangling component is still MALFORMED, not a package lookup', async () => {
     /*
-     * THE DISTINCTION v0.1.1 ESTABLISHED, and the one A1 could most easily
+     * THE DISTINCTION v0.1.1 ESTABLISHED, and the one A2 could most easily
      * break. A component naming a missing object in the SAME part is a broken
      * file; routing it through package-part resolution would turn it into
-     * `THREEMF_MODEL_PART_NOT_FOUND` and start telling users their archive is
-     * incomplete when their model is wrong.
+     * `THREEMF_MODEL_PART_NOT_FOUND` or the cross-part missing-object code and
+     * start telling users their archive is incomplete when their model is wrong.
      */
     const model = modelXml({
       resources:
@@ -388,15 +405,17 @@ describe('A1: the compatibility boundary has NOT moved', () => {
       build: '<item objectid="2"/>',
     });
 
-    const refused = await importing(model);
+    const refused = await refusalFrom(model);
     expect(refused.code).toBe(AppErrorCode.MalformedFile);
     expect(refused.reason).toBe(ImportRefusal.ThreeMfMissingObject);
     expect(refused.reason).not.toBe(ImportRefusal.ThreeMfModelPartNotFound);
+    expect(refused.reason).not.toBe(ImportRefusal.ThreeMfMissingModelPartObject);
   });
 
   it('an unreferenced second model part still does not change a valid import', async () => {
-    // Baseline: the archive above holds two `.model` entries. A plain root that
-    // references neither must import exactly as a single-part package does.
+    // Reachability decides what is read: the archive holds two `.model`
+    // entries and a root that references neither, so the second is never
+    // opened, never inflated and never charged.
     const archive = await buildZip([
       { name: '[Content_Types].xml', content: CONTENT_TYPES, method: 8 },
       { name: '_rels/.rels', content: RELS, method: 8 },

@@ -141,6 +141,15 @@ describe('3MF-C1: a genuine dangling component reference', () => {
 });
 
 describe('3MF-C2: a valid production-extension package', () => {
+  /*
+   * THIS BLOCK USED TO ASSERT A REFUSAL, AND STAGE 6D-A2 INVERTED IT.
+   *
+   * What Stage 6B-C1 established was never "this file must be refused" — it was
+   * that a VALID file must not be described as a broken one. A2 supplies the
+   * better answer to the same requirement: the file imports. The property is
+   * kept by asserting the geometry that arrives, and by keeping a case for every
+   * production construct that still cannot be followed, each refused by name.
+   */
   const root = `<?xml version="1.0" encoding="UTF-8"?>
 <model unit="millimeter" xmlns="${CORE_NS}" xmlns:p="${PRODUCTION_NS}">
  <resources>
@@ -151,45 +160,35 @@ describe('3MF-C2: a valid production-extension package', () => {
  <build><item objectid="2"/></build>
 </model>`;
 
-  it('is UNSUPPORTED_FILE, not MALFORMED_FILE', async () => {
-    const refusal = await refusalFor(async () =>
-      read3mf(await packageWith(root, [OBJECT_PART]), testReadContext()),
-    );
+  it('imports the referenced object rather than refusing the package', async () => {
+    const result = await read3mf(await packageWith(root, [OBJECT_PART]), testReadContext());
 
-    expect(refusal.code).toBe(AppErrorCode.UnsupportedFile);
-    expect(refusal.code).not.toBe(AppErrorCode.MalformedFile);
-    expect(refusal.reason).toBe(ImportRefusal.ThreeMfMultiModelPart);
+    expect(result.document.parts).toHaveLength(1);
+    // THE GEOMETRY IS THE CHILD'S, which is the whole claim. The root part
+    // declares no mesh at all, so anything here came from `object_1.model`.
+    expect([...(result.document.parts[0]?.mesh.positions ?? [])]).toEqual([
+      0, 0, 0, 10, 0, 0, 0, 10, 0, 0, 0, 10,
+    ]);
   });
 
-  it('says the objects live in several model parts, and never that the file is broken', async () => {
-    const refusal = await refusalFor(async () =>
-      read3mf(await packageWith(root, [OBJECT_PART]), testReadContext()),
-    );
+  it('says nothing about the production extension being unsupported', async () => {
+    const result = await read3mf(await packageWith(root, [OBJECT_PART]), testReadContext());
 
-    expect(refusal.message).toContain('several model parts');
-    expect(refusal.message).toContain('does not support');
-    // THE OLD SENTENCE MUST NOT COME BACK for a valid file.
-    expect(refusal.message).not.toContain('does not exist');
-    for (const forbidden of ['broken', 'corrupt', 'damaged', 'invalid', 'malformed']) {
-      expect(refusal.message.toLowerCase()).not.toContain(forbidden);
+    for (const warning of result.warnings) {
+      expect(warning.message.toLowerCase()).not.toContain('production extension');
+      expect(warning.message.toLowerCase()).not.toContain('several model parts');
     }
   });
 
-  it('suggests something the user can actually do', async () => {
-    const refusal = await refusalFor(async () =>
-      read3mf(await packageWith(root, [OBJECT_PART]), testReadContext()),
-    );
-    expect(refusal.message).toMatch(/plain 3MF|STL/i);
-  });
-
   /**
-   * ORDER, NOT COINCIDENCE.
+   * ORDER, NOT COINCIDENCE — and still the point after A2.
    *
-   * The same package with an ADDITIONAL genuinely dangling reference must still
-   * be classified unsupported. If the missing-object check ran first this would
-   * come back MALFORMED_FILE, which is the exact defect Stage 6B-C1 fixes.
+   * A package that follows a cross-part reference AND contains a genuinely
+   * dangling SAME-PART one is a broken file, and must be reported as one. What
+   * must never happen is the reverse: the cross-part reference being resolved
+   * against the wrong table and reported as the missing object.
    */
-  it('takes priority over the missing-object check when a file trips both', async () => {
+  it('still reports a genuinely dangling same-part reference as malformed', async () => {
     const both = `<?xml version="1.0" encoding="UTF-8"?>
 <model unit="millimeter" xmlns="${CORE_NS}" xmlns:p="${PRODUCTION_NS}">
  <resources>
@@ -206,16 +205,18 @@ describe('3MF-C2: a valid production-extension package', () => {
       read3mf(await packageWith(both, [OBJECT_PART]), testReadContext()),
     );
 
-    expect(refusal.code).toBe(AppErrorCode.UnsupportedFile);
-    expect(refusal.reason).toBe(ImportRefusal.ThreeMfMultiModelPart);
+    expect(refusal.code).toBe(AppErrorCode.MalformedFile);
+    expect(refusal.reason).toBe(ImportRefusal.ThreeMfMissingObject);
+    // NOT the cross-part code: the cross-part reference resolved perfectly well.
+    expect(refusal.reason).not.toBe(ImportRefusal.ThreeMfMissingModelPartObject);
   });
 
   /**
-   * THE PREFIX IS THE AUTHOR'S TO CHOOSE. Detection resolves the namespace, so
-   * a package using `prod:` rather than `p:` is recognised identically — and a
-   * literal match on the text `p:path` would have missed it.
+   * THE PREFIX IS THE AUTHOR'S TO CHOOSE. Resolution goes through the namespace,
+   * so a package using `prod:` rather than `p:` is read identically — and a
+   * literal match on the text `p:path` would have missed the file entirely.
    */
-  it('recognises the extension whatever prefix the file binds it to', async () => {
+  it('follows the extension whatever prefix the file binds it to', async () => {
     const renamed = `<?xml version="1.0" encoding="UTF-8"?>
 <model unit="millimeter" xmlns="${CORE_NS}" xmlns:prod="${PRODUCTION_NS}">
  <resources>
@@ -226,14 +227,13 @@ describe('3MF-C2: a valid production-extension package', () => {
  <build><item objectid="2"/></build>
 </model>`;
 
-    const refusal = await refusalFor(async () =>
-      read3mf(await packageWith(renamed, [OBJECT_PART]), testReadContext()),
-    );
-    expect(refusal.reason).toBe(ImportRefusal.ThreeMfMultiModelPart);
+    const result = await read3mf(await packageWith(renamed, [OBJECT_PART]), testReadContext());
+    expect(result.document.parts).toHaveLength(1);
   });
 
   /**
-   * THE SHAPE REAL PRODUCER OUTPUT ACTUALLY HAS — Stage v0.1.1 RC1.
+   * THE SHAPE REAL PRODUCER OUTPUT ACTUALLY HAS — and the BETA-001 failure
+   * class.
    *
    * A production-extension package commonly has an EMPTY root `<resources/>`:
    * the root model is a manifest of build items pointing into other model
@@ -242,63 +242,93 @@ describe('3MF-C2: a valid production-extension package', () => {
    * repository, reproduced here as a tiny synthetic equivalent rather than by
    * vendoring a third-party file.
    *
-   * Under v0.1.0 this exact shape was refused as MALFORMED_FILE — "this 3MF
-   * file builds an object which does not exist" — which is the BETA-001 defect
-   * reproduced on real producer output rather than on a constructed case.
+   * Under v0.1.0 this was MALFORMED_FILE — "this 3MF file builds an object which
+   * does not exist". Under v0.1.1 it was UNSUPPORTED_FILE. It now imports, with
+   * the item's transform applied.
    */
-  it('classifies an empty-root manifest with an item path as unsupported, not malformed', async () => {
+  it('imports an empty-root manifest whose build item carries a path', async () => {
     const manifestRoot = `<?xml version="1.0" encoding="UTF-8"?>
 <model unit="millimeter" xml:lang="en-US" xmlns="${CORE_NS}" xmlns:p="${PRODUCTION_NS}">
  <resources/>
  <build>
-  <item objectid="2" p:path="/3D/Objects/object_1.model" transform="1 0 0 0 1 0 0 0 1 50 50 0"/>
+  <item objectid="1" p:path="/3D/Objects/object_1.model" transform="1 0 0 0 1 0 0 0 1 50 50 0"/>
  </build>
 </model>`;
 
-    const refusal = await refusalFor(async () =>
-      read3mf(await packageWith(manifestRoot, [OBJECT_PART]), testReadContext()),
-    );
+    const result = await read3mf(await packageWith(manifestRoot, [OBJECT_PART]), testReadContext());
 
-    expect(refusal.code).toBe(AppErrorCode.UnsupportedFile);
-    expect(refusal.reason).toBe(ImportRefusal.ThreeMfMultiModelPart);
-    expect(refusal.message).not.toContain('does not exist');
+    expect(result.document.parts).toHaveLength(1);
+    expect(result.document.parts[0]?.transform).toEqual([1, 0, 0, 0, 1, 0, 0, 0, 1, 50, 50, 0]);
   });
 
-  it('recognises a production path on a build item too', async () => {
-    const onItem = `<?xml version="1.0" encoding="UTF-8"?>
+  /**
+   * THE TARGET'S TABLE, AND NOTHING ELSE.
+   *
+   * `OBJECT_PART` declares object 1. A manifest asking it for object 2 is a
+   * package whose parts disagree — and the one thing that must not happen is a
+   * fallback to the root's table, or to "the only object in there".
+   */
+  it('refuses a cross-part reference the target part does not declare', async () => {
+    const wrongId = `<?xml version="1.0" encoding="UTF-8"?>
 <model unit="millimeter" xmlns="${CORE_NS}" xmlns:p="${PRODUCTION_NS}">
- <resources><object id="1" type="model">${TETRAHEDRON_MESH}</object></resources>
- <build><item p:path="/3D/Objects/object_1.model" objectid="1"/></build>
+ <resources/>
+ <build><item objectid="2" p:path="/3D/Objects/object_1.model"/></build>
 </model>`;
 
     const refusal = await refusalFor(async () =>
-      read3mf(await packageWith(onItem, [OBJECT_PART]), testReadContext()),
+      read3mf(await packageWith(wrongId, [OBJECT_PART]), testReadContext()),
     );
-    expect(refusal.code).toBe(AppErrorCode.UnsupportedFile);
-    expect(refusal.details.via).toBe('item');
+
+    expect(refusal.code).toBe(AppErrorCode.MalformedFile);
+    expect(refusal.reason).toBe(ImportRefusal.ThreeMfMissingModelPartObject);
+    expect(refusal.details.part).toBe('3d/objects/object_1.model');
+  });
+
+  it('follows a production path on a build item as well as on a component', async () => {
+    const onItem = `<?xml version="1.0" encoding="UTF-8"?>
+<model unit="millimeter" xmlns="${CORE_NS}" xmlns:p="${PRODUCTION_NS}">
+ <resources><object id="1" type="model">${TETRAHEDRON_MESH}</object></resources>
+ <build>
+  <item objectid="1"/>
+  <item p:path="/3D/Objects/object_1.model" objectid="1"/>
+ </build>
+</model>`;
+
+    const result = await read3mf(await packageWith(onItem, [OBJECT_PART]), testReadContext());
+
+    /*
+     * TWO PARTS OVER TWO DISTINCT MESHES. Both items say `objectid="1"`, and
+     * they mean different objects because they name different model parts — the
+     * exact case a bare-id lookup gets wrong while appearing to work.
+     */
+    expect(result.document.parts).toHaveLength(2);
+    expect(result.document.parts[0]?.mesh).not.toBe(result.document.parts[1]?.mesh);
   });
 });
 
 describe('3MF-C3: a declared required extension', () => {
-  it('refuses rather than reading the file as baseline 3MF', async () => {
+  it('accepts a required PRODUCTION extension, because CAD Fixer implements it', async () => {
+    /*
+     * THE COMPATIBILITY TRANSITION, STAGE 6D-A2.
+     *
+     * Until A2 this was refused, and correctly: `requiredextensions` says the
+     * file cannot be understood without those semantics, and CAD Fixer had none
+     * of them. It has them now, for the reachable cross-part subset — so
+     * refusing a package for declaring an extension that is implemented would
+     * be refusing on the strength of a statement rather than of a construct.
+     *
+     * The rule itself did not weaken: every OTHER extension is still refused on
+     * declaration, and a production construct outside the supported subset is
+     * still refused where it is used. See the cases below and in 3MF-A2.
+     */
     const declared = `<?xml version="1.0" encoding="UTF-8"?>
 <model unit="millimeter" xmlns="${CORE_NS}" xmlns:p="${PRODUCTION_NS}" requiredextensions="p">
- <resources><object id="1" type="model">${TETRAHEDRON_MESH}</object></resources>
- <build><item objectid="1"/></build>
+ <resources/>
+ <build><item objectid="1" p:path="/3D/Objects/object_1.model"/></build>
 </model>`;
 
-    // NOTE: this model is otherwise perfectly readable. Refusing it is the
-    // point — the file says it cannot be understood without semantics CAD Fixer
-    // does not have, and importing the recognisable half would be incomplete
-    // geometry presented as the user's model.
-    const refusal = await refusalFor(async () =>
-      read3mf(await packageWith(declared), testReadContext()),
-    );
-
-    expect(refusal.code).toBe(AppErrorCode.UnsupportedFile);
-    expect(refusal.reason).toBe(ImportRefusal.ThreeMfUnsupportedExtension);
-    expect(refusal.message).toContain('production extension');
-    expect(refusal.details.extension).toBe(PRODUCTION_NS);
+    const result = await read3mf(await packageWith(declared, [OBJECT_PART]), testReadContext());
+    expect(result.document.parts).toHaveLength(1);
   });
 
   it('refuses an unknown required extension without naming it in the prose', async () => {
@@ -336,33 +366,48 @@ describe('3MF-C3: a declared required extension', () => {
   });
 
   /**
-   * THE COST OF BEING CONSERVATIVE, WRITTEN DOWN.
+   * THE CONSERVATIVE REFUSAL THIS REPLACED, AND WHY IT IS GONE.
    *
-   * This package declares the production extension REQUIRED and then keeps all
-   * of its geometry in the root model part, so CAD Fixer could in fact read it —
-   * and before Stage 6B-C1 it did. It is refused now because the file itself
-   * says it cannot be understood without semantics CAD Fixer does not implement,
-   * and the extension carries more than paths: reading it as baseline 3MF would
-   * be deciding, on the user's behalf, that the parts we ignored did not matter.
+   * Stage 6B-C1 refused this package — production declared required, all
+   * geometry in the root part — on the reasoning that the extension carries
+   * more than paths and reading it as baseline 3MF would decide on the user's
+   * behalf that the ignored parts did not matter. That reasoning was right while
+   * CAD Fixer implemented none of the extension. It now implements the part of
+   * it that decides WHICH GEOMETRY A PACKAGE CONTAINS, which is the only part
+   * that can change what a reader should show, so a declaration alone no longer
+   * tells us anything is missing.
    *
-   * THIS IS A DELIBERATE NARROWING OF WHAT IMPORTS, not an oversight. If beta
-   * evidence shows slicers routinely declare the extension without using it,
-   * this is the test to revisit — and the decision to revisit is a product
-   * decision, not a quiet loosening.
+   * THE NARROWING WAS DELIBERATE AND SO IS ITS REMOVAL. It is a product
+   * decision, taken in Stage 6D-A2 with the supported subset in hand, and not a
+   * quiet loosening: this test now pins the accepting behaviour so the next
+   * change to it is equally deliberate.
    */
-  it('refuses a declared-required extension even when the geometry is all in the root part', async () => {
+  it('reads a declared-required production package whose geometry is all in the root', async () => {
     const readableButDeclared = `<?xml version="1.0" encoding="UTF-8"?>
 <model unit="millimeter" xmlns="${CORE_NS}" xmlns:p="${PRODUCTION_NS}" requiredextensions="p">
  <resources><object id="1" type="model">${TETRAHEDRON_MESH}</object></resources>
  <build><item objectid="1"/></build>
 </model>`;
 
+    const result = await read3mf(await packageWith(readableButDeclared), testReadContext());
+    expect(result.document.parts).toHaveLength(1);
+  });
+
+  it('still refuses when production is required ALONGSIDE an extension that is not', async () => {
+    // The transition is per extension, not "any declaration is now fine".
+    const mixed = `<?xml version="1.0" encoding="UTF-8"?>
+<model unit="millimeter" xmlns="${CORE_NS}" xmlns:p="${PRODUCTION_NS}" xmlns:s="http://example.invalid/slice/2099" requiredextensions="p s">
+ <resources><object id="1" type="model">${TETRAHEDRON_MESH}</object></resources>
+ <build><item objectid="1"/></build>
+</model>`;
+
     const refusal = await refusalFor(async () =>
-      read3mf(await packageWith(readableButDeclared), testReadContext()),
+      read3mf(await packageWith(mixed), testReadContext()),
     );
 
     expect(refusal.code).toBe(AppErrorCode.UnsupportedFile);
     expect(refusal.reason).toBe(ImportRefusal.ThreeMfUnsupportedExtension);
+    expect(refusal.details.extension).toBe('http://example.invalid/slice/2099');
   });
 
   it('does not refuse a file that lists only the core namespace as required', async () => {
@@ -715,23 +760,51 @@ describe('every new refusal path leaves nothing behind', () => {
    * `commitImportedDocument` accepts one. The browser-level proof that a refused
    * import leaves the OPEN model untouched lives in `e2e/format-import.spec.ts`.
    */
-  it('produces no document for any of the new refusals, and reads a good file afterwards', async () => {
-    const productionRoot = `<?xml version="1.0" encoding="UTF-8"?>
+  it('produces no document for any refusal, and reads a good file afterwards', async () => {
+    /*
+     * THE FIXTURES MOVED WITH THE BOUNDARY — Stage 6D-A2. The two packages this
+     * used to name now import, so naming them would prove nothing. These are the
+     * refusals A2 introduced instead: a cross-part reference the target does not
+     * declare, a non-root part chaining further, and reachable parts that
+     * disagree about their unit.
+     *
+     * A MULTI-PART REFUSAL IS THE INTERESTING CASE. By the time it fires, one or
+     * more child parts have been inflated, parsed and materialised — so "no
+     * partial document" is a claim about a package that got most of the way
+     * through, not about one that failed at the door.
+     */
+    const missingChildObject = `<?xml version="1.0" encoding="UTF-8"?>
 <model unit="millimeter" xmlns="${CORE_NS}" xmlns:p="${PRODUCTION_NS}">
- <resources><object id="2" type="model"><components>
-  <component p:path="/3D/Objects/object_1.model" objectid="1"/>
- </components></object></resources>
- <build><item objectid="2"/></build>
+ <resources/>
+ <build><item objectid="404" p:path="/3D/Objects/object_1.model"/></build>
 </model>`;
-    const requiredRoot = `<?xml version="1.0" encoding="UTF-8"?>
-<model unit="millimeter" xmlns="${CORE_NS}" xmlns:p="${PRODUCTION_NS}" requiredextensions="p">
+    const chainedRoot = `<?xml version="1.0" encoding="UTF-8"?>
+<model unit="millimeter" xmlns="${CORE_NS}" xmlns:p="${PRODUCTION_NS}">
+ <resources/>
+ <build><item objectid="5" p:path="/3D/Objects/object_1.model"/></build>
+</model>`;
+    const chainingChild = `<?xml version="1.0" encoding="UTF-8"?>
+<model unit="millimeter" xmlns="${CORE_NS}" xmlns:p="${PRODUCTION_NS}">
+ <resources><object id="5" type="model"><components>
+  <component p:path="/3D/Objects/object_2.model" objectid="1"/>
+ </components></object></resources>
+ <build/>
+</model>`;
+    const inchChild = `<?xml version="1.0" encoding="UTF-8"?>
+<model unit="inch" xmlns="${CORE_NS}">
  <resources><object id="1" type="model">${TETRAHEDRON_MESH}</object></resources>
- <build><item objectid="1"/></build>
+ <build/>
+</model>`;
+    const unitRoot = `<?xml version="1.0" encoding="UTF-8"?>
+<model unit="millimeter" xmlns="${CORE_NS}" xmlns:p="${PRODUCTION_NS}">
+ <resources/>
+ <build><item objectid="1" p:path="/3D/Objects/object_1.model"/></build>
 </model>`;
 
     for (const bytes of [
-      await packageWith(productionRoot, [OBJECT_PART]),
-      await packageWith(requiredRoot),
+      await packageWith(missingChildObject, [OBJECT_PART]),
+      await packageWith(chainedRoot, [chainingChild, OBJECT_PART]),
+      await packageWith(unitRoot, [inchChild]),
     ]) {
       await expect(read3mf(bytes, testReadContext())).rejects.toBeDefined();
       // The very next import still works: no state survived the refusal.

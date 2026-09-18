@@ -46,7 +46,7 @@ touched. The resulting design is recorded in
 | Frequency      | 1 tester                                                    |
 | Workaround     | re-export the model as STL, or as a single-part 3MF         |
 | Roadmap area   | 3MF import interoperability                                 |
-| Classification | **CONFIRMED PRODUCTION-EXTENSION LIMITATION**               |
+| Classification | **SUPPORTED STRUCTURAL CLASS — TESTER RETEST REQUIRED**     |
 
 ### What the user saw
 
@@ -115,6 +115,46 @@ missing.
 **What this does NOT reopen.** The Stage 6B-C1 decision to honour
 `requiredextensions` strictly stands. This file uses the extension, so Case C
 — declared but unused — is still unobserved in the wild.
+
+### Stage 6D-A2 — the capability landed
+
+**CAD Fixer now imports reachable multi-model-part 3MF.** A root build item or
+component carrying a production-extension `path` is followed to the model part
+it names, the object is resolved in THAT part's table, and transforms compose
+across the boundary. `requiredextensions="p"` no longer refuses, because the
+extension is now implemented for the part of it that decides which geometry a
+package contains.
+
+**Measured on a real producer-authored package.** `production_ext.3mf`, carried
+in PrusaSlicer's own repository, is exactly the reported structural class: an
+empty root `<resources/>`, `requiredextensions="p"`, one build item naming
+`/3D/Objects/sub.model` with a transform, and a child whose object 2 wraps the
+mesh object 1 in a same-part component.
+
+| Version | Outcome                                                        |
+| ------- | -------------------------------------------------------------- |
+| v0.1.0  | `MALFORMED_FILE` — "builds an object which does not exist"     |
+| v0.1.1  | `UNSUPPORTED_FILE` — names the extension, truthfully           |
+| **A2**  | **imports**, 1 part, 12 triangles, transform `50 50 0` applied |
+
+Across the rest of the producer corpus there are **zero compatibility
+regressions**: every file that imported under v0.1.1 imports now, with the same
+part count.
+
+**Classification: `SUPPORTED STRUCTURAL CLASS — TESTER RETEST REQUIRED`.**
+
+**THE TESTER'S OWN FILE HAS NOT BEEN RETESTED, and this entry does not claim it
+works.** What is established is that the structural class their file belongs to
+— known from the v0.1.1 message they reported verbatim, which is emitted from
+exactly one place — is now supported, and that a genuine producer package of
+that class imports correctly. Their file may also use production constructs A2
+does not implement; those are refused by name rather than as "the extension is
+unsupported". Only their retest closes this.
+
+**What is still refused, and named specifically:** a `path` on a reference
+outside the root model part, a `path` naming an entry the archive does not hold,
+a cross-part reference the target part does not declare, reachable parts that
+declare different units, and any OTHER extension declared required.
 
 ### What Stage 6B-C1 changed
 

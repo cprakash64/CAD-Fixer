@@ -23,6 +23,7 @@ import {
   zipEncryptedEntry,
   zipOverTotalBudget,
   zipWithTraversalPath,
+  threeMfMissingModelPart,
   threeMfProductionExtension,
   threeMfDanglingComponent,
 } from './format-fixtures';
@@ -376,31 +377,72 @@ test.describe('a valid file CAD Fixer cannot read is not called a broken one', (
    * damaged; CAD Fixer reads one model part and that one does not hold the
    * object. These two tests are the pair that has to stay distinguishable.
    */
-  test('a production-extension 3MF is refused as unsupported, not as malformed', async ({
+  test('a production-extension 3MF imports its referenced geometry', async ({ page }) => {
+    /*
+     * STAGE 6D-A2, IN A REAL BROWSER. This test used to assert the refusal;
+     * what it asserted UNDERNEATH was that a valid file is never described as a
+     * broken one, and importing it is the better way to keep that promise.
+     *
+     * The root model part of this package declares NO mesh at all, so a part
+     * arriving on screen means the second model part was opened, parsed and
+     * placed — through the worker, the document gate and the render snapshot,
+     * none of which the unit tests exercise.
+     */
+    await openFile(page, 'good.3mf', threeMfTwoParts());
+    await expect(page.getByTestId('fact-parts')).toHaveText('2', { timeout: 30_000 });
+
+    await openFile(page, 'multipart.3mf', threeMfProductionExtension());
+    await expect(page.getByTestId('fact-filename')).toHaveText('multipart.3mf', {
+      timeout: 60_000,
+    });
+    /*
+     * ASSERTED ON THE TRIANGLE COUNT, NOT ON `fact-parts`. This package builds
+     * ONE part and the panel shows a part count only above one — so waiting for
+     * `fact-parts` here waits for an element the interface is right not to
+     * render. The tetrahedron in the referenced model part has four faces, and
+     * the root model part declares no mesh at all, so four triangles on screen
+     * IS the proof that the second part was opened and placed.
+     */
+    await expect(page.getByTestId('fact-triangles')).toHaveText('4');
+    // It is DRAWN, not merely accepted: the geometry reached the viewport.
+    expect((await readScene(page)).modelObjects).toBe(1);
+
+    // NOTHING TELLS THE USER THE EXTENSION IS UNSUPPORTED. That sentence would
+    // send them to re-export a file that just opened.
+    const shown = await statusText(page);
+    expect(shown).not.toMatch(/several model parts/i);
+    expect(shown).not.toMatch(/does not exist/i);
+
+    // And a valid file still imports afterwards.
+    await openFile(page, 'next.3mf', threeMfSharedPlacements(4));
+    await expect(page.getByTestId('fact-parts')).toHaveText('4', { timeout: 60_000 });
+  });
+
+  test('a package whose referenced part is missing is refused, and keeps the open model', async ({
     page,
   }) => {
+    /*
+     * THE TRANSACTIONAL HALF THE TEST ABOVE USED TO CARRY, moved to a package
+     * that still refuses. A multi-part refusal is the interesting case: by the
+     * time it fires the reader has opened the archive, parsed the root and
+     * resolved a reference, so "the model you had open is untouched" is a claim
+     * about a read that got most of the way through.
+     */
     await openFile(page, 'good.3mf', threeMfTwoParts());
     await expect(page.getByTestId('fact-parts')).toHaveText('2', { timeout: 30_000 });
     const before = await readScene(page);
 
-    await openFile(page, 'multipart.3mf', threeMfProductionExtension());
+    await openFile(page, 'incomplete.3mf', threeMfMissingModelPart());
     await expect
       .poll(async () => statusText(page), { timeout: 60_000 })
-      .toMatch(/several model parts/i);
+      .toMatch(/does not contain/i);
 
-    // It must NOT accuse the file of being broken.
-    const shown = await statusText(page);
-    expect(shown).toMatch(/does not support/i);
-    expect(shown).not.toMatch(/does not exist/i);
-
-    // TRANSACTIONAL: the open model is untouched and nothing was drawn.
     await expect(page.getByTestId('fact-parts')).toHaveText('2');
     await expect(page.getByTestId('fact-filename')).toHaveText('good.3mf');
     const after = await readScene(page);
     expect(after.modelObjects).toBe(before.modelObjects);
     expect(after.geometriesCreated).toBe(before.geometriesCreated);
 
-    // And a valid file still imports afterwards.
     await openFile(page, 'next.3mf', threeMfSharedPlacements(4));
     await expect(page.getByTestId('fact-parts')).toHaveText('4', { timeout: 60_000 });
   });

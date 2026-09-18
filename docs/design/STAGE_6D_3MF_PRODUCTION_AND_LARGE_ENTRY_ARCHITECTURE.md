@@ -2054,6 +2054,244 @@ fully parsed and peaked at 738 MiB.
   25,000 faces — which is why the diagnostic never appears in any figure above.
 - **It did not touch A1, BETA-001 or BETA-002.**
 
+# Stage 6D-A2 — reachable multi-model-part 3MF import
+
+**Decision: `MULTI-MODEL-PART 3MF IMPORT QUALIFIED`.** Base
+`9b851a28add7860e44acf427b81fd49c83d8dce5`. **Product behaviour changed**: a 3MF
+package that keeps its objects in several model parts now imports, where v0.1.1
+refused it. No resource ceiling moved.
+
+This is the first stage in which the A1 foundation is reachable from production,
+and it is the stage in which the risk profile of the 3MF reader changes
+completely. Until now the whole production extension was one refusal and the only
+way to be wrong was to be wrong about the category. Every reference is now a
+decision about **which bytes become the user's model**, and the ways to be wrong
+are silent: an id resolved against the wrong part's table, a reference the
+specification forbids followed anyway, a failing part skipped and the rest
+imported, each part granted the package's budget again.
+
+## What imports now
+
+A package whose root model part references objects in other model parts, through
+the production extension's `path`, on either a `<build><item>` or a
+`<component>`. The referenced parts may use core geometry semantics freely,
+including their own same-part components, and their transforms compose with the
+referring ones in the specification's order.
+
+The real producer-authored `production_ext.3mf` carried in PrusaSlicer's own
+repository is exactly this shape — an empty root `<resources/>`,
+`requiredextensions="p"`, one build item naming `/3D/Objects/sub.model` with a
+transform, and a child whose object 2 is a component wrapping the mesh object 1.
+**It imports, with its transform applied.** v0.1.0 called it malformed; v0.1.1
+called the extension unsupported.
+
+## The required-extension transition
+
+`requiredextensions="p"` no longer refuses. This is one line, and it is the whole
+compatibility boundary.
+
+It is not a weakening. The rule — the file says it cannot be understood without
+these semantics, so refuse rather than import the half we recognise — is
+unchanged for every extension CAD Fixer does not implement, and a production
+construct outside the supported subset is still refused where it is used. What
+changed is that the extension IS implemented for the part of it that decides
+which geometry a package contains, which is the only part that can change what a
+reader should show.
+
+Stage 6B-C1 refused a declared-required package whose geometry was all in the
+root, reasoning that the extension carries more than paths. That reasoning was
+right while none of it was implemented. The test that pinned it now pins the
+accepting behaviour, so the next change to it is equally deliberate.
+
+## Reachability
+
+**The root's build is the only build.** A referenced part's build section is
+parsed into its record and never walked, because the specification requires
+consumers to ignore it — and walking one would invent placements the package
+never asked for. A child's build describes how that part looks ON ITS OWN.
+
+**Reachability decides what is opened.** A `.model` entry nothing references is
+never inflated, never parsed and never charged. A test proves it by putting a
+MALFORMED spare part in an otherwise valid package: if reachability were not the
+rule the package would be refused rather than imported.
+
+## The walk
+
+`expandBuild` became `expandPackageBuild`, and everything the single-part walk
+guaranteed still holds — now package-wide.
+
+| Quantity       | Before               | After                             |
+| -------------- | -------------------- | --------------------------------- |
+| object table   | one part's           | the part each reference NAMES     |
+| cycle path     | bare object id       | `(ModelPartKey, objectId)`        |
+| depth budget   | per expansion        | one, not reset at a part boundary |
+| triangle total | **per parsed model** | one per package                   |
+| vertex total   | **per parsed model** | one per package                   |
+| part count     | per expansion        | one per package                   |
+| inflation      | one entry            | one budget, every reachable entry |
+
+The first two rows of bold are Stage 6D-R1's recorded finding: those counters
+reset per `ParsedModel`, so a package of two parts each just inside the ceiling
+would have passed while producing twice it. There is now one walk over the
+package and therefore one of each total.
+
+**`(ModelPartKey, objectId)` is the identity, and both halves matter.** Object
+ids are unique within a model part, not within a package, so `id="1"` in two
+parts is ordinary 3MF. A bare-id lookup produces a document of the right SHAPE
+with the wrong geometry in it, and a bare-id cycle path refuses a perfectly
+ordinary package as a loop. Both directions are tested with marker meshes, so a
+mix-up is visible rather than plausible.
+
+**`maxTotalTriangles` and `maxTotalVertices` became named `ThreeMfLimits` fields**,
+defaulting to the document's and asserted equal to them. Not a new ceiling: it is
+what makes the package-wide property provable at four triangles instead of
+twenty million.
+
+## Lifetime: one model part at a time
+
+```text
+open entry -> inflate -> decode -> parse -> materialise -> RELEASE -> next
+```
+
+The entry buffer and the decoded XML string are locals of the part loader, so
+both become collectible when it returns. `materialiseMeshes` now **clears the
+parser's Float64 scratch** once the canonical buffers exist — `number[]` at eight
+bytes an element is larger than the typed arrays built from it, and with one
+model part that merely inflated the peak while with a package of them it would
+accumulate, because every loaded part stays reachable from the graph until the
+import ends.
+
+The walk is **strictly sequential**, and a boundary test forbids `Promise.all`.
+Two reasons: the document's part order must be the file's traversal order rather
+than the order loads settled, and concurrent branches would have several model
+parts open at once.
+
+## Refusals, each naming a construct
+
+`THREEMF_MULTI_MODEL_PART_UNSUPPORTED` **was removed.** It named one sentence —
+"this 3MF stores referenced objects in several model parts, using an extension
+CAD Fixer does not support yet" — and that sentence stopped being true. A code
+with no producer would invite reuse, and the over-broad sentence would come back
+with it, telling a user to re-export a file that now opens.
+
+| Situation                                     | Code                                    | Class       |
+| --------------------------------------------- | --------------------------------------- | ----------- |
+| `path` malformed — traversal, URL, drive, NUL | `THREEMF_MALFORMED_MODEL_PART_PATH`     | MALFORMED   |
+| `path` names an entry not in the archive      | `THREEMF_MODEL_PART_NOT_FOUND`          | MALFORMED   |
+| `path` names something that is not a model    | `THREEMF_MODEL_PART_NOT_A_MODEL`        | UNSUPPORTED |
+| target part does not declare the object       | `THREEMF_MISSING_MODEL_PART_OBJECT`     | MALFORMED   |
+| **same-part** reference dangling              | `THREEMF_MISSING_OBJECT_REFERENCE`      | MALFORMED   |
+| a non-root part chains further                | `THREEMF_NON_ROOT_MODEL_PART_PATH`      | MALFORMED   |
+| reachable parts declare different units       | `THREEMF_INCONSISTENT_MODEL_PART_UNITS` | UNSUPPORTED |
+| any other extension declared required         | `THREEMF_UNSUPPORTED_EXTENSION`         | UNSUPPORTED |
+
+**The cross-part and same-part missing-object codes are deliberately different.**
+One is a broken object graph inside one file; the other is a package whose parts
+disagree. They send a user to different places.
+
+**There is no fallback in either direction.** A cross-part reference is never
+retried against the referring part's table, and a local one never reaches the
+package resolver. A test makes the first trap concrete: the root declares an
+object with the same id the cross-part reference asks for, so a fallback would
+find it and import the wrong geometry as a success.
+
+**Units are UNSUPPORTED, not malformed.** Nothing in such a package is
+self-contradictory and a producer may legitimately write it. Honouring it would
+mean rescaling one part's coordinates into another's unit, and CAD Fixer never
+rescales stored geometry. An absent `unit` compares as millimetre, because the
+specification defaults the attribute; unreachable parts are never compared.
+
+## Transactional
+
+A multi-part import succeeds only if everything reachable succeeds. `read3mf`
+returns a document or throws, and nothing becomes authoritative until
+`commitImportedDocument` accepts one — so partial success is not a state this
+layer can represent. What the tests add is that the refusal happens **after** one
+or more children have been inflated, parsed and materialised, which is when "no
+partial geometry" is a claim worth making.
+
+Cancellation carries **one token for the whole package**, checked before a child
+is opened, after its inflate, during its parse and after its materialisation. A
+token scoped to a part would stop a thing the user cannot see rather than the
+thing they asked for.
+
+## Measured, in Chromium, on the 8 GiB minimum host
+
+Production-extension packages, renderer `phys_footprint_peak` for the complete
+user action. `npm run qualify:import-phases -- 3mf-package:<parts>:<triangles>`.
+
+| Package                            | Expanded each | Triangles | Renderer peak   | Whole browser |
+| ---------------------------------- | ------------- | --------- | --------------- | ------------- |
+| MP-S — 2 parts x 400,000 triangles | ~71 MiB       | 800,000   | 494 MiB         | 680 MiB       |
+| MP-L — 2 parts x 1,200,000         | ~214 MiB      | 2,400,000 | 1,236–1,254 MiB | 1,552 MiB     |
+| MP-N — 4 parts x 600,000           | ~107 MiB      | 2,400,000 | 1,024 MiB       | 1,322 MiB     |
+
+**MP-L is two parts within a byte of the 256 MiB per-entry ceiling**, 428 MiB
+against the 512 MiB package total — the worst case the existing budgets permit.
+It peaks BELOW the 1,742–1,815 MiB Stage 6D-B3 measured for a single 248 MiB
+entry, and well below the 1,923–1,994 MiB Stage 6D-R1 measured for two such
+entries imported one after the other.
+
+**MP-N is the lifetime claim stated as a measurement.** It carries the SAME
+2,400,000 triangles as MP-L over twice as many parts and peaks LOWER. The peak
+tracks the largest model part's transient rather than the sum, which is what
+"one model part at a time, scratch released before the next opens" has to mean
+if it means anything.
+
+Replacing an MP-L document with a 5 MiB STL added **14 MiB** to the peak and
+landed, with no session loss — no monotonic growth attributable to stale
+model-part parser state.
+
+## The real producer corpus
+
+`CADFIXER_CORPUS=<dir> npm run qualify:threemf-corpus`, which ships no fixtures:
+the repository stays dataless and the files are the ones carried in the
+producers' own public repositories, exactly as the v0.1.1 RC qualification used
+them.
+
+| File                         | Provenance                       | A2 result                                        |
+| ---------------------------- | -------------------------------- | ------------------------------------------------ |
+| `production_ext.3mf`         | **real, PrusaSlicer repository** | **imports**, 1 part, transform `50 50 0` applied |
+| `prusa_fdm_roundtrip1.3mf`   | real, PrusaSlicer-2.9.6          | imports, 2 parts — unchanged                     |
+| `prusa_fdm_roundtrip2.3mf`   | real, PrusaSlicer-2.9.6          | imports, 2 parts — unchanged                     |
+| `prusa_sla_roundtrip1.3mf`   | real, PrusaSlicer-2.9.2          | imports, 1 part — unchanged                      |
+| `prusa_sla_roundtrip2.3mf`   | real, PrusaSlicer-2.9.2          | imports, 1 part — unchanged                      |
+| `prusa_wipe_tower.3mf`       | real, PrusaSlicer-2.9.0          | imports, 1 part — unchanged                      |
+| `prusa_seam_test_object.3mf` | real, PrusaSlicer repository     | imports, 225,154 triangles                       |
+| `buechse.3mf`                | real, PrusaSlicer repository     | imports, 1 part — unchanged                      |
+
+**Compatibility regressions: 0.** Every file that imported under v0.1.1 imports
+under A2 with the same part count.
+
+`production_ext.3mf` is the one that changed, and it is the BETA-001 failure
+class on a genuine producer-authored package rather than on a constructed one.
+Its structure is precisely the supported subset: an empty root `<resources/>`,
+`requiredextensions="p"`, one build item naming `/3D/Objects/sub.model` with a
+transform, and a child whose object 2 wraps the mesh object 1 in a same-part
+component. v0.1.0 called it malformed. v0.1.1 called the extension unsupported.
+A2 imports it.
+
+**No slicer was driven to produce any of these.** They are real packages
+authored by the producers and carried in their repositories, not fresh exports
+from installed applications, and none is claimed to be a Bambu Studio export.
+
+## What A2 still does not do
+
+- **No `p:UUID` interpretation.** It is identity metadata that cannot affect
+  geometry, transform, placement, unit or which representation is selected, so it
+  is ignored — the only production metadata that is.
+- **No production alternatives or model-resolution switching**, no Secure
+  Content, no encrypted parts, no printer settings, no slicer project metadata.
+  Every one of them is still refused on declaration by the unchanged
+  unknown-extension rule.
+- **No streaming XML**, no change to the 256 MiB per-entry ceiling, no change to
+  any Stage 6D-R3 gate.
+- **`maxModelParts` still has no production value**, which is Stage 6D-R1's
+  decision standing rather than an omission: the archive's entry ceiling, the one
+  package-wide inflation budget and the document's part and triangle ceilings
+  already bound a multi-part load. The refusal is wired so a ceiling can be
+  introduced with evidence without also having to invent its error.
+
 # Acceptance targets
 
 ## BETA-001

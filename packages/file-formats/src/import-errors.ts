@@ -167,7 +167,73 @@ export const ImportRefusal = {
    * legal in the package, and what CAD Fixer cannot do is read one as geometry.
    */
   ThreeMfModelPartNotAModel: 'THREEMF_MODEL_PART_NOT_A_MODEL',
-  ThreeMfMultiModelPart: 'THREEMF_MULTI_MODEL_PART_UNSUPPORTED',
+  /*
+   * `THREEMF_MULTI_MODEL_PART_UNSUPPORTED` WAS REMOVED IN STAGE 6D-A2, and the
+   * removal is the point rather than tidying.
+   *
+   * It named one sentence — "this 3MF stores referenced objects in several model
+   * parts, using an extension CAD Fixer does not support yet" — and that
+   * sentence stopped being true the moment reachable cross-part geometry
+   * imported. A code with no producer is drift at best; kept here it would
+   * invite reuse for some specific construct, and the over-broad sentence would
+   * come back with it, telling a user to re-export a file that would now open.
+   *
+   * What replaced it is three refusals that each name a construct:
+   * `ThreeMfNonRootModelPartPath`, `ThreeMfMissingModelPartObject` and
+   * `ThreeMfInconsistentModelPartUnits`.
+   */
+  /**
+   * A `path` on a reference inside a part that is not the package root.
+   *
+   * STAGE 6D-A2. The production extension permits a path-bearing reference only
+   * in the root model part; a referenced part may not chain further. MALFORMED
+   * rather than unsupported, because this is the package violating a structural
+   * rule of the extension it declares — not CAD Fixer declining a feature.
+   *
+   * REFUSED RATHER THAN FOLLOWED, and refused rather than ignored. Following it
+   * would import geometry the specification says no consumer should reach;
+   * ignoring it would silently drop a placement the file asked for.
+   */
+  ThreeMfNonRootModelPartPath: 'THREEMF_NON_ROOT_MODEL_PART_PATH',
+  /**
+   * A cross-part reference naming an object the target model part does not
+   * declare.
+   *
+   * STAGE 6D-A2, and DELIBERATELY DISTINCT FROM `ThreeMfMissingObject`. A
+   * same-part dangling component is a broken object graph inside one file; this
+   * is a package whose parts disagree about what one of them contains. The two
+   * send a user to look in different places, so they are not one code.
+   *
+   * THERE IS NO FALLBACK TO THE REFERRING PART'S TABLE. Resolving `B.model:1`
+   * against `A.model` when B has no object 1 would import the wrong geometry
+   * and call it success.
+   */
+  ThreeMfMissingModelPartObject: 'THREEMF_MISSING_MODEL_PART_OBJECT',
+  /**
+   * Reachable model parts of one package declare different units.
+   *
+   * STAGE 6D-A2. UNSUPPORTED, not malformed: nothing in the package is
+   * self-contradictory, and a producer may legitimately write it. Honouring it
+   * would mean rescaling one part's coordinates into another's unit, and CAD
+   * Fixer never rescales stored geometry — a document holds ONE unit authority
+   * and the numbers under it are the file's own.
+   *
+   * An ABSENT `unit` is compared as millimetre, because the specification
+   * defaults the attribute. Parts that are never reached are never compared.
+   */
+  ThreeMfInconsistentModelPartUnits: 'THREEMF_INCONSISTENT_MODEL_PART_UNITS',
+  /**
+   * A package that would need more model parts LOADED than the limit allows.
+   *
+   * STAGE 6D-A2 wires the Stage 6D-A1 plumbing to a refusal, and deliberately
+   * configures NO production ceiling: Stage 6D-R1 established that the archive
+   * entry count, the one package-wide inflation budget and the document's part
+   * and triangle ceilings already bound a multi-part load, and that a fourth
+   * bound with no measurement behind it is not a policy. The code exists so a
+   * ceiling can be introduced with evidence without also having to invent its
+   * refusal.
+   */
+  ThreeMfTooManyModelParts: 'THREEMF_TOO_MANY_MODEL_PARTS',
   /**
    * The package DECLARES that it requires an extension CAD Fixer does not
    * implement.

@@ -268,14 +268,21 @@ describe('listing boundary loops', () => {
 
   it('walks a part exactly at the ceiling', async () => {
     // The gate and the fill ceiling must agree exactly: a part that CAN be
-    // filled must have its openings listed, or the workflow would offer nothing
-    // to select on a model it is willing to work on.
+    // filled must have its openings listed, or the workflow would offer
+    // nothing to select on a model it is willing to work on.
+    //
+    // GIVEN ITS OWN TIMEOUT because it is the one case that genuinely does
+    // the work the ceiling bounds: a quarter of a million loose triangles is
+    // a quarter of a million boundary components, which is the whole point.
+    // Under parallel workers it has exceeded the default five seconds, and a
+    // test that fails on machine load rather than on behaviour is worse than
+    // no test.
     const handle = install(looseTriangles(HOLE_FILL_MAX_PART_FACES));
     const outcome = await holeFillListLoopsHandler({ handle, partId: PART }, context());
 
     expect(outcome.value.inventoried).toBe(true);
     expect(outcome.value.loopCount).toBe(HOLE_FILL_MAX_PART_FACES);
-  });
+  }, 30_000);
 
   it('reports `inventoried` whenever the walk did run', async () => {
     const handle = install(hp02QuadHole());

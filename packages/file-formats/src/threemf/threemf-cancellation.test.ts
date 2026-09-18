@@ -135,7 +135,7 @@ describe('B2: cancellation is observed in each phase of a 3MF import', () => {
     expect(polls()).toBeGreaterThan(0);
   });
 
-  it('B2-P2: a cancel at the building phase stops inside materialisation', async () => {
+  it('B2-P2: a cancel at the building phase stops before any placement is emitted', async () => {
     const archive = await multiPlacement(4);
     const { context } = cancellingAtPhase(ThreeMfImportPhase.BuildingDocument);
     const recorded = stats();
@@ -143,14 +143,26 @@ describe('B2: cancellation is observed in each phase of a 3MF import', () => {
     await expectCancelled(() => read3mf(archive, context, { stats: recorded }));
 
     /*
-     * THE DISCRIMINATING ASSERTION. `materialiseMeshes` polls BEFORE it counts
-     * the mesh it is about to build, so a zero here means the poll fired on the
-     * first object. Without that poll the loop would run to completion and this
-     * would be one, with `read3mf`'s own post-expansion check reporting the
-     * cancellation afterwards — the same user-visible outcome reached by doing
-     * all of the work first.
+     * MATERIALISATION BELONGS TO LOADING A PART, NOT TO EXPANDING THE BUILD —
+     * Stage 6D-A2, and this assertion moved with it.
+     *
+     * It used to run between the `BuildingDocument` report and the walk, so a
+     * cancel at that phase landed inside it and this asserted zero. A package
+     * materialises each model part as that part is READ, because the walk may
+     * have to open another part half way through and the scratch of the one it
+     * is leaving has to be gone by then. So by the time this phase is reported
+     * the root's meshes exist, and what a cancel here must stop is the
+     * EXPANSION.
+     *
+     * THE ASSERTION IS STILL THE DISCRIMINATING ONE. `walk` polls before it
+     * resolves or emits anything, so a zero here means the poll fired on the
+     * first step. Without it the walk would run to completion and emit four,
+     * with `read3mf`'s own post-expansion check reporting the cancellation
+     * afterwards — the same user-visible outcome reached by doing all of the
+     * work first. Cancellation DURING materialisation is proved by B2-P1, which
+     * cancels at the phase that now contains it.
      */
-    expect(recorded.meshResourcesMaterialised).toBe(0);
+    expect(recorded.meshResourcesMaterialised).toBe(1);
     expect(recorded.partsEmitted).toBe(0);
   });
 

@@ -333,6 +333,77 @@ export function packageModel(modelXml) {
   ]);
 }
 
+const PRODUCTION_NS = 'http://schemas.microsoft.com/3dmanufacturing/production/2015/06';
+
+/**
+ * A PRODUCTION-EXTENSION PACKAGE: a manifest root and `parts` referenced model
+ * parts, each carrying `trianglesEach` unshared triangles.
+ *
+ * THE SHAPE STAGE 6D-A2 ADDED SUPPORT FOR, and the one whose lifetime claim
+ * needs measuring: the reader opens the root, then each child in turn, and the
+ * claim is that it holds ONE model part's transient at a time. A package built
+ * from several large entries is the only way to see whether that is true — a
+ * reader that accumulated would grow by roughly one entry per part.
+ *
+ * Each child is its own ZIP entry, so `maxEntryBytes` applies per child and the
+ * package-wide inflation budget applies to their sum.
+ */
+export function threeMfProductionPackage(parts, trianglesEach) {
+  const entries = [
+    { name: '[Content_Types].xml', content: Buffer.from(CONTENT_TYPES, 'utf8') },
+    { name: '_rels/.rels', content: Buffer.from(RELS, 'utf8') },
+  ];
+
+  const items = [];
+  for (let part = 0; part < parts; part += 1) {
+    const path = `3D/Objects/object_${String(part + 1)}.model`;
+    items.push(
+      `<item objectid="1" p:path="/${path}" transform="1 0 0 0 1 0 0 0 1 ${String(part * 400)} 0 0"/>`,
+    );
+
+    const blocks = [
+      '<?xml version="1.0" encoding="UTF-8"?>' +
+        '<model unit="millimeter" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02">' +
+        '<resources><object id="1" type="model"><mesh><vertices>',
+    ];
+    const BATCH = 4096;
+    for (let index = 0; index < trianglesEach; index += BATCH) {
+      const upto = Math.min(index + BATCH, trianglesEach);
+      let block = '';
+      for (let n = index; n < upto; n += 1) {
+        const x = (n % 512) * 0.5;
+        const y = Math.floor(n / 512) * 0.5;
+        block +=
+          `<vertex x="${x.toFixed(4)}" y="${y.toFixed(4)}" z="0.0000"/>` +
+          `<vertex x="${(x + 0.4).toFixed(4)}" y="${y.toFixed(4)}" z="0.0000"/>` +
+          `<vertex x="${x.toFixed(4)}" y="${(y + 0.4).toFixed(4)}" z="0.0000"/>`;
+      }
+      blocks.push(block);
+    }
+    blocks.push('</vertices><triangles>');
+    for (let index = 0; index < trianglesEach; index += BATCH) {
+      const upto = Math.min(index + BATCH, trianglesEach);
+      let block = '';
+      for (let n = index; n < upto; n += 1) {
+        const base = n * 3;
+        block += `<triangle v1="${String(base)}" v2="${String(base + 1)}" v3="${String(base + 2)}"/>`;
+      }
+      blocks.push(block);
+    }
+    blocks.push('</triangles></mesh></object></resources><build/></model>');
+    entries.push({ name: path, content: Buffer.from(blocks.join(''), 'utf8') });
+  }
+
+  const root =
+    '<?xml version="1.0" encoding="UTF-8"?>' +
+    '<model unit="millimeter" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02" ' +
+    `xmlns:p="${PRODUCTION_NS}" requiredextensions="p">` +
+    `<resources/><build>${items.join('')}</build></model>`;
+  entries.splice(2, 0, { name: '3D/3dmodel.model', content: Buffer.from(root, 'utf8') });
+
+  return buildZip(entries);
+}
+
 const HEAD =
   '<?xml version="1.0" encoding="UTF-8"?>' +
   '<model unit="millimeter" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02">' +

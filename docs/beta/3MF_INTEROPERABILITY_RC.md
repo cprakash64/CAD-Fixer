@@ -1,5 +1,14 @@
 # 3MF interoperability — v0.1.1 RC1
 
+> **SUPERSEDED IN PART BY STAGE 6D-A2.** The decision recorded below — Policy A,
+> strict `requiredextensions` — was right while CAD Fixer implemented none of
+> the production extension. A2 implements the reachable cross-part subset, so a
+> required PRODUCTION declaration no longer refuses; every other extension still
+> does, and the corpus was re-run with zero compatibility regressions.
+> `production_ext.3mf` now imports. See the Stage 6D-A2 section of
+> `docs/design/STAGE_6D_3MF_PRODUCTION_AND_LARGE_ENTRY_ARCHITECTURE.md`. The
+> structural findings and the source-code evidence below stand unchanged.
+
 Evidence for the one release-blocking question raised by Stage 6B-C1: does
 refusing an unsupported `requiredextensions` declaration break real slicer files
 that v0.1.0 accepted?

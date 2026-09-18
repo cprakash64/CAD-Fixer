@@ -1492,3 +1492,107 @@ describe('R3: the automatic boundary listing is size-gated before it walks', () 
     expect(source).toContain('inventoried: true');
   });
 });
+
+describe('A2: reachable cross-part loading keeps its ownership rules', () => {
+  /*
+   * THE RULES THAT ARE INVISIBLE WHEN BROKEN.
+   *
+   * A multi-part import that resolved an object id against the wrong part's
+   * table, gave each model part its own inflation allowance, or walked several
+   * parts concurrently would still produce a document — the wrong one, or one
+   * that cost several times what it should. None of those shows up as an error,
+   * so each is pinned at the source.
+   */
+  const reader = readFileSync(
+    join(REPO_ROOT, 'packages', 'file-formats', 'src', 'threemf', 'threemf-reader.ts'),
+    'utf8',
+  );
+
+  it('has exactly one place that resolves a package path', () => {
+    // A second resolver is a second answer to "may CAD Fixer open this entry",
+    // and the first traversal rule to be forgotten would be in the copy.
+    expect(reader.match(/resolvePackageModelPath\(/g) ?? []).toHaveLength(1);
+  });
+
+  it('constructs exactly one package graph, holding the archive budget', () => {
+    expect(reader.match(/new PackageModelGraph</g) ?? []).toHaveLength(1);
+    const at = reader.indexOf('new PackageModelGraph<');
+    const construction = reader.slice(at, reader.indexOf('});', at));
+    // THE ARCHIVE'S BUDGET, not a fresh one. A per-part budget is a per-part
+    // FULL allowance — twenty parts, twenty times the ceiling.
+    expect(construction).toContain('budget,');
+    expect(construction).not.toContain('createInflationBudget');
+  });
+
+  it('never awaits model-part loads concurrently', () => {
+    /*
+     * ORDERING AND LIFETIME BOTH DEPEND ON THIS. `Promise.all` over components
+     * would make the document's part order the order loads happened to settle,
+     * and would inflate, decode and parse several model parts at once — which is
+     * the transient accumulation Stage 6D-R1's one-part-in-flight contract rests
+     * on not happening.
+     */
+    // Matched as a CALL, so the comment above the walk explaining why this is
+    // forbidden does not trip its own rule.
+    expect(reader).not.toMatch(/Promise\s*\.\s*all(Settled)?\s*\(/);
+  });
+
+  it('keys the cycle path on the object identity, never on a bare id', () => {
+    // Two model parts may each legally declare `id="1"`. A bare-id path set
+    // calls `A.model:1 -> B.model:1` a cycle and refuses an ordinary package.
+    expect(reader).toContain('objectKeyToString({ part: target.key, objectId })');
+  });
+
+  it('enforces the package totals from the limits it was given', () => {
+    /*
+     * Stage 6D-R1 recorded that these counters reset per parsed model, so a
+     * package of two parts each just inside the ceiling produced twice it. They
+     * are read from `limits` so the package-wide property is provable at four
+     * triangles instead of twenty million.
+     */
+    const walkAt = reader.indexOf('async function expandPackageBuild');
+    const walk = reader.slice(walkAt);
+    expect(walk).toContain('limits.maxTotalTriangles');
+    expect(walk).toContain('limits.maxTotalVertices');
+    /*
+     * THE WALK READS ITS CEILINGS FROM `limits`. Reaching for
+     * `DEFAULT_DOCUMENT_LIMITS` here would re-hardcode them and make the
+     * package-wide property unprovable without a twenty-million-triangle
+     * fixture. The DEFAULTS still come from the document — asserted in the 3MF
+     * suite — which is where that equality belongs.
+     */
+    expect(walk).not.toContain('DEFAULT_DOCUMENT_LIMITS.maxTotal');
+  });
+
+  it('keeps the retired whole-extension refusal out of the vocabulary', () => {
+    // `THREEMF_MULTI_MODEL_PART_UNSUPPORTED` said the extension was unsupported.
+    // That sentence stopped being true in A2, and a code with no producer would
+    // invite its return.
+    const errors = readFileSync(
+      join(REPO_ROOT, 'packages', 'file-formats', 'src', 'import-errors.ts'),
+      'utf8',
+    );
+    expect(errors).not.toMatch(/ThreeMfMultiModelPart:/);
+  });
+
+  it('tells no user that the production extension is unsupported', () => {
+    /*
+     * THE ONE SENTENCE A2 HAD TO RETIRE. A refusal naming the whole extension
+     * would send someone to re-export a file that now imports. Specific
+     * constructs may still be named — the non-root path refusal does — so this
+     * looks for the CLAIM, not for the words.
+     */
+    for (const file of shippedSources()) {
+      const text = readFileSync(file, 'utf8');
+      for (const [quote] of text.matchAll(/'[^'\n]{40,}'/g)) {
+        const sentence = quote.toLowerCase();
+        if (!sentence.includes('production extension')) continue;
+        expect(
+          sentence.includes('does not support that extension') ||
+            sentence.includes('does not support the 3mf production'),
+          `${relative(REPO_ROOT, file)} still calls the production extension unsupported`,
+        ).toBe(false);
+      }
+    }
+  });
+});

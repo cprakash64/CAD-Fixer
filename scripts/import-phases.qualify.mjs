@@ -60,6 +60,7 @@ import {
   threeMfDense,
   threeMfManyObjects,
   threeMfPlacements,
+  threeMfProductionPackage,
 } from './fixtures.qualify.mjs';
 
 const BASE_URL = process.env.CADFIXER_QUALIFY_URL ?? 'http://localhost:4173/';
@@ -125,6 +126,21 @@ function buildFixture(spec) {
         name: `${spec}.3mf`,
         content: threeMfManyObjects(objects, each),
         triangles: objects * each,
+      };
+    }
+    case '3mf-package': {
+      /*
+       * A PRODUCTION-EXTENSION PACKAGE: `n(0)` referenced model parts of
+       * `n(1)` triangles each. Stage 6D-A2's lifetime claim is that ONE model
+       * part is open at a time, which only a package of several large entries
+       * can put to the test.
+       */
+      const parts = n(0, 2);
+      const each = n(1, 500_000);
+      return {
+        name: `${spec}.3mf`,
+        content: threeMfProductionPackage(parts, each),
+        triangles: parts * each,
       };
     }
     case '3mf-place': {
