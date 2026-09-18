@@ -156,6 +156,33 @@ outside the root model part, a `path` naming an entry the archive does not hold,
 a cross-part reference the target part does not declare, reachable parts that
 declare different units, and any OTHER extension declared required.
 
+### Stage 6D-A3 — a second blocker on the same file family
+
+**A2 was probably not sufficient on its own, and that is worth saying plainly.**
+
+The reported file is a multi-material **AMS** print. AMS is Bambu Lab's
+Automatic Material System, so the producer was almost certainly Bambu Studio or
+OrcaSlicer. Stage 6D-A3's producer corpus found that **both of those write Zip64
+3MF packages at any size** — their calibration packages are 140 and 256
+kilobytes and every size and offset in the central directory is the
+`0xFFFFFFFF` sentinel.
+
+CAD Fixer refused every such archive with _"This archive's directory is
+truncated"_, **before** the production-extension support A2 added could be
+reached. So a Bambu or Orca production package had two independent reasons not
+to import, and A2 removed only one of them.
+
+A3 reads Zip64 directories. Both blockers are now gone for this file family, and
+all sixteen files in the producer corpus — PrusaSlicer, Bambu Studio and
+OrcaSlicer — import.
+
+**This still does not say the tester's file works.** It says two defects that
+would each have blocked it are fixed, and that real packages from the producer
+family it came from now import correctly. Their file may use further constructs
+CAD Fixer refuses by name. Only their retest closes this.
+
+**Status unchanged: `SUPPORTED STRUCTURAL CLASS — TESTER RETEST REQUIRED`.**
+
 ### What Stage 6B-C1 changed
 
 The product finding is **confirmed**: a standards-valid production-extension

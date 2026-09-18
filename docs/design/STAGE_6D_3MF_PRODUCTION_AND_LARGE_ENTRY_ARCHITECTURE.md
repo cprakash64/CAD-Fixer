@@ -2292,6 +2292,240 @@ from installed applications, and none is claimed to be a Bambu Studio export.
   already bound a multi-part load. The refusal is wired so a ceiling can be
   introduced with evidence without also having to invent its error.
 
+# Stage 6D-A3 — hardening the Production Extension against the normative text
+
+**Decision: `PRODUCTION EXTENSION SEMANTICS HARDENED — READY FOR A4`.** Base
+`6324c6d5510516065f85170992dd4f85cbbce0c2`. **Product behaviour changed in three
+ways**, all of them corrections, all listed below. No resource ceiling moved.
+
+Stage 6D-A2 made a production-extension package import. A3 is the stage that
+checks the semantics are the SPECIFICATION'S rather than the ones that happened
+to make A2's fixtures pass — and the stage in which a real producer corpus was
+allowed to contradict the implementation.
+
+## The normative matrix
+
+Every rule below was read from the primary specifications during this stage
+rather than recalled from A1 or A2.
+
+| Construct                 | Normative requirement                                                                                                | CAD Fixer                                                              | Test           |
+| ------------------------- | -------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- | -------------- |
+| `p:path` on `<item>`      | root build only; "objectid becomes a reference to the object within the referenced model"                            | followed; object resolved in the target part                           | A3-NS, A2-X01  |
+| `p:path` on `<component>` | **"ONLY valid in the root model file"**; non-root use — consumer **"MUST generate an error"**                        | `THREEMF_NON_ROOT_MODEL_PART_PATH`, before local fallback              | A3-NR          |
+| non-root `<build>`        | **"Every consumer MUST ignore the build section entries of all referenced child model files"**                       | ignored, and **not validated**                                         | A3-CB1–CB4     |
+| referenced resources      | **"MUST come from the referenced object file"**                                                                      | per-part object and property tables, no upward lookup                  | A3-ID, A3-PROP |
+| root model part           | the target of the OPC relationship `.../2013/01/3dmodel` in the root `.rels`                                         | **now read from `.rels`** — see the defect below                       | A3-ROOT        |
+| non-root in root `.rels`  | **"MUST not be referenced from the root .rels file"**                                                                | relied on: whatever it names is the root                               | A3-ROOT        |
+| `requiredextensions`      | "space-delimited list of namespace **prefixes**"; consumer "MUST NOT process this model-file if they do not support" | resolved through the prefix map; production accepted, all else refused | A3-RX          |
+| unknown namespaces        | **"Consumers MUST ignore all XML nodes and attributes from namespaces it does not explicitely support"**             | declared-but-unrequired extensions are ignored                         | A3-RX          |
+| `unit`                    | micron, millimeter, centimeter, inch, foot, meter; default millimeter                                                | exactly those six, case-sensitive; absent = millimetre                 | A3-U           |
+| resource `id`             | `xs:positiveInteger`, max exclusive 2^31                                                                             | lexical check, 1..2,147,483,647                                        | A3-IDV         |
+| `transform`               | "row-major affine", twelve values, implicit `(0,0,0,1)` column                                                       | composed in row-vector order; tokens checked lexically                 | A3-TX, A3-TXV  |
+| `p:UUID`                  | producer requirement; **no consumer validation mandated**                                                            | ignored, including when malformed                                      | A3-UUID        |
+| alternatives (2021/04)    | a separate extension; `fullres` / `lowres` / `obfuscated` select the representation                                  | refused specifically                                                   | A3-ALT         |
+
+## The supported subset, exactly
+
+**SUPPORTED** — imports, with no warning about the extension:
+
+- `p:path` on a root `<build><item>`, and on a `<component>` in the root model
+  part
+- any number of referenced `.model` parts, each parsed once however often named
+- same-part `<components>` inside a referenced part, to the shared depth budget
+- repeated references to one model part, sharing one canonical mesh
+- `transform` on items and components, composed across the part boundary
+- object ids scoped per model part, including the same id in several parts
+- a referenced part with an empty, absent or ignorable `<build>`
+- reachable parts that agree on a unit, or omit it and mean millimetre
+- `p:UUID` anywhere, in any form
+
+**UNSUPPORTED, REFUSED BY NAME** — a valid construct CAD Fixer does not
+implement:
+
+| Construct                                          | Code                                    |
+| -------------------------------------------------- | --------------------------------------- |
+| production alternatives / model resolution         | `THREEMF_MODEL_RESOLUTION_UNSUPPORTED`  |
+| any other extension declared required              | `THREEMF_UNSUPPORTED_EXTENSION`         |
+| reachable parts declaring different units          | `THREEMF_INCONSISTENT_MODEL_PART_UNITS` |
+| a `path` naming something that is not a model part | `THREEMF_MODEL_PART_NOT_A_MODEL`        |
+
+**MALFORMED, REFUSED BY NAME** — the package contradicts the specification:
+
+| Construct                                       | Code                                |
+| ----------------------------------------------- | ----------------------------------- |
+| a `path` outside the root model part            | `THREEMF_NON_ROOT_MODEL_PART_PATH`  |
+| a `path` that is not a well-formed package path | `THREEMF_MALFORMED_MODEL_PART_PATH` |
+| a `path` naming an entry the archive lacks      | `THREEMF_MODEL_PART_NOT_FOUND`      |
+| an object the target part does not declare      | `THREEMF_MISSING_MODEL_PART_OBJECT` |
+| several model parts and no identifiable root    | `THREEMF_AMBIGUOUS_ROOT_MODEL_PART` |
+
+**IGNORED AS SAFE METADATA** — proven unable to change geometry, transform,
+placement, unit or which representation is selected:
+
+- `p:UUID` on `<model>`, `<build>`, `<item>`, `<object>` and `<component>`
+- a referenced part's own `<build>` entries
+- a referenced part's own relationships
+- `[Content_Types].xml` declarations
+- elements and attributes from any namespace CAD Fixer does not implement, per
+  3MF core's must-ignore rule — except the alternatives namespace, above
+
+## Three corrections
+
+### 1. The root model part was found by guessing
+
+`findModelEntry` preferred `3D/3dmodel.model` and otherwise took **the first
+`.model` entry the ZIP directory happened to list**. The specification identifies
+the root by the OPC relationship, and the production extension adds that non-root
+model files must NOT appear in the root `.rels` — so the relationship is
+unambiguous and the directory order means nothing.
+
+In a single-part package the old behaviour was harmless. **After A2 it is not**:
+in a production package the first `.model` can be a CHILD, and the reader walks
+the root's build — so it would expand a part the specification says to ignore, or
+find no build and report a file that builds nothing. Either way it answers from
+the wrong part, silently.
+
+`resolveRootModelEntry` now tries, in order: the root `.rels` model relationship;
+the conventional path; a single `.model` entry. **Several model parts with none
+of those is a refusal**, `THREEMF_AMBIGUOUS_ROOT_MODEL_PART`, not a guess. A
+`.rels` Target goes through `canonicalisePackagePath` — the same validation a
+production `path` gets — so relationships cannot become a weaker route into the
+archive, and a broken or unsafe one falls back rather than refusing a package
+that plainly has a root.
+
+### 2. Zip64 packages were refused as corrupt — and mainstream slicers write them
+
+**This is the finding the producer corpus existed to produce.** Zip64 exists for
+archives past four gibibytes, so a 512 MiB ceiling looks like it makes the whole
+thing irrelevant. It does not: a writer may emit the Zip64 structures at ANY
+size, and **Bambu Studio and OrcaSlicer do**. Their calibration packages are 140
+and 256 kilobytes, and in both every size and offset in the central directory is
+the `0xFFFFFFFF` sentinel with the real values in a Zip64 extended-information
+extra field.
+
+CAD Fixer refused all of them with _"This archive's directory is truncated"_ —
+telling users their working slicer output was damaged.
+
+`readZipDirectory` now consults the Zip64 end-of-central-directory record when,
+and only when, a fixed field is its sentinel, and resolves each entry's size and
+offset from the tag-1 extra field per field rather than as a block. **Every
+ceiling is applied to the RESOLVED value**: checking the sentinel would refuse an
+ordinary entry as four gibibytes, and skipping the check for Zip64 entries would
+leave a real one unbounded. A sentinel promising a value the extra field does not
+carry is malformed, never a fallback to `0xFFFFFFFF`.
+
+64-bit fields are read as two 32-bit halves and refused above 2^53, so no offset
+this reader follows can have been rounded.
+
+### 3. A transform token was coerced rather than read
+
+`Number('0x10')` is sixteen and `Number('Infinity')` is infinity, and neither is
+an `xs:double`. Transform tokens are now checked against the lexical form first —
+the same reasoning that made `pid` a lexical check. `1e400` is a valid spelling
+that overflows, so the finiteness check stays.
+
+## What is refused, and why it is not "the extension"
+
+`THREEMF_MODEL_RESOLUTION_UNSUPPORTED` is new. The production **alternatives**
+extension — `.../production/alternatives/2021/04`, a different URI — lets an
+object carry `fullres`, `lowres` and `obfuscated` representations, so which
+geometry IS the object depends on a selection.
+
+**The tension with core is real and is recorded rather than glossed.** Core says a
+consumer "MUST ignore all XML nodes and attributes from namespaces it does not
+explicitely support", which read alone would have CAD Fixer import the base object
+and report success — possibly handing a user an obscured representation as their
+model. A package using alternatives is required by the production specification to
+declare the extension, in which case the unknown-required rule refuses it first;
+this catches the producer that did not. It is a narrow, namespace-scoped
+exception, not an "unknown namespace is an error" policy, and a declared but
+unused extension still imports.
+
+## What is deliberately NOT validated
+
+- **`[Content_Types].xml`.** A model part's content type is packaging metadata.
+  What decides whether CAD Fixer reads an entry as geometry is that a production
+  `path` names it, that the path ends in `.model`, and that the bytes parse as a
+  model through a fail-closed scanner. Requiring a content type adds no
+  protection — a non-model entry still fails to parse — and would refuse packages
+  whose declarations differ only in form.
+- **A referenced part's own `.rels`.** OPC conformance requires referenced model
+  files to be listed in the referencing part's relationships, but the `path`
+  attribute names the target directly and that is what the geometry
+  interpretation rests on. Validating it would refuse packages mainstream readers
+  open, for metadata that changes no geometry.
+- **A referenced part's `<build>`.** Normatively ignorable, so validating it would
+  be a false refusal bought with no safety.
+- **`p:UUID`, in any form.** The specification puts UUIDs on producers and
+  mandates no consumer validation. A malformed one imports.
+- **A package that uses `p:path` without declaring the extension required.** The
+  production specification says a producer MUST declare it. Refusing a file for a
+  producer-side MUST that changes no interpretation would cost interoperability
+  and buy nothing.
+
+## Producer corpus — sixteen real files, all importing
+
+Fetched into scratch and deleted; nothing is committed.
+`CADFIXER_CORPUS=<dir> npm run qualify:threemf-corpus`.
+
+| File                  | Producer          | Parts | Triangles | Result                       |
+| --------------------- | ----------------- | ----- | --------- | ---------------------------- |
+| `production_ext`      | PrusaSlicer repo  | 1     | 12        | imports, transform `50 50 0` |
+| `fdm_roundtrip1`, `2` | PrusaSlicer 2.9.6 | 2     | 72        | imports                      |
+| `sla_roundtrip1`, `2` | PrusaSlicer 2.9.2 | 1     | 24        | imports                      |
+| `wipe_tower`          | PrusaSlicer 2.9.0 | 1     | 36        | imports                      |
+| `seam_test_object`    | PrusaSlicer repo  | 1     | 225,154   | imports                      |
+| `Büchse` (×3 repos)   | shared fixture    | 1     | 12        | imports                      |
+| `flowrate-test-pass1` | **Bambu Studio**  | 9     | 6,920     | **Zip64 — was refused**      |
+| `auto_pa_line_dual`   | Bambu Studio      | 16    | 192       | imports, 2 distinct meshes   |
+| `pa_pattern`          | Bambu / Orca      | 1     | 12        | imports                      |
+| `Orca-LinearFlow`     | **OrcaSlicer**    | 11    | 15,160    | **Zip64 — was refused**      |
+| `OrcaBadge`           | OrcaSlicer        | 39    | 72,586    | imports                      |
+| `OrcaSliced`          | OrcaSlicer        | 30    | 256,568   | imports                      |
+
+**16 of 16 import. Two of them could not before this stage.** No slicer was
+driven to produce any of these; they are real packages carried in the producers'
+own public repositories.
+
+## Memory: unchanged from A2
+
+Same harness, same 8 GiB host, renderer `phys_footprint_peak`.
+
+| Package                            | A2              | **A3**        |
+| ---------------------------------- | --------------- | ------------- |
+| MP-S — 2 parts x 400,000 triangles | 494 MiB         | **506 MiB**   |
+| MP-L — 2 parts x 1,200,000         | 1,236–1,254 MiB | **1,271 MiB** |
+
+Within run-to-run spread on both. A3 added a `.rels` read — a few hundred bytes
+charged to the package's own budget — and changed nothing else about what an
+import allocates.
+
+## The support statement this stage earns
+
+> **CAD Fixer supports core 3MF geometry and the geometry-reference subset of the
+> 3MF Production Extension: `path` references from a root build item or root
+> component to reachable model parts, with their transforms and part-scoped
+> object identities. Other Production Extension semantics, and every other 3MF
+> extension, are refused by name. Resource limits apply package-wide.**
+
+Every clause is bounded by something measured or refused, and nothing broader is
+claimed: not "supports the Production Extension", not "supports multi-material",
+not "supports Bambu Studio files". The corpus shows sixteen real producer
+packages importing; it does not show that every package those producers can emit
+will.
+
+## Product behaviour change
+
+- **Newly accepted:** every Zip64 3MF — which is every Bambu Studio and
+  OrcaSlicer package of this kind; and a production package whose root model part
+  sits at an unconventional path with a correct `.rels`.
+- **Newly refused:** a package using the production ALTERNATIVES extension
+  without declaring it required; an archive with several `.model` parts, no root
+  relationship and no conventional path; a transform token that is not an
+  `xs:double`.
+- **Unchanged:** every ceiling, every cancellation guarantee, core 3MF, STL and
+  OBJ.
+
 # Acceptance targets
 
 ## BETA-001

@@ -575,3 +575,185 @@ describe('the document gate runs for every format', () => {
     expect(triangleCount(document.parts[0]?.mesh as never)).toBe(4);
   });
 });
+
+/* ---------------------------------- A3: multi-model-part, through the worker -- */
+
+describe('A3: a production-extension package goes through the same transaction', () => {
+  const CORE = 'http://schemas.microsoft.com/3dmanufacturing/core/2015/02';
+  const PRODUCTION = 'http://schemas.microsoft.com/3dmanufacturing/production/2015/06';
+  const RELS =
+    '<?xml version="1.0" encoding="UTF-8"?>' +
+    '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+    '<Relationship Id="rel0" Target="/3D/3dmodel.model" ' +
+    'Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/></Relationships>';
+  const CONTENT_TYPES_XML =
+    '<?xml version="1.0" encoding="UTF-8"?>' +
+    '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">' +
+    '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>' +
+    '<Default Extension="model" ContentType="application/vnd.ms-package.3dmanufacturing-3dmodel+xml"/>' +
+    '</Types>';
+
+  /** `children` referenced parts, each placed once by the root's build. */
+  async function productionPackage(children: number, broken = false): Promise<ArrayBuffer> {
+    const items: string[] = [];
+    const parts: { name: string; method: 8; content: string }[] = [];
+    for (let index = 0; index < children; index += 1) {
+      const path = `3D/Objects/object_${String(index + 1)}.model`;
+      items.push(
+        `<item objectid="1" p:path="/${path}" transform="1 0 0 0 1 0 0 0 1 ${String(index * 30)} 0 0"/>`,
+      );
+      parts.push({
+        name: path,
+        method: 8,
+        content:
+          '<?xml version="1.0" encoding="UTF-8"?>' +
+          `<model unit="millimeter" xmlns="${CORE}"><resources>` +
+          // THE LAST CHILD IS THE BROKEN ONE when asked for, so the refusal
+          // happens AFTER earlier children have been read and materialised.
+          (broken && index === children - 1
+            ? '<object id="1" type="model"><mesh><vertices>' +
+              '<vertex x="0" y="0" z="0"/></vertices><triangles>' +
+              '<triangle v1="0" v2="9" v3="9"/></triangles></mesh></object>'
+            : `<object id="1" type="model">${TETRAHEDRON_MESH}</object>`) +
+          '</resources><build/></model>',
+      });
+    }
+
+    return toArrayBuffer(
+      await buildZip([
+        { name: '[Content_Types].xml', method: 8, content: CONTENT_TYPES_XML },
+        { name: '_rels/.rels', method: 8, content: RELS },
+        {
+          name: '3D/3dmodel.model',
+          method: 8,
+          content:
+            '<?xml version="1.0" encoding="UTF-8"?>' +
+            `<model unit="millimeter" xmlns="${CORE}" xmlns:p="${PRODUCTION}" requiredextensions="p">` +
+            `<resources/><build>${items.join('')}</build></model>`,
+        },
+        ...parts,
+      ]),
+    );
+  }
+
+  it('commits every reachable part as one document, with one render buffer each', async () => {
+    const result = await modelImportHandler(
+      { bytes: await productionPackage(3), fileName: 'package.3mf' },
+      context(),
+    );
+
+    expect(result.value.formatId).toBe('3mf');
+    expect(result.value.parts).toHaveLength(3);
+    expect(result.value.unit).toBe('millimeter');
+    expect(result.value.triangleCount).toBe(12);
+    // THREE DISTINCT MESHES, so three render resources and no accidental sharing.
+    expect(new Set(result.value.parts.map((part) => part.meshResourceIndex)).size).toBe(3);
+    expect(result.value.render.parts).toHaveLength(3);
+  });
+
+  it('leaves the previous document untouched when one reachable part is broken', async () => {
+    /*
+     * THE TRANSACTIONAL CLAIM AT THE LAYER THAT CAN BREAK IT. Two children are
+     * read and materialised before the third refuses, so this is not a package
+     * that failed at the door — and still nothing becomes authoritative.
+     */
+    const first = await modelImportHandler(
+      { bytes: await productionPackage(1), fileName: 'good.3mf' },
+      context(),
+    );
+    const before = residentDocuments.stats();
+
+    await expectRefusal(
+      async () =>
+        modelImportHandler(
+          { bytes: await productionPackage(3, true), fileName: 'broken.3mf' },
+          context(),
+        ),
+      AppErrorCode.MalformedFile,
+    );
+
+    // The handle from before still resolves, and nothing new became resident.
+    expect(residentDocuments.stats()).toEqual(before);
+    const document = residentDocuments.resolve(first.value.handle);
+    expect('parts' in document).toBe(true);
+
+    // And the next valid package still imports.
+    const next = await modelImportHandler(
+      { bytes: await productionPackage(2), fileName: 'next.3mf' },
+      context(),
+    );
+    expect(next.value.parts).toHaveLength(2);
+  });
+
+  it('a replacement is a SEPARATE document, and releasing the first does not disturb it', async () => {
+    /*
+     * THE REPLACEMENT RACE, WITH MULTI-PART SOURCES ON BOTH SIDES.
+     *
+     * AN IMPORT NEVER OVERWRITES. Each commit produces its own `documentId`, so
+     * a package import that takes seconds cannot have its result written over
+     * by one started later — the two are different documents and the page
+     * decides which it is looking at. Releasing the one it has moved off is the
+     * separate, explicit act, and it must not touch the other.
+     */
+    const original = await modelImportHandler(
+      { bytes: await productionPackage(3), fileName: 'a.3mf' },
+      context(),
+    );
+    const replacement = await modelImportHandler(
+      { bytes: await productionPackage(2), fileName: 'b.3mf' },
+      context(),
+    );
+
+    expect(replacement.value.parts).toHaveLength(2);
+    expect(original.value.handle.documentId).not.toBe(replacement.value.handle.documentId);
+    expect('parts' in residentDocuments.resolve(original.value.handle)).toBe(true);
+    expect('parts' in residentDocuments.resolve(replacement.value.handle)).toBe(true);
+
+    residentDocuments.release(original.value.handle.documentId);
+
+    // The superseded handle stops resolving; the current one is untouched.
+    expect('parts' in residentDocuments.resolve(original.value.handle)).toBe(false);
+    const current = residentDocuments.resolve(replacement.value.handle);
+    expect('parts' in current).toBe(true);
+    if (!('parts' in current)) return;
+    expect(current.parts).toHaveLength(2);
+  });
+
+  it('a stale handle for a released package resolves to a typed failure, not to geometry', async () => {
+    const original = await modelImportHandler(
+      { bytes: await productionPackage(3), fileName: 'a.3mf' },
+      context(),
+    );
+    residentDocuments.release(original.value.handle.documentId);
+
+    const stale = residentDocuments.resolve(original.value.handle);
+    expect('parts' in stale).toBe(false);
+    expect(isAppError(stale)).toBe(true);
+  });
+
+  it('a cancelled package import commits nothing and leaves the worker usable', async () => {
+    let cancelled = false;
+    const token: CancellationToken = {
+      get isCancelled(): boolean {
+        return cancelled;
+      },
+      onCancelled(): () => void {
+        return (): void => undefined;
+      },
+    };
+
+    const bytes = await productionPackage(3);
+    cancelled = true;
+    await expectRefusal(
+      async () => modelImportHandler({ bytes, fileName: 'cancelled.3mf' }, context(token)),
+      AppErrorCode.OperationCancelled,
+    );
+    expect(residentDocuments.stats().documentCount).toBe(0);
+
+    const after = await modelImportHandler(
+      { bytes: await productionPackage(2), fileName: 'after.3mf' },
+      context(),
+    );
+    expect(after.value.parts).toHaveLength(2);
+  });
+});

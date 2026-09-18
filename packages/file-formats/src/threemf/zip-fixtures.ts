@@ -79,6 +79,25 @@ export interface ZipFixtureEntry {
 export interface ZipFixtureOptions {
   /** Overrides the EOCD entry count, independently of the real one. */
   readonly declaredEntryCount?: number;
+  /**
+   * Writes the archive the way Bambu Studio and OrcaSlicer write theirs: every
+   * size and offset replaced by the `0xFFFFFFFF` sentinel, the real values in a
+   * Zip64 extended-information extra field, and a Zip64 end-of-central-directory
+   * record and locator before the EOCD.
+   *
+   * NOT A LARGE-ARCHIVE OPTION. Zip64 exists for archives past four gibibytes,
+   * but a writer may emit it at any size — and Stage 6D-A3's producer corpus
+   * found two mainstream slicers doing so in packages of a few hundred
+   * kilobytes. A fixture of a few hundred bytes reproduces it exactly.
+   */
+  readonly zip64?: boolean;
+  /**
+   * Writes the Zip64 sentinels and the records, but omits the extra field that
+   * is supposed to carry the real values.
+   *
+   * The malformed case: an entry that promises a 64-bit size it does not carry.
+   */
+  readonly zip64WithoutExtra?: boolean;
 }
 
 /**
@@ -121,45 +140,92 @@ export async function buildZip(
     local.set(payload, 30 + nameBytes.byteLength);
     locals.push(local);
 
-    const central = new Uint8Array(46 + nameBytes.byteLength);
+    /*
+     * ZIP64 REPLACES THE THREE 32-BIT FIELDS WITH SENTINELS and carries the
+     * real values, in the order uncompressed, compressed, local offset, in a
+     * tag-1 extra field. `zip64WithoutExtra` writes the sentinels and no extra
+     * field at all, which is the malformed shape a reader must refuse rather
+     * than read as four gibibytes.
+     */
+    const wantsZip64 = options.zip64 === true || options.zip64WithoutExtra === true;
+    const extraBytes = options.zip64 === true ? 4 + 24 : 0;
+    const central = new Uint8Array(46 + nameBytes.byteLength + extraBytes);
     const centralView = new DataView(central.buffer);
     centralView.setUint32(0, 0x02014b50, true);
-    centralView.setUint16(4, 20, true);
-    centralView.setUint16(6, 20, true);
+    centralView.setUint16(4, 45, true);
+    centralView.setUint16(6, 45, true);
     centralView.setUint16(8, flags, true);
     centralView.setUint16(10, method, true);
     centralView.setUint32(16, crc32(raw), true);
-    centralView.setUint32(20, declaredCompressed, true);
-    centralView.setUint32(24, declaredUncompressed, true);
+    centralView.setUint32(20, wantsZip64 ? 0xffffffff : declaredCompressed, true);
+    centralView.setUint32(24, wantsZip64 ? 0xffffffff : declaredUncompressed, true);
     centralView.setUint16(28, nameBytes.byteLength, true);
-    centralView.setUint32(42, offset, true);
+    centralView.setUint16(30, extraBytes, true);
+    centralView.setUint32(42, wantsZip64 ? 0xffffffff : offset, true);
     central.set(nameBytes, 46);
+    if (options.zip64 === true) {
+      const at = 46 + nameBytes.byteLength;
+      centralView.setUint16(at, 0x0001, true);
+      centralView.setUint16(at + 2, 24, true);
+      setUint64(centralView, at + 4, declaredUncompressed);
+      setUint64(centralView, at + 12, declaredCompressed);
+      setUint64(centralView, at + 20, offset);
+    }
     centrals.push(central);
 
     offset += local.byteLength;
   }
 
   const centralSize = centrals.reduce((total, entry) => total + entry.byteLength, 0);
-  const eocd = new Uint8Array(22);
-  const eocdView = new DataView(eocd.buffer);
-  eocdView.setUint32(0, 0x06054b50, true);
-  eocdView.setUint16(8, options.declaredEntryCount ?? entries.length, true);
-  eocdView.setUint16(10, options.declaredEntryCount ?? entries.length, true);
-  eocdView.setUint32(12, centralSize, true);
-  eocdView.setUint32(16, offset, true);
+  const zip64 = options.zip64 === true || options.zip64WithoutExtra === true;
+  const tail = zip64 ? 56 + 20 + 22 : 22;
 
-  const out = new Uint8Array(offset + centralSize + 22);
+  const out = new Uint8Array(offset + centralSize + tail);
   let at = 0;
   for (const local of locals) {
     out.set(local, at);
     at += local.byteLength;
   }
+  const centralStart = at;
   for (const central of centrals) {
     out.set(central, at);
     at += central.byteLength;
   }
-  out.set(eocd, at);
+
+  const view = new DataView(out.buffer);
+  if (zip64) {
+    // Zip64 end of central directory record: 56 bytes for version 1.
+    const record = at;
+    view.setUint32(record, 0x06064b50, true);
+    setUint64(view, record + 4, 44);
+    view.setUint16(record + 12, 45, true);
+    view.setUint16(record + 14, 45, true);
+    setUint64(view, record + 24, entries.length);
+    setUint64(view, record + 32, entries.length);
+    setUint64(view, record + 40, centralSize);
+    setUint64(view, record + 48, centralStart);
+    at += 56;
+
+    // Zip64 end of central directory locator.
+    view.setUint32(at, 0x07064b50, true);
+    setUint64(view, at + 8, record);
+    view.setUint32(at + 16, 1, true);
+    at += 20;
+  }
+
+  view.setUint32(at, 0x06054b50, true);
+  const declared = options.declaredEntryCount ?? entries.length;
+  view.setUint16(at + 8, zip64 ? 0xffff : declared, true);
+  view.setUint16(at + 10, zip64 ? 0xffff : declared, true);
+  view.setUint32(at + 12, zip64 ? 0xffffffff : centralSize, true);
+  view.setUint32(at + 16, zip64 ? 0xffffffff : centralStart, true);
   return out;
+}
+
+/** A 64-bit little-endian write, in two halves. Fixtures never need BigInt. */
+function setUint64(view: DataView, at: number, value: number): void {
+  view.setUint32(at, value >>> 0, true);
+  view.setUint32(at + 4, Math.floor(value / 0x1_0000_0000), true);
 }
 
 export const CONTENT_TYPES = `<?xml version="1.0" encoding="UTF-8"?>

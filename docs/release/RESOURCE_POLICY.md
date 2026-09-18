@@ -109,6 +109,46 @@ pages rather than anything the reader holds.
 producer corpus is run with `CADFIXER_CORPUS=<dir> npm run qualify:threemf-corpus`,
 which ships no fixtures — the repository stays dataless.
 
+## Stage 6D-A3: Zip64, and where the root model part comes from
+
+**No ceiling moved.** Two intake corrections, both found by running real
+producer output against the reader.
+
+**Zip64 directories are read.** Zip64 exists for archives past four gibibytes,
+but a writer may emit its structures at any size — and **Bambu Studio and
+OrcaSlicer do**, in calibration packages of 140 and 256 kilobytes where every
+size and offset is the `0xFFFFFFFF` sentinel. CAD Fixer refused all of them as
+corrupt archives. The Zip64 end-of-central-directory record and the tag-1 extra
+field are now consulted when, and only when, a fixed field is its sentinel.
+
+**Every ceiling is applied to the RESOLVED value**, which is the part that
+matters here: checking the sentinel would refuse an ordinary entry as four
+gibibytes, and skipping the check for Zip64 entries would leave a real one
+unbounded. A sentinel promising a value the extra field does not carry is
+malformed, never a silent fallback to `0xFFFFFFFF`. Sizes and offsets are read
+as two 32-bit halves and refused above 2^53.
+
+**The root model part comes from the package, not from directory order.** It is
+the target of the OPC relationship `.../2013/01/3dmodel` in the root `.rels`,
+then the conventional path, then a single `.model` entry — and **several model
+parts with none of those is a refusal** rather than a guess. The relationship
+Target is validated by the same resolver a production `path` uses.
+
+| Ceiling                     | Value   | Scope                                               |
+| --------------------------- | ------- | --------------------------------------------------- |
+| per-entry expanded          | 256 MiB | unchanged, now also for Zip64 entries               |
+| package expanded, per chunk | 512 MiB | unchanged; the root `.rels` is charged too          |
+| compression ratio           | 200:1   | unchanged, checked on the declaration first         |
+| archive entries             | 4,096   | unchanged, taken from the Zip64 record when present |
+
+**Multi-part memory is unchanged.** MP-S measured 506 MiB against A2's 494 MiB
+and MP-L 1,271 MiB against A2's 1,236–1,254 MiB — run-to-run spread on both. The
+only new allocation is the root `.rels`, a few hundred bytes charged to the
+package's own inflation budget.
+
+Reproduce the producer corpus with
+`CADFIXER_CORPUS=<dir> npm run qualify:threemf-corpus`, which ships no fixtures.
+
 ## Stage 6D-R3: the import-peak gate is gone, and so is an unbounded walk
 
 **`estimateImportPeak`, `checkImportPeak` and `maxImportPeakBytes` are deleted.**

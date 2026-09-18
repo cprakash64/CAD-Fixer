@@ -1596,3 +1596,62 @@ describe('A2: reachable cross-part loading keeps its ownership rules', () => {
     }
   });
 });
+
+describe('A3: production semantics resolve by namespace, and the root by the package', () => {
+  const reader = readFileSync(
+    join(REPO_ROOT, 'packages', 'file-formats', 'src', 'threemf', 'threemf-reader.ts'),
+    'utf8',
+  );
+
+  it('matches no literal namespace prefix in its semantic logic', () => {
+    /*
+     * THE PREFIX IS THE AUTHOR'S TO CHOOSE. `p`, `prod` and `production` are
+     * all the same attribute, and a package binding the namespace to anything
+     * else is equally ordinary — so a literal `p:path` or `pa:alternatives`
+     * comparison would read some files and silently miss others.
+     *
+     * Matched as a STRING LITERAL so the prose above may keep naming them.
+     */
+    for (const [literal] of reader.matchAll(/'[^'\n]*'/g)) {
+      expect(literal, 'production semantics must not match a literal prefix').not.toMatch(
+        /\b(p|pa|prod|production):[a-zA-Z]/,
+      );
+    }
+  });
+
+  it('keeps the two production namespaces distinct', () => {
+    // One is implemented and one is not. Treating a URI as equivalent because
+    // it contains the word "production" is how a version's semantics get
+    // silently assumed.
+    expect(reader).toContain("production/2015/06'");
+    expect(reader).toContain("production/alternatives/2021/04'");
+    // Never a substring test on the URI.
+    expect(reader).not.toMatch(/\.includes\(\s*'production'/);
+    expect(reader).not.toMatch(
+      /startsWith\(\s*'http:\/\/schemas\.microsoft\.com\/3dmanufacturing\/production/,
+    );
+  });
+
+  it('resolves the root model part through the package, not by taking the first entry', () => {
+    /*
+     * THE DEFECT A3 FIXED, AND IT WAS SILENT. The reader used to return the
+     * first `.model` the ZIP DIRECTORY listed whenever the conventional path
+     * was absent. In a production-extension package that can be a CHILD, and
+     * since A2 the reader walks the root's build — so it would expand a part
+     * the specification says to ignore, or refuse a package that builds fine.
+     */
+    expect(reader).toContain('MODEL_RELATIONSHIP_TYPE');
+    expect(reader).toContain('resolveRootModelEntry');
+    expect(reader).not.toContain('function findModelEntry');
+    // One resolver, one call site.
+    expect(reader.match(/resolveRootModelEntry\(/g) ?? []).toHaveLength(2);
+  });
+
+  it('never resolves a relationship target through a weaker path rule', () => {
+    // A `.rels` Target goes through the SAME validation a production `path`
+    // does. A second, looser route would be the first place traversal came back.
+    const at = reader.indexOf('function modelTargetFromRels');
+    const body = reader.slice(at, reader.indexOf('\n}', at));
+    expect(body).toContain('canonicalisePackagePath');
+  });
+});

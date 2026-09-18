@@ -326,3 +326,94 @@ describe('the reader is abandoned when the budget fires', () => {
     expect(budget.totalProducedBytes).toBe(limits.maxTotalUncompressedBytes);
   });
 });
+
+/* ============================================================== Zip64 ==== */
+
+describe('A3: Zip64 directories, which mainstream slicers write at any size', () => {
+  /**
+   * WHY THIS IS NOT A LARGE-ARCHIVE FEATURE.
+   *
+   * Zip64 exists for archives past four gibibytes, so a 512 MiB ceiling looks
+   * like it makes the whole thing irrelevant. It does not: a writer may emit the
+   * Zip64 structures WHATEVER the size, and Stage 6D-A3's producer corpus found
+   * Bambu Studio and OrcaSlicer doing exactly that in calibration packages of
+   * 140 and 256 kilobytes — every size and offset the sentinel, the real values
+   * in the Zip64 records.
+   *
+   * Before this, CAD Fixer refused all of them with "this archive's directory
+   * is truncated", which is both wrong and the worst kind of wrong: it told
+   * users their working slicer output was damaged.
+   */
+  it('reads an archive whose EOCD defers entirely to the Zip64 record', async () => {
+    const archive = await buildZip(
+      [
+        { name: 'a.txt', content: 'alpha', method: 8 },
+        { name: 'b.txt', content: 'bravo', method: 8 },
+      ],
+      { zip64: true },
+    );
+
+    const entries = readZipDirectory(archive);
+    expect(entries.map((entry) => entry.name)).toEqual(['a.txt', 'b.txt']);
+    expect(entries[0]?.uncompressedSize).toBe(5);
+    expect(entries[1]?.uncompressedSize).toBe(5);
+  });
+
+  it('inflates a Zip64 entry through the ordinary path', async () => {
+    const archive = await buildZip([{ name: 'a.txt', content: 'alpha', method: 8 }], {
+      zip64: true,
+    });
+    const entries = readZipDirectory(archive);
+    const entry = entries[0];
+    expect(entry).toBeDefined();
+    if (entry === undefined) return;
+
+    const bytes = await readZipEntry(archive, entry, {
+      limits: DEFAULT_ZIP_LIMITS,
+      inflateRaw: inflateRawForTests,
+      budget: createInflationBudget(DEFAULT_ZIP_LIMITS),
+    });
+    expect(new TextDecoder().decode(bytes)).toBe('alpha');
+  });
+
+  it('applies every ceiling to the Zip64 values, not to the sentinels', async () => {
+    /*
+     * THE DANGEROUS FAILURE WOULD BE SILENT. If the limits were checked against
+     * `0xFFFFFFFF` an ordinary entry would look like four gibibytes and be
+     * refused; if they were skipped for Zip64 entries a real one would be
+     * unbounded. Both are wrong, and only checking the RESOLVED value is right.
+     */
+    const archive = await buildZip([{ name: 'a.txt', content: 'alpha', method: 8 }], {
+      zip64: true,
+    });
+    expect(() => readZipDirectory(archive, { ...DEFAULT_ZIP_LIMITS, maxEntryBytes: 4 })).toThrow();
+    expect(readZipDirectory(archive, { ...DEFAULT_ZIP_LIMITS, maxEntryBytes: 5 })).toHaveLength(1);
+  });
+
+  it('refuses an entry that promises a 64-bit size it does not carry', async () => {
+    const archive = await buildZip([{ name: 'a.txt', content: 'alpha', method: 8 }], {
+      zip64WithoutExtra: true,
+    });
+    let caught: unknown;
+    try {
+      readZipDirectory(archive);
+    } catch (error) {
+      caught = error;
+    }
+    expect(isAppError(caught)).toBe(true);
+    if (!isAppError(caught)) return;
+    expect(caught.code).toBe(AppErrorCode.MalformedFile);
+    expect(refusalOf(caught)).toBe(ImportRefusal.ZipMalformed);
+    // AND NOT READ AS FOUR GIBIBYTES, which is what a fallback would do.
+    expect(caught.message).not.toContain('4 GiB');
+  });
+
+  it('leaves an ordinary archive on the 32-bit path', async () => {
+    // The Zip64 record is consulted only when a field is the sentinel. An
+    // archive that says nothing about Zip64 must not be looking for one.
+    const archive = await buildZip([{ name: 'a.txt', content: 'alpha', method: 8 }]);
+    const entries = readZipDirectory(archive);
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.localOffset).toBe(0);
+  });
+});

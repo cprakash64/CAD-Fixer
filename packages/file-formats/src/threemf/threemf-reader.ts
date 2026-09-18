@@ -60,6 +60,7 @@ import {
 import { DEFAULT_XML_LIMITS, readAttrs, scanXml, type XmlLimits } from './xml-scan';
 import { ModelPartRole, PackageModelGraph, type ModelPart } from './package-graph';
 import {
+  canonicalisePackagePath,
   modelPartKeyOfEntry,
   objectKeyToString,
   resolvePackageModelPath,
@@ -171,8 +172,21 @@ export const ThreeMfImportPhase = {
 
 export type ThreeMfImportPhase = (typeof ThreeMfImportPhase)[keyof typeof ThreeMfImportPhase];
 
-/** The canonical model part path, and the fallback the research allowed. */
+/** The conventional model part path. Every real producer writes this one. */
 const MODEL_PART = '3d/3dmodel.model';
+
+/**
+ * The package's root relationship part, and the relationship that names the
+ * root model — Stage 6D-A3.
+ *
+ * 3MF CORE IDENTIFIES THE ROOT MODEL PART THIS WAY, not by path convention. The
+ * production extension then adds that non-root model files MUST NOT be
+ * referenced from the root `.rels`, which is what makes this relationship
+ * unambiguous: whatever it names IS the root, and nothing else in the package
+ * can be.
+ */
+const ROOT_RELS_PART = '_rels/.rels';
+const MODEL_RELATIONSHIP_TYPE = 'http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel';
 
 /**
  * The 3MF core specification's permitted `unit` values, spelled as the format
@@ -257,6 +271,33 @@ const CORE_NAMESPACE = 'http://schemas.microsoft.com/3dmanufacturing/core/2015/0
 const PRODUCTION_NAMESPACE = 'http://schemas.microsoft.com/3dmanufacturing/production/2015/06';
 
 /**
+ * THE PRODUCTION ALTERNATIVES EXTENSION, which is a DIFFERENT extension with a
+ * different URI and is not implemented — Stage 6D-A3.
+ *
+ * It lets an object carry alternative representations selected by a
+ * `modelresolution` of `fullres`, `lowres` or `obfuscated`. Which representation
+ * IS the object therefore depends on a choice the consumer makes, so ignoring
+ * the element is not a neutral act: it would import whichever representation
+ * the base object happens to hold and report that as the user's model.
+ *
+ * NAMED SEPARATELY FROM THE 2015/06 URI ON PURPOSE. "Contains the word
+ * production" is not a version policy — these are two extensions, one
+ * implemented and one not, and treating a URI as equivalent because it looks
+ * similar is how a future version's semantics get silently assumed.
+ */
+const ALTERNATIVES_NAMESPACE =
+  'http://schemas.microsoft.com/3dmanufacturing/production/alternatives/2021/04';
+
+/**
+ * Elements of the alternatives extension that decide which geometry an object
+ * is.
+ *
+ * Matched by LOCAL NAME against a prefix that resolves to the alternatives
+ * namespace, never by the literal text `pa:alternatives`.
+ */
+const ALTERNATIVES_ELEMENTS: readonly string[] = Object.freeze(['alternatives', 'alternative']);
+
+/**
  * A reference to an object, which may leave this model part.
  *
  * `path` IS THE PRODUCTION EXTENSION'S, VERBATIM AND UNRESOLVED. The parser
@@ -310,6 +351,24 @@ export function productionPathValueOf(
     if (prefixes.get(key.slice(0, colon)) === PRODUCTION_NAMESPACE) return value;
   }
   return undefined;
+}
+
+/**
+ * Whether a qualified element name's prefix resolves to the alternatives
+ * namespace.
+ *
+ * AN UNPREFIXED NAME IS NOT IN IT. A default-namespace `<alternatives>` would
+ * be a core element of that name, which core does not define — so it falls
+ * through to the ordinary unknown-element path rather than being refused for
+ * belonging to an extension it never named.
+ */
+function resolvesToAlternatives(
+  qualifiedName: string,
+  prefixes: ReadonlyMap<string, string>,
+): boolean {
+  const colon = qualifiedName.indexOf(':');
+  if (colon === -1) return false;
+  return prefixes.get(qualifiedName.slice(0, colon)) === ALTERNATIVES_NAMESPACE;
 }
 
 const TEXTURE_ELEMENTS: readonly string[] = Object.freeze(['texture2d', 'texture2dgroup']);
@@ -381,6 +440,15 @@ function readCoordinate(raw: string | undefined, what: string, objectId: string)
  * source never had, for no benefit. The research measured 99,959 transform
  * values surviving the full pipeline bit-identically.
  */
+/**
+ * `xs:double` lexical form, minus the special values a matrix cannot hold.
+ *
+ * The schema permits `INF`, `-INF` and `NaN`; a placement made of them is not a
+ * placement, so they are excluded here and would be caught by the finiteness
+ * check regardless.
+ */
+const XS_DOUBLE = /^[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?$/;
+
 function parseTransform(raw: string | undefined): PartTransform {
   if (raw === undefined || raw.trim() === '') return IDENTITY_PART_TRANSFORM;
   const parts = raw.trim().split(/\s+/);
@@ -393,6 +461,24 @@ function parseTransform(raw: string | undefined): PartTransform {
   }
   const values: number[] = [];
   for (const token of parts) {
+    /*
+     * CHECKED LEXICALLY BEFORE IT IS COERCED — Stage 6D-A3, and the same
+     * reasoning that made `pid` a lexical check rather than a `Number` call.
+     * `Number` accepts `0x10` as sixteen, `Infinity` as infinity and `''` as
+     * zero, and none of those is an `xs:double`. A transform built from a token
+     * the format does not define is a placement CAD Fixer invented.
+     *
+     * `Number.isFinite` still runs afterwards: `1e400` is a perfectly valid
+     * `xs:double` lexical form that overflows to infinity, and a matrix cannot
+     * hold that.
+     */
+    if (!XS_DOUBLE.test(token)) {
+      throw importMalformed(
+        ImportRefusal.ThreeMfBadTransform,
+        'This 3MF file contains a placement value that is not a number.',
+        { token: token.slice(0, 32) },
+      );
+    }
     const value = Number(token);
     if (!Number.isFinite(value)) {
       throw importMalformed(
@@ -649,6 +735,21 @@ export function parseModelXml(
           }
           current = selfClosing ? undefined : record;
           return;
+        }
+
+        /*
+         * THE ALTERNATIVES EXTENSION DECIDES WHICH GEOMETRY AN OBJECT IS, so it
+         * cannot be one of the elements this reader records and moves past —
+         * Stage 6D-A3. Resolved through the PREFIX MAP, exactly as `path` is: a
+         * literal match on `pa:alternatives` would miss a package that binds
+         * the namespace to any other prefix.
+         */
+        if (ALTERNATIVES_ELEMENTS.includes(local) && resolvesToAlternatives(name, prefixes)) {
+          throw importUnsupported(
+            ImportRefusal.ThreeMfModelResolutionUnsupported,
+            'This 3MF offers more than one version of the same object — a full-resolution one and a reduced or obscured one. CAD Fixer cannot tell which you meant, so it will not guess.',
+            { element: local },
+          );
         }
 
         if (UNSUPPORTED_RESOURCE_ELEMENTS.includes(local)) {
@@ -1331,14 +1432,121 @@ async function expandPackageBuild(
  * the one check worth having there: that what reaches `readZipEntry` is a real
  * directory entry with a real offset and size.
  */
-function findModelEntry(entries: readonly ZipEntry[]): ZipEntry {
-  const canonical = entries.find((entry) => entry.name.toLowerCase() === MODEL_PART);
-  if (canonical !== undefined) return canonical;
-  const anyModel = entries.find((entry) => entry.name.toLowerCase().endsWith('.model'));
-  if (anyModel !== undefined) return anyModel;
+/**
+ * The `Target` of the root `.rels` relationship that names the 3D model part.
+ *
+ * SHAPE ONLY, AND IT NEVER THROWS FOR CONTENT. A package whose `.rels` is
+ * unreadable, unparseable or silent about the model is a package whose root has
+ * to be found another way — refusing here would reject files every mainstream
+ * reader opens, because the relationship is only one of three things that can
+ * identify the root. What it must not do is FOLLOW something unsafe, and it
+ * cannot: the target goes through `canonicalisePackagePath`, which is the same
+ * validation a production `path` gets.
+ *
+ * THE XML IS STILL FAIL-CLOSED. `scanXml` runs `describeUnsafeXml` before it
+ * reads an element, so a `.rels` carrying a DOCTYPE or an entity is refused by
+ * the scanner rather than parsed leniently by this.
+ */
+function modelTargetFromRels(
+  xml: string,
+  entries: readonly ZipEntry[],
+  limits: ZipLimits,
+  xmlLimits: XmlLimits,
+): ZipEntry | undefined {
+  let target: string | undefined;
+  scanXml(
+    xml,
+    {
+      onOpen(name, attributeText) {
+        if (target !== undefined) return;
+        if (localName(name) !== 'Relationship') return;
+        const attrs = readAttrs(attributeText, xmlLimits);
+        /*
+         * `Type` AND `Target`, CAPITALISED, because OPC spells them that way
+         * and XML attribute names are case-sensitive. Accepting `type` as well
+         * would be inventing an attribute the package format does not define —
+         * and every producer writes the conforming spelling.
+         */
+        if (attrs.Type !== MODEL_RELATIONSHIP_TYPE) return;
+        target = attrs.Target;
+      },
+    },
+    xmlLimits,
+  );
+  if (target === undefined || target === '') return undefined;
+
+  /*
+   * OPC PERMITS A RELATIVE TARGET, and the production extension's own examples
+   * write an absolute one. A single leading slash is added when it is absent so
+   * both spellings reach the same resolver — which is also the only resolver,
+   * so a `.rels` cannot become a second route with weaker path rules.
+   */
+  const absolute = target.startsWith('/') ? target : `/${target}`;
+  const canonical = canonicalisePackagePath(absolute, limits);
+  if ('refusal' in canonical) return undefined;
+  return entries.find((entry) => modelPartKeyOfEntry(entry) === canonical.key);
+}
+
+/**
+ * THE ROOT MODEL PART, in the order the specification makes available.
+ *
+ * WHY THIS IS NOT A PATH LOOKUP. 3MF core identifies the root model part by the
+ * OPC relationship of type `.../2013/01/3dmodel` in the package's root `.rels`;
+ * `/3D/3dmodel.model` is a convention every producer happens to follow, not the
+ * rule. The production extension then adds that non-root model files MUST NOT
+ * be referenced from the root `.rels`, which is what makes the relationship
+ * unambiguous: whatever it names is the root and nothing else can be.
+ *
+ * WHY IT MATTERS MORE SINCE STAGE 6D-A2. This used to return the first `.model`
+ * entry the ZIP DIRECTORY happened to list when the conventional path was
+ * absent. In a single-part package that is harmless. In a production-extension
+ * package it can return a CHILD part — and A2 walks the root's build, so the
+ * reader would expand a child's ignorable build entries as though they were the
+ * package's, or find none and report a file that builds nothing. Either way it
+ * would be answering from the wrong part.
+ *
+ * THE LAST RESORT IS A REFUSAL, NOT A GUESS. One `.model` entry is
+ * unambiguous whatever the relationships say. Several, with nothing to
+ * distinguish them, is a package whose root CAD Fixer cannot identify, and
+ * picking one would be inventing an answer.
+ */
+async function resolveRootModelEntry(
+  bytes: Uint8Array,
+  entries: readonly ZipEntry[],
+  zipOptions: ZipReadOptions,
+  decodeText: (input: Uint8Array) => string,
+  limits: ZipLimits,
+  xmlLimits: XmlLimits,
+): Promise<ZipEntry> {
+  const models = entries.filter((entry) => entry.name.toLowerCase().endsWith('.model'));
+  if (models.length === 0) {
+    throw importMalformed(
+      ImportRefusal.ThreeMfNoModelPart,
+      'This archive does not contain a 3MF model part, so it is not a 3MF file.',
+    );
+  }
+
+  const rels = entries.find((entry) => entry.name.toLowerCase() === ROOT_RELS_PART);
+  if (rels !== undefined) {
+    const declared = modelTargetFromRels(
+      decodeText(await readZipEntry(bytes, rels, zipOptions)),
+      entries,
+      limits,
+      xmlLimits,
+    );
+    if (declared !== undefined) return declared;
+  }
+
+  const conventional = models.find((entry) => entry.name.toLowerCase() === MODEL_PART);
+  if (conventional !== undefined) return conventional;
+
+  const only = models[0];
+  if (models.length === 1 && only !== undefined) return only;
+
   throw importMalformed(
-    ImportRefusal.ThreeMfNoModelPart,
-    'This archive does not contain a 3MF model part, so it is not a 3MF file.',
+    ImportRefusal.ThreeMfAmbiguousRootModelPart,
+    `This 3MF contains ${formatCount(models.length)} model parts and does not say which one is the main one, so CAD Fixer cannot tell which model you meant.`,
+    { modelParts: models.length },
   );
 }
 
@@ -1399,13 +1607,12 @@ export async function read3mf(
   const entries = readZipDirectory(bytes, zipLimits);
   throwIfCancelled(context.cancellation);
 
-  const modelEntry = findModelEntry(entries);
-
   /*
    * ONE BUDGET FOR THE WHOLE ARCHIVE, created here and passed to every entry
-   * this import inflates — the root part and every referenced part alike. A
-   * per-part budget would be a per-part FULL allowance, which is how a package
-   * with twenty parts extracts twenty times the ceiling.
+   * this import inflates — the root relationships, the root part and every
+   * referenced part alike. A per-part budget would be a per-part FULL
+   * allowance, which is how a package with twenty parts extracts twenty times
+   * the ceiling.
    */
   const budget = options.budget ?? createInflationBudget(zipLimits);
   const zipOptions: ZipReadOptions = {
@@ -1416,6 +1623,22 @@ export async function read3mf(
       throwIfCancelled(context.cancellation);
     },
   };
+
+  /*
+   * THE ROOT IS RESOLVED BEFORE ANYTHING ELSE IS READ, and it may need the root
+   * `.rels` — which is why the budget exists by now. Charging those few hundred
+   * bytes to the package's one budget is the point: no entry this import
+   * inflates gets an allowance of its own.
+   */
+  const modelEntry = await resolveRootModelEntry(
+    bytes,
+    entries,
+    zipOptions,
+    context.decodeText,
+    zipLimits,
+    xmlLimits,
+  );
+  throwIfCancelled(context.cancellation);
 
   /*
    * BOTH ARE POLLED SINCE STAGE 6D-B2. They were the last two long loops in

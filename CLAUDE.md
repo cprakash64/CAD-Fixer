@@ -488,6 +488,61 @@ materialise -> RELEASE -> next`. The entry buffer and the decoded XML are
   because it cannot affect geometry, transform, placement, unit or which
   representation is selected. Broadening that list needs its own reasoning.
 
+## Production Extension semantics (Stage 6D-A3)
+
+- **THE ROOT MODEL PART IS THE ONE THE PACKAGE NAMES.** 3MF core identifies it by
+  the OPC relationship `.../2013/01/3dmodel` in the root `.rels`, and the
+  production extension adds that non-root model files MUST NOT appear there — so
+  the relationship is unambiguous. `resolveRootModelEntry` tries the
+  relationship, then the conventional `3D/3dmodel.model`, then a SINGLE `.model`
+  entry, and **refuses** (`THREEMF_AMBIGUOUS_ROOT_MODEL_PART`) rather than
+  guessing between several. The old `findModelEntry` took the first `.model` the
+  ZIP DIRECTORY listed, which after Stage 6D-A2 could be a CHILD part — and the
+  reader walks the ROOT's build, so it would have answered from the wrong part
+  silently. A `.rels` Target goes through `canonicalisePackagePath`, so
+  relationships are never a weaker route into the archive.
+- **ZIP64 IS READ, AND IT IS NOT A LARGE-ARCHIVE FEATURE.** A writer may emit the
+  Zip64 structures at any size, and Bambu Studio and OrcaSlicer do — their
+  140 KiB and 256 KiB calibration packages carry the `0xFFFFFFFF` sentinel in
+  every size and offset. CAD Fixer refused all of them as corrupt. The Zip64
+  record and the tag-1 extra field are consulted ONLY when a fixed field is its
+  sentinel, each field resolved on its own. **EVERY CEILING IS APPLIED TO THE
+  RESOLVED VALUE**: checking the sentinel refuses an ordinary entry as four
+  gibibytes, and skipping the check leaves a real one unbounded. A sentinel with
+  no extra field is MALFORMED, never a fallback. 64-bit values are read as two
+  halves and refused above 2^53.
+- **MEANING COMES FROM THE NAMESPACE URI, NEVER FROM THE PREFIX.** `p`, `prod`,
+  `x` and `production` are all the same attribute. A boundary test asserts no
+  string literal in the reader matches a literal prefix, and that the two
+  production URIs — `production/2015/06` and
+  `production/alternatives/2021/04` — are compared exactly rather than by
+  substring. "Contains the word production" is not a version policy.
+- **THE ALTERNATIVES EXTENSION IS REFUSED, AND THE TENSION IS WRITTEN DOWN.**
+  `THREEMF_MODEL_RESOLUTION_UNSUPPORTED`. It selects between `fullres`, `lowres`
+  and `obfuscated` representations, so ignoring it could hand a user an obscured
+  model as their part. Core says a consumer MUST ignore namespaces it does not
+  support, so this is a NARROW, namespace-scoped exception — not an
+  "unknown namespace is an error" policy. A declared-but-unused extension still
+  imports, and an unknown element from one is still ignored.
+- **`requiredextensions` HOLDS PREFIXES**, resolved through the map. Production is
+  accepted because it is implemented; every other extension is still refused, in
+  the root AND in any referenced part.
+- **WHAT IS DELIBERATELY NOT VALIDATED, each for a stated reason:**
+  `[Content_Types].xml` (packaging metadata; a non-model entry fails to parse
+  anyway), a referenced part's own `.rels` (the `path` names the target
+  directly), a referenced part's `<build>` (normatively ignorable, so validating
+  it is a false refusal), `p:UUID` in any form (a producer requirement with no
+  mandated consumer validation), and a package that uses `p:path` without
+  declaring the extension required (a producer-side MUST that changes no
+  interpretation).
+- **A TRANSFORM TOKEN IS CHECKED LEXICALLY BEFORE IT IS COERCED.** `Number` reads
+  `0x10` as sixteen and `Infinity` as infinity, and neither is an `xs:double` —
+  the same reasoning that made `pid` a lexical check. An ABSENT or EMPTY
+  transform is identity; a PRESENT but unusable one is malformed.
+- **UNITS ARE THE SIX CORE TOKENS, CASE-SENSITIVELY.** `Millimeter` is not one of
+  them and is refused rather than normalised: the format enumerates lower-case
+  values, so accepting a variant would be inventing a spelling.
+
 ## Export invariants (Stage 4A-2B2)
 
 - **VALIDATION IS MANDATORY AND HAS NO SWITCH.** Every successful OBJ or 3MF

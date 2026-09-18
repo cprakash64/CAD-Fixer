@@ -235,6 +235,43 @@ export const ImportRefusal = {
    */
   ThreeMfTooManyModelParts: 'THREEMF_TOO_MANY_MODEL_PARTS',
   /**
+   * Several `.model` entries and nothing that says which one is the root.
+   *
+   * STAGE 6D-A3. 3MF core identifies the root model part by the OPC
+   * relationship of type `.../2013/01/3dmodel` in the package's root `.rels`,
+   * and the production extension adds that non-root model files MUST NOT be
+   * referenced from it — so that relationship is unambiguous by construction.
+   *
+   * WHEN IT IS ABSENT AND THE CONVENTIONAL PATH IS NOT THERE EITHER, a package
+   * with several model parts has no root that CAD Fixer can identify. It used
+   * to take the first `.model` the ZIP directory happened to list, which in a
+   * production-extension package can be a CHILD part — and since Stage 6D-A2
+   * that means walking the wrong part's build and importing geometry the
+   * package never asked for. Refusing is the honest answer; guessing is the one
+   * outcome that cannot be defended.
+   */
+  ThreeMfAmbiguousRootModelPart: 'THREEMF_AMBIGUOUS_ROOT_MODEL_PART',
+  /**
+   * The package uses the production ALTERNATIVES extension.
+   *
+   * STAGE 6D-A3. `http://schemas.microsoft.com/3dmanufacturing/production/alternatives/2021/04`
+   * lets an object carry alternative representations — `fullres`, `lowres` and
+   * `obfuscated`, the last being "a modified version hiding sensitive zones".
+   * Which representation IS the object therefore depends on a selection the
+   * consumer makes.
+   *
+   * REFUSED RATHER THAN IGNORED, and the tension is deliberate: 3MF core says a
+   * consumer "MUST ignore all XML nodes and attributes from namespaces it does
+   * not explicitly support", which read alone would have CAD Fixer import the
+   * base object and report success. It could then hand a user an obfuscated or
+   * low-resolution representation as their model, which is exactly the class of
+   * claim this product does not make. A package using alternatives is required
+   * by the production specification to declare the extension, in which case the
+   * unknown-required rule refuses it first; this catches the producer that did
+   * not.
+   */
+  ThreeMfModelResolutionUnsupported: 'THREEMF_MODEL_RESOLUTION_UNSUPPORTED',
+  /**
    * The package DECLARES that it requires an extension CAD Fixer does not
    * implement.
    *

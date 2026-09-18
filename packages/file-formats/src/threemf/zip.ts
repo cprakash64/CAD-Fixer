@@ -49,6 +49,28 @@ export interface ZipEntry {
 
 const EOCD_SIGNATURE = 0x06054b50;
 const CENTRAL_SIGNATURE = 0x02014b50;
+/**
+ * ZIP64, AND WHY A 3MF READER NEEDS IT AT 140 KIB.
+ *
+ * Zip64 exists for archives past four gibibytes, so it looks like something a
+ * 512 MiB ceiling makes irrelevant. It is not: a writer may emit the Zip64
+ * structures WHATEVER the size, and Stage 6D-A3's producer corpus found that
+ * Bambu Studio and OrcaSlicer do exactly that — their calibration packages are
+ * a few hundred kilobytes and every size and offset in them is the
+ * `0xFFFFFFFF` sentinel, with the real values in the Zip64 records.
+ *
+ * Without this CAD Fixer refused every one of those files as a corrupt
+ * archive, which is both wrong and the worst kind of wrong: it told users their
+ * working slicer output was damaged.
+ */
+const ZIP64_EOCD_LOCATOR_SIGNATURE = 0x07064b50;
+const ZIP64_EOCD_SIGNATURE = 0x06064b50;
+const ZIP64_EOCD_LOCATOR_BYTES = 20;
+/** The sentinel a 32-bit field carries when its real value is in a Zip64 record. */
+const ZIP64_SENTINEL_32 = 0xffffffff;
+const ZIP64_SENTINEL_16 = 0xffff;
+/** Zip64 extended information, in the extra field. */
+const ZIP64_EXTRA_TAG = 0x0001;
 /** The EOCD sits after an optional comment of at most 65,535 bytes. */
 const MAX_EOCD_SEARCH = 66_000;
 
@@ -86,6 +108,105 @@ export function describeUnsafePath(raw: string, limits: ZipLimits): string | und
   // Percent-encoded traversal is REFUSED rather than decoded, because decoding
   // invites a second round of exactly the same argument.
   if (/%2e%2e/i.test(raw) || /%2f/i.test(raw) || /%5c/i.test(raw)) return 'encoded traversal';
+  return undefined;
+}
+
+/**
+ * A 64-bit little-endian value, as a `number`, refusing anything beyond exact
+ * integer range.
+ *
+ * READ AS TWO 32-BIT HALVES RATHER THAN AS A `BigInt`. Every quantity it can
+ * describe here is bounded by `maxArchiveBytes` at 512 MiB, so a value needing
+ * more than 53 bits is not a large archive — it is a claim this reader should
+ * refuse before it becomes an offset. Returning `undefined` makes the caller
+ * say so rather than silently producing a rounded number.
+ */
+function readUint64(view: DataView, at: number): number | undefined {
+  const low = view.getUint32(at, true);
+  const high = view.getUint32(at + 4, true);
+  // 2^53 - 1 total, so the high word may not exceed 2^21 - 1.
+  if (high > 0x001fffff) return undefined;
+  return high * 0x1_0000_0000 + low;
+}
+
+/** What the Zip64 records say about the central directory, when they exist. */
+interface Zip64Directory {
+  readonly entryCount: number;
+  readonly offset: number;
+}
+
+/**
+ * The Zip64 end-of-central-directory record, when the EOCD defers to one.
+ *
+ * ONLY CONSULTED WHEN A FIELD IS THE SENTINEL. A reader that always looked
+ * would be reading structures most archives do not have; one that never looked
+ * refuses the archives that do. Every offset below is bounds-checked before it
+ * is followed, because all three of them come from the file.
+ */
+function readZip64Directory(
+  view: DataView,
+  length: number,
+  eocd: number,
+): Zip64Directory | undefined {
+  const locator = eocd - ZIP64_EOCD_LOCATOR_BYTES;
+  if (locator < 0) return undefined;
+  if (view.getUint32(locator, true) !== ZIP64_EOCD_LOCATOR_SIGNATURE) return undefined;
+
+  const recordAt = readUint64(view, locator + 8);
+  // `readUint64` cannot return a negative, so the only bound worth checking is
+  // that the whole 56-byte record is inside the archive.
+  if (recordAt === undefined || recordAt + 56 > length) return undefined;
+  if (view.getUint32(recordAt, true) !== ZIP64_EOCD_SIGNATURE) return undefined;
+
+  const entryCount = readUint64(view, recordAt + 32);
+  const offset = readUint64(view, recordAt + 48);
+  if (entryCount === undefined || offset === undefined) return undefined;
+  return { entryCount, offset };
+}
+
+/**
+ * A Zip64 extended-information extra field's replacement values.
+ *
+ * THE FIELDS ARE POSITIONAL AND CONDITIONAL. Only those whose 32-bit
+ * counterpart is the sentinel are present, in the order uncompressed,
+ * compressed, local offset, disk — so which eight bytes mean what depends on
+ * what the fixed record already said. Reading them in a fixed order regardless
+ * is the classic way to end up with a compressed size in an offset.
+ */
+function readZip64Extra(
+  view: DataView,
+  at: number,
+  extraLength: number,
+  needs: { uncompressed: boolean; compressed: boolean; localOffset: boolean },
+): { uncompressed?: number; compressed?: number; localOffset?: number } | undefined {
+  let cursor = at;
+  const end = at + extraLength;
+  while (cursor + 4 <= end) {
+    const tag = view.getUint16(cursor, true);
+    const size = view.getUint16(cursor + 2, true);
+    if (cursor + 4 + size > end) return undefined;
+    if (tag !== ZIP64_EXTRA_TAG) {
+      cursor += 4 + size;
+      continue;
+    }
+
+    let field = cursor + 4;
+    const remaining = (): number => cursor + 4 + size - field;
+    const out: { uncompressed?: number; compressed?: number; localOffset?: number } = {};
+    for (const [wanted, key] of [
+      [needs.uncompressed, 'uncompressed'],
+      [needs.compressed, 'compressed'],
+      [needs.localOffset, 'localOffset'],
+    ] as const) {
+      if (!wanted) continue;
+      if (remaining() < 8) return undefined;
+      const value = readUint64(view, field);
+      if (value === undefined) return undefined;
+      out[key] = value;
+      field += 8;
+    }
+    return out;
+  }
   return undefined;
 }
 
@@ -127,7 +248,22 @@ export function readZipDirectory(
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const eocd = findEndOfCentralDirectory(view, bytes.byteLength);
 
-  const entryCount = view.getUint16(eocd + 10, true);
+  /*
+   * THE EOCD MAY DEFER TO A ZIP64 RECORD, and Stage 6D-A3's producer corpus
+   * showed it doing so in packages of a few hundred kilobytes. When any of the
+   * three fields is its sentinel the authoritative values live in the Zip64
+   * end-of-central-directory record; when none is, that record is not consulted
+   * even if it exists, because the fixed fields are then complete and
+   * self-consistent.
+   */
+  const zip64 =
+    view.getUint16(eocd + 10, true) === ZIP64_SENTINEL_16 ||
+    view.getUint32(eocd + 12, true) === ZIP64_SENTINEL_32 ||
+    view.getUint32(eocd + 16, true) === ZIP64_SENTINEL_32
+      ? readZip64Directory(view, bytes.byteLength, eocd)
+      : undefined;
+
+  const entryCount = zip64?.entryCount ?? view.getUint16(eocd + 10, true);
   if (entryCount > limits.maxEntries) {
     throw importTooLarge(
       ImportRefusal.ZipTooManyEntries,
@@ -136,7 +272,7 @@ export function readZipDirectory(
     );
   }
 
-  let offset = view.getUint32(eocd + 16, true);
+  let offset = zip64?.offset ?? view.getUint32(eocd + 16, true);
   const entries: ZipEntry[] = [];
   const seen = new Set<string>();
   let declaredTotal = 0;
@@ -151,12 +287,52 @@ export function readZipDirectory(
 
     const flags = view.getUint16(offset + 8, true);
     const method = view.getUint16(offset + 10, true);
-    const compressedSize = view.getUint32(offset + 20, true);
-    const uncompressedSize = view.getUint32(offset + 24, true);
     const nameLength = view.getUint16(offset + 28, true);
     const extraLength = view.getUint16(offset + 30, true);
     const commentLength = view.getUint16(offset + 32, true);
-    const localOffset = view.getUint32(offset + 42, true);
+
+    /*
+     * A SENTINEL MEANS "READ THIS FROM THE EXTRA FIELD", per field. The three
+     * quantities are independent — an archive may carry a Zip64 local offset
+     * with ordinary 32-bit sizes — so each is resolved on its own and the extra
+     * field is only consulted when at least one of them asks for it.
+     */
+    const fixedCompressed = view.getUint32(offset + 20, true);
+    const fixedUncompressed = view.getUint32(offset + 24, true);
+    const fixedLocalOffset = view.getUint32(offset + 42, true);
+    const needs = {
+      uncompressed: fixedUncompressed === ZIP64_SENTINEL_32,
+      compressed: fixedCompressed === ZIP64_SENTINEL_32,
+      localOffset: fixedLocalOffset === ZIP64_SENTINEL_32,
+    };
+
+    let extended: ReturnType<typeof readZip64Extra>;
+    if (needs.uncompressed || needs.compressed || needs.localOffset) {
+      if (offset + 46 + nameLength + extraLength > bytes.byteLength) {
+        throw importMalformed(ImportRefusal.ZipMalformed, 'This archive’s directory is truncated.');
+      }
+      extended = readZip64Extra(view, offset + 46 + nameLength, extraLength, needs);
+      if (
+        extended === undefined ||
+        (needs.uncompressed && extended.uncompressed === undefined) ||
+        (needs.compressed && extended.compressed === undefined) ||
+        (needs.localOffset && extended.localOffset === undefined)
+      ) {
+        /*
+         * THE SENTINEL PROMISED A VALUE THAT IS NOT THERE. Falling back to
+         * `0xFFFFFFFF` would turn a missing size into a 4 GiB one and a missing
+         * offset into a read far outside the archive.
+         */
+        throw importMalformed(
+          ImportRefusal.ZipMalformed,
+          'This archive’s directory is corrupt: an entry promises a 64-bit size it does not carry.',
+        );
+      }
+    }
+
+    const compressedSize = extended?.compressed ?? fixedCompressed;
+    const uncompressedSize = extended?.uncompressed ?? fixedUncompressed;
+    const localOffset = extended?.localOffset ?? fixedLocalOffset;
 
     // Bit 0 is the encryption flag. An encrypted 3MF is not one we can read,
     // and guessing at it is worse than saying so.
