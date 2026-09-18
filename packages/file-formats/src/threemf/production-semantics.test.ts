@@ -546,6 +546,74 @@ describe('A3-ROOT: the root model part is the one the package names', () => {
     expect(refusal.details.modelParts).toBe(2);
   });
 
+  /*
+   * A4-ROOT — the 3MF Consortium's own POSITIVE conformance cases
+   * (`P_XXX_0101_02`, `P_XXX_0102_01/02`, `P_XXX_0325_01`, `P_XXX_2202_01` and
+   * their production-suite twins) name the root `/3D/3dmodel`,
+   * `/3D/3dmodel.moodel` and `/3D/3dmodel.part`. The relationship TYPE is what
+   * makes a part the 3D model; OPC does not constrain its extension. CAD Fixer
+   * refused all of them as "not a 3MF file" before Stage 6D-A4.
+   */
+  for (const rootAt of ['3D/3dmodel', '3D/3dmodel.moodel', '3D/3dmodel.part']) {
+    it(`A4-ROOT: follows the relationship to a root named ${rootAt}`, async () => {
+      const result = await read3mf(
+        await packageOf({
+          rels: relsNaming(`/${rootAt}`),
+          rootAt,
+          root: model({
+            resources: `<object id="1" type="model">${markerMesh(5)}</object>`,
+            build: '<item objectid="1"/>',
+          }),
+        }),
+        testReadContext(),
+      );
+      expect(result.document.parts).toHaveLength(1);
+      expect(markerOf(result.document.parts[0]?.mesh.positions ?? [])).toBe(5);
+    });
+  }
+
+  it('A4-ROOT: a non-.model root still reaches its production children', async () => {
+    const result = await read3mf(
+      await packageOf({
+        rels: relsNaming('/3D/3dmodel.part'),
+        rootAt: '3D/3dmodel.part',
+        root: model({ build: '<item objectid="1" p:path="/3D/Objects/a.model"/>' }),
+        parts: {
+          '3D/Objects/a.model': model({
+            resources: `<object id="1" type="model">${markerMesh(9)}</object>`,
+          }),
+        },
+      }),
+      testReadContext(),
+    );
+    expect(markerOf(result.document.parts[0]?.mesh.positions ?? [])).toBe(9);
+  });
+
+  it('A4-ROOT: the relaxation is the ROOT relationship only — a production path keeps the .model rule', async () => {
+    const refusal = await refusalFrom({
+      root: model({ build: '<item objectid="1" p:path="/3D/Objects/a.part"/>' }),
+      parts: {
+        '3D/Objects/a.part': model({
+          resources: `<object id="1" type="model">${markerMesh(1)}</object>`,
+        }),
+      },
+    });
+    expect(refusal.reason).toBe(ImportRefusal.ThreeMfModelPartNotAModel);
+  });
+
+  it('A4-ROOT: an unsafe non-.model relationship target is still never followed', async () => {
+    const refusal = await refusalFrom({
+      rels: relsNaming('/3D/../3D/3dmodel.part'),
+      rootAt: '3D/3dmodel.part',
+      root: model({
+        resources: `<object id="1" type="model">${markerMesh(1)}</object>`,
+        build: '<item objectid="1"/>',
+      }),
+    });
+    // Not followed, and with no `.model` entry there is nothing else to use.
+    expect(refusal.reason).toBe(ImportRefusal.ThreeMfNoModelPart);
+  });
+
   it('refuses an archive with no model part at all', async () => {
     const refusal = await refusalFrom({ rels: null });
     expect(refusal.reason).toBe(ImportRefusal.ThreeMfNoModelPart);
@@ -2303,5 +2371,99 @@ describe('A3-PROP: a part’s property resources are its own', () => {
     expect([...(withMaterial.document.parts[0]?.mesh.positions ?? [])]).toEqual([
       ...(without.document.parts[0]?.mesh.positions ?? []),
     ]);
+  });
+});
+
+/* ============================== namespaces decide core meaning (A4-NS) === */
+
+describe('A4-NS: a core meaning needs a core element — Stage 6D-A4', () => {
+  const DISPLACEMENT_NS = 'http://schemas.3mf.io/3dmanufacturing/displacement/2023/10';
+  const VENDOR_NS = 'http://example.invalid/vendor';
+  const foreignMesh = (prefix: string, marker: number): string =>
+    `<${prefix}:displacementmesh><${prefix}:vertices>` +
+    `<${prefix}:vertex x="${String(marker)}" y="0" z="0"/>` +
+    `<${prefix}:vertex x="${String(marker)}" y="1" z="0"/>` +
+    `<${prefix}:vertex x="${String(marker)}" y="0" z="1"/>` +
+    `</${prefix}:vertices><${prefix}:triangles><${prefix}:triangle v1="0" v2="1" v3="2"/>` +
+    `</${prefix}:triangles></${prefix}:displacementmesh>`;
+
+  it('A4-NS01: an object holding only a foreign mesh is not read as core geometry', async () => {
+    /*
+     * The shape of the 3MF Consortium's `N_DPX_3314_01`: displacement content,
+     * the extension NOT declared required. Core says ignore it, which leaves
+     * the object with no core geometry — so there is nothing to import. Before
+     * Stage 6D-A4 the `d:` vertices and triangles were read as the core mesh.
+     */
+    const refusal = await refusalFrom({
+      root: model({
+        xmlns: ` xmlns="${CORE_NS}" xmlns:d="${DISPLACEMENT_NS}"`,
+        resources: `<object id="1" type="model">${foreignMesh('d', 3)}</object>`,
+        build: '<item objectid="1"/>',
+      }),
+    });
+    expect(refusal.code).toBe(AppErrorCode.MalformedFile);
+    expect(refusal.reason).toBe(ImportRefusal.ThreeMfNoBuildItems);
+  });
+
+  it('A4-NS02: a foreign mesh beside a core mesh contributes nothing', async () => {
+    const result = await read3mf(
+      await packageOf({
+        root: model({
+          xmlns: ` xmlns="${CORE_NS}" xmlns:v="${VENDOR_NS}"`,
+          resources: `<object id="1" type="model">${markerMesh(4)}${foreignMesh('v', 99)}</object>`,
+          build: '<item objectid="1"/>',
+        }),
+      }),
+      testReadContext(),
+    );
+    const mesh = result.document.parts[0]?.mesh;
+    expect(mesh?.positions.length).toBe(9);
+    expect(mesh?.indices.length).toBe(3);
+    expect(markerOf(mesh?.positions ?? [])).toBe(4);
+  });
+
+  it('A4-NS03: foreign `object`, `item` and `component` elements are ignored, not followed', async () => {
+    const result = await read3mf(
+      await packageOf({
+        root: model({
+          xmlns: ` xmlns="${CORE_NS}" xmlns:v="${VENDOR_NS}"`,
+          resources:
+            `<object id="1" type="model">${markerMesh(1)}` +
+            '<v:component objectid="2"/></object>' +
+            `<v:object id="2">${markerMesh(2)}</v:object>`,
+          build: '<item objectid="1"/><v:item objectid="2"/>',
+        }),
+      }),
+      testReadContext(),
+    );
+    expect(result.document.parts).toHaveLength(1);
+    expect(markerOf(result.document.parts[0]?.mesh.positions ?? [])).toBe(1);
+  });
+
+  it('A4-NS04: core elements under ANY prefix bound to the core namespace are still core', async () => {
+    const xml =
+      '<?xml version="1.0" encoding="UTF-8"?>' +
+      `<c:model xmlns:c="${CORE_NS}" unit="millimeter"><c:resources>` +
+      '<c:object id="1" type="model"><c:mesh><c:vertices>' +
+      '<c:vertex x="6" y="0" z="0"/><c:vertex x="6" y="1" z="0"/><c:vertex x="6" y="0" z="1"/>' +
+      '</c:vertices><c:triangles><c:triangle v1="0" v2="1" v3="2"/></c:triangles></c:mesh>' +
+      '</c:object></c:resources><c:build><c:item objectid="1"/></c:build></c:model>';
+    const result = await read3mf(await packageOf({ root: xml }), testReadContext());
+    expect(markerOf(result.document.parts[0]?.mesh.positions ?? [])).toBe(6);
+  });
+
+  it('A4-NS05: unprefixed elements keep their meaning under the legacy 2013/01 default namespace', async () => {
+    // lib3mf's v0.9.3 fixtures; imported before Stage 6D-A4 and still imported.
+    const result = await read3mf(
+      await packageOf({
+        root: model({
+          xmlns: ' xmlns="http://schemas.microsoft.com/3dmanufacturing/2013/01"',
+          resources: `<object id="1" type="model">${markerMesh(8)}</object>`,
+          build: '<item objectid="1"/>',
+        }),
+      }),
+      testReadContext(),
+    );
+    expect(markerOf(result.document.parts[0]?.mesh.positions ?? [])).toBe(8);
   });
 });

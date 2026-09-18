@@ -29,8 +29,16 @@ export default defineConfig({
      * rather than in `npm test` for the same reason the benchmarks do: its
      * result depends on what is on the machine, so asserting anything would
      * produce failures that say nothing about the code.
+     *
+     * `interop-corpus.suite.ts` is the Stage 6D-A4 generalisation of it to STL,
+     * OBJ and 3MF, run through every gate the worker applies, with optional
+     * export and parse-back. Same arrangement, same reason.
      */
-    include: ['scripts/**/*.bench-suite.ts', 'scripts/threemf-corpus.suite.ts'],
+    include: [
+      'scripts/**/*.bench-suite.ts',
+      'scripts/threemf-corpus.suite.ts',
+      'scripts/interop-corpus.suite.ts',
+    ],
     pool: 'forks',
     maxWorkers: 1,
     fileParallelism: false,

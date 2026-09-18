@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { AppErrorCode, isAppError } from '@cadfixer/shared';
 import { ImportRefusal, refusalOf } from '../import-errors';
 import {
+  canonicalisePackagePartName,
   canonicalisePackagePath,
   modelPartKeyOfEntry,
   objectKeyEquals,
@@ -302,5 +303,44 @@ describe('A1: a package reference and a ZIP entry name are different grammars', 
       // (its own separate objection) is set aside.
       expect(describeUnsafePath(hostile.slice(1), DEFAULT_ZIP_LIMITS)).toBeDefined();
     }
+  });
+});
+
+describe('A4-PN: a root part name gets every shape rule except the .model suffix', () => {
+  const refusalOfName = (raw: string): PackagePathRefusal | undefined => {
+    const result = canonicalisePackagePartName(raw);
+    return 'refusal' in result ? result.refusal : undefined;
+  };
+
+  it('accepts the names the 3MF Consortium’s positive root cases use', () => {
+    for (const raw of ['/3D/3dmodel', '/3D/3dmodel.moodel', '/3D/3dmodel.part']) {
+      const result = canonicalisePackagePartName(raw);
+      expect('key' in result ? result.key : undefined).toBe(raw.slice(1).toLowerCase());
+    }
+  });
+
+  it('refuses every unsafe shape exactly as a production path is refused', () => {
+    const cases: readonly (readonly [string, PackagePathRefusal])[] = [
+      ['3D/3dmodel', PackagePathRefusal.NotAbsolute],
+      ['/3D/../3dmodel', PackagePathRefusal.ParentSegment],
+      ['/3D/./3dmodel', PackagePathRefusal.CurrentSegment],
+      ['/3D//3dmodel', PackagePathRefusal.EmptySegment],
+      ['/3D/%2e%2e/3dmodel', PackagePathRefusal.EncodedTraversal],
+      ['/3D\\3dmodel', PackagePathRefusal.Backslash],
+      ['C:/3D/3dmodel', PackagePathRefusal.DriveLetter],
+      ['https://example.com/3dmodel', PackagePathRefusal.UrlLike],
+      ['/3D/3d\u0000model', PackagePathRefusal.ControlCharacter],
+      [`/${'a'.repeat(DEFAULT_ZIP_LIMITS.maxPathLength)}`, PackagePathRefusal.TooLong],
+    ];
+    for (const [raw, refusal] of cases) {
+      expect(refusalOfName(raw)).toBe(refusal);
+      // And the production-path grammar agrees on every one of them.
+      expect(refusalOfPath(raw)).toBe(refusal);
+    }
+  });
+
+  it('leaves the production-path grammar requiring .model', () => {
+    expect(refusalOfPath('/3D/3dmodel.part')).toBe(PackagePathRefusal.NotAModelPart);
+    expect(refusalOfName('/3D/3dmodel.part')).toBeUndefined();
   });
 });

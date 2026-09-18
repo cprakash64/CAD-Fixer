@@ -47,6 +47,12 @@ of the package, and the object it names is resolved in THAT part. See the Stage
 6D-A2 section of
 `docs/design/STAGE_6D_3MF_PRODUCTION_AND_LARGE_ENTRY_ARCHITECTURE.md`.
 
+Stage 6D-A4 qualified STL, OBJ and 3MF interoperability for the release
+candidate against 2,130 real and reference files — the 3MF
+Consortium's conformance suites among them — and corrected what that found: see
+the Interoperability invariants below and the Stage 6D-A4 section of the design
+document. The support statement is `docs/release/SUPPORT_MATRIX.md`.
+
 NOT implemented, and not to be implemented unless a task explicitly asks:
 tolerance welding, NON-PLANAR hole filling, batch or "fill all" hole filling,
 booleans, remeshing, UNIT CONVERSION of any kind, OBJ polygons, MTL resolution,
@@ -222,6 +228,8 @@ npm run bench:repair-browser # repair workflow timings in a real browser (NOT in
 npm run bench:hole-fill # hole-fill phase timings and broadphase reduction (NOT in CI)
 npm run bench:boundary-listing # automatic boundary-walk cost by shape (NOT in CI)
 npm run qualify:threemf-corpus # real producer 3MF files; CADFIXER_CORPUS=<dir>, ships no data
+npm run qualify:interop-corpus # STL + OBJ + 3MF through every import gate, optional export
+                               # (CADFIXER_CORPUS, CADFIXER_CORPUS_REPORT, CADFIXER_EXPORT=1)
 npm run qualify:import-phases  # Chromium footprint, ATTRIBUTED BY PHASE (NOT in CI)
 npm run check:node     # runtime version guard; also runs before test/build/verify
 ```
@@ -542,6 +550,67 @@ materialise -> RELEASE -> next`. The entry buffer and the decoded XML are
 - **UNITS ARE THE SIX CORE TOKENS, CASE-SENSITIVELY.** `Millimeter` is not one of
   them and is refused rather than normalised: the format enumerates lower-case
   values, so accepting a variant would be inventing a spelling.
+
+## Interoperability invariants (Stage 6D-A4)
+
+- **THE ROOT RELATIONSHIP NAMES THE ROOT, WHATEVER IT IS CALLED.** The OPC
+  relationship's TYPE is what makes a part the 3D model; the 3MF Consortium's
+  positive conformance cases name roots `/3D/3dmodel`, `/3D/3dmodel.moodel` and
+  `/3D/3dmodel.part`, and CAD Fixer refused them as "not a 3MF file". The `.rels`
+  target goes through `canonicalisePackagePartName` — every shape rule, no
+  `.model` suffix — and the relationship is read BEFORE asking whether any
+  `.model` entry exists. A production `path` keeps the suffix rule:
+  `canonicalisePackagePath` is `canonicalisePackagePartName` plus the suffix,
+  never a parallel implementation, and a boundary test holds that.
+- **A CORE MEANING NEEDS A CORE ELEMENT.** `isCoreElement`: a PREFIXED element
+  whose prefix does not resolve to the core namespace is ignored — `d:vertex`
+  inside a displacement mesh is not a vertex. An UNPREFIXED element keeps its
+  meaning, because lib3mf's v0.9.3 fixtures put core elements in the
+  pre-release `2013/01` default namespace and have always imported. Tightening
+  the default namespace needs its own evidence.
+- **A DECOMPRESSOR FAILURE IS A DAMAGED FILE, NOT AN INTERNAL ERROR.**
+  `readZipEntry` converts only what the platform inflater's `next()` throws;
+  AppErrors — cancellation, budget refusals — pass through, and the stream is
+  still released on early exit. The untyped `TypeError` it replaced reached the
+  user as the file name followed by an empty message. **The loop pulls `next()`
+  DIRECTLY, never through an `async function*` layer**: the first version of
+  this fix did, and a 2 x 1.2 M-triangle production package peaked at 1,600 MiB
+  in Chromium against 1,221–1,242 MiB without it — chunks queued beside the
+  preallocated entry buffer. A boundary test keeps async generators out of
+  `zip.ts`. Any change to this loop is re-measured with
+  `npm run qualify:import-phases -- 3mf-package:2:1200000` against the previous
+  build, interleaved, several runs each: A3 alone spans 1,285–1,730 MiB on the
+  8 GiB host.
+- **THE ZIP DIRECTORY IS BOUNDED BEFORE IT IS FOLLOWED.** A Zip64 locator that
+  leads to no valid record is corruption, never a fallback to sentinel values
+  (which reported "65,535 entries"). The record must sit before its locator.
+  Split archives — any disk number other than the first, entries-on-disk not
+  equal to the total — are refused. An entry whose data or offset lies outside
+  the archive is refused at the directory. A deflated entry declaring output
+  from ZERO compressed bytes is an unbounded ratio and is refused before its
+  allocation. A stored entry whose two sizes differ is corrupt. The EOCD is the
+  signature whose comment ends the file, so a signature inside a comment cannot
+  shadow the real one.
+- **OBJ TOKENS ARE CHECKED LEXICALLY BEFORE THEY ARE COERCED**, as 3MF transform
+  tokens are. A face corner is `v`, `v/`, `v/vt`, `v//vn` or `v/vt/vn` with
+  integer components (`OBJ_CORNER`); `Number` would have read `0x2` as two.
+- **AN ASCII STL LINE ENDS AT LF OR CR.** A classic-Mac file's `solid` line used
+  to run to the end of the file.
+- **EVERY OBJ GROUP BOUNDARY SURVIVES EXPORT.** OBJ has run-START records and no
+  run-END record, so the writer emits one wherever the reader needs one — an
+  empty-named group (a plain STL `solid`), the face after a group (a hole-fill
+  patch), a part's first face — and `expectedObjRoundTrip` states the one thing
+  OBJ cannot say: once a run has started, faces in no group come back in an
+  EMPTY-named group. Before this, OBJ export of every ASCII STL with an unnamed
+  solid, and of every hole-filled grouped mesh, was refused on parse-back.
+- **CONFORMANCE NEGATIVES ARE FOR PRINTERS.** Many of the 3MF Consortium's
+  negative cases are geometrically defective meshes a printer must reject and a
+  repair tool exists to open — negative volume, inward normals, fewer than four
+  triangles, non-manifold edges. CAD Fixer imports those exactly, and Mesh
+  Health diagnoses them. The rest it accepts are OPC, content-type, metadata and
+  UUID checks A3 deliberately does not enforce. Neither is a licence to accept
+  a negative case that changes GEOMETRY; each accepted negative is classified in
+  the Stage 6D-A4 design section, and a new one must be too.
 
 ## Export invariants (Stage 4A-2B2)
 

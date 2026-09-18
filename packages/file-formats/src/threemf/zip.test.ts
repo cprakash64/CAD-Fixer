@@ -231,19 +231,41 @@ describe('the total budget is spent across every entry of one archive', () => {
   it('charges STORED entries too, which produce output without inflating', async () => {
     // Method 0 needs no work to produce its bytes. That is not a reason to let
     // them past the ceiling uncounted.
+    //
+    // THE DIRECTORY IS HONEST AND READ UNDER WIDER LIMITS, so the only thing
+    // standing between these bytes and the caller is the runtime budget. This
+    // used to reach the runtime path with a stored entry declaring a smaller
+    // uncompressed size than it stores; since Stage 6D-A4 the directory refuses
+    // that contradiction itself — asserted separately below.
     const archive = await buildZip([
-      { name: 'a.bin', content: payload(4 * KIB, 1), method: 0, declaredUncompressedSize: 1 },
-      { name: 'b.bin', content: payload(4 * KIB, 2), method: 0, declaredUncompressedSize: 1 },
+      { name: 'a.bin', content: payload(4 * KIB, 1), method: 0 },
+      { name: 'b.bin', content: payload(4 * KIB, 2), method: 0 },
     ]);
     const limits = limitsWithTotal(6 * KIB);
     const budget = createInflationBudget(limits);
+    const entries = readZipDirectory(archive, DEFAULT_ZIP_LIMITS);
 
     await expectRefusal(
-      async () => readAll(archive, limits, budget),
+      async () => {
+        for (const entry of entries) {
+          await readZipEntry(archive, entry, { limits, inflateRaw: inflateRawForTests, budget });
+        }
+      },
       AppErrorCode.ResourceLimitExceeded,
       ImportRefusal.ZipTotalTooLarge,
     );
     expect(budget.totalProducedBytes).toBe(4 * KIB);
+  });
+
+  it('A4-Z: refuses a STORED entry whose two sizes disagree, before reading it', async () => {
+    const archive = await buildZip([
+      { name: 'a.bin', content: payload(4 * KIB, 1), method: 0, declaredUncompressedSize: 1 },
+    ]);
+    await expectRefusal(
+      () => Promise.resolve(readZipDirectory(archive)),
+      AppErrorCode.MalformedFile,
+      ImportRefusal.ZipMalformed,
+    );
   });
 
   it('gives each import its own budget, so one archive cannot starve the next', async () => {
@@ -415,5 +437,257 @@ describe('A3: Zip64 directories, which mainstream slicers write at any size', ()
     const entries = readZipDirectory(archive);
     expect(entries).toHaveLength(1);
     expect(entries[0]?.localOffset).toBe(0);
+  });
+});
+
+/* ===================================================== A4 Zip64 audit ==== */
+
+describe('A4-Z64: every Zip64 field is bounded before it is followed or allocated — Stage 6D-A4', () => {
+  /*
+   * The Zip64 fixture lays out `locals | centrals | record(56) | locator(20) |
+   * EOCD(22)`, so each structure is at a fixed distance from the end and a test
+   * can corrupt exactly one field of it.
+   */
+  const RECORD_FROM_END = 22 + 20 + 56;
+  const LOCATOR_FROM_END = 22 + 20;
+
+  async function zip64Archive(): Promise<Uint8Array> {
+    return buildZip(
+      [
+        { name: 'a.txt', content: 'alpha', method: 8 },
+        { name: 'b.txt', content: 'bravo', method: 8 },
+      ],
+      { zip64: true },
+    );
+  }
+
+  function mutate(archive: Uint8Array, edit: (view: DataView, length: number) => void): Uint8Array {
+    const copy = archive.slice();
+    edit(new DataView(copy.buffer), copy.byteLength);
+    return copy;
+  }
+
+  function set64(view: DataView, at: number, low: number, high: number): void {
+    view.setUint32(at, low, true);
+    view.setUint32(at + 4, high, true);
+  }
+
+  /** The offset of `a.txt`'s central record and of its tag-1 extra field. */
+  function firstCentral(archive: Uint8Array): { central: number; extra: number } {
+    const view = new DataView(archive.buffer, archive.byteOffset, archive.byteLength);
+    const record = archive.byteLength - RECORD_FROM_END;
+    const central = view.getUint32(record + 48, true);
+    return { central, extra: central + 46 + view.getUint16(central + 28, true) };
+  }
+
+  const malformed = (archive: Uint8Array): Promise<void> =>
+    expectRefusal(
+      () => Promise.resolve(readZipDirectory(archive)),
+      AppErrorCode.MalformedFile,
+      ImportRefusal.ZipMalformed,
+    );
+
+  it('A4-Z64-01: a locator whose record is not a Zip64 record is corruption, not 65,535 entries', async () => {
+    const archive = mutate(await zip64Archive(), (view, length) => {
+      view.setUint32(length - RECORD_FROM_END, 0x12345678, true);
+    });
+    await malformed(archive);
+  });
+
+  it('A4-Z64-02: a record offset beyond 2^53 is refused, never rounded into range', async () => {
+    const archive = mutate(await zip64Archive(), (view, length) => {
+      set64(view, length - LOCATOR_FROM_END + 8, 0, 0x0020_0000);
+    });
+    await malformed(archive);
+  });
+
+  it('A4-Z64-03: a record that would overlap its own locator is refused', async () => {
+    const archive = mutate(await zip64Archive(), (view, length) => {
+      set64(view, length - LOCATOR_FROM_END + 8, length - LOCATOR_FROM_END - 20, 0);
+    });
+    await malformed(archive);
+  });
+
+  it('A4-Z64-04: a 2^40 entry count is a resource refusal, before any entry is read', async () => {
+    const archive = mutate(await zip64Archive(), (view, length) => {
+      const record = length - RECORD_FROM_END;
+      set64(view, record + 24, 0, 0x100);
+      set64(view, record + 32, 0, 0x100);
+    });
+    await expectRefusal(
+      () => Promise.resolve(readZipDirectory(archive)),
+      AppErrorCode.ResourceLimitExceeded,
+      ImportRefusal.ZipTooManyEntries,
+    );
+  });
+
+  it('A4-Z64-05: a directory offset past the archive is refused', async () => {
+    const archive = mutate(await zip64Archive(), (view, length) => {
+      set64(view, length - RECORD_FROM_END + 48, length + 1, 0);
+    });
+    await malformed(archive);
+  });
+
+  it('A4-Z64-06: entries-on-this-disk disagreeing with the total is a split archive', async () => {
+    const archive = mutate(await zip64Archive(), (view, length) => {
+      set64(view, length - RECORD_FROM_END + 24, 1, 0);
+    });
+    await malformed(archive);
+  });
+
+  it('A4-Z64-07: a locator counting two disks is a split archive', async () => {
+    const archive = mutate(await zip64Archive(), (view, length) => {
+      view.setUint32(length - LOCATOR_FROM_END + 16, 2, true);
+    });
+    await malformed(archive);
+  });
+
+  it('A4-Z64-08: a record on a disk other than the first is a split archive', async () => {
+    const archive = mutate(await zip64Archive(), (view, length) => {
+      view.setUint32(length - RECORD_FROM_END + 16, 3, true);
+    });
+    await malformed(archive);
+  });
+
+  it('A4-Z64-09: a 64-bit local offset past the archive is refused at the directory', async () => {
+    const source = await zip64Archive();
+    const { extra } = firstCentral(source);
+    // Tag-1 payload order: uncompressed, compressed, local offset.
+    const archive = mutate(source, (view, length) => {
+      set64(view, extra + 4 + 16, length, 0);
+    });
+    await malformed(archive);
+  });
+
+  it('A4-Z64-10: the largest exact integer as an offset is still refused, with no rounding', async () => {
+    const source = await zip64Archive();
+    const { extra } = firstCentral(source);
+    const archive = mutate(source, (view) => {
+      set64(view, extra + 4 + 16, 0xffff_ffff, 0x001f_ffff);
+    });
+    await malformed(archive);
+  });
+
+  it('A4-Z64-11: a 64-bit compressed size beyond 2^53 is refused', async () => {
+    const source = await zip64Archive();
+    const { extra } = firstCentral(source);
+    const archive = mutate(source, (view) => {
+      set64(view, extra + 4 + 8, 0, 0x0100_0000);
+    });
+    await malformed(archive);
+  });
+
+  it('A4-Z64-12: a 300 MiB 64-bit uncompressed size is refused before it can be allocated', async () => {
+    const source = await zip64Archive();
+    const { extra } = firstCentral(source);
+    const archive = mutate(source, (view) => {
+      set64(view, extra + 4, 300 * 1024 * 1024, 0);
+    });
+    await expectRefusal(
+      () => Promise.resolve(readZipDirectory(archive)),
+      AppErrorCode.ResourceLimitExceeded,
+      ImportRefusal.ZipEntryTooLarge,
+    );
+  });
+
+  it('A4-Z64-13: an extra field shorter than the values its sentinels promise is refused', async () => {
+    const source = await zip64Archive();
+    const { extra } = firstCentral(source);
+    const archive = mutate(source, (view) => {
+      view.setUint16(extra + 2, 16, true);
+    });
+    await malformed(archive);
+  });
+
+  it('A4-Z64-14: a truncated Zip64 archive has no directory to read', async () => {
+    const source = await zip64Archive();
+    for (const cut of [1, 21, 30, RECORD_FROM_END]) {
+      await expectRefusal(
+        () => Promise.resolve(readZipDirectory(source.subarray(0, source.byteLength - cut))),
+        AppErrorCode.MalformedFile,
+        ImportRefusal.ZipNoCentralDirectory,
+      );
+    }
+  });
+
+  it('A4-Z64-15: a Zip64 archive whose central records were cut away is refused', async () => {
+    const source = await zip64Archive();
+    const { central } = firstCentral(source);
+    const archive = mutate(source, (view) => {
+      view.setUint32(central, 0, true);
+    });
+    await malformed(archive);
+  });
+});
+
+describe('A4-Z: classic directory hardening — Stage 6D-A4', () => {
+  const malformed = (archive: Uint8Array): Promise<void> =>
+    expectRefusal(
+      () => Promise.resolve(readZipDirectory(archive)),
+      AppErrorCode.MalformedFile,
+      ImportRefusal.ZipMalformed,
+    );
+
+  it('A4-Z-01: an EOCD numbering a disk other than the first is a split archive', async () => {
+    const archive = await buildZip([{ name: 'a.txt', content: 'alpha', method: 8 }]);
+    new DataView(archive.buffer).setUint16(archive.byteLength - 22 + 4, 1, true);
+    await malformed(archive);
+  });
+
+  it('A4-Z-02: entries on this disk disagreeing with the total is a split archive', async () => {
+    const archive = await buildZip([
+      { name: 'a.txt', content: 'alpha', method: 8 },
+      { name: 'b.txt', content: 'bravo', method: 8 },
+    ]);
+    new DataView(archive.buffer).setUint16(archive.byteLength - 22 + 8, 1, true);
+    await malformed(archive);
+  });
+
+  it('A4-Z-03: an EOCD signature inside the archive comment does not shadow the real record', async () => {
+    const source = await buildZip([{ name: 'a.txt', content: 'alpha', method: 8 }]);
+    // A 26-byte comment beginning with a plausible-looking fake EOCD.
+    const comment = new Uint8Array(26);
+    new DataView(comment.buffer).setUint32(0, 0x06054b50, true);
+    const archive = new Uint8Array(source.byteLength + comment.byteLength);
+    archive.set(source);
+    archive.set(comment, source.byteLength);
+    new DataView(archive.buffer).setUint16(source.byteLength - 22 + 20, comment.byteLength, true);
+
+    const entries = readZipDirectory(archive);
+    expect(entries.map((entry) => entry.name)).toEqual(['a.txt']);
+  });
+
+  it('A4-Z-04: a deflated entry declaring output from zero compressed bytes is refused before any allocation', async () => {
+    const archive = await buildZip([
+      {
+        name: 'a.bin',
+        content: 'x',
+        method: 8,
+        declaredCompressedSize: 0,
+        declaredUncompressedSize: 200 * 1024 * 1024,
+      },
+    ]);
+    // Refused by the DIRECTORY, so `readZipEntry` — which sizes its buffer from
+    // the declaration — is never reached.
+    await expectRefusal(
+      () => Promise.resolve(readZipDirectory(archive)),
+      AppErrorCode.ResourceLimitExceeded,
+      ImportRefusal.ZipRatioExceeded,
+    );
+  });
+
+  it('A4-Z-05: a local offset past the archive is refused at the directory', async () => {
+    const archive = await buildZip([{ name: 'a.txt', content: 'alpha', method: 8 }]);
+    const view = new DataView(archive.buffer);
+    const central = view.getUint32(archive.byteLength - 22 + 16, true);
+    view.setUint32(central + 42, archive.byteLength, true);
+    await malformed(archive);
+  });
+
+  it('A4-Z-06: an empty deflated entry is still an ordinary entry', async () => {
+    const archive = await buildZip([
+      { name: 'empty.txt', content: '', method: 8, declaredCompressedSize: 0 },
+    ]);
+    expect(readZipDirectory(archive)).toHaveLength(1);
   });
 });

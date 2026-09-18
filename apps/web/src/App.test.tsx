@@ -44,6 +44,26 @@ describe('application shell', () => {
     );
   });
 
+  it('labels the release as the Technical Preview, not an internal development stage', () => {
+    // Stage 6D-A4: the header read "Stage 0 — foundation" in public releases.
+    renderApp();
+
+    expect(screen.getByTestId('release-stage')).toHaveTextContent('Technical Preview');
+    expect(document.body.textContent).not.toMatch(/Stage \d|foundation/i);
+  });
+
+  it('states the import scope honestly before a file is chosen', () => {
+    renderApp();
+    const zone = screen.getByTestId('drop-zone').textContent;
+
+    expect(zone).toMatch(/geometry only/i);
+    expect(zone).toMatch(/faces must be triangles/i);
+    expect(zone).toMatch(/requires any other extension is refused/i);
+    expect(zone).toMatch(/never uploaded/i);
+    // Nothing that implies the whole of 3MF, or material fidelity, is supported.
+    expect(zone).not.toMatch(/all 3MF|every 3MF|full 3MF|materials are preserved/i);
+  });
+
   it('renders the workspace regions a user needs to orient themselves', () => {
     renderApp();
 

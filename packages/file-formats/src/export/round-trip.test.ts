@@ -351,3 +351,70 @@ describe('RR09: multi-model-part 3MF import → STL export → STL read-back', (
     expect(triangleCount(parsed.mesh)).toBe(8);
   });
 });
+
+describe('RR10: real ASCII STL and OBJ group shapes → every target — Stage 6D-A4', () => {
+  /*
+   * Found by the Stage 6D-A4 corpus: OBJ export of these REAL READER OUTPUTS
+   * was refused on parse-back, because an empty-named group wrote no record.
+   * A plain `solid` is how a great many ASCII STL exporters open a file.
+   */
+  const sources: readonly (readonly [string, () => Promise<GeometryDocument>])[] = [
+    [
+      'an ASCII STL whose solid has no name',
+      async (): Promise<GeometryDocument> => {
+        const text =
+          'solid\nfacet normal 0 0 1\nouter loop\nvertex 0 0 0\nvertex 1 0 0\nvertex 0 1 0\n' +
+          'endloop\nendfacet\nendsolid\n';
+        const result = await readStl(new TextEncoder().encode(text), testReadContext());
+        return { parts: [{ id: 'part-1' as never, mesh: result.mesh, transform: IDENTITY }] };
+      },
+    ],
+    [
+      'an ASCII STL whose solid name is not ASCII',
+      async (): Promise<GeometryDocument> => {
+        const text =
+          'solid 月球\nfacet normal 0 0 1\nouter loop\nvertex 0 0 0\nvertex 1 0 0\nvertex 0 1 0\n' +
+          'endloop\nendfacet\nendsolid 月球\n';
+        const result = await readStl(new TextEncoder().encode(text), testReadContext());
+        return { parts: [{ id: 'part-1' as never, mesh: result.mesh, transform: IDENTITY }] };
+      },
+    ],
+    [
+      'an OBJ with a bare `usemtl` and a bare `g`',
+      async (): Promise<GeometryDocument> =>
+        (
+          await readObj(
+            new TextEncoder().encode(
+              'o Cyl\nv 0 0 0\nv 1 0 0\nv 0 1 0\nv 0 0 1\nusemtl\nf 1 2 3\ng\nf 1 2 4\ng top\nf 1 3 4\n',
+            ),
+            testReadContext(),
+          )
+        ).document,
+    ],
+  ];
+
+  for (const [label, load] of sources) {
+    for (const target of [MeshFormatId.Obj, MeshFormatId.Stl, MeshFormatId.ThreeMf]) {
+      it(`${label} → ${target}`, async () => {
+        const source = await load();
+        const written = await exportDocument({
+          snapshot: exportSnapshotOf(source, 'doc-1', 1, { unitAssertion: LengthUnit.Millimeter }),
+          target,
+          write: testWriteContextWithDeflate(),
+          read: testExportReadContext(),
+        });
+        const reader =
+          target === MeshFormatId.Obj ? readObj : target === MeshFormatId.Stl ? readStl : read3mf;
+        const back = await reader(written.bytes, testReadContext());
+        const backMeshes = 'document' in back ? distinctMeshes(back.document) : [back.mesh];
+        const total = backMeshes.reduce((sum, mesh) => sum + triangleCount(mesh), 0);
+        expect(total).toBe(
+          distinctMeshes(source).reduce((sum, mesh) => sum + triangleCount(mesh), 0),
+        );
+        if (target === MeshFormatId.Obj) {
+          expect(checkObjStructure(inspectObj(written.bytes))).toEqual([]);
+        }
+      });
+    }
+  }
+});

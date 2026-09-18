@@ -95,7 +95,7 @@ export function buildBinaryStl(
 
 export interface AsciiStlOptions {
   readonly solidName?: string;
-  readonly lineEnding?: '\n' | '\r\n';
+  readonly lineEnding?: '\n' | '\r\n' | '\r';
   readonly indent?: string;
   readonly includeEndSolid?: boolean;
   readonly trailingNewline?: boolean;

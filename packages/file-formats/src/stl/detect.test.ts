@@ -112,6 +112,13 @@ describe('ascii detection', () => {
     expect(detectStlEncoding(bytes).encoding).toBe(StlEncoding.Ascii);
   });
 
+  it('accepts classic-Mac CR-only line endings — Stage 6D-A4 regression', () => {
+    // PrusaSlicer's test data carries `20mmbox-CR.stl`. Before the fix the
+    // `solid` line ran to the end of the file and the file was "unrecognised".
+    const bytes = buildAsciiStl([UNIT_TRIANGLE], { lineEnding: '\r' });
+    expect(detectStlEncoding(bytes).encoding).toBe(StlEncoding.Ascii);
+  });
+
   it('accepts an empty solid', () => {
     const bytes = asciiToBytes('solid empty\nendsolid empty\n');
     expect(detectStlEncoding(bytes).encoding).toBe(StlEncoding.Ascii);

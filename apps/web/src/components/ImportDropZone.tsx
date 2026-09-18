@@ -115,9 +115,11 @@ export function ImportDropZone(): ReactNode {
       >
         <p className="import__headline">Drop a model file here</p>
         <p className="import__detail">
-          Opens {describeImplementedFormats()} ({SUPPORTED_EXTENSIONS.join(', ')}). Geometry only:
-          OBJ material libraries and 3MF textures are not loaded. Files are read on this device and
-          never uploaded.
+          Opens {describeImplementedFormats()} ({SUPPORTED_EXTENSIONS.join(', ')}), geometry only.
+          OBJ faces must be triangles, and OBJ material libraries and 3MF colours, materials and
+          textures are not loaded. 3MF files that spread a model across several model parts are
+          read; a 3MF that requires any other extension is refused with the reason. Files are read
+          on this device and never uploaded.
         </p>
 
         {/* Drag and drop is never the only route in: a file picker keeps the

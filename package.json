@@ -47,7 +47,8 @@
     "qualify:stl-footprint": "node scripts/stl-footprint.qualify.mjs",
     "qualify:import-phases": "node scripts/import-phases.qualify.mjs",
     "bench:boundary-listing": "vitest run --config vitest.bench.config.ts scripts/boundary-listing.bench-suite.ts",
-    "qualify:threemf-corpus": "vitest run --config vitest.bench.config.ts scripts/threemf-corpus.suite.ts"
+    "qualify:threemf-corpus": "vitest run --config vitest.bench.config.ts scripts/threemf-corpus.suite.ts",
+    "qualify:interop-corpus": "vitest run --config vitest.bench.config.ts scripts/interop-corpus.suite.ts"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

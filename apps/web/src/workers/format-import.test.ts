@@ -521,13 +521,30 @@ describe('the document gate runs for every format', () => {
      * which catches a directory that lies — is proven against the reader in
      * `threemf/zip.test.ts` (ZT01–ZT05) with the limits narrowed instead.
      */
+    /*
+     * THE COMPRESSED BYTES ARE REAL — Stage 6D-A4. This declared 2 MiB of
+     * compressed data per entry inside an archive of a few hundred bytes; the
+     * directory now refuses an entry whose data would lie outside the archive,
+     * so each entry carries 1.2 MiB of incompressible bytes instead and the
+     * ratio stays under 200:1 honestly.
+     */
+    const incompressible = (length: number, seed: number): Uint8Array => {
+      const out = new Uint8Array(length);
+      let state = 0x9e3779b9 ^ seed;
+      for (let at = 0; at < length; at += 1) {
+        state ^= state << 13;
+        state ^= state >>> 17;
+        state ^= state << 5;
+        out[at] = state & 0xff;
+      }
+      return out;
+    };
     const oversized = await buildZip(
-      ['a', 'b', 'c'].map((name) => ({
+      ['a', 'b', 'c'].map((name, index) => ({
         name: `3D/${name}.model`,
-        content: 'x',
+        content: incompressible(1.2 * 1024 * 1024, index + 1),
         method: 8,
         declaredUncompressedSize: 200 * 1024 * 1024,
-        declaredCompressedSize: 2 * 1024 * 1024,
       })),
     );
 

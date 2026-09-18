@@ -60,7 +60,7 @@ import {
 import { DEFAULT_XML_LIMITS, readAttrs, scanXml, type XmlLimits } from './xml-scan';
 import { ModelPartRole, PackageModelGraph, type ModelPart } from './package-graph';
 import {
-  canonicalisePackagePath,
+  canonicalisePackagePartName,
   modelPartKeyOfEntry,
   objectKeyToString,
   resolvePackageModelPath,
@@ -414,6 +414,31 @@ function localName(name: string): string {
   return colon === -1 ? name : name.slice(colon + 1);
 }
 
+/**
+ * Whether an element may carry a CORE meaning — Stage 6D-A4.
+ *
+ * MEANING COMES FROM THE NAMESPACE, NEVER FROM THE LOCAL NAME ALONE. The walk
+ * used to dispatch on the local name, so `<d:vertex>` and `<d:triangle>` inside
+ * a displacement extension's `<d:displacementmesh>` were read as the object's
+ * core mesh: the 3MF Consortium's negative case `N_DPX_3314_01` — displacement
+ * content with the extension NOT declared required — imported thirty-six
+ * triangles from objects that have no core mesh at all. Core says a consumer
+ * MUST ignore nodes from namespaces it does not support, and a PREFIXED element
+ * whose prefix does not resolve to the core namespace is exactly that.
+ *
+ * AN UNPREFIXED ELEMENT KEEPS ITS MEANING, deliberately. lib3mf's own v0.9.3
+ * fixtures put the core elements in the pre-release `2013/01` default
+ * namespace, and CAD Fixer has always read them; tightening the default
+ * namespace is a separate decision with its own evidence, not a side effect of
+ * this one. What changes is only that a construct from ANOTHER namespace can no
+ * longer impersonate a core one.
+ */
+function isCoreElement(name: string, prefixes: ReadonlyMap<string, string>): boolean {
+  const colon = name.indexOf(':');
+  if (colon === -1) return true;
+  return prefixes.get(name.slice(0, colon)) === CORE_NAMESPACE;
+}
+
 function readCoordinate(raw: string | undefined, what: string, objectId: string): number {
   const value = Number(raw);
   /*
@@ -629,12 +654,20 @@ export function parseModelXml(
           return;
         }
 
-        if (local === 'build') {
+        /*
+         * FROM HERE ON, A CORE MEANING NEEDS A CORE ELEMENT. The alternatives
+         * refusal and the unsupported-resource record below are keyed on their
+         * OWN namespaces and names, so they are checked for foreign elements;
+         * nothing else is.
+         */
+        const core = isCoreElement(name, prefixes);
+
+        if (local === 'build' && core) {
           inBuild = true;
           return;
         }
 
-        if (local === 'item' && inBuild) {
+        if (local === 'item' && inBuild && core) {
           const attrs = readAttrs(attributeText, xmlLimits);
           const objectId = attrs.objectid;
           if (objectId === undefined) {
@@ -657,7 +690,7 @@ export function parseModelXml(
           return;
         }
 
-        if (local === 'object') {
+        if (local === 'object' && core) {
           const attrs = readAttrs(attributeText, xmlLimits);
           const id = attrs.id;
           if (id === undefined) {
@@ -780,7 +813,7 @@ export function parseModelXml(
           return;
         }
 
-        if (current === undefined) return;
+        if (current === undefined || !core) return;
 
         if (local === 'vertex') {
           const attrs = readAttrs(attributeText, xmlLimits);
@@ -861,6 +894,7 @@ export function parseModelXml(
         }
       },
       onClose(name) {
+        if (!isCoreElement(name, prefixes)) return;
         const local = localName(name);
         if (local === 'object') current = undefined;
         if (local === 'build') inBuild = false;
@@ -1440,8 +1474,14 @@ async function expandPackageBuild(
  * to be found another way — refusing here would reject files every mainstream
  * reader opens, because the relationship is only one of three things that can
  * identify the root. What it must not do is FOLLOW something unsafe, and it
- * cannot: the target goes through `canonicalisePackagePath`, which is the same
- * validation a production `path` gets.
+ * cannot: the target goes through `canonicalisePackagePartName`, which is every
+ * shape rule a production `path` gets.
+ *
+ * EXCEPT THE `.model` SUFFIX — Stage 6D-A4. The relationship's TYPE is what
+ * says the part is a 3D model; OPC does not constrain its name, and the 3MF
+ * Consortium's positive conformance cases name it `/3D/3dmodel`,
+ * `/3D/3dmodel.moodel` and `/3D/3dmodel.part`. Requiring the suffix here
+ * refused those as "not a 3MF file".
  *
  * THE XML IS STILL FAIL-CLOSED. `scanXml` runs `describeUnsafeXml` before it
  * reads an element, so a `.rels` carrying a DOCTYPE or an entity is refused by
@@ -1482,7 +1522,7 @@ function modelTargetFromRels(
    * so a `.rels` cannot become a second route with weaker path rules.
    */
   const absolute = target.startsWith('/') ? target : `/${target}`;
-  const canonical = canonicalisePackagePath(absolute, limits);
+  const canonical = canonicalisePackagePartName(absolute, limits);
   if ('refusal' in canonical) return undefined;
   return entries.find((entry) => modelPartKeyOfEntry(entry) === canonical.key);
 }
@@ -1518,14 +1558,12 @@ async function resolveRootModelEntry(
   limits: ZipLimits,
   xmlLimits: XmlLimits,
 ): Promise<ZipEntry> {
-  const models = entries.filter((entry) => entry.name.toLowerCase().endsWith('.model'));
-  if (models.length === 0) {
-    throw importMalformed(
-      ImportRefusal.ThreeMfNoModelPart,
-      'This archive does not contain a 3MF model part, so it is not a 3MF file.',
-    );
-  }
-
+  /*
+   * THE RELATIONSHIP IS READ FIRST, and before any question about extensions.
+   * It is the normative identification, and it may name a root whose part name
+   * does not end in `.model` — see `modelTargetFromRels`. Asking "are there any
+   * `.model` entries?" first refused exactly those packages.
+   */
   const rels = entries.find((entry) => entry.name.toLowerCase() === ROOT_RELS_PART);
   if (rels !== undefined) {
     const declared = modelTargetFromRels(
@@ -1535,6 +1573,14 @@ async function resolveRootModelEntry(
       xmlLimits,
     );
     if (declared !== undefined) return declared;
+  }
+
+  const models = entries.filter((entry) => entry.name.toLowerCase().endsWith('.model'));
+  if (models.length === 0) {
+    throw importMalformed(
+      ImportRefusal.ThreeMfNoModelPart,
+      'This archive does not contain a 3MF model part, so it is not a 3MF file.',
+    );
   }
 
   const conventional = models.find((entry) => entry.name.toLowerCase() === MODEL_PART);

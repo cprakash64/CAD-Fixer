@@ -2526,6 +2526,305 @@ will.
 - **Unchanged:** every ceiling, every cancellation guarantee, core 3MF, STL and
   OBJ.
 
+# Stage 6D-A4 — interoperability qualification and the release-candidate gate
+
+**Decision: `INTEROPERABILITY QUALIFIED — READY FOR RELEASE CANDIDATE`.** Base
+`a204af82c6ea0c58294c95192bc3b237073ec556`. No resource ceiling moved, no
+geometry algorithm changed, nothing deployed and nothing tagged.
+
+The question was not "do files import". It was whether every valid file inside
+the claimed surface imports correctly, whether valid files outside it refuse
+specifically, and whether malformed ones fail typed and transactionally. The
+evidence below answered it — and on the way it found seven defects, all
+corrected in this stage, three of them in the claimed support surface.
+
+## The corpus
+
+Fetched from upstream repositories into scratch storage by sparse, shallow
+checkout at pinned commits, run through the production pipeline, and deleted.
+**Nothing is committed.** `npm run qualify:interop-corpus` is the harness: the
+worker's own sequence — `identifyFormat` from the bytes, `requireReader`,
+`assertMeshStructure` per distinct mesh, `assertGeometryDocument`, the R3
+geometry gate and the render expansion — and, with `CADFIXER_EXPORT=1`, an export
+of every imported document to STL, OBJ and 3MF through `exportDocument`, each read
+back once more independently and compared by triangle count and tight world
+bounds.
+
+| Source                                  | Commit         |     Files | Class                         |
+| --------------------------------------- | -------------- | --------: | ----------------------------- |
+| 3MFConsortium/test_suites (suites 1–11) | `f483d3beee06` |     1,402 | REFERENCE TEST                |
+| 3MFConsortium/3mf-samples               | `665e20dc4d77` |        80 | REFERENCE TEST                |
+| 3MFConsortium/lib3mf `Tests/TestFiles`  | `bfb5df00057f` |        99 | REFERENCE TEST                |
+| prusa3d/PrusaSlicer                     | `6f510128d7c2` |        36 | 6 REAL, 30 REFERENCE          |
+| bambulab/BambuStudio                    | `77b9dd94d1e3` |        49 | 21 REAL, 28 REFERENCE         |
+| SoftFever/OrcaSlicer                    | `db91d4b63046` |        38 | 10 REAL, 28 REFERENCE         |
+| Ultimaker/Cura `resources/meshes`       | `72521b78f085` |       240 | REAL                          |
+| Ultimaker/CuraEngine                    | `27c70acfac15` |         3 | REFERENCE TEST                |
+| assimp/assimp `test/models`             | `c693cb0d68ce` |        39 | REFERENCE TEST                |
+| tinyobjloader/tinyobjloader             | `45636bdcef1a` |        55 | REFERENCE TEST                |
+| WoLpH/numpy-stl                         | `b0ae1249a7d1` |        17 | REFERENCE TEST                |
+| admesh/admesh                           | `e1b296b575ba` |        72 | REFERENCE TEST                |
+| **Total**                               |                | **2,130** | **277 REAL, 1,853 REFERENCE** |
+
+**REAL PRODUCER-AUTHORED** means a file a real tool wrote and a project ships as
+a product resource, or a test fixture whose own metadata names the application
+that wrote it. Every one is listed, with its source, commit, path, size, hash,
+Zip form, extensions, producer metadata, expected and actual outcome, in
+[`docs/beta/A4_REAL_PRODUCER_CORPUS.tsv`](../beta/A4_REAL_PRODUCER_CORPUS.tsv).
+**SYNTHETIC** fixtures are generated in-repo and are never counted as producer
+output: the 99-case mutation campaign, 37 ZIP/Zip64 unit cases, and the browser
+fixtures in `e2e/format-fixtures.ts`.
+
+**Final run: 2,130 files, 0 crashes, 1,020 imports, 3,060 exports with
+parse-back — 0 export failures, 0 geometry mismatches.**
+
+## Results by format
+
+**STL** — 235 files (115 real). All import except PrusaSlicer's
+`20mmbox-nonstandard.stl` (×3 repositories), which carries
+`facet normal +inf -inf weirdvalue` and text after `endfacet`; PrusaSlicer's own
+test calls it nonstandard, and refusing it as malformed is the preservation
+policy. **One defect**: `20mmbox-CR.stl` — classic-Mac CR-only line endings —
+was refused as unrecognisable. Fixed.
+
+**OBJ** — 195 files (49 real). Every triangle-face file imports. 47 are refused
+as polygons (`OBJ_POLYGON_UNSUPPORTED` — 11 of them Cura's printer-platform
+meshes); the rest of the refusals are genuinely malformed (NaN coordinates,
+zero, forward and out-of-range indices, point- and line-only files, a UTF-16
+file). **One defect**, found by the mutation campaign rather than the corpus: a
+face corner was coerced with `Number`, so `f 1/x 2 3`, `0x2`, `1e0` and `1.0`
+all imported. Fixed.
+
+**Core 3MF** — every real producer 3MF imports: 113 of 113 (6 PrusaSlicer, 5
+Bambu Studio, 10 OrcaSlicer, 92 Cura). The 3MF Consortium's core positive suite:
+**132 of 133 import**, and the one that does not is `P_XXX_0909_04`, a single
+363 MiB model entry refused by `ZIP_ENTRY_TOO_LARGE` — BETA-002's class. Before
+this stage **four** core positives (`0101_02`, `0102_01`, `0102_02`, `0325_01`)
+were refused as "not a 3MF file": their root model parts are named
+`/3D/3dmodel`, `/3D/3dmodel.moodel` and `/3D/3dmodel.part`. Fixed. 3mf-samples
+`MUSTPASS`: 13 of 13.
+
+**Production Extension** — the consortium's production positive suite: **162 of
+163 import** (the same 363 MiB entry is the exception); every
+`prod_alt` positive and negative is refused by name. Every real
+production-extension package imports: 7 in the Bambu Studio and OrcaSlicer
+repositories (`auto_pa_line_dual/single`, `pa_pattern`, `OrcaBadge`), up to 39
+parts, with placements checked against producer metadata and against three
+export targets.
+
+**Zip64** — 25 Zip64 packages in the corpus, 17 of which import. The other 8
+are refused for what they contain — seven require Secure Content, beam-lattice
+or volumetric extensions, and one lib3mf slice fixture has no build items — and
+never for their Zip form. Every real Zip64 producer package imports: 2 Bambu
+Studio, 4 OrcaSlicer, 1 Cura.
+
+## Differential geometry
+
+Triangle counts, part counts and bounds were compared against independent
+references, not against CAD Fixer's own opinion:
+
+- **Producer metadata.** Bambu Studio and OrcaSlicer write a
+  `Metadata/model_settings.config` listing every part, and per-part
+  `mesh_stat face_count` where they record it. For every package that carries
+  it, CAD Fixer's part count equals the producer's (16/16, 8/8, 1/1, 39/39,
+  30/30, in both repositories), and its triangle total equals the sum of the
+  producer's per-part face counts (192/192, 96/96). **Half the parts in the two
+  `auto_pa_line` packages are Bambu `modifier_part` volumes** — settings regions,
+  not printed geometry. Core 3MF represents them as ordinary mesh objects and
+  says nothing about their role, so CAD Fixer imports and shows them as parts.
+  That is faithful to the 3MF and a real usability gap for Bambu projects; it is
+  recorded as S3 and would need vendor metadata interpretation to close.
+- **Three exporters as a differential.** Every imported document was written as
+  STL, OBJ and 3MF, read back, and compared by triangle total and per-vertex
+  baked world bounds — 3,060 comparisons, 0 mismatches. A first pass reported
+  26; the harness had compared a transformed bounding BOX with baked geometry's
+  tight bounds for rotated parts. The export engine's own exact per-coordinate
+  check had passed every one.
+- **PrusaSlicer's own test expectations**: `20mmbox-*` import as 20 × 20 × 20
+  boxes of 12 triangles, and `production_ext.3mf` places its object at
+  `50 50 0`, as in A3.
+
+## The negative cases CAD Fixer imports, and why each is right or tolerable
+
+The conformance suite's negatives are written for a **printer** — "printer should
+generate error". Of 552 negatives run, 84 import. Each was classified from the
+test specification (`3MF_Test_Specification_v2_4_1`), and **none produces
+geometry the file does not describe**:
+
+| Category                                                                                                                                         | Cases                                           | Why CAD Fixer imports                                                                                                |
+| ------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| Defective meshes (negative volume, inward normals, < 4 triangles, non-manifold, duplicate vertex refs, outside build area, negative determinant) | 0411, 0416, 0418, 0421, 0426, 0427              | A repair tool exists to open these. Imported exactly; Mesh Health diagnoses them.                                    |
+| OPC packaging (dotted segments, bad or duplicate relationships, external thumbnail, CMYK thumbnail, non-ASCII part name)                         | 0202–0208, 0402 01/02/04, 0403, 0405–0407, 0419 | A3's decision: a broken relationship falls back to a root the package plainly has; nothing external is ever fetched. |
+| Content types                                                                                                                                    | 0204–0207, 0404, 2802_02                        | Not a geometry gate (A3).                                                                                            |
+| Metadata, `xml:space`, non-root `.rels` ids                                                                                                      | 0409, 0410, 0413_01                             | Not interpreted.                                                                                                     |
+| Production UUIDs, dot-leading part name                                                                                                          | 0802, 0415_01                                   | Producer-side requirements; not validated (A3).                                                                      |
+| Materials on a component object                                                                                                                  | 0424                                            | Materials are not interpreted.                                                                                       |
+| 0420_01                                                                                                                                          | 1                                               | This copy of the file contains no DTD; its suite-1/2/4 twins do and are refused.                                     |
+
+`0402_03` — a start part pointing at a thumbnail — **now refuses**, because the
+relationship is honoured whatever the part is called and a PNG is not a model.
+`N_DPX_3314_01` **now refuses** — see correction 4. 3mf-samples `MUSTFAIL`: 7 refused, 31 imported — 18 materials-extension data
+errors and one duplicated core `basematerials` (materials are not interpreted),
+5 OPC relationship checks, 3 schema, `xml:space` and whitespace checks, 2
+metadata checks, and 2 object-`type` checks. CAD Fixer does not interpret an
+object's `type`, so a build item naming a `type="other"` object imports its
+geometry; that is S3, and the geometry itself is exactly what the file holds.
+
+## Valid-but-unsupported matrix
+
+| Semantic                                                               | Where observed                    | Outcome                                                                  |
+| ---------------------------------------------------------------------- | --------------------------------- | ------------------------------------------------------------------------ |
+| Production alternatives (model resolution)                             | suite 5 `prod_alt`, 30 files      | `THREEMF_MODEL_RESOLUTION_UNSUPPORTED` or unsupported-extension, by name |
+| Secure Content                                                         | suite 8, lib3mf, 70 files         | `THREEMF_UNSUPPORTED_EXTENSION`                                          |
+| Materials declared required                                            | suite 6, 359 files                | `THREEMF_UNSUPPORTED_EXTENSION`                                          |
+| Slice, beam lattice, booleans, displacement, volumetric, triangle sets | suites 1, 4, 7, 9, 10, 11, lib3mf | `THREEMF_UNSUPPORTED_EXTENSION`                                          |
+| Unknown required extension, unresolvable required prefix               | mutation campaign, lib3mf         | `THREEMF_UNSUPPORTED_EXTENSION`                                          |
+
+Every one is `UNSUPPORTED_FILE`, none is called malformed, and none commits any
+geometry. Optional (not required) extension content is ignored: suite 6's eight
+materials-optional positives import their geometry.
+
+## Alternatives policy review: `KEEP REFUSAL`
+
+Every one of the 21 official `prod_alt` positives declares the alternatives
+namespace **required**, so core's unknown-required rule refuses them before A3's
+namespace-scoped exception is reached. No official case uses alternatives
+without declaring them, so no evidence shows the refusal contradicting required
+consumer behaviour, and the reason for it — `fullres` versus `lowres` versus
+`obfuscated` decides which geometry is the object — is unchanged.
+
+## Seven corrections
+
+1. **A root model part not named `.model` was refused as "not a 3MF file"** (S2).
+   The OPC relationship's TYPE makes a part the root; the relationship is now
+   read first, and its target goes through `canonicalisePackagePartName` — every
+   shape rule, no suffix. A production `path` keeps the suffix rule, and
+   `canonicalisePackagePath` is that function plus the suffix.
+2. **OBJ export was refused for every ASCII STL with an unnamed `solid`, and for
+   every hole-filled grouped mesh** (S2). The OBJ writer emitted a record only
+   for a non-empty name or a material change, so an empty-named group — and the
+   faces after a group — had no boundary on the way back in, and parse-back
+   refused the export. Found through numpy-stl's `Moon_Chinese.stl` and assimp's
+   `empty_mat.obj`. The writer now emits a run start wherever OBJ needs one, and
+   `expectedObjRoundTrip` states the one thing OBJ cannot say: once a run has
+   started, faces in no group come back in an empty-named group.
+3. **A damaged deflate stream escaped as an untyped `TypeError`** (S2 — the
+   fuzz-lite invariant forbids INTERNAL for bad data). The user saw the file name
+   followed by an EMPTY message. Found by the mutation campaign. `readZipEntry`
+   now converts only what the decompressor's `next()` throws. **The first
+   version of this fix was itself a memory regression** — see _Memory_ below —
+   and the memory gate is what caught it.
+4. **Foreign-namespace elements were read as core geometry** (S3). `d:vertex`
+   and `d:triangle` inside a displacement mesh became the object's mesh;
+   `N_DPX_3314_01` imported 36 triangles from objects with no core mesh. A
+   prefixed element now needs a prefix bound to the core namespace; unprefixed
+   elements keep their meaning, because lib3mf's v0.9.3 fixtures use the
+   pre-release default namespace.
+5. **ZIP directory hardening** (S3). A Zip64 locator leading to a corrupt record
+   fell back to sentinel values and was reported as 65,535 entries; split
+   archives were followed; offsets and compressed sizes outside the archive were
+   carried into arithmetic; a deflated entry declaring output from zero
+   compressed bytes skipped the ratio check and was allocated at its declared
+   size; stored entries with contradictory sizes were accepted; an EOCD
+   signature inside a comment shadowed the real record.
+6. **OBJ face corners are checked lexically** (S3), as 3MF transform tokens are.
+7. **An ASCII STL line ends at LF or CR** (S3).
+
+Correction 5 also changed two TEST fixtures, deliberately: the browser and
+worker "archive over the total budget" fixtures declared 2 MiB of compressed data
+per entry inside a few-hundred-byte file. They now carry real incompressible
+bytes, so the ceiling they exist to prove is the only one they can reach.
+
+## Mutation campaign
+
+`packages/file-formats/src/mutation-campaign.test.ts`: 99 deterministic cases
+over six valid seeds — entry deletion and renaming, path traversal, encoding and
+URL forms, object-id and namespace mutation, required-extension mutation,
+transform tokens, units, DOCTYPE injection, truncation at five points, deflate
+corruption in Zip32 and Zip64 form, directory, EOCD and Zip64 corruption,
+encryption and method flags, declared-size overrun, shortfall and bombs, and
+STL/OBJ truncation, counts, tokens and corners. **Every outcome is a correct
+import or a typed MALFORMED / UNSUPPORTED / RESOURCE / CANCELLED refusal; none is
+a crash or INTERNAL.** Before this stage two failed that invariant and six OBJ
+corners imported.
+
+## Browser proofs
+
+`e2e/interop-recovery.spec.ts`:
+
+- **Recovery**, for malformed STL, malformed OBJ, malformed 3MF, unsupported 3MF,
+  a resource refusal, a corrupt Zip64 record and a corrupt deflate stream: the
+  open model stays on screen, the message is specific and never internal, and
+  the next file — a production 3MF — imports.
+- **Supersession** of a six-part, 360,000-triangle production package by an STL
+  chosen mid-import: the STL lands and the package never overwrites it.
+- **Cancellation** of the same package mid-child: the open model is kept and the
+  worker imports again.
+- **Locality**: STL, OBJ, core, production and Zip64 3MF imported and each
+  exported to all three formats — zero requests off the application origin.
+
+`e2e/format-import.timing.spec.ts` MF-P27: a 180,000-triangle, six-part Zip64
+production package keeps the UI thread under a third of the import window and
+under one second absolutely. Measured longest main-thread gaps on the final
+production build, two runs each: 1 M-triangle binary STL 19 ms, 150 k core 3MF
+18–19 ms, 180 k six-part Zip64 production 3MF 17–18 ms, 150 k OBJ 17 ms.
+
+**Two load-sensitive proofs failed once and are recorded, not hidden.** In one
+full `test:e2e` run under host load (1-minute load average ~13), the large-STL
+responsiveness check timed out at 30 s; it passed 3/3 in isolation and in the
+next full run (186 passed). In one `test:e2e:harness` run under the same load,
+§44's 1,000-placement main-thread gap measured 1,991 ms against a 775 ms ceiling;
+it measured 224–312 ms in three isolated runs and 247 ms in the next full run
+(77 passed). Neither path is touched by this stage.
+
+## Memory
+
+Renderer `phys_footprint_peak`, production build, the 8 GiB minimum host,
+`npm run qualify:import-phases`. A4 and A3 builds were served side by side and
+run **interleaved**, because on this host A3 alone ranged 1,241–1,730 MiB for
+MP-L across runs — the host's memory state moves the number more than most code
+changes do.
+
+| Case                                         | A3 (interleaved)                              | **A4 final**              |
+| -------------------------------------------- | --------------------------------------------- | ------------------------- |
+| MP-L — 2 parts x 1,200,000 triangles         | 1,241 / 1,259 / 1,269 / 1,280 / 1,281 / 1,294 | **1,199 / 1,220 / 1,261** |
+| MP-S — 2 parts x 400,000                     | 506 (A3 record)                               | **511**                   |
+| 320 MiB binary STL, the exact R3 ceiling     | 1,182 (R3 record)                             | **1,182**                 |
+| Bambu `flowrate-test-pass1` (Zip64, 9 parts) | —                                             | **112**                   |
+| Orca `OrcaBadge` (production, 39 parts)      | —                                             | **125**                   |
+
+No session loss and no crash in any run.
+
+**THE GATE CAUGHT A REGRESSION THIS STAGE INTRODUCED.** The first version of
+correction 3 wrapped the decompressor in an `async function*` that converted its
+failures and re-yielded each chunk. MP-L then peaked at **1,564–1,706 MiB over
+nine runs**, never once reaching A3's range. A third build — identical except for
+a direct `next()` loop — measured 1,221 / 1,242 / 1,291 MiB against A3's 1,241 /
+1,294 / 1,269 in the same round-robin. The extra hop per chunk let the
+decompressor run ahead of the consumer, so inflated chunks queued beside the
+preallocated entry buffer. The shipped loop is the direct one, and a boundary
+test keeps async generators out of `zip.ts`.
+
+## Resource policy — unchanged, and checked
+
+`maxEntryBytes` 256 MiB, `maxTotalUncompressedBytes` 512 MiB,
+`maxCompressionRatio` 200:1, `MAX_IMPORT_GEOMETRY_BYTES` 768 MiB and the STL
+pre-gate of 6,710,886 triangles are byte-identical to A3. The deleted import-peak
+APIs remain absent (boundary test). One `InflationBudget` still spans every
+model part.
+
+## What A4 did NOT do
+
+No streaming import, no ceiling change, no alternatives, no Secure Content, no
+material or texture import, no OBJ polygon triangulation, no CRC verification,
+no deployment, no tag.
+
+## Release version recommendation: `v0.2.0`
+
+Since v0.1.1 the product gained a capability — production-extension multi-part
+3MF import — and Zip64 intake, a changed import resource gate, and a corrected
+OBJ export. That is a feature release of the Technical Preview, not a patch.
+
 # Acceptance targets
 
 ## BETA-001

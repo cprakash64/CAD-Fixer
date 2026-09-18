@@ -321,15 +321,31 @@ export class ByteScanner {
     while (this.cursor < this.bytes.length) {
       const byte = this.bytes[this.cursor];
       if (byte === undefined || !isStlWhitespace(byte)) return;
-      if (byte === CHAR_NEWLINE) this.lineNumber += 1;
+      // A lone CR is a line break too (see `skipRestOfLine`); a CR that begins
+      // a CRLF pair is not counted, so CRLF files are not numbered twice.
+      if (
+        byte === CHAR_NEWLINE ||
+        (byte === CHAR_CARRIAGE_RETURN && this.bytes[this.cursor + 1] !== CHAR_NEWLINE)
+      ) {
+        this.lineNumber += 1;
+      }
       this.cursor += 1;
     }
   }
 
+  /**
+   * Skips the free text after `solid` / `endsolid`, up to the line break.
+   *
+   * A LINE ENDS AT LF *OR* CR — Stage 6D-A4. Stopping at LF alone meant a file
+   * written with classic-Mac CR-only line endings had its `solid` line run to
+   * the end of the file, so a valid ASCII STL was reported as unrecognisable.
+   * PrusaSlicer's own test data carries exactly such a file. Stopping at the CR
+   * of a CRLF pair is harmless: the LF that follows is whitespace.
+   */
   public skipRestOfLine(): void {
     while (this.cursor < this.bytes.length) {
       const byte = this.bytes[this.cursor];
-      if (byte === CHAR_NEWLINE) return;
+      if (byte === CHAR_NEWLINE || byte === CHAR_CARRIAGE_RETURN) return;
       this.cursor += 1;
     }
   }

@@ -27,6 +27,14 @@ import {
 import { DEFAULT_OBJ_LIMITS, type ObjLimits } from './limits';
 
 /**
+ * One face corner: a position index, then optionally a texture index and a
+ * normal index, each an optionally signed decimal integer, either of the
+ * latter possibly empty. Bounded by the token length the tokeniser already
+ * enforces, and linear — no nested quantifier can backtrack.
+ */
+const OBJ_CORNER = /^[+-]?\d+(?:\/[+-]?\d*){0,2}$/;
+
+/**
  * THE PRODUCTION OBJ READER.
  *
  * Semantically equivalent to the qualified research parser in
@@ -388,6 +396,23 @@ function readFace(
     // v, v/vt, v//vn and v/vt/vn all begin with the position index.
     const slash = corner.indexOf('/');
     const token = slash === -1 ? corner : corner.slice(0, slash);
+    /*
+     * THE CORNER IS CHECKED LEXICALLY BEFORE ANY PART OF IT IS COERCED — Stage
+     * 6D-A4, the reasoning A3 applied to 3MF transform tokens. `Number` reads
+     * `0x2` as two, `1e0` as one and `1.0` as one, none of which is an OBJ
+     * index; and the texture and normal components were never looked at, so
+     * `f 1/x 2 3` imported. Those components are still not IMPORTED — CAD
+     * Fixer reads positions only — but a corner that is not one of OBJ's four
+     * shapes is not a corner. An EMPTY component (`1/`, `1//`) is tolerated,
+     * as it always was, because writers emit it.
+     */
+    if (token.length > 0 && !OBJ_CORNER.test(corner)) {
+      throw importMalformed(
+        ImportRefusal.ObjBadIndex,
+        `This OBJ file has a face index CAD Fixer cannot read on line ${String(line)}.`,
+        { line, token: corner.slice(0, 64) },
+      );
+    }
     if (token.length === 0) {
       /*
        * `f /1/1` — a corner that gives a texture and a normal and no position.

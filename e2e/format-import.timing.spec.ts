@@ -1,6 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { ThreeMfImportPhase } from '@cadfixer/file-formats';
-import { objLarge, threeMfLarge } from './format-fixtures';
+import { objLarge, threeMfLarge, threeMfProductionLarge, toZip64 } from './format-fixtures';
 
 /**
  * OBJ-P17/P18 AND MF-P22/P23 — cancellation and responsiveness on large files.
@@ -204,6 +204,43 @@ test('MF-P23: a large 3MF import leaves the UI thread responsive', async ({ page
     measurement.longestGapMs,
     `longest gap ${measurement.longestGapMs.toFixed(0)}ms of ${measurement.durationMs.toFixed(0)}ms`,
   ).toBeLessThan(measurement.durationMs / 3);
+});
+
+/* ---------------------------------------------------------------- MF-P27 -- */
+
+test('MF-P27: a large Zip64 multi-model-part 3MF import leaves the UI thread responsive', async ({
+  page,
+}) => {
+  /*
+   * STAGE 6D-A4. MF-P23 measures one model part in a classic archive. The
+   * packages Bambu Studio and OrcaSlicer write are Zip64 and, for multi-part
+   * projects, production-extension packages whose geometry lives in CHILD
+   * model parts — a different path through the reader: a Zip64 directory, the
+   * root's relationships, then one child after another, each inflated,
+   * decoded, scanned and materialised. The same bar applies to all of it.
+   */
+  test.setTimeout(300_000);
+  await page.goto('/');
+
+  const children = 6;
+  const trianglesPerChild = 30_000;
+  const bytes = toZip64(threeMfProductionLarge(children, trianglesPerChild));
+  await openFile(page, 'large-zip64-production.3mf', bytes);
+  await startFrameLoop(page);
+
+  await expect(page.getByTestId('fact-triangles')).toHaveText(
+    (children * trianglesPerChild).toLocaleString(),
+    { timeout: 240_000 },
+  );
+
+  const measurement = await stopFrameLoop(page);
+  expect(measurement.frames).toBeGreaterThan(5);
+  expect(
+    measurement.longestGapMs,
+    `longest gap ${measurement.longestGapMs.toFixed(0)}ms of ${measurement.durationMs.toFixed(0)}ms`,
+  ).toBeLessThan(measurement.durationMs / 3);
+  // No multi-second block, stated absolutely as well as relatively.
+  expect(measurement.longestGapMs).toBeLessThan(1_000);
 });
 
 /* ---------------------------------------------------------------- MF-P22 -- */

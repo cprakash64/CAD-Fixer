@@ -112,6 +112,43 @@ export function canonicalisePackagePath(
   raw: string,
   limits: ZipLimits = DEFAULT_ZIP_LIMITS,
 ): { readonly key: ModelPartKey } | { readonly refusal: PackagePathRefusal } {
+  const canonical = canonicalisePackagePartName(raw, limits);
+  if ('refusal' in canonical) return canonical;
+  if (!canonical.key.endsWith(MODEL_EXTENSION)) {
+    /*
+     * A GEOMETRY REFERENCE MAY ONLY NAME A MODEL PART. A `path` pointing at a
+     * thumbnail, a texture or a directory is not a model part that happens to
+     * be the wrong type — following it would be opening an entry for a reason
+     * the package never stated, which is the same rule that keeps `mtllib`
+     * unopened.
+     */
+    return { refusal: PackagePathRefusal.NotAModelPart };
+  }
+  return canonical;
+}
+
+/**
+ * Validates an absolute package part name and reduces it to canonical text,
+ * WITHOUT asking what kind of part it names — Stage 6D-A4.
+ *
+ * Every shape rule of `canonicalisePackagePath` applies here unchanged: no
+ * traversal, no encoded traversal, no drive letter, no URL, no backslash, no
+ * control character, no empty or dot segment, a leading slash required. What
+ * is NOT applied is the `.model` suffix, and that is the only difference.
+ *
+ * WHY THE ROOT NEEDS THIS. 3MF core identifies the root model part by the TYPE
+ * of the OPC relationship that names it, and OPC puts no constraint on a part's
+ * extension. The 3MF Consortium's own positive conformance cases name the root
+ * `/3D/3dmodel`, `/3D/3dmodel.moodel` and `/3D/3dmodel.part`, and a consumer
+ * must read them. Requiring `.model` there refused them as "not a 3MF file".
+ * A production `path` keeps the suffix rule, because it is a reference an
+ * untrusted file asks CAD Fixer to follow — the root relationship's TYPE is the
+ * package saying what the part is.
+ */
+export function canonicalisePackagePartName(
+  raw: string,
+  limits: ZipLimits = DEFAULT_ZIP_LIMITS,
+): { readonly key: ModelPartKey } | { readonly refusal: PackagePathRefusal } {
   if (raw.length > limits.maxPathLength) return { refusal: PackagePathRefusal.TooLong };
 
   /*
@@ -158,18 +195,7 @@ export function canonicalisePackagePath(
     if (segment === '..') return { refusal: PackagePathRefusal.ParentSegment };
   }
 
-  const canonical = segments.join('/').toLowerCase();
-  if (!canonical.endsWith(MODEL_EXTENSION)) {
-    /*
-     * A GEOMETRY REFERENCE MAY ONLY NAME A MODEL PART. A `path` pointing at a
-     * thumbnail, a texture or a directory is not a model part that happens to
-     * be the wrong type — following it would be opening an entry for a reason
-     * the package never stated, which is the same rule that keeps `mtllib`
-     * unopened.
-     */
-    return { refusal: PackagePathRefusal.NotAModelPart };
-  }
-  return { key: canonical as ModelPartKey };
+  return { key: segments.join('/').toLowerCase() as ModelPartKey };
 }
 
 /** The canonical key for an entry already present in the archive directory. */

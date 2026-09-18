@@ -169,6 +169,33 @@ describe('ASCII STL import', () => {
     expect(triangleCount((await readStl(bytes, testContext())).mesh)).toBe(2);
   });
 
+  it('handles classic-Mac CR-only line endings, names included — Stage 6D-A4 regression', async () => {
+    const bytes = buildAsciiStl([UNIT_TRIANGLE, UNIT_TRIANGLE], { lineEnding: '\r' });
+    const result = await readStl(bytes, testContext());
+
+    expect(result.encoding).toBe(StlEncoding.Ascii);
+    expect(triangleCount(result.mesh)).toBe(2);
+    expect([...result.mesh.positions.subarray(0, 9)]).toEqual([0, 0, 0, 1, 0, 0, 0, 1, 0]);
+  });
+
+  it('numbers lines through lone CRs and counts a CRLF once', async () => {
+    const lf = asciiToBytes('solid a\nfacet normal 0 0 1\nouter loop\nvertex 0 0 x\n');
+    const cr = asciiToBytes('solid a\rfacet normal 0 0 1\router loop\rvertex 0 0 x\r');
+    const crlf = asciiToBytes('solid a\r\nfacet normal 0 0 1\r\nouter loop\r\nvertex 0 0 x\r\n');
+    const lineOf = async (bytes: Uint8Array): Promise<unknown> => {
+      try {
+        await readStl(bytes, testContext());
+      } catch (error) {
+        return (error as { details?: { line?: unknown } }).details?.line;
+      }
+      return undefined;
+    };
+
+    expect(await lineOf(lf)).toBe(4);
+    expect(await lineOf(cr)).toBe(4);
+    expect(await lineOf(crlf)).toBe(4);
+  });
+
   it('handles a missing final newline', async () => {
     const bytes = buildAsciiStl([UNIT_TRIANGLE], { trailingNewline: false });
 

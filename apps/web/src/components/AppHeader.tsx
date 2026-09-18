@@ -4,6 +4,10 @@ import type { ReactNode } from 'react';
  * The local-processing indicator is a factual statement about this build: no
  * code path in the application transmits model data anywhere. It must be
  * removed or qualified the moment that stops being true.
+ *
+ * THE RELEASE LABEL IS PUBLIC COPY. It read "Stage 0 — foundation" — internal
+ * development language — until Stage 6D-A4; what a visitor is using is the
+ * Technical Preview, and that is what it now says.
  */
 export function AppHeader(): ReactNode {
   return (
@@ -11,7 +15,9 @@ export function AppHeader(): ReactNode {
       <div className="app-header__identity">
         <span className="app-header__mark" aria-hidden="true" />
         <h1 className="app-header__title">CAD Fixer</h1>
-        <span className="app-header__stage">Stage 0 — foundation</span>
+        <span className="app-header__stage" data-testid="release-stage">
+          Technical Preview
+        </span>
       </div>
       <p className="app-header__privacy" data-testid="privacy-badge">
         Models are processed locally in your browser

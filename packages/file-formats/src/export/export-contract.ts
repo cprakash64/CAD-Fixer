@@ -393,6 +393,59 @@ function isIdentityTransform(transform: PartTransform): boolean {
 }
 
 /**
+ * THE GROUPS AN OBJ EXPORT READS BACK WITH, derived from OBJ's own grouping
+ * model rather than from what the writer happens to emit — Stage 6D-A4.
+ *
+ * OBJ has two run-start records, `g` and `usemtl`, and NO record that ends a
+ * run: a run lasts until the next one starts, across `o` boundaries too. So:
+ *
+ *   - EVERY GROUP COMES BACK AS ITSELF: its name and its material reference as
+ *     `objRoundTripName` leaves them, over the same faces. That includes a
+ *     group with an EMPTY name and no material — a plain `solid` in an ASCII
+ *     STL, or a bare `g` in an OBJ — which the writer used to emit nothing for,
+ *     so the boundary vanished and the export was refused on parse-back.
+ *   - FACES IN NO GROUP stay in no group only while no run has started yet in
+ *     the file. After one has, OBJ cannot say "no group", and they come back as
+ *     a group with an EMPTY name and no material. That is where a hole-fill
+ *     patch appended after a named group goes: its geometry is exact, and its
+ *     group membership is the one thing the format cannot state.
+ *   - A group covering no faces cannot be written at all, and is not expected.
+ *
+ * Stated here so the validator compares against the format's semantics; a
+ * writer that emitted too few records — the defect this replaced — is then a
+ * refusal, and a writer that emitted wrong ones is too.
+ */
+function expectedObjGroups(
+  groups: readonly MeshGroup[] | undefined,
+  faceCount: number,
+  runs: { started: boolean },
+): { readonly groups?: MeshGroup[] } {
+  const out: MeshGroup[] = [];
+  let face = 0;
+  const ungrouped = (until: number): void => {
+    if (until <= face) return;
+    if (runs.started) out.push({ name: '', indexOffset: face * 3, indexCount: (until - face) * 3 });
+    face = until;
+  };
+  for (const group of groups ?? []) {
+    if (group.indexCount === 0) continue;
+    const first = group.indexOffset / 3;
+    ungrouped(first);
+    const materialRef = group.materialRef === undefined ? '' : objRoundTripName(group.materialRef);
+    out.push({
+      name: objRoundTripName(group.name),
+      indexOffset: group.indexOffset,
+      indexCount: group.indexCount,
+      ...(materialRef.length === 0 ? {} : { materialRef }),
+    });
+    runs.started = true;
+    face = first + group.indexCount / 3;
+  }
+  ungrouped(faceCount);
+  return out.length === 0 ? {} : { groups: out };
+}
+
+/**
  * WHAT AN OBJ EXPORT IS EXPECTED TO READ BACK AS.
  *
  * OBJ has no structural transform, so a placement can only survive by being
@@ -412,6 +465,12 @@ function isIdentityTransform(transform: PartTransform): boolean {
  * so this is a statement about the pipeline rather than an approximation of it.
  */
 export function expectedObjRoundTrip(snapshot: ExportDocumentSnapshot): GeometryDocument {
+  /*
+   * FILE-GLOBAL, because OBJ's grouping state is. A `g` or `usemtl` stays in
+   * force across `o`, so whether an ungrouped run can come back ungrouped
+   * depends on whether ANY earlier part already started a run.
+   */
+  const runs = { started: false };
   const parts = snapshot.parts.map((part, index) => {
     const mesh = snapshot.meshes[part.meshResourceIndex];
     const positions = mesh?.positions ?? new Float32Array(0);
@@ -446,26 +505,7 @@ export function expectedObjRoundTrip(snapshot: ExportDocumentSnapshot): Geometry
       mesh: {
         positions: baked,
         indices: copiedIndices,
-        /*
-         * A GROUP WITH NO NAME COMES BACK NAMED AFTER ITS MATERIAL. The writer
-         * emits `usemtl` for the material and `g` only for a non-empty name, so
-         * an unnamed run has just the `usemtl` record — and a reader names that
-         * run after the material, because that is the only name it has.
-         */
-        ...(mesh?.groups === undefined || mesh.groups.length === 0
-          ? {}
-          : {
-              groups: mesh.groups.map((group) => ({
-                ...group,
-                name:
-                  objRoundTripName(group.name).length > 0
-                    ? objRoundTripName(group.name)
-                    : objRoundTripName(group.materialRef ?? ''),
-                ...(group.materialRef === undefined
-                  ? {}
-                  : { materialRef: objRoundTripName(group.materialRef) }),
-              })),
-            }),
+        ...expectedObjGroups(mesh?.groups, indices.length / 3, runs),
         metadata: { sourceFormat: MeshFormatId.Obj },
       } satisfies CanonicalMesh,
       transform: IDENTITY_PART_TRANSFORM,

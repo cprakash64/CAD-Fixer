@@ -248,6 +248,43 @@ record asked for.
 never been seen. Nothing here is a claim about whether their particular package
 imports — only about the entry class it reported.
 
+### Stage 6D-A4 — interoperability qualified; the release is what is missing
+
+A4 ran the production import pipeline over the 3MF Consortium's conformance
+suites, lib3mf's and the 3MF Consortium's samples, and every 3MF, STL and OBJ
+carried in the PrusaSlicer, Bambu Studio, OrcaSlicer and Cura repositories. All
+15 Bambu Studio and OrcaSlicer 3MF packages import — the 6 Zip64 ones and the 7
+production-extension ones among them — with part counts and per-part face counts
+equal to the producers' own `model_settings.config`, and each exports to STL, OBJ
+and 3MF with parse-back. A4's ZIP hardening runs on every one of those Zip64
+directories and they still import; its 3MF semantic corrections concern a root
+model part not named `.model` and foreign-namespace elements, neither of which
+Bambu or Orca write. One caution for the retest: Bambu `modifier_part` volumes are
+ordinary mesh objects in core 3MF, so they appear as parts in CAD Fixer.
+
+| Level       | Status                                                           |
+| ----------- | ---------------------------------------------------------------- |
+| **Product** | **`SUPPORTED STRUCTURAL CLASS`**                                 |
+| **Tester**  | **`AWAITING RETEST`** — A2, A3 and A4 are not deployed until the |
+|             | next release, so the tester cannot yet have run the fix.         |
+
+**Do not mark BETA-001 resolved** until the tester's own file has been opened in
+the deployed release. The retest instruction to send, verbatim, once the next
+release is live:
+
+> A new CAD Fixer Technical Preview is live. Please open the same 3MF file that
+> showed "a component that refers to an object which does not exist" — you do
+> not need to change or re-export it. If it opens, please tell us how many parts
+> the Model panel lists and whether the model looks complete and correctly
+> placed. If it is refused, please copy the whole message exactly, including the
+> file name, and tell us which slicer and version saved the file. Please do not
+> send the file itself unless you are authorised to share it; the message and
+> the slicer version are enough for us to classify it.
+
+A refusal after retest is still informative: every construct CAD Fixer does not
+implement is refused with its own sentence, so the message alone identifies
+which one the file uses.
+
 ### Information still needed
 
 Nothing further is needed to classify or to design. The remaining questions are
@@ -379,6 +416,15 @@ concatenated output simultaneously, costing **2.0–2.1× the entry** where 1.0�
 would do. The full analysis, the measurements and the chosen architecture are in
 `docs/design/STAGE_6D_3MF_PRODUCTION_AND_LARGE_ENTRY_ARCHITECTURE.md`. **No
 ceiling was moved in Stage 6D.**
+
+### Stage 6D-A4 — unchanged, and not claimed fixed
+
+**Status: `STREAMING IMPORT REQUIRED`.** A4 did not change the 256 MiB per-entry
+ceiling, the 512 MiB package ceiling or the 200:1 ratio cap, and the
+~297 MiB-entry class this report describes is still refused — by
+`ZIP_ENTRY_TOO_LARGE`, in a sentence naming the entry's expanded size and the
+limit. Nothing in the next release fixes it, and nothing may say so. Streaming
+import is the next major engineering track after the release candidate.
 
 ### Information still needed
 

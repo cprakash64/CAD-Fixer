@@ -230,6 +230,146 @@ describe('OBJ-W03/W04/W05: parts and placements', () => {
   });
 });
 
+describe('A4-OG: every group boundary survives an OBJ round trip — Stage 6D-A4', () => {
+  /*
+   * The Stage 6D-A4 corpus found OBJ export REFUSED on parse-back for real
+   * files: an ASCII STL whose `solid` has no name (numpy-stl's
+   * `Moon_Chinese.stl`, whose name is non-ASCII and sanitises to empty, and
+   * every file that writes a plain `solid`), and an OBJ with a bare `usemtl`
+   * (assimp's `empty_mat.obj`). The writer emitted a record only for a
+   * non-empty name or a material change, so an empty-named run had no boundary
+   * on the way back in. The same gap refused every hole-filled grouped mesh:
+   * the patch faces follow the last group and belong to none.
+   *
+   * Every case goes through `exportDocument`, so a writer that loses a boundary
+   * is an `EXPORT_VALIDATION_FAILED` refusal here, exactly as it was for users.
+   */
+  const groupedTetra = (groups: CanonicalMesh['groups']): CanonicalMesh => ({
+    ...tetrahedron(),
+    ...(groups === undefined ? {} : { groups }),
+  });
+  const groupsOf = async (bytes: Uint8Array): Promise<unknown[]> =>
+    (await readBack(bytes)).document.parts.map((part) =>
+      (part.mesh.groups ?? []).map((group) => [
+        group.name,
+        group.indexOffset,
+        group.indexCount,
+        group.materialRef,
+      ]),
+    );
+
+  it('A4-OG01: a group with an EMPTY name and no material — a plain STL `solid`', async () => {
+    const written = await exportObj(
+      documentOf([{ mesh: groupedTetra([{ name: '', indexOffset: 0, indexCount: 12 }]) }]),
+    );
+    expect(checkObjStructure(inspectObj(written.bytes))).toEqual([]);
+    expect(await groupsOf(written.bytes)).toEqual([[['', 0, 12, undefined]]]);
+  });
+
+  it('A4-OG02: an empty-named run between named ones keeps both boundaries', async () => {
+    const written = await exportObj(
+      documentOf([
+        {
+          mesh: groupedTetra([
+            { name: 'a', indexOffset: 0, indexCount: 3 },
+            { name: '', indexOffset: 3, indexCount: 6 },
+            { name: 'b', indexOffset: 9, indexCount: 3 },
+          ]),
+        },
+      ]),
+    );
+    expect(await groupsOf(written.bytes)).toEqual([
+      [
+        ['a', 0, 3, undefined],
+        ['', 3, 6, undefined],
+        ['b', 9, 3, undefined],
+      ],
+    ]);
+  });
+
+  it('A4-OG03: faces after the last group — a hole-fill patch — keep their geometry and end the group', async () => {
+    const source = groupedTetra([{ name: 'solid-a', indexOffset: 0, indexCount: 9 }]);
+    const written = await exportObj(documentOf([{ mesh: source }]));
+    const parsed = await readBack(written.bytes);
+    const back = parsed.document.parts[0]?.mesh;
+
+    // The named group is EXACTLY its own faces, not its own plus the patch.
+    // OBJ cannot say "in no group" once a run has started, so the trailing
+    // face comes back in an empty-named group — stated by the expectation.
+    expect(await groupsOf(written.bytes)).toEqual([
+      [
+        ['solid-a', 0, 9, undefined],
+        ['', 9, 3, undefined],
+      ],
+    ]);
+    expect(back === undefined ? 0 : triangleCount(back)).toBe(4);
+  });
+
+  it('A4-OG04: an unnamed group with a material comes back unnamed, with its material', async () => {
+    const written = await exportObj(
+      documentOf([
+        {
+          mesh: groupedTetra([
+            { name: '', indexOffset: 0, indexCount: 6, materialRef: 'red' },
+            { name: 'red', indexOffset: 6, indexCount: 6, materialRef: 'red' },
+          ]),
+        },
+      ]),
+    );
+    expect(await groupsOf(written.bytes)).toEqual([
+      [
+        ['', 0, 6, 'red'],
+        ['red', 6, 6, 'red'],
+      ],
+    ]);
+  });
+
+  it('A4-OG05: consecutive unnamed runs under one material keep their boundary', async () => {
+    const written = await exportObj(
+      documentOf([
+        {
+          mesh: groupedTetra([
+            { name: '', indexOffset: 0, indexCount: 6, materialRef: 'm' },
+            { name: '', indexOffset: 6, indexCount: 6, materialRef: 'm' },
+          ]),
+        },
+      ]),
+    );
+    expect(await groupsOf(written.bytes)).toEqual([
+      [
+        ['', 0, 6, 'm'],
+        ['', 6, 6, 'm'],
+      ],
+    ]);
+  });
+
+  it('A4-OG06: a later part does not inherit the previous part’s group or material', async () => {
+    const written = await exportObj(
+      documentOf([
+        { mesh: groupedTetra([{ name: 'g', indexOffset: 0, indexCount: 12, materialRef: 'm' }]) },
+        { mesh: tetrahedron() },
+      ]),
+    );
+    // `usemtl` persists across `o` in OBJ; a bare `usemtl` clears it.
+    expect(await groupsOf(written.bytes)).toEqual([[['g', 0, 12, 'm']], [['', 0, 12, undefined]]]);
+  });
+
+  it('A4-OG07: a document with no groups still writes no `g` and no `usemtl`', async () => {
+    const written = await exportObj(documentOf([{ mesh: tetrahedron() }, { mesh: TRIANGLE }]));
+    const inspected = inspectObj(written.bytes);
+    expect(inspected.groups).toEqual([]);
+    expect(inspected.materials).toEqual([]);
+    expect(await groupsOf(written.bytes)).toEqual([[], []]);
+  });
+
+  it('A4-OG08: leading faces before the first group stay ungrouped', async () => {
+    const written = await exportObj(
+      documentOf([{ mesh: groupedTetra([{ name: 'late', indexOffset: 6, indexCount: 6 }]) }]),
+    );
+    expect(await groupsOf(written.bytes)).toEqual([[['late', 6, 6, undefined]]]);
+  });
+});
+
 describe('OBJ-W07/W08/W09: names, groups and material references', () => {
   it('OBJ-W07: writes canonical groups as `g` records', async () => {
     const grouped: CanonicalMesh = {

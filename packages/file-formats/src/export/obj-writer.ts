@@ -52,19 +52,47 @@ function isIdentity(transform: PartTransform): boolean {
   return true;
 }
 
-/** The groups that fall inside one mesh, keyed by their first face. */
-function groupStarts(
-  groups: readonly { name: string; indexOffset: number; materialRef?: string }[] | undefined,
-): Map<number, { name: string; materialRef?: string }> {
-  const starts = new Map<number, { name: string; materialRef?: string }>();
-  if (groups === undefined) return starts;
+/** Where a run starts, and what it must read back as. `null`: in no group. */
+type RunStart = { readonly name: string; readonly materialRef: string | undefined } | null;
+
+/**
+ * EVERY FACE AT WHICH THE READER MUST SEE A RECORD, keyed by face — Stage 6D-A4.
+ *
+ * OBJ has run-START records and no run-END record: a `g` or `usemtl` lasts until
+ * the next one, across `o` too. So a run boundary exists on the way back in
+ * only if a record is written there, and this lists all of them: each group's
+ * first face, the face after a group that no other group starts at, and the
+ * part's first face when it is not a group's.
+ *
+ * This used to be the group starts alone, and a start was written only when it
+ * had a non-empty name or changed the material. A plain `solid` from an ASCII
+ * STL — a group with an empty name — therefore wrote NOTHING, its boundary was
+ * lost, and OBJ export of every such file was refused on parse-back; so was
+ * every hole-filled grouped mesh, whose patch faces ran on into the group
+ * before them.
+ */
+function runStarts(
+  groups: readonly {
+    name: string;
+    indexOffset: number;
+    indexCount: number;
+    materialRef?: string;
+  }[],
+  faceCount: number,
+): Map<number, RunStart> {
+  const starts = new Map<number, RunStart>();
+  if (faceCount > 0) starts.set(0, null);
   for (const group of groups) {
-    // A later group starting at the same face replaces an earlier one: the last
-    // declaration before a face is the one OBJ considers active.
-    starts.set(group.indexOffset / 3, {
-      name: group.name,
-      ...(group.materialRef === undefined ? {} : { materialRef: group.materialRef }),
+    if (group.indexCount === 0) continue;
+    const first = group.indexOffset / 3;
+    const end = first + group.indexCount / 3;
+    const materialRef = group.materialRef === undefined ? '' : objRoundTripName(group.materialRef);
+    starts.set(first, {
+      name: objRoundTripName(group.name),
+      materialRef: materialRef.length === 0 ? undefined : materialRef,
     });
+    // Overwritten by the next group when it starts exactly here.
+    if (end < faceCount && !starts.has(end)) starts.set(end, null);
   }
   return starts;
 }
@@ -133,6 +161,13 @@ export async function writeObjDocument(
    */
   let vertexBase = 1;
   let written = 0;
+  /*
+   * THE READER'S GROUPING STATE, which is FILE-GLOBAL: `usemtl` and `g` stay in
+   * force across `o`, so a part's first faces would otherwise run on in the
+   * previous part's last group.
+   */
+  let readerMaterial: string | undefined;
+  let runStarted = false;
 
   for (const [partIndex, part] of snapshot.parts.entries()) {
     const mesh = snapshot.meshes[part.meshResourceIndex];
@@ -192,32 +227,45 @@ export async function writeObjDocument(
       );
     }
 
-    const starts = groupStarts(mesh.groups);
-    let activeMaterial: string | undefined;
+    const starts = runStarts(mesh.groups ?? [], indices.length / 3);
 
     for (let at = 0; at < indices.length; at += 3) {
       const face = at / 3;
-      const group = starts.get(face);
-      if (group !== undefined) {
+      const run = starts.get(face);
+      /*
+       * A RECORD IS WRITTEN ONLY WHERE THE READER NEEDS ONE. Faces in no group
+       * before any run has started in the FILE are already in no group, so the
+       * part-start `null` is skipped then — a document with no groups at all
+       * writes no `g` and no `usemtl`, exactly as before.
+       */
+      if (run !== undefined && (run !== null || runStarted)) {
         /*
          * `usemtl` FIRST, THEN `g`, and the order is load-bearing.
          *
          * OBJ treats them as two different axes: `usemtl` sets the material in
          * force, `g` names the run of faces. Our `MeshGroup` flattens both into
          * one record, so on the way back in a reader sees two run-starts at the
-         * same face and keeps the LAST. Writing `g` first would therefore make
-         * the material's name the surviving group name and lose the real one.
+         * same face and keeps the LAST, and names a `usemtl` run after its
+         * material. So `usemtl` is written when the material in force must
+         * change — bare, to clear it — and `g` is then written unless the
+         * `usemtl` alone already reads back as the name wanted. A run in no
+         * group reads back as an empty name with no material: OBJ has no way to
+         * say "no group" once a run has started.
          */
-        if (group.materialRef !== undefined && group.materialRef !== activeMaterial) {
-          activeMaterial = group.materialRef;
-          sink.write(`usemtl ${objRoundTripName(group.materialRef)}\n`);
-          anyMaterial = true;
+        const wantName = run?.name ?? '';
+        const wantMaterial = run?.materialRef;
+        let readsBackAs: string | undefined;
+        if (wantMaterial !== readerMaterial) {
+          sink.write(wantMaterial === undefined ? 'usemtl\n' : `usemtl ${wantMaterial}\n`);
+          readerMaterial = wantMaterial;
+          readsBackAs = wantMaterial ?? '';
+          if (wantMaterial !== undefined) anyMaterial = true;
         }
-        const groupName = objRoundTripName(group.name);
-        if (groupName.length > 0) {
-          sink.write(`g ${groupName}\n`);
-          anyGroups = true;
+        if (readsBackAs !== wantName) {
+          sink.write(wantName.length > 0 ? `g ${wantName}\n` : 'g\n');
         }
+        if (run !== null) anyGroups = true;
+        runStarted = true;
       }
 
       const a = vertexBase + (indices[at] ?? 0);

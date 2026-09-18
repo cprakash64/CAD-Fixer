@@ -210,15 +210,19 @@ running first.
 - **Transactional apply**, which swaps one reference in the worker after
   re-checking every guard — revision currency, candidate state, validation
   acceptance, plan identity, single use. A double-click cannot commit twice.
-- **Undo of the most recent repair**, restoring the previous geometry from an
-  inverse patch held in the worker and revalidating it. See
+- **Undo of the most recent repair**, restoring the exact mesh the part held
+  before it, retained in the worker. See
   [ADR 0011](docs/adr/0011-repair-undo-revisions.md).
 - **STL, OBJ and 3MF import.** The format is decided from the BYTES, never from
   the extension: a `.stl` holding an OBJ is refused as a mismatch rather than
   guessed at. OBJ refuses a polygon instead of fanning it; 3MF supports build
-  items, component instances and all six units. No `mtllib` is ever opened and
-  no texture, material or external reference is ever resolved. Archive and XML
-  resources are bounded during inflation, not after. See
+  items, component instances, all six units, Zip64 packages, and the 3MF
+  Production Extension's references to other model parts — the multi-part
+  packages Bambu Studio, OrcaSlicer and PrusaSlicer write. Any other required
+  3MF extension is refused by name. No `mtllib` is ever opened and no texture,
+  material or external reference is ever resolved. Archive and XML resources
+  are bounded during inflation, not after. The exact support statement is
+  [SUPPORT_MATRIX.md](docs/release/SUPPORT_MATRIX.md); see also
   [ADR 0015](docs/adr/0015-production-obj-and-3mf-import.md).
 - **Format conversion to STL, OBJ or 3MF**, through one `Export / Convert`
   action that writes the WHOLE document. Before anything is written it reports
@@ -291,9 +295,16 @@ running first.
   OpenCascade — these need licence and WASM-portability evaluation first. The
   licence question is per-kernel (and for CGAL, per package); see
   [Geometry kernel licensing](docs/DEPENDENCIES.md#geometry-kernel-licensing).
-- **No self-intersection detection.** No triangle/triangle intersection test
-  exists. A model with zero topological defects can still pass through itself,
-  and the interface says so on every report rather than in a footnote.
+- **No self-intersection correction.** A read-only check can report where a
+  part passes through itself; nothing resolves it, and a model with zero
+  topological defects can still intersect itself — the interface says so on
+  every report rather than in a footnote.
+- **No 3MF extensions beyond the Production Extension's model-part references.**
+  Production alternatives, Secure Content, slices, beam lattices, booleans,
+  displacement and required materials are refused by name rather than partly
+  read.
+- **No streaming import.** A 3MF whose single model entry expands beyond
+  256 MiB is refused with a message naming its size and the limit.
 - **No wall-thickness analysis**, and therefore **no printability verdict**. The
   report's printability status is never "printable"; the most it says is "not
   yet determined". Filling an opening does not change this: the most CAD Fixer

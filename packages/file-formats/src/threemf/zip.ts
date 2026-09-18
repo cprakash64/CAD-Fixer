@@ -1,4 +1,4 @@
-import { formatBytes, formatCount, formatRatio } from '@cadfixer/shared';
+import { formatBytes, formatCount, formatRatio, isAppError } from '@cadfixer/shared';
 import { ImportRefusal, importMalformed, importTooLarge } from '../import-errors';
 
 /**
@@ -135,6 +135,15 @@ interface Zip64Directory {
   readonly offset: number;
 }
 
+/** Refuses an archive split across several files. OPC packages are one file. */
+function refuseMultiDisk(detail: string): never {
+  throw importMalformed(
+    ImportRefusal.ZipMalformed,
+    'This archive is split across several files, which a 3MF package cannot be.',
+    { reasonDetail: `multi-disk archive: ${detail}` },
+  );
+}
+
 /**
  * The Zip64 end-of-central-directory record, when the EOCD defers to one.
  *
@@ -142,6 +151,13 @@ interface Zip64Directory {
  * would be reading structures most archives do not have; one that never looked
  * refuses the archives that do. Every offset below is bounds-checked before it
  * is followed, because all three of them come from the file.
+ *
+ * NO LOCATOR MEANS NO ZIP64, and the caller then reads the fixed fields as the
+ * literal values they are. A LOCATOR THAT LEADS NOWHERE IS CORRUPTION — Stage
+ * 6D-A4. It used to fall back to the fixed fields too, so a damaged record was
+ * reported as an archive of 65,535 entries (a resource refusal) or followed to
+ * an offset of 0xFFFFFFFF (a "truncated" one): a statement about the user's
+ * archive that was not true.
  */
 function readZip64Directory(
   view: DataView,
@@ -152,15 +168,37 @@ function readZip64Directory(
   if (locator < 0) return undefined;
   if (view.getUint32(locator, true) !== ZIP64_EOCD_LOCATOR_SIGNATURE) return undefined;
 
-  const recordAt = readUint64(view, locator + 8);
-  // `readUint64` cannot return a negative, so the only bound worth checking is
-  // that the whole 56-byte record is inside the archive.
-  if (recordAt === undefined || recordAt + 56 > length) return undefined;
-  if (view.getUint32(recordAt, true) !== ZIP64_EOCD_SIGNATURE) return undefined;
+  const corrupt = (detail: string): never => {
+    throw importMalformed(
+      ImportRefusal.ZipMalformed,
+      'This archive’s directory is corrupt: its 64-bit directory record cannot be read.',
+      { reasonDetail: `zip64 record: ${detail}` },
+    );
+  };
 
+  // Disk holding the record, and the total number of disks. Writers put 0 or 1
+  // in the total for a single-file archive; anything else is a split archive.
+  if (view.getUint32(locator + 4, true) !== 0) refuseMultiDisk('locator disk');
+  if (view.getUint32(locator + 16, true) > 1) refuseMultiDisk('locator disk count');
+
+  const recordAt = readUint64(view, locator + 8);
+  // The 56-byte record must sit wholly BEFORE its locator. `readUint64` cannot
+  // return a negative, and a value past 2^53 is refused rather than rounded.
+  if (recordAt === undefined) return corrupt('offset beyond exact integer range');
+  if (recordAt + 56 > locator) return corrupt('offset outside the archive');
+  if (view.getUint32(recordAt, true) !== ZIP64_EOCD_SIGNATURE) return corrupt('signature');
+
+  if (view.getUint32(recordAt + 16, true) !== 0) refuseMultiDisk('record disk');
+  if (view.getUint32(recordAt + 20, true) !== 0) refuseMultiDisk('directory disk');
+
+  const onThisDisk = readUint64(view, recordAt + 24);
   const entryCount = readUint64(view, recordAt + 32);
   const offset = readUint64(view, recordAt + 48);
-  if (entryCount === undefined || offset === undefined) return undefined;
+  if (onThisDisk === undefined || entryCount === undefined || offset === undefined) {
+    return corrupt('field beyond exact integer range');
+  }
+  if (onThisDisk !== entryCount) refuseMultiDisk('entries on this disk');
+  if (offset > length) return corrupt('directory offset outside the archive');
   return { entryCount, offset };
 }
 
@@ -210,11 +248,25 @@ function readZip64Extra(
   return undefined;
 }
 
+/**
+ * The end-of-central-directory record.
+ *
+ * THE ONE WHOSE COMMENT ENDS THE FILE WINS — Stage 6D-A4. Searching backwards
+ * for the signature alone takes the LAST four bytes that spell it, and an
+ * archive comment may contain those bytes; the real record is the one whose
+ * declared comment length reaches exactly the end of the file. When no
+ * candidate does — some writers leave trailing bytes after the record — the
+ * last signature is used, which is what this always did.
+ */
 function findEndOfCentralDirectory(view: DataView, length: number): number {
   const limit = Math.max(0, length - MAX_EOCD_SEARCH);
+  let fallback: number | undefined;
   for (let at = length - 22; at >= limit; at -= 1) {
-    if (view.getUint32(at, true) === EOCD_SIGNATURE) return at;
+    if (view.getUint32(at, true) !== EOCD_SIGNATURE) continue;
+    if (at + 22 + view.getUint16(at + 20, true) === length) return at;
+    fallback ??= at;
   }
+  if (fallback !== undefined) return fallback;
   throw importMalformed(
     ImportRefusal.ZipNoCentralDirectory,
     'This file is not a readable archive: it has no central directory.',
@@ -256,6 +308,22 @@ export function readZipDirectory(
    * even if it exists, because the fixed fields are then complete and
    * self-consistent.
    */
+  /*
+   * ONE FILE, ONE DISK. A spanned or split archive numbers its disks here, and
+   * its offsets are relative to a disk this file is not; following them as if
+   * they were this file's is how a split archive becomes "truncated". Sentinel
+   * values defer to the Zip64 record, which is checked the same way.
+   */
+  const thisDisk = view.getUint16(eocd + 4, true);
+  const directoryDisk = view.getUint16(eocd + 6, true);
+  const entriesOnDisk = view.getUint16(eocd + 8, true);
+  const totalEntries = view.getUint16(eocd + 10, true);
+  if (thisDisk !== 0 && thisDisk !== ZIP64_SENTINEL_16) refuseMultiDisk('disk number');
+  if (directoryDisk !== 0 && directoryDisk !== ZIP64_SENTINEL_16) {
+    refuseMultiDisk('directory disk');
+  }
+  if (entriesOnDisk !== totalEntries) refuseMultiDisk('entries on this disk');
+
   const zip64 =
     view.getUint16(eocd + 10, true) === ZIP64_SENTINEL_16 ||
     view.getUint32(eocd + 12, true) === ZIP64_SENTINEL_32 ||
@@ -334,6 +402,21 @@ export function readZipDirectory(
     const uncompressedSize = extended?.uncompressed ?? fixedUncompressed;
     const localOffset = extended?.localOffset ?? fixedLocalOffset;
 
+    /*
+     * WHERE THE DATA IS, CHECKED BEFORE ANYTHING IS SIZED FROM IT — Stage 6D-A4.
+     * A resolved Zip64 value can be anything up to 2^53, so an offset or a
+     * compressed size that points past the archive is refused here, as a
+     * statement about the archive, rather than being carried into arithmetic
+     * further down.
+     */
+    if (localOffset + 30 > bytes.byteLength || compressedSize > bytes.byteLength) {
+      throw importMalformed(
+        ImportRefusal.ZipMalformed,
+        'This archive’s directory points outside the archive.',
+        { reasonDetail: 'entry extent' },
+      );
+    }
+
     // Bit 0 is the encryption flag. An encrypted 3MF is not one we can read,
     // and guessing at it is worse than saying so.
     if ((flags & 0x1) !== 0) {
@@ -403,11 +486,41 @@ export function readZipDirectory(
      * declaration is only a claim — the research corpus included a header that
      * lied about its uncompressed size for exactly this reason.
      */
-    if (compressedSize > 0 && uncompressedSize / compressedSize > limits.maxCompressionRatio) {
+    /*
+     * A STORED ENTRY'S TWO SIZES ARE THE SAME NUMBER. One that says otherwise
+     * has contradicted itself, and neither side is believed — Stage 6D-A4.
+     */
+    if (method === 0 && compressedSize !== uncompressedSize) {
+      throw importMalformed(
+        ImportRefusal.ZipMalformed,
+        'This archive’s directory is corrupt: a stored file declares two different sizes.',
+        { reasonDetail: 'stored sizes disagree' },
+      );
+    }
+    /*
+     * NOTHING INFLATES TO SOMETHING. A deflated entry with no compressed bytes
+     * cannot produce any output, so a nonzero declared size is an unbounded
+     * ratio — and `readZipEntry` sizes its one allocation from that declaration.
+     * The ratio check below skipped a zero divisor, which let a few hundred
+     * bytes of directory ask for a full per-entry allocation before the stream
+     * proved it empty. Stage 6D-A4.
+     */
+    const unboundedRatio = compressedSize === 0 && uncompressedSize > 0;
+    if (
+      unboundedRatio ||
+      (compressedSize > 0 && uncompressedSize / compressedSize > limits.maxCompressionRatio)
+    ) {
       throw importTooLarge(
         ImportRefusal.ZipRatioExceeded,
-        `A file inside this archive expands at ${formatRatio(uncompressedSize, compressedSize)}; CAD Fixer's compression-ratio limit is ${formatCount(limits.maxCompressionRatio)}:1.`,
-        { ratio: Math.round(uncompressedSize / compressedSize), limit: limits.maxCompressionRatio },
+        unboundedRatio
+          ? `A file inside this archive declares ${formatBytes(uncompressedSize)} of data from no compressed bytes at all; CAD Fixer's compression-ratio limit is ${formatCount(limits.maxCompressionRatio)}:1.`
+          : `A file inside this archive expands at ${formatRatio(uncompressedSize, compressedSize)}; CAD Fixer's compression-ratio limit is ${formatCount(limits.maxCompressionRatio)}:1.`,
+        {
+          ...(unboundedRatio
+            ? { declared: uncompressedSize, compressed: 0 }
+            : { ratio: Math.round(uncompressedSize / compressedSize) }),
+          limit: limits.maxCompressionRatio,
+        },
       );
     }
 
@@ -582,63 +695,106 @@ export async function readZipEntry(
 
   const out = new Uint8Array(declared);
   let produced = 0;
-  for await (const chunk of options.inflateRaw(compressed)) {
-    /*
-     * EVERY CHECK IS ON THE PROSPECTIVE TOTAL, BEFORE THE CHUNK IS RETAINED.
-     *
-     * Accounting first and checking afterwards would make the peak one chunk
-     * larger than the limit says it is. Refusing before the write means the
-     * budget is the actual bound on what this holds.
-     *
-     * Throwing here also abandons the stream: leaving the `for await` calls the
-     * async iterator's `return()`, whose `finally` cancels the underlying
-     * reader, so the remaining chunks are never produced at all.
-     */
-    const prospectiveEntry = produced + chunk.byteLength;
-    if (prospectiveEntry > limits.maxEntryBytes) {
-      throw importTooLarge(
-        ImportRefusal.ZipEntryTooLarge,
-        `A file inside this archive expands beyond CAD Fixer's per-entry expansion limit of ${formatBytes(limits.maxEntryBytes)}.`,
-        { limit: limits.maxEntryBytes },
-      );
-    }
-    const prospectiveTotal = budget.totalProducedBytes + chunk.byteLength;
-    if (prospectiveTotal > budget.maxTotalBytes) refuseTotal(prospectiveTotal);
-    if (
-      entry.compressedSize > 0 &&
-      prospectiveEntry / entry.compressedSize > limits.maxCompressionRatio
-    ) {
-      throw importTooLarge(
-        ImportRefusal.ZipRatioExceeded,
-        `A file inside this archive expands beyond CAD Fixer's compression-ratio limit of ${formatCount(limits.maxCompressionRatio)}:1.`,
-        { limit: limits.maxCompressionRatio },
-      );
-    }
-    /*
-     * THE ARCHIVE HAS CONTRADICTED ITSELF, and neither side is believed.
-     *
-     * Checked AFTER the resource ceilings so that an entry which is both over
-     * budget and over its declaration still reports the ceiling it crossed —
-     * the resource ceilings are policy the user can act on, and this is a
-     * statement about the file. Checked BEFORE the write, because the write is
-     * what would go out of bounds.
-     *
-     * The buffer is NOT grown and a second one is NOT allocated: growing would
-     * hand an attacker the doubling this change exists to remove, and it would
-     * mean the declared size bounded nothing at all.
-     */
-    if (prospectiveEntry > declared) {
-      throw importMalformed(
-        ImportRefusal.ZipDeclaredSizeOverrun,
-        'A file inside this archive contains more data than the archive says it does, so CAD Fixer will not read it.',
-        { declared, atLeast: prospectiveEntry },
-      );
-    }
+  /*
+   * A DECOMPRESSOR FAILURE IS A DAMAGED FILE, NOT AN INTERNAL ERROR — Stage
+   * 6D-A4. The platform inflater rejects a damaged stream with a bare
+   * `TypeError` (`Z_DATA_ERROR`), which used to leave the worker as an INTERNAL
+   * error: the user saw the file name followed by an empty message. Only
+   * `next()` is inside the conversion's `try`, so only the decompressor's own
+   * failures are converted; an `AppError` passes through untouched, and nothing
+   * thrown by the code below can be mistaken for corruption.
+   *
+   * A DIRECT PULL, NEVER AN ASYNC GENERATOR LAYER. The first version wrapped the
+   * stream in an `async function*` that converted the error and re-yielded each
+   * chunk. That extra hop per chunk let the decompressor run ahead of this loop,
+   * and inflated chunks queued beside the preallocated `out`: measured in
+   * Chromium on the 8 GiB host, a 2 x 1.2 M-triangle production package peaked at
+   * 1,600 MiB against 1,221-1,242 MiB for this loop and 1,241 MiB for Stage
+   * 6D-A3. A boundary test keeps `async function*` out of this file.
+   *
+   * Leaving early still releases the stream: `return()` is forwarded in the
+   * `finally`, exactly as `for await` forwarded it.
+   */
+  const chunks = options.inflateRaw(compressed)[Symbol.asyncIterator]();
+  let drained = false;
+  try {
+    for (;;) {
+      let step: IteratorResult<Uint8Array>;
+      try {
+        step = await chunks.next();
+      } catch (error) {
+        drained = true;
+        if (isAppError(error)) throw error;
+        throw importMalformed(
+          ImportRefusal.ZipMalformed,
+          'A file inside this archive is damaged: its compressed data cannot be decompressed.',
+          { reasonDetail: 'corrupt compressed data', entry: entry.name.slice(0, 128) },
+        );
+      }
+      if (step.done === true) {
+        drained = true;
+        break;
+      }
+      const chunk = step.value;
+      /*
+       * EVERY CHECK IS ON THE PROSPECTIVE TOTAL, BEFORE THE CHUNK IS RETAINED.
+       *
+       * Accounting first and checking afterwards would make the peak one chunk
+       * larger than the limit says it is. Refusing before the write means the
+       * budget is the actual bound on what this holds.
+       *
+       * Throwing here also abandons the stream: leaving the `for await` calls the
+       * async iterator's `return()`, whose `finally` cancels the underlying
+       * reader, so the remaining chunks are never produced at all.
+       */
+      const prospectiveEntry = produced + chunk.byteLength;
+      if (prospectiveEntry > limits.maxEntryBytes) {
+        throw importTooLarge(
+          ImportRefusal.ZipEntryTooLarge,
+          `A file inside this archive expands beyond CAD Fixer's per-entry expansion limit of ${formatBytes(limits.maxEntryBytes)}.`,
+          { limit: limits.maxEntryBytes },
+        );
+      }
+      const prospectiveTotal = budget.totalProducedBytes + chunk.byteLength;
+      if (prospectiveTotal > budget.maxTotalBytes) refuseTotal(prospectiveTotal);
+      if (
+        entry.compressedSize > 0 &&
+        prospectiveEntry / entry.compressedSize > limits.maxCompressionRatio
+      ) {
+        throw importTooLarge(
+          ImportRefusal.ZipRatioExceeded,
+          `A file inside this archive expands beyond CAD Fixer's compression-ratio limit of ${formatCount(limits.maxCompressionRatio)}:1.`,
+          { limit: limits.maxCompressionRatio },
+        );
+      }
+      /*
+       * THE ARCHIVE HAS CONTRADICTED ITSELF, and neither side is believed.
+       *
+       * Checked AFTER the resource ceilings so that an entry which is both over
+       * budget and over its declaration still reports the ceiling it crossed —
+       * the resource ceilings are policy the user can act on, and this is a
+       * statement about the file. Checked BEFORE the write, because the write is
+       * what would go out of bounds.
+       *
+       * The buffer is NOT grown and a second one is NOT allocated: growing would
+       * hand an attacker the doubling this change exists to remove, and it would
+       * mean the declared size bounded nothing at all.
+       */
+      if (prospectiveEntry > declared) {
+        throw importMalformed(
+          ImportRefusal.ZipDeclaredSizeOverrun,
+          'A file inside this archive contains more data than the archive says it does, so CAD Fixer will not read it.',
+          { declared, atLeast: prospectiveEntry },
+        );
+      }
 
-    out.set(chunk, produced);
-    produced = prospectiveEntry;
-    budget.totalProducedBytes = prospectiveTotal;
-    options.throwIfCancelled?.();
+      out.set(chunk, produced);
+      produced = prospectiveEntry;
+      budget.totalProducedBytes = prospectiveTotal;
+      options.throwIfCancelled?.();
+    }
+  } finally {
+    if (!drained) await chunks.return?.();
   }
 
   /*

@@ -41,11 +41,12 @@
  *
  * Run: npm run preview   (in another terminal)
  *      npm run qualify:import-phases -- stl:100,stl:200,stl:300
+ *      npm run qualify:import-phases -- file:6920:/path/outside/the/repo/package.3mf
  */
 
 import { chromium } from 'playwright';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -150,6 +151,21 @@ function buildFixture(spec) {
         name: `${spec}.3mf`,
         content: threeMfPlacements(placements, each),
         triangles: placements * each,
+      };
+    }
+    case 'file': {
+      /*
+       * A REAL FILE, measured as it is — Stage 6D-A4. `file:<triangles>:<path>`,
+       * the path outside the repository (the corpus is never committed) and the
+       * triangle count the one the import is expected to report. The bytes are
+       * copied into the temporary directory like any generated fixture, so the
+       * cleanup below never touches the original.
+       */
+      const path = rest.slice(1).join(':');
+      return {
+        name: path.split('/').pop() ?? 'file',
+        content: readFileSync(path),
+        triangles: n(0, 0),
       };
     }
     default:

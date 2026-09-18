@@ -475,22 +475,41 @@ export function threeMfPlacements(count: number): Buffer {
 /**
  * An archive whose entries TOGETHER exceed the total uncompressed budget.
  *
- * Each entry declares 200 MiB against a 256 MiB per-entry cap, and a 100:1
- * ratio against a 200:1 cap — every per-entry ceiling satisfied, and 600 MiB
- * in total against 512 MiB. Declared rather than real, because producing half
- * a gigabyte to prove a half-gigabyte ceiling would allocate exactly what the
- * ceiling exists to prevent.
+ * Each entry declares 200 MiB against a 256 MiB per-entry cap, and a ratio
+ * under 200:1 against a 200:1 cap — every per-entry ceiling satisfied, and
+ * 600 MiB in total against 512 MiB. The UNCOMPRESSED size is declared rather
+ * than real, because producing half a gigabyte to prove a half-gigabyte ceiling
+ * would allocate exactly what the ceiling exists to prevent.
+ *
+ * THE COMPRESSED BYTES ARE REAL — Stage 6D-A4. This used to declare 2 MiB of
+ * compressed data per entry inside a file of a few hundred bytes, to keep the
+ * ratio under the cap. Since Stage 6D-A4 the directory refuses an entry whose
+ * data would lie outside the archive, which that one did, so it now carries
+ * 1.2 MiB of incompressible bytes per entry and the only ceiling it can reach
+ * is the one it exists to prove.
  */
 export function zipOverTotalBudget(): Buffer {
   return buildZip(
-    ['a', 'b', 'c'].map((name) => ({
+    ['a', 'b', 'c'].map((name, index) => ({
       name: `3D/${name}.model`,
-      content: 'x',
+      content: incompressible(1.2 * 1024 * 1024, index + 1),
       method: 8,
       declaredUncompressedSize: 200 * 1024 * 1024,
-      declaredCompressedSize: 2 * 1024 * 1024,
     })),
   );
+}
+
+/** Deterministic bytes deflate cannot shrink: an xorshift stream, seeded. */
+function incompressible(length: number, seed: number): Buffer {
+  const out = Buffer.alloc(Math.floor(length));
+  let state = 0x9e3779b9 ^ seed;
+  for (let at = 0; at < out.length; at += 1) {
+    state ^= state << 13;
+    state ^= state >>> 17;
+    state ^= state << 5;
+    out[at] = state & 0xff;
+  }
+  return out;
 }
 
 /* --------------------------------------- valid but unsupported packages -- */
@@ -605,5 +624,148 @@ export function threeMfMissingModelPart(): Buffer {
     { name: '[Content_Types].xml', content: CONTENT_TYPES },
     { name: '_rels/.rels', content: RELS },
     { name: '3D/3dmodel.model', content: root },
+  ]);
+}
+
+/* ------------------------------------------------- Stage 6D-A4 fixtures -- */
+
+/**
+ * Rewrites a finished archive into ZIP64 FORM, the way Bambu Studio and
+ * OrcaSlicer write theirs: every size and offset in the central directory is
+ * the `0xFFFFFFFF` sentinel with the real values in a tag-1 extra field, and the
+ * EOCD defers to a Zip64 record and locator. The local headers are untouched,
+ * exactly as in those producers' packages.
+ */
+export function toZip64(archive: Buffer): Buffer {
+  const eocd = archive.length - 22;
+  const entryCount = archive.readUInt16LE(eocd + 10);
+  let at = archive.readUInt32LE(eocd + 16);
+  const locals = archive.subarray(0, at);
+  const centrals: Buffer[] = [];
+  for (let index = 0; index < entryCount; index += 1) {
+    const nameLength = archive.readUInt16LE(at + 28);
+    const fixed = Buffer.from(archive.subarray(at, at + 46 + nameLength));
+    const compressed = fixed.readUInt32LE(20);
+    const uncompressed = fixed.readUInt32LE(24);
+    const offset = fixed.readUInt32LE(42);
+    fixed.writeUInt32LE(0xffffffff, 20);
+    fixed.writeUInt32LE(0xffffffff, 24);
+    fixed.writeUInt32LE(0xffffffff, 42);
+    fixed.writeUInt16LE(28, 30);
+    const extra = Buffer.alloc(28);
+    extra.writeUInt16LE(0x0001, 0);
+    extra.writeUInt16LE(24, 2);
+    extra.writeBigUInt64LE(BigInt(uncompressed), 4);
+    extra.writeBigUInt64LE(BigInt(compressed), 12);
+    extra.writeBigUInt64LE(BigInt(offset), 20);
+    centrals.push(fixed, extra);
+    at += 46 + nameLength;
+  }
+  const central = Buffer.concat(centrals);
+  const record = Buffer.alloc(56);
+  record.writeUInt32LE(0x06064b50, 0);
+  record.writeBigUInt64LE(44n, 4);
+  record.writeUInt16LE(45, 12);
+  record.writeUInt16LE(45, 14);
+  record.writeBigUInt64LE(BigInt(entryCount), 24);
+  record.writeBigUInt64LE(BigInt(entryCount), 32);
+  record.writeBigUInt64LE(BigInt(central.length), 40);
+  record.writeBigUInt64LE(BigInt(locals.length), 48);
+  const locator = Buffer.alloc(20);
+  locator.writeUInt32LE(0x07064b50, 0);
+  locator.writeBigUInt64LE(BigInt(locals.length + central.length), 8);
+  locator.writeUInt32LE(1, 16);
+  const end = Buffer.alloc(22);
+  end.writeUInt32LE(0x06054b50, 0);
+  end.writeUInt16LE(0xffff, 8);
+  end.writeUInt16LE(0xffff, 10);
+  end.writeUInt32LE(0xffffffff, 12);
+  end.writeUInt32LE(0xffffffff, 16);
+  return Buffer.concat([locals, central, record, locator, end]);
+}
+
+/** The production-extension package in Zip64 form. */
+export function threeMfZip64Production(): Buffer {
+  return toZip64(threeMfProductionExtension());
+}
+
+/** Zip64 form with its record's signature destroyed: corrupt, not "65,535 entries". */
+export function threeMfZip64CorruptRecord(): Buffer {
+  const archive = threeMfZip64Production();
+  archive.writeUInt32LE(0x12345678, archive.length - 22 - 20 - 56);
+  return archive;
+}
+
+/** An intact directory over a damaged deflate stream in the model part. */
+export function threeMfCorruptDeflate(): Buffer {
+  const archive = threeMf();
+  // Find the model entry's data through its local header, and damage it.
+  let at = 0;
+  while (archive.readUInt32LE(at) === 0x04034b50) {
+    const nameLength = archive.readUInt16LE(at + 26);
+    const name = archive.subarray(at + 30, at + 30 + nameLength).toString('utf8');
+    const data = at + 30 + nameLength + archive.readUInt16LE(at + 28);
+    if (name === '3D/3dmodel.model') {
+      archive[data] = (archive[data] ?? 0) ^ 0xff;
+      archive[data + 1] = (archive[data + 1] ?? 0) ^ 0xff;
+      return archive;
+    }
+    at = data + archive.readUInt32LE(at + 18);
+  }
+  throw new Error('fixture has no model entry');
+}
+
+/** A valid package that REQUIRES an extension CAD Fixer does not implement. */
+export function threeMfRequiresUnknownExtension(): Buffer {
+  return threeMf(
+    modelXml({ unit: 'millimeter' }).replace(
+      '<model unit="millimeter"',
+      '<model unit="millimeter" xmlns:q="http://example.invalid/quux" requiredextensions="q"',
+    ),
+  );
+}
+
+/**
+ * A large production package: the root holds only components, each naming a
+ * CHILD model part that carries a large mesh — so parsing, and therefore a
+ * cancel, lands inside a child rather than in the root.
+ */
+export function threeMfProductionLarge(children: number, trianglesPerChild: number): Buffer {
+  const vertices: string[] = [];
+  const faces: string[] = [];
+  for (let index = 0; index < trianglesPerChild; index += 1) {
+    const x = (index % 512) * 0.5;
+    const y = Math.floor(index / 512) * 0.5;
+    const base = index * 3;
+    vertices.push(
+      `<vertex x="${x.toFixed(3)}" y="${y.toFixed(3)}" z="0"/>` +
+        `<vertex x="${(x + 0.4).toFixed(3)}" y="${y.toFixed(3)}" z="0"/>` +
+        `<vertex x="${x.toFixed(3)}" y="${(y + 0.4).toFixed(3)}" z="0"/>`,
+    );
+    faces.push(
+      `<triangle v1="${String(base)}" v2="${String(base + 1)}" v3="${String(base + 2)}"/>`,
+    );
+  }
+  const mesh = `<mesh><vertices>${vertices.join('')}</vertices><triangles>${faces.join('')}</triangles></mesh>`;
+  const child = `<?xml version="1.0" encoding="UTF-8"?>
+<model unit="millimeter" xmlns="${CORE_NS}"><resources><object id="1" type="model">${mesh}</object></resources><build/></model>`;
+  const components = Array.from(
+    { length: children },
+    (_child, index) =>
+      `<component p:path="/3D/Objects/part_${String(index)}.model" objectid="1" transform="1 0 0 0 1 0 0 0 1 0 0 ${String(index * 5)}"/>`,
+  ).join('');
+  const root = `<?xml version="1.0" encoding="UTF-8"?>
+<model unit="millimeter" xmlns="${CORE_NS}" xmlns:p="${PRODUCTION_NS}" requiredextensions="p">
+ <resources><object id="9" type="model"><components>${components}</components></object></resources>
+ <build><item objectid="9"/></build>
+</model>`;
+  return buildZip([
+    { name: '[Content_Types].xml', content: CONTENT_TYPES },
+    { name: '_rels/.rels', content: RELS },
+    { name: '3D/3dmodel.model', content: root },
+    ...Array.from({ length: children }, (_child, index) => ({
+      name: `3D/Objects/part_${String(index)}.model`,
+      content: child,
+    })),
   ]);
 }

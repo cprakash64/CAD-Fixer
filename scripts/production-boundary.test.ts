@@ -1648,10 +1648,55 @@ describe('A3: production semantics resolve by namespace, and the root by the pac
   });
 
   it('never resolves a relationship target through a weaker path rule', () => {
-    // A `.rels` Target goes through the SAME validation a production `path`
-    // does. A second, looser route would be the first place traversal came back.
+    // A `.rels` Target goes through the SAME shape validation a production
+    // `path` does. A second, looser route would be the first place traversal
+    // came back.
+    //
+    // STAGE 6D-A4: the root relationship no longer demands the `.model` suffix
+    // — the relationship TYPE is what says the part is a model, and the 3MF
+    // Consortium's positive cases name roots `3dmodel`, `3dmodel.moodel` and
+    // `3dmodel.part`. So the `.rels` route calls `canonicalisePackagePartName`,
+    // and this asserts the production-path grammar is that SAME function plus
+    // the suffix, rather than a parallel implementation that could drift.
     const at = reader.indexOf('function modelTargetFromRels');
     const body = reader.slice(at, reader.indexOf('\n}', at));
-    expect(body).toContain('canonicalisePackagePath');
+    expect(body).toContain('canonicalisePackagePartName(');
+    expect(body).not.toMatch(/startsWith\('\.\.'|split\('\/'\)/);
+
+    const paths = readFileSync(
+      join(REPO_ROOT, 'packages/file-formats/src/threemf/package-path.ts'),
+      'utf8',
+    );
+    const start = paths.indexOf('export function canonicalisePackagePath(');
+    const pathBody = paths.slice(start, paths.indexOf('\n}', start));
+    expect(pathBody).toContain('canonicalisePackagePartName(raw, limits)');
+    // Every shape rule lives in exactly one function.
+    expect(paths.match(/PackagePathRefusal\.ParentSegment/g) ?? []).toHaveLength(1);
+  });
+});
+
+describe('A4: the inflation loop pulls the decompressor directly', () => {
+  it('keeps every async-generator layer out of the ZIP reader', () => {
+    /*
+     * Stage 6D-A4 wrapped the decompressor in an `async function*` to turn its
+     * failures into a typed refusal. The extra hop per chunk let inflated chunks
+     * queue beside the preallocated entry buffer: a 2 x 1.2 M-triangle
+     * production package peaked at 1,600 MiB in Chromium against 1,221-1,242 MiB
+     * for a direct `next()` loop. Comments are stripped, because the reason is
+     * written down there and must stay.
+     */
+    const zip = readFileSync(
+      join(REPO_ROOT, 'packages', 'file-formats', 'src', 'threemf', 'zip.ts'),
+      'utf8',
+    );
+    const code = zip
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .split('\n')
+      .filter((line) => !line.trim().startsWith('//'))
+      .join('\n');
+    expect(code).not.toMatch(/async\s+function\s*\*/);
+    expect(code).not.toMatch(/async\s+\*\s*\w+\s*\(/);
+    // The conversion is still there, around `next()` alone.
+    expect(code).toMatch(/await chunks\.next\(\)/);
   });
 });
