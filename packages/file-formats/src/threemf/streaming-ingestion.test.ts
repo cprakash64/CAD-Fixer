@@ -353,3 +353,116 @@ describe('6E-R: the streaming read', () => {
     }
   });
 });
+
+/* ------------------------------------------- unsupported-feature parity -- */
+
+const ALTERNATIVES = 'http://schemas.microsoft.com/3dmanufacturing/production/alternatives/2021/04';
+const CHILD = '3D/Objects/a.model';
+
+function childModel(): string {
+  return denseModel(3);
+}
+
+/** A root placing the child through `p:path`, with extra namespaces and attributes. */
+function productionRoot(xmlns: string, attrs: string, objectExtra = ''): string {
+  return (
+    `<?xml version="1.0" encoding="UTF-8"?><model unit="millimeter" xmlns="${CORE}" xmlns:p="${PRODUCTION}"${xmlns}${attrs}>` +
+    `<resources><object id="2" type="model">${TETRAHEDRON_MESH}${objectExtra}</object></resources>` +
+    `<build><item objectid="2"/><item objectid="1" p:path="/${CHILD}"/></build></model>`
+  );
+}
+
+async function refusalWithDetails(
+  run: () => Promise<unknown>,
+): Promise<{ code: string; reason: unknown; message: string; details: unknown }> {
+  try {
+    await run();
+  } catch (error) {
+    if (!isAppError(error)) throw error;
+    return {
+      code: error.code,
+      reason: refusalOf(error),
+      message: error.message,
+      details: error.details,
+    };
+  }
+  throw new Error('expected a refusal');
+}
+
+describe('6E-U: unsupported features are refused identically however the part arrives', () => {
+  const cases: readonly { name: string; model: string; reason: string }[] = [
+    {
+      name: 'Secure Content declared required',
+      model: productionRoot(
+        ' xmlns:z="http://schemas.microsoft.com/3dmanufacturing/securecontent/2019/04"',
+        ' requiredextensions="p z"',
+      ),
+      reason: ImportRefusal.ThreeMfUnsupportedExtension,
+    },
+    {
+      name: 'Slice declared required',
+      model: productionRoot(
+        ' xmlns:s="http://schemas.microsoft.com/3dmanufacturing/slice/2015/07"',
+        ' requiredextensions="p s"',
+      ),
+      reason: ImportRefusal.ThreeMfUnsupportedExtension,
+    },
+    {
+      name: 'an alternatives element, under a non-conventional prefix',
+      model: productionRoot(
+        ` xmlns:alt="${ALTERNATIVES}"`,
+        ' requiredextensions="p"',
+        `<alt:alternatives><alt:alternative p:path="/${CHILD}" objectid="1"/></alt:alternatives>`,
+      ),
+      reason: ImportRefusal.ThreeMfModelResolutionUnsupported,
+    },
+  ];
+
+  for (const { name, model, reason } of cases) {
+    it(`${name}: same code, reason, message and details at every slice size`, async () => {
+      const bytes = await packageOf(model, { [CHILD]: childModel() });
+      const whole = await refusalWithDetails(() => read3mf(bytes, testReadContext()));
+      expect(whole.reason).toBe(reason);
+      for (const slice of [1, 2, 3, 7, 64, 4_096]) {
+        const streamed = await refusalWithDetails(() =>
+          read3mf(bytes, testReadContext(), {
+            ingestion: streaming({ inflateRaw: (b) => inflateRawSlicedForTests(b, slice) }),
+          }),
+        );
+        expect(streamed).toEqual(whole);
+      }
+    });
+  }
+});
+
+describe('6E-D: a refused stream leaves nothing behind for the next import', () => {
+  it('a corrupt deflate is the typed "damaged" refusal, and the next read is unaffected', async () => {
+    const good = await packageOf(denseModel(200));
+    const expected = await read3mf(good, testReadContext());
+
+    // Corrupt the model entry's compressed data in place: same sizes, bad stream.
+    const bad = good.slice();
+    const entry = entryOf(bad, '3D/3dmodel.model');
+    const view = new DataView(bad.buffer, bad.byteOffset, bad.byteLength);
+    const start =
+      entry.localOffset +
+      30 +
+      view.getUint16(entry.localOffset + 26, true) +
+      view.getUint16(entry.localOffset + 28, true);
+    bad.fill(0xff, start, start + Math.min(64, entry.compressedSize));
+
+    const whole = await refusalWithDetails(() => read3mf(bad, testReadContext()));
+    const streamed = await refusalWithDetails(() =>
+      read3mf(bad, testReadContext(), { ingestion: streaming() }),
+    );
+    expect(streamed.code).toBe(AppErrorCode.MalformedFile);
+    expect(streamed.reason).toBe(ImportRefusal.ZipMalformed);
+    expect(streamed.message).toMatch(/damaged/);
+    expect(streamed).toEqual(whole);
+
+    // The next streamed read, with a fresh context as every import has, is whole.
+    const after = await read3mf(good, testReadContext(), { ingestion: streaming() });
+    expect(documentTriangleCount(after.document)).toBe(documentTriangleCount(expected.document));
+    expect(after.document.parts[0]?.name).toBe(expected.document.parts[0]?.name);
+  });
+});

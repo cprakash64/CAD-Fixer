@@ -196,6 +196,11 @@ complete inside one piece. Proof, in `xml-stream.test.ts`:
   before any element event is emitted.
 - **6E-R** (`streaming-ingestion.test.ts`) — `requiredextensions` split across
   every slice size 1–13.
+- **6E-U** — Secure Content and Slice declared required, and an Alternatives
+  element under a non-conventional prefix: the same code, reason, message and
+  details whole and streamed, at slice sizes 1, 2, 3, 7, 64 and 4,096 bytes.
+- **6E-D** — a corrupt deflate stream is the typed `ZIP_MALFORMED` "damaged"
+  refusal on both paths, identical, and the next streamed read is unaffected.
 - **6E-P** (`mutation-campaign.test.ts`) — every 3MF mutation case read whole and
   streamed (7-byte slices yielding every piece; 64 KiB slices yielding every 16),
   compared by fingerprint: unit, parts, names, material references, mesh
