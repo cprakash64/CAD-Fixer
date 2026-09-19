@@ -58,4 +58,8 @@ before it is offered; there is no way to skip that.
   flip that still decompresses and still parses is not detected. The XML and
   mesh gates bound what such a file can do, but not what it means.
 - **Chromium-based desktop browsers** on an 8 GiB machine are the qualified
-  envelope; see [BROWSER_SUPPORT.md](BROWSER_SUPPORT.md).
+  envelope; see [BROWSER_SUPPORT.md](BROWSER_SUPPORT.md). Firefox, Safari and
+  mobile browsers are not qualified.
+- **No universal-compatibility claim.** The qualification corpus shows the files
+  it contains importing; it does not show that every file a producer can write
+  will. Model size is bounded by the resource policy, not unrestricted.
