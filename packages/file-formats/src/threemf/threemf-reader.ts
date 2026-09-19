@@ -52,12 +52,25 @@ import {
   DEFAULT_ZIP_LIMITS,
   readZipDirectory,
   readZipEntry,
+  streamZipEntry,
   type InflationBudget,
   type ZipEntry,
   type ZipLimits,
   type ZipReadOptions,
 } from './zip';
-import { DEFAULT_XML_LIMITS, readAttrs, scanXml, type XmlLimits } from './xml-scan';
+import {
+  DEFAULT_XML_LIMITS,
+  readAttrs,
+  scanXml,
+  type XmlHandlers,
+  type XmlLimits,
+} from './xml-scan';
+import {
+  scanXmlByteStream,
+  type StreamScanStats,
+  type StreamXmlLimits,
+  type TextStreamDecoder,
+} from './xml-stream';
 import { ModelPartRole, PackageModelGraph, type ModelPart } from './package-graph';
 import {
   canonicalisePackagePartName,
@@ -554,6 +567,28 @@ export function parseModelXml(
   /** Defaults to `Root`. A referenced part must be parsed AS one — see below. */
   role: ModelPartRole = ModelPartRole.Root,
 ): ParsedModel {
+  const parser = createModelXmlParser(limits, xmlLimits, onElements, role);
+  scanXml(xml, parser.handlers, xmlLimits);
+  return parser.finish();
+}
+
+/**
+ * The model-part parser, separated from what DRIVES it — Stage 6E-A1.
+ *
+ * `handlers` receive the element events; `finish()` runs every check that
+ * needs the whole part and returns the parsed model. `parseModelXml` drives it
+ * with `scanXml` over one string; the streaming prototype drives the SAME
+ * handlers with `scanXmlByteStream`. So streaming changes how the bytes arrive
+ * and nothing about what they mean: objects, meshes, components, production
+ * paths, transforms, units, property references and every refusal are this one
+ * implementation, whichever driver is used.
+ */
+export function createModelXmlParser(
+  limits: ThreeMfLimits = DEFAULT_3MF_LIMITS,
+  xmlLimits: XmlLimits = DEFAULT_XML_LIMITS,
+  onElements?: (count: number) => void,
+  role: ModelPartRole = ModelPartRole.Root,
+): { readonly handlers: XmlHandlers; finish(): ParsedModel } {
   let unit: string | undefined;
   const objects = new Map<string, ObjectRecord>();
   const build: ObjectReference[] = [];
@@ -587,484 +622,484 @@ export function parseModelXml(
    */
   const seen = { model: false };
 
-  scanXml(
-    xml,
-    {
-      onOpen(name, attributeText, selfClosing) {
-        const local = localName(name);
+  const handlers: XmlHandlers = {
+    onOpen(name, attributeText, selfClosing) {
+      const local = localName(name);
 
-        if (local === 'model') {
-          seen.model = true;
-          const attrs = readAttrs(attributeText, xmlLimits);
-          prefixes = namespacePrefixes(attrs);
-          /*
-           * A DECLARED REQUIREMENT IS REFUSED BEFORE THE BODY IS READ.
-           *
-           * `requiredextensions` is the format's own way of saying the file
-           * cannot be understood without those semantics. Reading the parts we
-           * happen to recognise and presenting the result as the user's model
-           * would be incomplete geometry reported as success — so this is
-           * checked at the document element, which is as early as it can be
-           * known, and nothing after it runs.
-           *
-           * The attribute holds PREFIXES, not URIs, so each is resolved through
-           * the namespace map. A prefix that resolves to nothing is refused
-           * too: an unresolvable requirement is a requirement whose semantics
-           * are unknown, and guessing is the one thing this must not do.
-           */
-          const required = attrs.requiredextensions;
-          if (required !== undefined) {
-            for (const prefix of required.split(/\s+/)) {
-              if (prefix === '') continue;
-              const namespace = prefixes.get(prefix);
-              if (namespace === CORE_NAMESPACE) continue;
-              /*
-               * THE PRODUCTION EXTENSION IS NOW IMPLEMENTED, SO REQUIRING IT IS
-               * NOT A REFUSAL — Stage 6D-A2, and this line is the whole
-               * compatibility transition.
-               *
-               * It is not a weakening of the rule. `requiredextensions` says
-               * the file cannot be understood without those semantics, and that
-               * remains a refusal for every extension CAD Fixer does not
-               * implement. What changed is that this one IS implemented, for
-               * the reachable cross-part subset — and a construct of it outside
-               * that subset is still refused, by name, where it is encountered.
-               * Declaring an extension is not the same as using a part of it
-               * nobody supports.
-               */
-              if (namespace === PRODUCTION_NAMESPACE) continue;
-              throw importUnsupported(
-                ImportRefusal.ThreeMfUnsupportedExtension,
-                'This 3MF requires a 3MF extension that CAD Fixer does not support yet. Try exporting a plain 3MF, or an STL, from the tool that made it.',
-                {
-                  extension: (namespace ?? prefix).slice(0, 128),
-                  resolved: namespace !== undefined,
-                },
-              );
-            }
-          }
-          unit = attrs.unit;
-          if (unit !== undefined && !THREE_MF_UNITS.includes(unit)) {
-            throw importMalformed(
-              ImportRefusal.ThreeMfUnsupportedUnit,
-              'This 3MF file declares a unit CAD Fixer does not recognise.',
-              { unit: unit.slice(0, 32) },
-            );
-          }
-          return;
-        }
-
+      if (local === 'model') {
+        seen.model = true;
+        const attrs = readAttrs(attributeText, xmlLimits);
+        prefixes = namespacePrefixes(attrs);
         /*
-         * FROM HERE ON, A CORE MEANING NEEDS A CORE ELEMENT. The alternatives
-         * refusal and the unsupported-resource record below are keyed on their
-         * OWN namespaces and names, so they are checked for foreign elements;
-         * nothing else is.
+         * A DECLARED REQUIREMENT IS REFUSED BEFORE THE BODY IS READ.
+         *
+         * `requiredextensions` is the format's own way of saying the file
+         * cannot be understood without those semantics. Reading the parts we
+         * happen to recognise and presenting the result as the user's model
+         * would be incomplete geometry reported as success — so this is
+         * checked at the document element, which is as early as it can be
+         * known, and nothing after it runs.
+         *
+         * The attribute holds PREFIXES, not URIs, so each is resolved through
+         * the namespace map. A prefix that resolves to nothing is refused
+         * too: an unresolvable requirement is a requirement whose semantics
+         * are unknown, and guessing is the one thing this must not do.
          */
-        const core = isCoreElement(name, prefixes);
-
-        if (local === 'build' && core) {
-          inBuild = true;
-          return;
-        }
-
-        if (local === 'item' && inBuild && core) {
-          const attrs = readAttrs(attributeText, xmlLimits);
-          const objectId = attrs.objectid;
-          if (objectId === undefined) {
-            throw importMalformed(
-              ImportRefusal.ThreeMfMalformedStructure,
-              'This 3MF file contains a build item that names no object.',
+        const required = attrs.requiredextensions;
+        if (required !== undefined) {
+          for (const prefix of required.split(/\s+/)) {
+            if (prefix === '') continue;
+            const namespace = prefixes.get(prefix);
+            if (namespace === CORE_NAMESPACE) continue;
+            /*
+             * THE PRODUCTION EXTENSION IS NOW IMPLEMENTED, SO REQUIRING IT IS
+             * NOT A REFUSAL — Stage 6D-A2, and this line is the whole
+             * compatibility transition.
+             *
+             * It is not a weakening of the rule. `requiredextensions` says
+             * the file cannot be understood without those semantics, and that
+             * remains a refusal for every extension CAD Fixer does not
+             * implement. What changed is that this one IS implemented, for
+             * the reachable cross-part subset — and a construct of it outside
+             * that subset is still refused, by name, where it is encountered.
+             * Declaring an extension is not the same as using a part of it
+             * nobody supports.
+             */
+            if (namespace === PRODUCTION_NAMESPACE) continue;
+            throw importUnsupported(
+              ImportRefusal.ThreeMfUnsupportedExtension,
+              'This 3MF requires a 3MF extension that CAD Fixer does not support yet. Try exporting a plain 3MF, or an STL, from the tool that made it.',
+              {
+                extension: (namespace ?? prefix).slice(0, 128),
+                resolved: namespace !== undefined,
+              },
             );
           }
-          /*
-           * THE PATH TRAVELS WITH THE REFERENCE THAT CARRIED IT — Stage 6D-A2.
-           * Recorded unresolved and unvalidated; the package walk decides what
-           * it means, because only the walk knows the package.
-           */
-          const itemPath = productionPathValueOf(attrs, prefixes);
-          build.push({
-            objectId,
-            transform: parseTransform(attrs.transform),
-            ...(itemPath === undefined ? {} : { path: itemPath }),
-          });
-          return;
+        }
+        unit = attrs.unit;
+        if (unit !== undefined && !THREE_MF_UNITS.includes(unit)) {
+          throw importMalformed(
+            ImportRefusal.ThreeMfUnsupportedUnit,
+            'This 3MF file declares a unit CAD Fixer does not recognise.',
+            { unit: unit.slice(0, 32) },
+          );
+        }
+        return;
+      }
+
+      /*
+       * FROM HERE ON, A CORE MEANING NEEDS A CORE ELEMENT. The alternatives
+       * refusal and the unsupported-resource record below are keyed on their
+       * OWN namespaces and names, so they are checked for foreign elements;
+       * nothing else is.
+       */
+      const core = isCoreElement(name, prefixes);
+
+      if (local === 'build' && core) {
+        inBuild = true;
+        return;
+      }
+
+      if (local === 'item' && inBuild && core) {
+        const attrs = readAttrs(attributeText, xmlLimits);
+        const objectId = attrs.objectid;
+        if (objectId === undefined) {
+          throw importMalformed(
+            ImportRefusal.ThreeMfMalformedStructure,
+            'This 3MF file contains a build item that names no object.',
+          );
+        }
+        /*
+         * THE PATH TRAVELS WITH THE REFERENCE THAT CARRIED IT — Stage 6D-A2.
+         * Recorded unresolved and unvalidated; the package walk decides what
+         * it means, because only the walk knows the package.
+         */
+        const itemPath = productionPathValueOf(attrs, prefixes);
+        build.push({
+          objectId,
+          transform: parseTransform(attrs.transform),
+          ...(itemPath === undefined ? {} : { path: itemPath }),
+        });
+        return;
+      }
+
+      if (local === 'object' && core) {
+        const attrs = readAttrs(attributeText, xmlLimits);
+        const id = attrs.id;
+        if (id === undefined) {
+          throw importMalformed(
+            ImportRefusal.ThreeMfMalformedStructure,
+            'This 3MF file contains an object with no id.',
+          );
+        }
+        if (objects.has(id)) {
+          throw importMalformed(
+            ImportRefusal.ThreeMfDuplicateObjectId,
+            'This 3MF file declares two objects with the same id.',
+            { objectId: id.slice(0, 64) },
+          );
+        }
+        /*
+         * NAMES ARE TRUNCATED, NOT REFUSED, and to the DOCUMENT'S cap.
+         *
+         * A name is display metadata, and refusing an entire model because a
+         * string is long would be the wrong trade — but truncating to a
+         * larger number than the document accepts is not truncating at all.
+         * A 600-character object name used to be carried through the reader
+         * intact and then refused by `assertGeometryDocument`, which made a
+         * perfectly good model unimportable for a cosmetic reason.
+         */
+        /*
+         * `pid` IS A RESOURCE ID, NOT AN OPAQUE LABEL.
+         *
+         * It used to be sliced to a length cap and stored as a string, which
+         * meant `pid="steel"` and `pid="0"` were carried through the document
+         * and — before the property-reference fix — written straight back out
+         * into a file CAD Fixer produced. The shape is checked here and the
+         * reference is resolved after the scan.
+         */
+        const pid = attrs.pid;
+        if (pid !== undefined) {
+          if (!isResourceId(pid)) {
+            throw importMalformed(
+              ImportRefusal.ThreeMfMalformedResourceId,
+              'This 3MF file contains a property reference that is not a resource id.',
+              { objectId: id.slice(0, 40), pid: pid.slice(0, 40) },
+            );
+          }
+          propertyReferences.push({ id: pid, where: id.slice(0, 40) });
+        }
+        /*
+         * `pindex` SELECTS WITHIN A PROPERTY GROUP, so it means nothing
+         * without one. An object carrying it alone is malformed, and reading
+         * past it would be reading an index into a resource that was never
+         * named.
+         */
+        if (pid === undefined && attrs.pindex !== undefined) {
+          throw importMalformed(
+            ImportRefusal.ThreeMfMalformedStructure,
+            'This 3MF file contains an object with a property index but no property reference.',
+            { objectId: id.slice(0, 40) },
+          );
         }
 
-        if (local === 'object' && core) {
+        const record: ObjectRecord = {
+          id,
+          name: attrs.name?.slice(0, DEFAULT_DOCUMENT_LIMITS.maxNameLength),
+          ...(pid === undefined ? {} : { materialRef: pid }),
+          positions: [],
+          triangles: [],
+          components: [],
+        };
+        objects.set(id, record);
+        if (objects.size > limits.maxObjects) {
+          throw importTooLarge(
+            ImportRefusal.ThreeMfTooManyObjects,
+            `This 3MF file declares ${formatCount(objects.size)} objects; CAD Fixer's limit is ${formatCount(limits.maxObjects)} objects.`,
+            { declared: objects.size, limit: limits.maxObjects },
+          );
+        }
+        current = selfClosing ? undefined : record;
+        return;
+      }
+
+      /*
+       * THE ALTERNATIVES EXTENSION DECIDES WHICH GEOMETRY AN OBJECT IS, so it
+       * cannot be one of the elements this reader records and moves past —
+       * Stage 6D-A3. Resolved through the PREFIX MAP, exactly as `path` is: a
+       * literal match on `pa:alternatives` would miss a package that binds
+       * the namespace to any other prefix.
+       */
+      if (ALTERNATIVES_ELEMENTS.includes(local) && resolvesToAlternatives(name, prefixes)) {
+        throw importUnsupported(
+          ImportRefusal.ThreeMfModelResolutionUnsupported,
+          'This 3MF offers more than one version of the same object — a full-resolution one and a reduced or obscured one. CAD Fixer cannot tell which you meant, so it will not guess.',
+          { element: local },
+        );
+      }
+
+      if (UNSUPPORTED_RESOURCE_ELEMENTS.includes(local)) {
+        // RECORDED, never silently dropped. What CAD Fixer did not import is
+        // reported to the user rather than being left for them to discover.
+        unsupported.add(local);
+        /*
+         * ITS ID IS STILL READ. The resource is not interpreted, but a `pid`
+         * pointing at it is a VALID reference to something CAD Fixer chose not
+         * to import — which is a completely different fact from a reference to
+         * nothing, and the only way to tell them apart is to know this id
+         * exists.
+         */
+        if (PROPERTY_GROUP_ELEMENTS.includes(local)) {
           const attrs = readAttrs(attributeText, xmlLimits);
           const id = attrs.id;
-          if (id === undefined) {
-            throw importMalformed(
-              ImportRefusal.ThreeMfMalformedStructure,
-              'This 3MF file contains an object with no id.',
-            );
-          }
-          if (objects.has(id)) {
-            throw importMalformed(
-              ImportRefusal.ThreeMfDuplicateObjectId,
-              'This 3MF file declares two objects with the same id.',
-              { objectId: id.slice(0, 64) },
-            );
-          }
-          /*
-           * NAMES ARE TRUNCATED, NOT REFUSED, and to the DOCUMENT'S cap.
-           *
-           * A name is display metadata, and refusing an entire model because a
-           * string is long would be the wrong trade — but truncating to a
-           * larger number than the document accepts is not truncating at all.
-           * A 600-character object name used to be carried through the reader
-           * intact and then refused by `assertGeometryDocument`, which made a
-           * perfectly good model unimportable for a cosmetic reason.
-           */
-          /*
-           * `pid` IS A RESOURCE ID, NOT AN OPAQUE LABEL.
-           *
-           * It used to be sliced to a length cap and stored as a string, which
-           * meant `pid="steel"` and `pid="0"` were carried through the document
-           * and — before the property-reference fix — written straight back out
-           * into a file CAD Fixer produced. The shape is checked here and the
-           * reference is resolved after the scan.
-           */
-          const pid = attrs.pid;
-          if (pid !== undefined) {
-            if (!isResourceId(pid)) {
+          if (id !== undefined) {
+            if (!isResourceId(id)) {
               throw importMalformed(
                 ImportRefusal.ThreeMfMalformedResourceId,
-                'This 3MF file contains a property reference that is not a resource id.',
-                { objectId: id.slice(0, 40), pid: pid.slice(0, 40) },
+                'This 3MF file declares a property resource whose id is not a resource id.',
+                { element: local, id: id.slice(0, 40) },
               );
             }
-            propertyReferences.push({ id: pid, where: id.slice(0, 40) });
+            propertyGroupIds.add(id);
           }
-          /*
-           * `pindex` SELECTS WITHIN A PROPERTY GROUP, so it means nothing
-           * without one. An object carrying it alone is malformed, and reading
-           * past it would be reading an index into a resource that was never
-           * named.
-           */
-          if (pid === undefined && attrs.pindex !== undefined) {
-            throw importMalformed(
-              ImportRefusal.ThreeMfMalformedStructure,
-              'This 3MF file contains an object with a property index but no property reference.',
-              { objectId: id.slice(0, 40) },
-            );
-          }
-
-          const record: ObjectRecord = {
-            id,
-            name: attrs.name?.slice(0, DEFAULT_DOCUMENT_LIMITS.maxNameLength),
-            ...(pid === undefined ? {} : { materialRef: pid }),
-            positions: [],
-            triangles: [],
-            components: [],
-          };
-          objects.set(id, record);
-          if (objects.size > limits.maxObjects) {
-            throw importTooLarge(
-              ImportRefusal.ThreeMfTooManyObjects,
-              `This 3MF file declares ${formatCount(objects.size)} objects; CAD Fixer's limit is ${formatCount(limits.maxObjects)} objects.`,
-              { declared: objects.size, limit: limits.maxObjects },
-            );
-          }
-          current = selfClosing ? undefined : record;
-          return;
         }
+        return;
+      }
 
+      if (current === undefined || !core) return;
+
+      if (local === 'vertex') {
+        const attrs = readAttrs(attributeText, xmlLimits);
+        current.positions.push(
+          readCoordinate(attrs.x, 'x', current.id),
+          readCoordinate(attrs.y, 'y', current.id),
+          readCoordinate(attrs.z, 'z', current.id),
+        );
+        if (current.positions.length / 3 > limits.maxVerticesPerObject) {
+          throw importTooLarge(
+            ImportRefusal.ThreeMfTooManyVertices,
+            `An object in this 3MF file contains ${formatCount(current.positions.length / 3)} vertices; CAD Fixer's limit is ${formatCount(limits.maxVerticesPerObject)} vertices for one object.`,
+            { declared: current.positions.length / 3, limit: limits.maxVerticesPerObject },
+          );
+        }
+        return;
+      }
+
+      if (local === 'triangle') {
+        const attrs = readAttrs(attributeText, xmlLimits);
         /*
-         * THE ALTERNATIVES EXTENSION DECIDES WHICH GEOMETRY AN OBJECT IS, so it
-         * cannot be one of the elements this reader records and moves past —
-         * Stage 6D-A3. Resolved through the PREFIX MAP, exactly as `path` is: a
-         * literal match on `pa:alternatives` would miss a package that binds
-         * the namespace to any other prefix.
+         * A TRIANGLE MAY CARRY ITS OWN PROPERTY REFERENCE, and CAD Fixer does
+         * not import per-triangle properties — but it must still refuse a
+         * reference to a resource that does not exist, for the same reason it
+         * refuses one on an object. The attributes are already parsed here, so
+         * checking costs a property read on a path that is otherwise
+         * untouched.
          */
-        if (ALTERNATIVES_ELEMENTS.includes(local) && resolvesToAlternatives(name, prefixes)) {
-          throw importUnsupported(
-            ImportRefusal.ThreeMfModelResolutionUnsupported,
-            'This 3MF offers more than one version of the same object — a full-resolution one and a reduced or obscured one. CAD Fixer cannot tell which you meant, so it will not guess.',
-            { element: local },
-          );
-        }
-
-        if (UNSUPPORTED_RESOURCE_ELEMENTS.includes(local)) {
-          // RECORDED, never silently dropped. What CAD Fixer did not import is
-          // reported to the user rather than being left for them to discover.
-          unsupported.add(local);
-          /*
-           * ITS ID IS STILL READ. The resource is not interpreted, but a `pid`
-           * pointing at it is a VALID reference to something CAD Fixer chose not
-           * to import — which is a completely different fact from a reference to
-           * nothing, and the only way to tell them apart is to know this id
-           * exists.
-           */
-          if (PROPERTY_GROUP_ELEMENTS.includes(local)) {
-            const attrs = readAttrs(attributeText, xmlLimits);
-            const id = attrs.id;
-            if (id !== undefined) {
-              if (!isResourceId(id)) {
-                throw importMalformed(
-                  ImportRefusal.ThreeMfMalformedResourceId,
-                  'This 3MF file declares a property resource whose id is not a resource id.',
-                  { element: local, id: id.slice(0, 40) },
-                );
-              }
-              propertyGroupIds.add(id);
-            }
-          }
-          return;
-        }
-
-        if (current === undefined || !core) return;
-
-        if (local === 'vertex') {
-          const attrs = readAttrs(attributeText, xmlLimits);
-          current.positions.push(
-            readCoordinate(attrs.x, 'x', current.id),
-            readCoordinate(attrs.y, 'y', current.id),
-            readCoordinate(attrs.z, 'z', current.id),
-          );
-          if (current.positions.length / 3 > limits.maxVerticesPerObject) {
-            throw importTooLarge(
-              ImportRefusal.ThreeMfTooManyVertices,
-              `An object in this 3MF file contains ${formatCount(current.positions.length / 3)} vertices; CAD Fixer's limit is ${formatCount(limits.maxVerticesPerObject)} vertices for one object.`,
-              { declared: current.positions.length / 3, limit: limits.maxVerticesPerObject },
-            );
-          }
-          return;
-        }
-
-        if (local === 'triangle') {
-          const attrs = readAttrs(attributeText, xmlLimits);
-          /*
-           * A TRIANGLE MAY CARRY ITS OWN PROPERTY REFERENCE, and CAD Fixer does
-           * not import per-triangle properties — but it must still refuse a
-           * reference to a resource that does not exist, for the same reason it
-           * refuses one on an object. The attributes are already parsed here, so
-           * checking costs a property read on a path that is otherwise
-           * untouched.
-           */
-          const trianglePid = attrs.pid;
-          if (trianglePid !== undefined) {
-            if (!isResourceId(trianglePid)) {
-              throw importMalformed(
-                ImportRefusal.ThreeMfMalformedResourceId,
-                'This 3MF file contains a triangle property reference that is not a resource id.',
-                { objectId: current.id.slice(0, 40), pid: trianglePid.slice(0, 40) },
-              );
-            }
-            propertyReferences.push({ id: trianglePid, where: current.id.slice(0, 40) });
-          }
-
-          current.triangles.push(
-            readIndex(attrs.v1, current.id),
-            readIndex(attrs.v2, current.id),
-            readIndex(attrs.v3, current.id),
-          );
-          if (current.triangles.length / 3 > limits.maxTrianglesPerObject) {
-            throw importTooLarge(
-              ImportRefusal.ThreeMfTooManyTriangles,
-              `An object in this 3MF file contains ${formatCount(current.triangles.length / 3)} triangles; CAD Fixer's limit is ${formatCount(limits.maxTrianglesPerObject)} triangles for one object.`,
-              { declared: current.triangles.length / 3, limit: limits.maxTrianglesPerObject },
-            );
-          }
-          return;
-        }
-
-        if (local === 'component') {
-          const attrs = readAttrs(attributeText, xmlLimits);
-          const objectId = attrs.objectid;
-          if (objectId === undefined) {
+        const trianglePid = attrs.pid;
+        if (trianglePid !== undefined) {
+          if (!isResourceId(trianglePid)) {
             throw importMalformed(
-              ImportRefusal.ThreeMfMalformedStructure,
-              'This 3MF file contains a component that names no object.',
+              ImportRefusal.ThreeMfMalformedResourceId,
+              'This 3MF file contains a triangle property reference that is not a resource id.',
+              { objectId: current.id.slice(0, 40), pid: trianglePid.slice(0, 40) },
             );
           }
-          /*
-           * THE PATH IS RECORDED, NOT ACTED ON HERE — and that is still true
-           * after Stage 6D-A2, for the same reason it was before: only the walk
-           * knows which part this is, which parts the package holds, and
-           * therefore whether this reference is legal, resolvable or neither.
-           * Deciding here would scatter that judgement across the scanner.
-           */
-          const componentPath = productionPathValueOf(attrs, prefixes);
-          current.components.push({
-            objectId,
-            transform: parseTransform(attrs.transform),
-            ...(componentPath === undefined ? {} : { path: componentPath }),
-          });
+          propertyReferences.push({ id: trianglePid, where: current.id.slice(0, 40) });
         }
-      },
-      onClose(name) {
-        if (!isCoreElement(name, prefixes)) return;
-        const local = localName(name);
-        if (local === 'object') current = undefined;
-        if (local === 'build') inBuild = false;
-      },
-      ...(onElements === undefined ? {} : { onProgress: onElements }),
+
+        current.triangles.push(
+          readIndex(attrs.v1, current.id),
+          readIndex(attrs.v2, current.id),
+          readIndex(attrs.v3, current.id),
+        );
+        if (current.triangles.length / 3 > limits.maxTrianglesPerObject) {
+          throw importTooLarge(
+            ImportRefusal.ThreeMfTooManyTriangles,
+            `An object in this 3MF file contains ${formatCount(current.triangles.length / 3)} triangles; CAD Fixer's limit is ${formatCount(limits.maxTrianglesPerObject)} triangles for one object.`,
+            { declared: current.triangles.length / 3, limit: limits.maxTrianglesPerObject },
+          );
+        }
+        return;
+      }
+
+      if (local === 'component') {
+        const attrs = readAttrs(attributeText, xmlLimits);
+        const objectId = attrs.objectid;
+        if (objectId === undefined) {
+          throw importMalformed(
+            ImportRefusal.ThreeMfMalformedStructure,
+            'This 3MF file contains a component that names no object.',
+          );
+        }
+        /*
+         * THE PATH IS RECORDED, NOT ACTED ON HERE — and that is still true
+         * after Stage 6D-A2, for the same reason it was before: only the walk
+         * knows which part this is, which parts the package holds, and
+         * therefore whether this reference is legal, resolvable or neither.
+         * Deciding here would scatter that judgement across the scanner.
+         */
+        const componentPath = productionPathValueOf(attrs, prefixes);
+        current.components.push({
+          objectId,
+          transform: parseTransform(attrs.transform),
+          ...(componentPath === undefined ? {} : { path: componentPath }),
+        });
+      }
     },
-    xmlLimits,
-  );
+    onClose(name) {
+      if (!isCoreElement(name, prefixes)) return;
+      const local = localName(name);
+      if (local === 'object') current = undefined;
+      if (local === 'build') inBuild = false;
+    },
+    ...(onElements === undefined ? {} : { onProgress: onElements }),
+  };
 
-  if (!seen.model) {
-    throw importMalformed(
-      ImportRefusal.ThreeMfMalformedStructure,
-      'This file does not contain a 3MF model.',
-    );
-  }
-
-  /*
-   * A PATH-BEARING REFERENCE IS LEGAL ONLY IN THE ROOT PART — Stage 6D-A2.
-   *
-   * The production extension lets the ROOT model part point into the others; a
-   * referenced part may not chain further. Refused here, before any structural
-   * check that would misread it: a path-bearing reference in a referenced part
-   * names an object this table was never going to hold, so the missing-object
-   * check below would otherwise fire on it and report a rule violation as a
-   * broken object graph.
-   *
-   * REFUSED RATHER THAN IGNORED. Ignoring would silently drop a placement the
-   * file asked for, which is the one outcome worse than refusing.
-   */
-  if (role !== ModelPartRole.Root) {
-    for (const object of objects.values()) {
-      for (const component of object.components) {
-        if (component.path === undefined) continue;
-        throw importMalformed(
-          ImportRefusal.ThreeMfNonRootModelPartPath,
-          'This 3MF has a model part that points at a further model part, which the 3MF production extension only allows the main part to do.',
-          { objectId: object.id.slice(0, 64), via: 'component' },
-        );
-      }
-    }
-  }
-
-  /*
-   * STRUCTURAL VALIDATION, after the shape is known.
-   *
-   * Index bounds cannot be checked while scanning: a `<triangle>` may legally
-   * precede the `<vertex>` elements it refers to in a malformed file, and
-   * refusing early would reject on ordering rather than on validity.
-   */
-  for (const object of objects.values()) {
-    const vertexCount = object.positions.length / 3;
-    for (const index of object.triangles) {
-      if (index < 0 || index >= vertexCount) {
-        throw importMalformed(
-          ImportRefusal.ThreeMfBadVertexIndex,
-          'This 3MF file contains a triangle that refers to a vertex which does not exist.',
-          { objectId: object.id.slice(0, 64), index, vertexCount },
-        );
-      }
-    }
-    for (let at = 0; at < object.components.length; at += 1) {
-      const component = object.components[at];
-      if (component === undefined) continue;
-      /*
-       * A CROSS-PART REFERENCE IS NOT RESOLVED AGAINST THIS TABLE, EVER.
-       *
-       * Its object lives in the part the path names, so `objects` here is the
-       * wrong table by construction — and checking it anyway is exactly the
-       * v0.1.0 defect that told users a valid slicer export contained a
-       * reference to an object that does not exist. The walk resolves it
-       * against the part it actually names, and reports
-       * `THREEMF_MISSING_MODEL_PART_OBJECT` when it is genuinely absent there.
-       */
-      if (component.path !== undefined) continue;
-      if (objects.has(component.objectId)) continue;
-      /*
-       * THE IDS REACH THE SENTENCE ONLY IF THEY ARE IDS.
-       *
-       * `isResourceId` is the same lexical gate `pid` goes through, and it is
-       * applied here because an object id is UNTRUSTED text: a file may put a
-       * kilobyte of anything in it. A well-formed id is at most ten digits and
-       * says exactly where to look; anything else is described in `details` and
-       * kept out of the prose, so no refusal can be made to carry arbitrary
-       * file content.
-       */
-      const missing = component.objectId;
-      const holder = object.id;
-      const locatable = isResourceId(missing) && isResourceId(holder);
+  const finish = (): ParsedModel => {
+    if (!seen.model) {
       throw importMalformed(
-        ImportRefusal.ThreeMfMissingObject,
-        locatable
-          ? `This 3MF file contains a component that refers to an object which does not exist. Object ${holder}, component ${String(at + 1)} refers to missing object ${missing}.`
-          : 'This 3MF file contains a component that refers to an object which does not exist.',
-        {
-          objectId: missing.slice(0, 64),
-          referencingObjectId: holder.slice(0, 64),
-          componentIndex: at + 1,
-        },
+        ImportRefusal.ThreeMfMalformedStructure,
+        'This file does not contain a 3MF model.',
       );
     }
-  }
-  /*
-   * ONLY THE ROOT'S BUILD IS VALIDATED, BECAUSE ONLY THE ROOT'S IS USED.
-   *
-   * The specification requires a referenced part's build section to be ignored
-   * by consumers. Validating one CAD Fixer will never walk would refuse
-   * packages that every conformant consumer accepts, on the strength of
-   * entries that mean nothing — so a referenced part's build is read into the
-   * record and then left alone. See the ignored-metadata note in
-   * `expandPackageBuild`.
-   *
-   * A path-bearing ROOT item is skipped here for the same reason its component
-   * equivalent is: its object is in another part's table.
-   */
-  if (role === ModelPartRole.Root) {
-    for (const item of build) {
-      if (item.path !== undefined) continue;
-      if (!objects.has(item.objectId)) {
+
+    /*
+     * A PATH-BEARING REFERENCE IS LEGAL ONLY IN THE ROOT PART — Stage 6D-A2.
+     *
+     * The production extension lets the ROOT model part point into the others; a
+     * referenced part may not chain further. Refused here, before any structural
+     * check that would misread it: a path-bearing reference in a referenced part
+     * names an object this table was never going to hold, so the missing-object
+     * check below would otherwise fire on it and report a rule violation as a
+     * broken object graph.
+     *
+     * REFUSED RATHER THAN IGNORED. Ignoring would silently drop a placement the
+     * file asked for, which is the one outcome worse than refusing.
+     */
+    if (role !== ModelPartRole.Root) {
+      for (const object of objects.values()) {
+        for (const component of object.components) {
+          if (component.path === undefined) continue;
+          throw importMalformed(
+            ImportRefusal.ThreeMfNonRootModelPartPath,
+            'This 3MF has a model part that points at a further model part, which the 3MF production extension only allows the main part to do.',
+            { objectId: object.id.slice(0, 64), via: 'component' },
+          );
+        }
+      }
+    }
+
+    /*
+     * STRUCTURAL VALIDATION, after the shape is known.
+     *
+     * Index bounds cannot be checked while scanning: a `<triangle>` may legally
+     * precede the `<vertex>` elements it refers to in a malformed file, and
+     * refusing early would reject on ordering rather than on validity.
+     */
+    for (const object of objects.values()) {
+      const vertexCount = object.positions.length / 3;
+      for (const index of object.triangles) {
+        if (index < 0 || index >= vertexCount) {
+          throw importMalformed(
+            ImportRefusal.ThreeMfBadVertexIndex,
+            'This 3MF file contains a triangle that refers to a vertex which does not exist.',
+            { objectId: object.id.slice(0, 64), index, vertexCount },
+          );
+        }
+      }
+      for (let at = 0; at < object.components.length; at += 1) {
+        const component = object.components[at];
+        if (component === undefined) continue;
+        /*
+         * A CROSS-PART REFERENCE IS NOT RESOLVED AGAINST THIS TABLE, EVER.
+         *
+         * Its object lives in the part the path names, so `objects` here is the
+         * wrong table by construction — and checking it anyway is exactly the
+         * v0.1.0 defect that told users a valid slicer export contained a
+         * reference to an object that does not exist. The walk resolves it
+         * against the part it actually names, and reports
+         * `THREEMF_MISSING_MODEL_PART_OBJECT` when it is genuinely absent there.
+         */
+        if (component.path !== undefined) continue;
+        if (objects.has(component.objectId)) continue;
+        /*
+         * THE IDS REACH THE SENTENCE ONLY IF THEY ARE IDS.
+         *
+         * `isResourceId` is the same lexical gate `pid` goes through, and it is
+         * applied here because an object id is UNTRUSTED text: a file may put a
+         * kilobyte of anything in it. A well-formed id is at most ten digits and
+         * says exactly where to look; anything else is described in `details` and
+         * kept out of the prose, so no refusal can be made to carry arbitrary
+         * file content.
+         */
+        const missing = component.objectId;
+        const holder = object.id;
+        const locatable = isResourceId(missing) && isResourceId(holder);
         throw importMalformed(
           ImportRefusal.ThreeMfMissingObject,
-          'This 3MF file builds an object which does not exist.',
-          { objectId: item.objectId.slice(0, 64) },
+          locatable
+            ? `This 3MF file contains a component that refers to an object which does not exist. Object ${holder}, component ${String(at + 1)} refers to missing object ${missing}.`
+            : 'This 3MF file contains a component that refers to an object which does not exist.',
+          {
+            objectId: missing.slice(0, 64),
+            referencingObjectId: holder.slice(0, 64),
+            componentIndex: at + 1,
+          },
         );
       }
     }
-  }
-  /*
-   * THE BUILD SECTION IS THE ROOT PART'S, AND ONLY THE ROOT PART'S.
-   *
-   * A referenced model part is required by the specification to carry an EMPTY
-   * build section, and every consumer is required to ignore its entries. So an
-   * empty build is malformed in the root and entirely ordinary in a referenced
-   * part, and a single rule cannot be right for both.
-   *
-   * ROOT VALIDATION IS UNCHANGED. `role` defaults to `Root` and production
-   * passes nothing else in Stage 6D-A1, so this refusal fires exactly where it
-   * fired before. What changed is that a referenced part can now be parsed at
-   * all — previously it could not, which was the first blocker A2 would have
-   * hit.
-   */
-  if (role === ModelPartRole.Root && build.length === 0) {
-    throw importMalformed(
-      ImportRefusal.ThreeMfNoBuildItems,
-      'This 3MF file contains no build items, so there is nothing to show.',
-    );
-  }
-
-  /*
-   * EVERY PROPERTY REFERENCE MUST LAND, and this is where that is decided.
-   *
-   * Deferred to here rather than checked inline so declaration ORDER cannot
-   * refuse a valid file. What it catches is the case CAD Fixer used to accept
-   * silently — and then reproduce in its own output: `pid="5"` with no resource
-   * 5 anywhere.
-   *
-   * A reference to a property group CAD Fixer does not interpret is NOT an
-   * error: the id exists, the file is valid, and the unsupported-feature record
-   * above reports that its contents were not imported.
-   */
-  for (const reference of propertyReferences) {
-    if (!propertyGroupIds.has(reference.id)) {
+    /*
+     * ONLY THE ROOT'S BUILD IS VALIDATED, BECAUSE ONLY THE ROOT'S IS USED.
+     *
+     * The specification requires a referenced part's build section to be ignored
+     * by consumers. Validating one CAD Fixer will never walk would refuse
+     * packages that every conformant consumer accepts, on the strength of
+     * entries that mean nothing — so a referenced part's build is read into the
+     * record and then left alone. See the ignored-metadata note in
+     * `expandPackageBuild`.
+     *
+     * A path-bearing ROOT item is skipped here for the same reason its component
+     * equivalent is: its object is in another part's table.
+     */
+    if (role === ModelPartRole.Root) {
+      for (const item of build) {
+        if (item.path !== undefined) continue;
+        if (!objects.has(item.objectId)) {
+          throw importMalformed(
+            ImportRefusal.ThreeMfMissingObject,
+            'This 3MF file builds an object which does not exist.',
+            { objectId: item.objectId.slice(0, 64) },
+          );
+        }
+      }
+    }
+    /*
+     * THE BUILD SECTION IS THE ROOT PART'S, AND ONLY THE ROOT PART'S.
+     *
+     * A referenced model part is required by the specification to carry an EMPTY
+     * build section, and every consumer is required to ignore its entries. So an
+     * empty build is malformed in the root and entirely ordinary in a referenced
+     * part, and a single rule cannot be right for both.
+     *
+     * ROOT VALIDATION IS UNCHANGED. `role` defaults to `Root` and production
+     * passes nothing else in Stage 6D-A1, so this refusal fires exactly where it
+     * fired before. What changed is that a referenced part can now be parsed at
+     * all — previously it could not, which was the first blocker A2 would have
+     * hit.
+     */
+    if (role === ModelPartRole.Root && build.length === 0) {
       throw importMalformed(
-        ImportRefusal.ThreeMfDanglingPropertyReference,
-        'This 3MF file refers to a property resource which does not exist.',
-        { pid: reference.id.slice(0, 40), objectId: reference.where },
+        ImportRefusal.ThreeMfNoBuildItems,
+        'This 3MF file contains no build items, so there is nothing to show.',
       );
     }
-  }
 
-  return { unit, objects, build, unsupported, role };
+    /*
+     * EVERY PROPERTY REFERENCE MUST LAND, and this is where that is decided.
+     *
+     * Deferred to here rather than checked inline so declaration ORDER cannot
+     * refuse a valid file. What it catches is the case CAD Fixer used to accept
+     * silently — and then reproduce in its own output: `pid="5"` with no resource
+     * 5 anywhere.
+     *
+     * A reference to a property group CAD Fixer does not interpret is NOT an
+     * error: the id exists, the file is valid, and the unsupported-feature record
+     * above reports that its contents were not imported.
+     */
+    for (const reference of propertyReferences) {
+      if (!propertyGroupIds.has(reference.id)) {
+        throw importMalformed(
+          ImportRefusal.ThreeMfDanglingPropertyReference,
+          'This 3MF file refers to a property resource which does not exist.',
+          { pid: reference.id.slice(0, 40), objectId: reference.where },
+        );
+      }
+    }
+
+    return { unit, objects, build, unsupported, role };
+  };
+
+  return { handlers, finish };
 }
 
 /**
@@ -1631,6 +1666,26 @@ export interface ThreeMfReadOptions {
    * first.
    */
   readonly budget?: InflationBudget;
+  /**
+   * STREAMING INGESTION — Stage 6E-A1 PROTOTYPE, RESEARCH AND QUALIFICATION
+   * ONLY. When present, every MODEL PART is read with `streamZipEntry` and
+   * `scanXmlByteStream` instead of `readZipEntry` + `decodeText` + `scanXml`,
+   * feeding the same `createModelXmlParser` handlers. Nothing in the
+   * application passes it, and a boundary test asserts that; the shipped
+   * import is the whole-buffer path, unchanged.
+   */
+  readonly ingestion?: StreamingIngestion;
+}
+
+/** How the streaming prototype reaches the platform. See `ThreeMfReadOptions.ingestion`. */
+export interface StreamingIngestion {
+  /** Must feed the compressed input in bounded slices; see `streamZipEntry`. */
+  readonly inflateRaw: (compressed: Uint8Array) => AsyncIterable<Uint8Array>;
+  readonly createDecoder: () => TextStreamDecoder;
+  readonly streamLimits?: StreamXmlLimits;
+  readonly yieldEveryPieces?: number;
+  readonly stats?: StreamScanStats;
+  readonly onBytes?: (pass: 1 | 2, byteLength: number) => void;
 }
 
 export async function read3mf(
@@ -1748,6 +1803,41 @@ export async function read3mf(
     role: ModelPartRole,
   ): Promise<{ parsed: ParsedModel; unit: string | undefined }> => {
     throwIfCancelled(context.cancellation);
+    const ingestion = options.ingestion;
+    if (ingestion !== undefined) {
+      reportPartProgress(ThreeMfImportPhase.Decompressing);
+      reportPartProgress(ThreeMfImportPhase.Parsing);
+      const parser = createModelXmlParser(limits, xmlLimits, poll, role);
+      await scanXmlByteStream(
+        (pass) =>
+          streamZipEntry(bytes, entry, {
+            ...zipOptions,
+            inflateRaw: ingestion.inflateRaw,
+            charge: pass === 1,
+          }),
+        parser.handlers,
+        xmlLimits,
+        {
+          createDecoder: ingestion.createDecoder,
+          poll,
+          yieldToEventLoop: context.yieldToEventLoop,
+          ...(ingestion.streamLimits === undefined ? {} : { streamLimits: ingestion.streamLimits }),
+          ...(ingestion.yieldEveryPieces === undefined
+            ? {}
+            : { yieldEveryPieces: ingestion.yieldEveryPieces }),
+          ...(ingestion.stats === undefined ? {} : { stats: ingestion.stats }),
+          ...(ingestion.onBytes === undefined ? {} : { onBytes: ingestion.onBytes }),
+        },
+      );
+      throwIfCancelled(context.cancellation);
+      const streamed = parser.finish();
+      throwIfCancelled(context.cancellation);
+      materialiseMeshes(streamed, options.stats, poll);
+      throwIfCancelled(context.cancellation);
+      partsLoaded += 1;
+      void key;
+      return { parsed: streamed, unit: streamed.unit };
+    }
     reportPartProgress(ThreeMfImportPhase.Decompressing);
     const partBytes = await readZipEntry(bytes, entry, zipOptions);
     throwIfCancelled(context.cancellation);

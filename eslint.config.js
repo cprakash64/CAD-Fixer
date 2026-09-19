@@ -221,6 +221,32 @@ export default tseslint.config(
     },
   },
 
+  /*
+   * STAGE 6E-A1'S STREAMING QUALIFICATION HARNESS: a Node driver whose
+   * `page.evaluate` bodies run in the page, and a worker entry Vite bundles
+   * into a temporary directory. Same two-runtime reasoning as the B3 harness
+   * above — but `no-restricted-globals` STAYS ON: neither file needs a network
+   * API, and the local server the driver starts is Node's `http`, not a fetch.
+   */
+  {
+    files: ['scripts/streaming-import.qualify.mjs'],
+    languageOptions: {
+      globals: { ...globals.node, ...globals.browser },
+    },
+    rules: {
+      '@typescript-eslint/explicit-function-return-type': 'off',
+    },
+  },
+  {
+    files: ['scripts/streaming-import.worker.mjs'],
+    languageOptions: {
+      globals: { ...globals.worker },
+    },
+    rules: {
+      '@typescript-eslint/explicit-function-return-type': 'off',
+    },
+  },
+
   // The Stage 3A-3B experimental browser harness.
   //
   // These files run IN A BROWSER — a page and a module Worker — so they need

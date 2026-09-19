@@ -13,7 +13,8 @@
  */
 
 interface TextDecoderLike {
-  decode(input?: Uint8Array): string;
+  /** `{ stream: true }` holds an incomplete UTF-8 sequence for the next call (Stage 6E). */
+  decode(input?: Uint8Array, options?: { stream?: boolean }): string;
 }
 
 interface TextEncoderLike {

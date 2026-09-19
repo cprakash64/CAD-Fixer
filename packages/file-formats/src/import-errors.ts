@@ -106,6 +106,15 @@ export const ImportRefusal = {
   XmlTooDeep: 'XML_TOO_DEEP',
   XmlTooManyElements: 'XML_TOO_MANY_ELEMENTS',
   XmlAttributeTooLong: 'XML_ATTRIBUTE_TOO_LONG',
+  /**
+   * STAGE 6E-A1, STREAMING ONLY. One tag — the text between `<` and the first
+   * `>` — longer than the streaming scanner will hold while it waits for the
+   * `>`. The whole-string scanner has no such bound because the whole string is
+   * already in memory; a streaming scanner that did not bound it would retain
+   * an unterminated tag until end of input, which is the whole-entry
+   * materialisation streaming exists to avoid. Not produced by any shipped path.
+   */
+  XmlTagTooLong: 'XML_TAG_TOO_LONG',
 
   /* ------------------------------------------------------------------- 3mf -- */
   ThreeMfNoModelPart: 'THREEMF_NO_MODEL_PART',

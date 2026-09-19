@@ -193,6 +193,89 @@ export interface XmlHandlers {
   readonly onProgress?: (elements: number) => void;
 }
 
+/**
+ * The counters every scan carries, whichever driver feeds it.
+ *
+ * MUTABLE AND SHARED ON PURPOSE — Stage 6E-A1. `scanXml` walks one whole
+ * string; the streaming scanner in `xml-stream.ts` walks the same document in
+ * pieces. Both hand each tag to `applyTag`, so element counting, depth, name
+ * rules, limits and event order are ONE implementation rather than two that
+ * could drift apart.
+ */
+export interface XmlScanState {
+  depth: number;
+  elements: number;
+}
+
+/**
+ * Applies one tag: the text between a `<` and the FIRST `>` after it.
+ *
+ * THE FIRST `>`, NOT A QUOTE-AWARE ONE, and that is the behaviour both drivers
+ * preserve exactly: an attribute value containing `>` ends the tag early. That
+ * is a known quirk of this scanner, recorded in the Stage 6E design document;
+ * changing it is a semantic decision, not a streaming one.
+ */
+export function applyTag(
+  inner: string,
+  state: XmlScanState,
+  handlers: XmlHandlers,
+  limits: XmlLimits,
+): void {
+  const { onOpen, onClose, onProgress } = handlers;
+
+  if (inner.startsWith('/')) {
+    state.depth -= 1;
+    if (state.depth < 0) throw malformed('an end tag with no matching start tag');
+    onClose?.(inner.slice(1).trim());
+    return;
+  }
+
+  const selfClosing = inner.endsWith('/');
+  const body = selfClosing ? inner.slice(0, -1) : inner;
+  const space = body.search(/\s/);
+  const name = (space === -1 ? body : body.slice(0, space)).trim();
+  if (name.length === 0 || name.length > limits.maxNameLength) {
+    throw malformed('an unusable element name');
+  }
+
+  state.elements += 1;
+  if (state.elements > limits.maxElements) {
+    throw importTooLarge(
+      ImportRefusal.XmlTooManyElements,
+      `This 3MF file contains more than ${formatCount(limits.maxElements)} XML elements, which is CAD Fixer's limit.`,
+      { limit: limits.maxElements },
+    );
+  }
+  if (!selfClosing) {
+    state.depth += 1;
+    if (state.depth > limits.maxDepth) {
+      throw importTooLarge(
+        ImportRefusal.XmlTooDeep,
+        `This 3MF file nests XML ${formatCount(state.depth)} levels deep; CAD Fixer's limit is ${formatCount(limits.maxDepth)} levels.`,
+        { depth: state.depth, limit: limits.maxDepth },
+      );
+    }
+  }
+
+  onOpen?.(name, space === -1 ? '' : body.slice(space), selfClosing);
+  if (selfClosing) onClose?.(name);
+
+  // A yield point exists here by construction: the caller's handler runs
+  // between elements, so a cancellation token can be polled at a bounded
+  // interval without the scanner knowing anything about cancellation.
+  if (onProgress !== undefined && (state.elements & 0xffff) === 0) onProgress(state.elements);
+}
+
+/** The refusal for an unsafe construct, as `scanXml` raises it. */
+export function refuseUnsafeXml(refusal: ImportRefusal): never {
+  refuseUnsafe(refusal);
+}
+
+/** A malformed-XML refusal naming `what`, exactly as the scanner words it. */
+export function malformedXml(what: string): Error {
+  return malformed(what);
+}
+
 /** Walks elements. Attributes are parsed lazily by the caller via `readAttrs`. */
 export function scanXml(
   text: string,
@@ -202,10 +285,8 @@ export function scanXml(
   const unsafe = describeUnsafeXml(text);
   if (unsafe !== undefined) refuseUnsafe(unsafe);
 
-  const { onOpen, onClose, onProgress } = handlers;
+  const state: XmlScanState = { depth: 0, elements: 0 };
   let at = 0;
-  let depth = 0;
-  let elements = 0;
   const length = text.length;
 
   while (at < length) {
@@ -233,56 +314,12 @@ export function scanXml(
 
     const gt = text.indexOf('>', lt);
     if (gt === -1) throw malformed('unterminated tag');
-    const inner = text.slice(lt + 1, gt);
-
-    if (inner.startsWith('/')) {
-      depth -= 1;
-      if (depth < 0) throw malformed('an end tag with no matching start tag');
-      onClose?.(inner.slice(1).trim());
-      at = gt + 1;
-      continue;
-    }
-
-    const selfClosing = inner.endsWith('/');
-    const body = selfClosing ? inner.slice(0, -1) : inner;
-    const space = body.search(/\s/);
-    const name = (space === -1 ? body : body.slice(0, space)).trim();
-    if (name.length === 0 || name.length > limits.maxNameLength) {
-      throw malformed('an unusable element name');
-    }
-
-    elements += 1;
-    if (elements > limits.maxElements) {
-      throw importTooLarge(
-        ImportRefusal.XmlTooManyElements,
-        `This 3MF file contains more than ${formatCount(limits.maxElements)} XML elements, which is CAD Fixer's limit.`,
-        { limit: limits.maxElements },
-      );
-    }
-    if (!selfClosing) {
-      depth += 1;
-      if (depth > limits.maxDepth) {
-        throw importTooLarge(
-          ImportRefusal.XmlTooDeep,
-          `This 3MF file nests XML ${formatCount(depth)} levels deep; CAD Fixer's limit is ${formatCount(limits.maxDepth)} levels.`,
-          { depth, limit: limits.maxDepth },
-        );
-      }
-    }
-
-    onOpen?.(name, space === -1 ? '' : body.slice(space), selfClosing);
-    if (selfClosing) onClose?.(name);
-
-    // A yield point exists here by construction: the caller's handler runs
-    // between elements, so a cancellation token can be polled at a bounded
-    // interval without the scanner knowing anything about cancellation.
-    if (onProgress !== undefined && (elements & 0xffff) === 0) onProgress(elements);
-
+    applyTag(text.slice(lt + 1, gt), state, handlers, limits);
     at = gt + 1;
   }
 
-  if (depth !== 0) throw malformed('unclosed elements');
-  return { elements };
+  if (state.depth !== 0) throw malformed('unclosed elements');
+  return { elements: state.elements };
 }
 
 function malformed(what: string): Error {

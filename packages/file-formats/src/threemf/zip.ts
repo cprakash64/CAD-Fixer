@@ -816,6 +816,214 @@ export async function readZipEntry(
   return out;
 }
 
+/* ==================================================== streaming reads === */
+
+export interface ZipStreamOptions extends ZipReadOptions {
+  /**
+   * Whether the bytes this read produces are charged to `budget`.
+   *
+   * THE SECOND READ OF AN ENTRY IS NOT CHARGED AGAIN. The streaming XML path
+   * reads a model part twice — once for the fail-closed security pass, once for
+   * elements — and the package budget bounds what the ARCHIVE expands to, not
+   * how many times CAD Fixer chooses to look at it. The replay is still held to
+   * every per-entry rule below, including producing exactly the declared size,
+   * so it cannot be a different, larger stream.
+   */
+  readonly charge: boolean;
+  /** Slice length for STORED entries, which need no inflater. */
+  readonly storedSliceBytes?: number;
+}
+
+/**
+ * One entry's inflated bytes, as a sequence of chunks — Stage 6E-A1 PROTOTYPE,
+ * reached only through the research-only streaming ingestion option.
+ *
+ * EVERY RULE `readZipEntry` APPLIES, EXCEPT THE ALLOCATION. The declared size is
+ * still bounded by `maxEntryBytes` before anything is inflated, and the stream
+ * is still held to it chunk by chunk: per-entry ceiling, package budget (when
+ * charged), compression ratio against the compressed size, overrun past the
+ * declaration, and a shortfall at the end. A damaged deflate stream is still a
+ * typed "damaged" refusal. What is gone is the one `Uint8Array` of the declared
+ * size: each chunk is handed on and released.
+ *
+ * THE INFLATER MUST BE FED IN SLICES. Chromium's DecompressionStream inflates an
+ * entire input write into its readable queue at once — measured in Stage 6E-A1
+ * at 109 MiB queued from one write of a 109 MiB entry — so streaming the OUTPUT
+ * is only streaming if the INPUT is written in bounded slices under the
+ * stream's own backpressure. That is the injected `inflateRaw`'s job; see
+ * `inflateRawSlicedForTests` for the reference shape.
+ *
+ * A CLASS, NOT AN ASYNC GENERATOR, and a direct `next()` pull — the reasoning
+ * `readZipEntry` records for its loop, and the boundary test that keeps async
+ * generators out of this file.
+ */
+export function streamZipEntry(
+  bytes: Uint8Array,
+  entry: ZipEntry,
+  options: ZipStreamOptions,
+): AsyncIterable<Uint8Array> {
+  const limits = options.limits ?? DEFAULT_ZIP_LIMITS;
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  if (entry.localOffset + 30 > bytes.byteLength) {
+    throw importMalformed(ImportRefusal.ZipMalformed, 'This archive’s file header is truncated.');
+  }
+  const nameLength = view.getUint16(entry.localOffset + 26, true);
+  const extraLength = view.getUint16(entry.localOffset + 28, true);
+  const start = entry.localOffset + 30 + nameLength + extraLength;
+  if (start + entry.compressedSize > bytes.byteLength) {
+    throw importMalformed(ImportRefusal.ZipMalformed, 'This archive’s file data is truncated.');
+  }
+  const compressed = bytes.subarray(start, start + entry.compressedSize);
+  const declared = entry.method === 0 ? compressed.byteLength : entry.uncompressedSize;
+  if (declared > limits.maxEntryBytes) {
+    throw importTooLarge(
+      ImportRefusal.ZipEntryTooLarge,
+      `A file inside this archive expands to ${formatBytes(declared)}; CAD Fixer's per-entry expansion limit is ${formatBytes(limits.maxEntryBytes)}.`,
+      { declared, limit: limits.maxEntryBytes },
+    );
+  }
+  return {
+    [Symbol.asyncIterator]: () => new ZipEntryChunks(compressed, entry, declared, limits, options),
+  };
+}
+
+class ZipEntryChunks implements AsyncIterator<Uint8Array> {
+  private readonly compressed: Uint8Array;
+  private readonly entry: ZipEntry;
+  private readonly declared: number;
+  private readonly limits: ZipLimits;
+  private readonly options: ZipStreamOptions;
+  private readonly source: AsyncIterator<Uint8Array> | undefined;
+  private produced = 0;
+  private finished = false;
+
+  public constructor(
+    compressed: Uint8Array,
+    entry: ZipEntry,
+    declared: number,
+    limits: ZipLimits,
+    options: ZipStreamOptions,
+  ) {
+    this.compressed = compressed;
+    this.entry = entry;
+    this.declared = declared;
+    this.limits = limits;
+    this.options = options;
+    this.source =
+      entry.method === 0 ? undefined : options.inflateRaw(compressed)[Symbol.asyncIterator]();
+  }
+
+  public async next(): Promise<IteratorResult<Uint8Array>> {
+    if (this.finished) return { done: true, value: undefined };
+    let chunk: Uint8Array;
+    if (this.source === undefined) {
+      if (this.produced >= this.compressed.byteLength) return this.end();
+      const slice = Math.max(1, this.options.storedSliceBytes ?? 65_536);
+      chunk = this.compressed.subarray(this.produced, this.produced + slice);
+    } else {
+      let step: IteratorResult<Uint8Array>;
+      try {
+        step = await this.source.next();
+      } catch (error) {
+        this.finished = true;
+        if (isAppError(error)) throw error;
+        throw importMalformed(
+          ImportRefusal.ZipMalformed,
+          'A file inside this archive is damaged: its compressed data cannot be decompressed.',
+          { reasonDetail: 'corrupt compressed data', entry: this.entry.name.slice(0, 128) },
+        );
+      }
+      if (step.done === true) return this.end();
+      chunk = step.value;
+    }
+    await this.account(chunk);
+    return { done: false, value: chunk };
+  }
+
+  public async return(): Promise<IteratorResult<Uint8Array>> {
+    if (!this.finished) {
+      this.finished = true;
+      await this.source?.return?.();
+    }
+    return { done: true, value: undefined };
+  }
+
+  private end(): IteratorResult<Uint8Array> {
+    this.finished = true;
+    if (this.produced !== this.declared) {
+      throw importMalformed(
+        ImportRefusal.ZipDeclaredSizeShortfall,
+        'A file inside this archive is smaller than the archive says it is, so CAD Fixer will not read it.',
+        { declared: this.declared, produced: this.produced },
+      );
+    }
+    return { done: true, value: undefined };
+  }
+
+  /** The `readZipEntry` checks, in its order, on the prospective totals. */
+  private async account(chunk: Uint8Array): Promise<void> {
+    const prospective = this.produced + chunk.byteLength;
+    const fail = async (error: Error): Promise<never> => {
+      await this.return();
+      throw error;
+    };
+    if (prospective > this.limits.maxEntryBytes) {
+      await fail(
+        importTooLarge(
+          ImportRefusal.ZipEntryTooLarge,
+          `A file inside this archive expands beyond CAD Fixer's per-entry expansion limit of ${formatBytes(this.limits.maxEntryBytes)}.`,
+          { limit: this.limits.maxEntryBytes },
+        ),
+      );
+    }
+    const budget = this.options.budget;
+    const prospectiveTotal = budget.totalProducedBytes + chunk.byteLength;
+    if (this.options.charge && prospectiveTotal > budget.maxTotalBytes) {
+      await fail(
+        importTooLarge(
+          ImportRefusal.ZipTotalTooLarge,
+          `This archive expands beyond the ${formatBytes(budget.maxTotalBytes)} of data CAD Fixer will extract in total. That limit is on expanded data, not on the size of the file.`,
+          {
+            produced: prospectiveTotal,
+            limit: budget.maxTotalBytes,
+            entry: this.entry.name.slice(0, 128),
+          },
+        ),
+      );
+    }
+    if (
+      this.entry.method !== 0 &&
+      this.entry.compressedSize > 0 &&
+      prospective / this.entry.compressedSize > this.limits.maxCompressionRatio
+    ) {
+      await fail(
+        importTooLarge(
+          ImportRefusal.ZipRatioExceeded,
+          `A file inside this archive expands beyond CAD Fixer's compression-ratio limit of ${formatCount(this.limits.maxCompressionRatio)}:1.`,
+          { limit: this.limits.maxCompressionRatio },
+        ),
+      );
+    }
+    if (prospective > this.declared) {
+      await fail(
+        importMalformed(
+          ImportRefusal.ZipDeclaredSizeOverrun,
+          'A file inside this archive contains more data than the archive says it does, so CAD Fixer will not read it.',
+          { declared: this.declared, atLeast: prospective },
+        ),
+      );
+    }
+    this.produced = prospective;
+    if (this.options.charge) budget.totalProducedBytes = prospectiveTotal;
+    try {
+      this.options.throwIfCancelled?.();
+    } catch (error) {
+      await this.return();
+      throw error;
+    }
+  }
+}
+
 /** True when the bytes begin with a local file header or an empty-archive EOCD. */
 export function looksLikeZip(bytes: Uint8Array): boolean {
   if (bytes.byteLength < 4) return false;

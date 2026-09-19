@@ -10,7 +10,8 @@ import { identifyFormat } from './identify';
 import { ImportRefusal, refusalOf } from './import-errors';
 import { registerBuiltInFormats } from './register';
 import { requireReader } from './registry';
-import { testReadContext } from './test-context';
+import { inflateRawSlicedForTests, testReadContext } from './test-context';
+import { read3mf, type StreamingIngestion } from './threemf/threemf-reader';
 import { buildAsciiStl, buildBinaryStl, triangleAt, UNIT_TRIANGLE } from './stl/fixtures';
 import { buildZip, CONTENT_TYPES, RELS, TETRAHEDRON_MESH } from './threemf/zip-fixtures';
 
@@ -946,6 +947,70 @@ describe('A4-M: STL and OBJ mutations — every outcome is a correct import or a
       if (expected.reason !== undefined && outcome.kind === 'refused') {
         expect(outcome.reason).toBe(expected.reason);
       }
+    });
+  }
+});
+
+/* ------------------------------------------------ 6E-A1 streaming parity -- */
+
+/**
+ * Everything a document is, as comparable text: part order, names, transforms,
+ * the unit, warnings, unsupported features and every mesh's exact bytes. Two
+ * documents with the same fingerprint are the same import.
+ */
+async function fingerprint3mf(
+  bytes: Uint8Array,
+  streaming: { readonly sliceBytes: number; readonly yieldEveryPieces: number } | undefined,
+): Promise<string> {
+  const ingestion: StreamingIngestion | undefined =
+    streaming === undefined
+      ? undefined
+      : {
+          inflateRaw: (compressed) => inflateRawSlicedForTests(compressed, streaming.sliceBytes),
+          createDecoder: () => new TextDecoder('utf-8', { fatal: false }),
+          yieldEveryPieces: streaming.yieldEveryPieces,
+        };
+  try {
+    const result = await read3mf(
+      bytes,
+      testReadContext(),
+      ingestion === undefined ? {} : { ingestion },
+    );
+    const meshes = new Map<unknown, number>();
+    const parts = result.document.parts.map((part) => {
+      if (!meshes.has(part.mesh)) meshes.set(part.mesh, meshes.size);
+      return [part.name, part.materialRef, meshes.get(part.mesh), [...part.transform]];
+    });
+    const meshBytes = [...meshes.keys()].map((mesh) => {
+      const { positions, indices } = mesh as { positions: Float32Array; indices: Uint32Array };
+      return [
+        [...new Uint8Array(positions.buffer, positions.byteOffset, positions.byteLength)].join(','),
+        [...indices].join(','),
+      ];
+    });
+    return JSON.stringify({
+      unit: result.document.unit,
+      parts,
+      meshBytes,
+      warnings: result.warnings.map((warning) => warning.code),
+      unsupported: result.compatibility.unsupported,
+    });
+  } catch (error) {
+    if (!isAppError(error)) throw error;
+    return JSON.stringify({ code: error.code, reason: refusalOf(error), message: error.message });
+  }
+}
+
+describe('6E-P: streaming ingestion is the same import — every 3MF mutation, both ways', () => {
+  for (const testCase of THREEMF_CASES) {
+    it(testCase.name, async () => {
+      const bytes = await testCase.build();
+      const expected = await fingerprint3mf(bytes, undefined);
+      // Tiny slices and a yield after every piece: the harshest schedule.
+      expect(await fingerprint3mf(bytes, { sliceBytes: 7, yieldEveryPieces: 1 })).toBe(expected);
+      expect(await fingerprint3mf(bytes, { sliceBytes: 65_536, yieldEveryPieces: 16 })).toBe(
+        expected,
+      );
     });
   }
 });

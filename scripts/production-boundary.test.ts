@@ -1700,3 +1700,35 @@ describe('A4: the inflation loop pulls the decompressor directly', () => {
     expect(code).toMatch(/await chunks\.next\(\)/);
   });
 });
+
+describe('6E-A1: the streaming ingestion prototype is on no shipped path', () => {
+  const STREAMING_SYMBOLS = [
+    'streamZipEntry',
+    'scanXmlByteStream',
+    'XmlStreamScanner',
+    'XmlSecurityStream',
+    'StreamingIngestion',
+    'inflateRawSlicedForTests',
+    'xml-stream',
+  ];
+
+  it('the package index exports none of it', () => {
+    const index = readFileSync(
+      join(REPO_ROOT, 'packages', 'file-formats', 'src', 'index.ts'),
+      'utf8',
+    );
+    for (const symbol of STREAMING_SYMBOLS) expect(index).not.toContain(symbol);
+  });
+
+  it('nothing in the application names it or passes an ingestion option', () => {
+    for (const file of sourceFilesUnder(join(REPO_ROOT, 'apps', 'web'))) {
+      const text = readFileSync(file, 'utf8');
+      for (const symbol of STREAMING_SYMBOLS) {
+        expect(text.includes(symbol), `${relative(REPO_ROOT, file)} names ${symbol}`).toBe(false);
+      }
+      expect(/\bingestion\s*:/.test(text), `${relative(REPO_ROOT, file)} passes ingestion`).toBe(
+        false,
+      );
+    }
+  });
+});

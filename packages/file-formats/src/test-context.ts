@@ -43,6 +43,44 @@ export async function* inflateRawForTests(compressed: Uint8Array): AsyncIterable
   }
 }
 
+/**
+ * Raw-DEFLATE inflation that feeds the compressed input in bounded SLICES —
+ * the reference shape for streaming ingestion (Stage 6E-A1).
+ *
+ * `inflateRawForTests` writes the whole payload at once, which in Chromium makes
+ * the decompressor inflate the entire entry into its queue immediately. Here
+ * each slice is written only after the previous write has resolved, and a
+ * TransformStream resolves a write only once its readable side has room — so
+ * the queue stays about one slice's output ahead of the consumer.
+ */
+export async function* inflateRawSlicedForTests(
+  compressed: Uint8Array,
+  sliceBytes = 65_536,
+): AsyncIterable<Uint8Array> {
+  const stream = new DecompressionStream('deflate-raw');
+  const writer = stream.writable.getWriter();
+  const reader = stream.readable.getReader();
+  const pump = (async (): Promise<void> => {
+    for (let at = 0; at < compressed.byteLength; at += sliceBytes) {
+      const piece = new Uint8Array(Math.min(sliceBytes, compressed.byteLength - at));
+      piece.set(compressed.subarray(at, at + piece.byteLength));
+      await writer.write(piece);
+    }
+    await writer.close();
+  })();
+  // A write rejected because the stream errored is reported by `read()`.
+  pump.catch(() => undefined);
+  try {
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      if (value !== undefined) yield value;
+    }
+  } finally {
+    await reader.cancel().catch(() => undefined);
+  }
+}
+
 export interface TestContextOptions {
   readonly cancellation?: CancellationToken;
   readonly budget?: ImportBudget;
