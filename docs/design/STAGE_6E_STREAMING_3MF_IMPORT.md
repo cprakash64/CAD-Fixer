@@ -1412,7 +1412,7 @@ say the ceiling can be higher than it can.
 
 - **BETA-002's class is supported**: an indexed 297.15 MiB entry imports at
   1,162–1,184 MiB renderer, and the tester's file class is no longer refused for
-  its size. It is not deployed — v0.2.0 still refuses above 256 MiB.
+  its size. v0.3.0 is the release that carries it.
 - **The 3MF Consortium's ~363 MiB positives are still refused**, and
   deliberately. `P_XXX_0909_04.3mf` and `P_XPX_0909_04.3mf` import correctly
   when the ceiling is raised far enough to admit them, at 1,878–1,970 MiB
@@ -1450,10 +1450,10 @@ stage's question.
   above.
 - **6E-A4 — DONE.** Per-entry ceiling raised to 320 MiB; large-export
   validation fixed and routed. See the section above.
-- **6E-A5** — release qualification.
+- **6E-A5** — release qualification and controlled deployment as **v0.3.0**.
 
-On `main` the per-entry limit is **320 MiB**; production still runs v0.2.0 at
-**256 MiB** until A5 deploys.
+The per-entry limit is **320 MiB**, and v0.3.0 is the release that carries
+it.
 
 ## Reproduction
 
