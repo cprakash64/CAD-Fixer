@@ -20,7 +20,7 @@ import { DEFAULT_ZIP_LIMITS } from './zip';
 const MIB = 1024 * 1024;
 
 describe('6E-A4: the 3MF size policy is internally consistent', () => {
-  it('the per-entry ceiling is the one the reader applies, not a copy of it', () => {
+  it('A4-L03: the per-entry ceiling is the one the reader applies, not a copy of it', () => {
     // One source of truth: the ZIP limits READ the policy rather than restating
     // it, so a message, a test and an allocation cannot drift apart.
     expect(DEFAULT_ZIP_LIMITS.maxEntryBytes).toBe(MAX_THREEMF_MODEL_ENTRY_BYTES);
@@ -57,7 +57,7 @@ describe('6E-A4: the 3MF size policy is internally consistent', () => {
     expect(writerCeiling).toBeLessThanOrEqual(DEFAULT_ZIP_LIMITS.maxEntryBytes);
   });
 
-  it('the routing threshold sits strictly inside the eligible range', () => {
+  it('A4-L04: the routing threshold sits strictly inside the eligible range', () => {
     // Below the threshold buffered, at or above it streamed, and everything up
     // to the ceiling is eligible — so the whole band above the threshold is
     // reachable and streamed rather than partly unreachable.
@@ -68,5 +68,21 @@ describe('6E-A4: the 3MF size policy is internally consistent', () => {
     expect(
       routeModelEntryIngestion(THREEMF_STREAMING_THRESHOLD_BYTES - 1, ThreeMfIngestion.Auto),
     ).toBe(ThreeMfIngestion.Buffered);
+  });
+
+  it('A4-L01: the BETA-002 class is inside the ceiling, and the margin is small on purpose', () => {
+    /*
+     * The tester class is a model entry expanding to about 297 MiB, and the
+     * ceiling clears it by 23 MiB. THE NARROWNESS IS THE FINDING, not an
+     * oversight: maximally dense indexed 3MF carries a triangle every ~70
+     * bytes, and the full-product peak steps from 1,641 MiB to 2,056 MiB of
+     * whole-browser footprint between a 302 MiB entry and a 321 MiB one. A
+     * wider margin would mean admitting that step. The assertion is therefore
+     * that the class fits AND that the ceiling has not drifted upward into the
+     * region the measurements rejected.
+     */
+    const betaClass = 297 * MIB;
+    expect(MAX_THREEMF_MODEL_ENTRY_BYTES).toBeGreaterThan(betaClass);
+    expect(MAX_THREEMF_MODEL_ENTRY_BYTES).toBeLessThanOrEqual(336 * MIB);
   });
 });

@@ -532,12 +532,12 @@ test.describe('6E-A2: a streamed import that fails commits nothing and leaves th
 });
 
 test.describe('6E-A2: no ingestion mode admits what the per-entry ceiling refuses', () => {
-  test('A3-R05: an entry declared past 256 MiB is refused in EVERY mode under production limits', async ({
+  test('A3-R05/A4-L03: an entry declared past the per-entry ceiling is refused in EVERY mode', async ({
     page,
   }) => {
     /*
      * ROUTING IS NOT A CEILING, and this is where that is proved end to end.
-     * `auto` sends a 256 MiB-plus declaration towards the streamed path — and
+     * `auto` sends an over-ceiling declaration towards the streamed path — and
      * it is refused at the ZIP directory before any path is taken, exactly as
      * the forced modes refuse it. A3 did not move `maxEntryBytes`, and nothing
      * a user can do reaches a mode that would.
@@ -548,7 +548,7 @@ test.describe('6E-A2: no ingestion mode admits what the per-entry ceiling refuse
       await setIngestion(page, mode);
       await choose(page, { name: `${mode}-over.3mf`, buffer: threeMfOverEntryCeiling() });
       await expect(page.getByTestId('status-list')).toContainText(
-        /per-entry expansion limit is 256 MiB/i,
+        /per-entry expansion limit is 320 MiB/i,
         { timeout: 60_000 },
       );
       await expect(page.getByTestId('model-empty')).toBeVisible();

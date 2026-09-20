@@ -558,14 +558,14 @@ test('STL import is unchanged by the arrival of other formats', async ({ page })
 
 /* ------------------------------------------------- 6E-A2 eligibility -- */
 
-test('6E-A2: a 3MF entry declared past 256 MiB is still refused by the shipped application', async ({
+test('6E-A4: a 3MF entry declared past the per-entry ceiling is refused by the shipped application', async ({
   page,
 }) => {
   // Stage 6E-A2 productionised streamed ingestion and switched NOTHING on: the
   // shipped worker reads 3MF buffered, under the unchanged per-entry ceiling.
   await openFile(page, 'over-ceiling.3mf', threeMfOverEntryCeiling());
   await expect(page.getByTestId('status-list')).toContainText(
-    /per-entry expansion limit is 256 MiB/i,
+    /per-entry expansion limit is 320 MiB/i,
     { timeout: 60_000 },
   );
   await expect(page.getByTestId('model-empty')).toBeVisible();

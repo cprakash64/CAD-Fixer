@@ -672,6 +672,73 @@ materialise -> RELEASE -> next`. The entry buffer and the decoded XML are
   XML namespace as one declared on the `<model>` element; the Stage 6E design
   document records the evidence and the residual risk.
 
+## 3MF size-policy invariants (Stage 6E-A4)
+
+- **ONE SOURCE OF TRUTH: `threemf/size-limits.ts`**, a leaf module that imports
+  NOTHING. `MAX_THREEMF_MODEL_ENTRY_BYTES` (320 MiB) and
+  `MAX_THREEMF_PACKAGE_BYTES` (512 MiB) are read by `DEFAULT_ZIP_LIMITS`, by the
+  3MF WRITER and by every refusal message. Nothing restates either number.
+- **THE ENTRY CEILING IS 320 MiB, AND THE WORST CASE IS INDEXED, NOT SOUP.**
+  Stage 6D-B3 rejected 384 MiB after measuring 2,679–3,071 MiB for a 376 MiB
+  entry on the BUFFERED path. Streaming halved that — but A4 first proposed
+  384 MiB from a ladder built out of UNSHARED SOUP at ~185 bytes a triangle,
+  which **understated the worst case by ~650 MiB**. 3MF shares vertices: an
+  indexed grid carries a triangle every ~70 bytes, and so do the 3MF
+  Consortium's own large positive cases. Remeasured on that shape the peak steps
+  from 1,641 MiB whole-browser at a 302 MiB entry to 2,056 at 321 MiB and
+  2,506 at 364 MiB. **Any future ceiling argument must use maximally dense
+  INDEXED content**; a soup ladder will say the ceiling can be higher than it
+  can. The 6D-B3 section of `docs/release/RESOURCE_POLICY.md` is superseded, not
+  deleted — it is correct about the reader it measured.
+- **WHAT BOUNDS THE PEAK NOW IS GEOMETRY, NOT THE ENTRY.** A 480 MiB text-heavy
+  entry around four triangles peaks at 452–461 MiB, varying ±3 MiB across runs.
+  The ceiling is a proxy for triangles and a loose one: at 320 MiB the densest
+  admissible file carries about 4.8 million of them.
+- **THE MARGIN OVER BETA-002 IS 23 MiB AND IS DELIBERATE.** The tester class is
+  ~297 MiB; the next credible step up crosses the cliff. Widening it would mean
+  admitting the 2.0–2.5 GiB region. Do not widen it without remeasuring on
+  indexed content.
+- **A MULTI-PART PACKAGE IS CHEAPER THAN ONE LARGE ENTRY WITH THE SAME
+  GEOMETRY**, because one model part is open at a time: 2 × 252 MiB carrying
+  2,833,988 triangles peaks at 1,433–1,535 MiB whole-browser against
+  1,925–2,214 for a single 492 MiB entry carrying fewer. That is why the
+  PER-ENTRY ceiling is the one that moved and **the 512 MiB package total did
+  not** — and why a package still cannot hold two maximum-sized parts.
+- **THE ENTRY CEILING MAY NEVER EXCEED THE PACKAGE CEILING**, and must leave at
+  least 64 MiB of room beside it, or a maximum-sized part could not have a
+  sibling. Asserted in `size-limits.test.ts`.
+- **THE WRITER MAY NEVER PRODUCE A MODEL ENTRY THE READER WOULD REFUSE.** The
+  3MF writer bounds its model XML by
+  `min(maxSerialisedBytes, MAX_THREEMF_MODEL_ENTRY_BYTES)`. Before A4 it used
+  `maxSerialisedBytes` (512 MiB) while the reader refused above 256 MiB, and the
+  gap was REACHABLE: a ~1.5 M triangle document — an ordinary multi-part package
+  — was serialised in full, compressed to 22.7 MiB, and then refused at
+  parse-back as `ZIP_ENTRY_TOO_LARGE`, surfacing as an INTERNAL error after all
+  the work. A resource refusal from the writer is a decision; one from the
+  validator is CAD Fixer saying it wrote a file it cannot read.
+- **EXPORT VALIDATION ROUTES LIKE AN IMPORT — Stage 6E-A4 REVERSES 6E-A3.** A3
+  pinned parse-back to `buffered` so a routing defect could not validate an
+  invalid file. At a 320 MiB ceiling that would cost more than importing does.
+  The replacement safety is the 2,474-file three-way differential plus
+  `ingestion-routing.test.ts`; the artifact is still FULLY parsed and FULLY
+  validated, and nothing is trusted because we wrote it. The export worker
+  supplies `createTextDecoder` for this, and so does `testExportReadContext`.
+- **A REFUSAL MAY NOT READ AS A CONTRADICTION.** `formatBytes` rounds to whole
+  units above ten, so a 402,704,688-byte entry refused against a
+  402,653,184-byte ceiling printed "expands to 320 MiB; ... limit is 320 MiB".
+  `formatBytesAgainst` adds two decimals ONLY when the plain rendering would
+  collide, and renders an exact tie as a tie. Every size refusal that compares a
+  value with its ceiling uses it.
+- **FIXTURES THAT MEAN "OVER THE CEILING" DERIVE FROM THE CEILING.**
+  `threeMfOverEntryCeiling()` declared a flat 300 MiB and silently became a file
+  the product ACCEPTS when the ceiling moved. It now reads
+  `MAX_THREEMF_MODEL_ENTRY_BYTES + 1`, and sizes its incompressible payload from
+  that too so the RATIO never fires first and the fixture keeps testing the
+  ceiling.
+- **BETA-002 IS A SUPPORTED RESOURCE CLASS ON `main` AND IS NOT RELEASED.** The
+  live v0.2.0 build still refuses above 256 MiB. The support matrix says so at
+  the top; do not let it read as though the deployed site changed.
+
 ## Automatic ingestion routing invariants (Stage 6E-A3)
 
 - **THE ROUTE IS DECIDED PER MODEL ENTRY, FROM ITS DECLARED UNCOMPRESSED SIZE,

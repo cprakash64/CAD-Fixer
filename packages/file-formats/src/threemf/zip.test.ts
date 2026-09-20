@@ -577,11 +577,17 @@ describe('A4-Z64: every Zip64 field is bounded before it is followed or allocate
     await malformed(archive);
   });
 
-  it('A4-Z64-12: a 300 MiB 64-bit uncompressed size is refused before it can be allocated', async () => {
+  it('A4-Z64-12: an over-ceiling 64-bit uncompressed size is refused before it can be allocated', async () => {
+    /*
+     * SIZED FROM THE CEILING, NOT FROM A LITERAL — Stage 6E-A4. This declared a
+     * flat 300 MiB, which was over the ceiling while that was 256 MiB and under
+     * it once A4 raised it to 384 MiB; the entry then tripped the COMPRESSION
+     * RATIO instead and the test stopped being about Zip64 sizes at all.
+     */
     const source = await zip64Archive();
     const { extra } = firstCentral(source);
     const archive = mutate(source, (view) => {
-      set64(view, extra + 4, 300 * 1024 * 1024, 0);
+      set64(view, extra + 4, DEFAULT_ZIP_LIMITS.maxEntryBytes + 1, 0);
     });
     await expectRefusal(
       () => Promise.resolve(readZipDirectory(archive)),

@@ -543,7 +543,9 @@ describe('3MF-R3: per-entry expanded size', () => {
   });
 
   it('says the default per-entry ceiling in IEC units', () => {
-    expect(DEFAULT_ZIP_LIMITS.maxEntryBytes).toBe(256 * 1024 * 1024);
+    // 320 MiB since Stage 6E-A4, which raised it from 256 MiB once streaming
+    // made the entry stop being the thing that bounds the peak.
+    expect(DEFAULT_ZIP_LIMITS.maxEntryBytes).toBe(320 * 1024 * 1024);
   });
 });
 
@@ -656,7 +658,9 @@ describe('3MF-R6: every number comes from the enforcing constant', () => {
    *
    * This is what separates a message that reports the ceiling from one that
    * merely recites a number someone typed twice. A duplicated literal would go
-   * on printing 256 MiB after the limit changed, and nothing would notice.
+   * on printing the old ceiling after the limit changed, and nothing would
+   * notice — which is exactly what Stage 6E-A4 moving it from 256 MiB to
+   * 320 MiB was an opportunity to confirm.
    */
   it.each([
     [4096, '4 KiB'],
@@ -704,10 +708,10 @@ describe('3MF-R6: every number comes from the enforcing constant', () => {
    */
   it('labels the binary defaults with binary units', () => {
     expect(DEFAULT_ZIP_LIMITS.maxArchiveBytes).toBe(512 * 1024 * 1024);
-    expect(DEFAULT_ZIP_LIMITS.maxEntryBytes).toBe(256 * 1024 * 1024);
+    expect(DEFAULT_ZIP_LIMITS.maxEntryBytes).toBe(320 * 1024 * 1024);
     expect(DEFAULT_ZIP_LIMITS.maxTotalUncompressedBytes).toBe(512 * 1024 * 1024);
     expect(formatBytes(DEFAULT_ZIP_LIMITS.maxArchiveBytes)).toBe('512 MiB');
-    expect(formatBytes(DEFAULT_ZIP_LIMITS.maxEntryBytes)).toBe('256 MiB');
+    expect(formatBytes(DEFAULT_ZIP_LIMITS.maxEntryBytes)).toBe('320 MiB');
   });
 });
 

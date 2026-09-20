@@ -87,49 +87,38 @@ async function exportThreeMf(document: GeometryDocument): Promise<Uint8Array> {
   return written.bytes;
 }
 
-describe('6E-A4: the writer can never produce a model entry the reader refuses', () => {
-  it('a document past the entry ceiling is refused by the WRITER, before the work', async () => {
+describe('6E-A4: a large 3MF export is written, validated and re-openable', () => {
+  it('A4-L26: a document whose XML exceeds the OLD 256 MiB ceiling round-trips', async () => {
     /*
-     * THE DEFECT, AT THE SIZE IT OCCURRED. ~1.5 M unshared triangles serialise
-     * to about 277 MiB of model XML: over the per-entry ceiling the reader
-     * applies, under the 512 MiB `maxSerialisedBytes` the writer used to use
-     * alone. It was written in full, compressed to a 22.7 MiB archive, and THEN
-     * refused at parse-back as `ZIP_ENTRY_TOO_LARGE` — surfacing as
-     * `EXPORT_VALIDATION_UNREADABLE`, an INTERNAL error, after all the work.
-     *
-     * WHICH LAYER REFUSES IS THE POINT. A resource refusal from the writer is a
-     * decision CAD Fixer can explain; one from the validator is CAD Fixer
-     * saying it wrote a file it cannot read back.
+     * THE REGRESSION, AT THE SIZE IT ACTUALLY OCCURRED. ~1.5 M triangles
+     * serialises to roughly 277 MiB of model XML: over the old per-entry
+     * ceiling, under the new one. Before Stage 6E-A4 this call rejected with
+     * `EXPORT_VALIDATION_UNREADABLE` after writing the whole archive.
      */
     const triangles = 1_500_000;
     const xmlBytes = triangles * BYTES_PER_TRIANGLE;
-    expect(xmlBytes).toBeGreaterThan(MAX_THREEMF_MODEL_ENTRY_BYTES);
+    expect(xmlBytes).toBeGreaterThan(256 * 1024 * 1024);
+    expect(xmlBytes).toBeLessThan(MAX_THREEMF_MODEL_ENTRY_BYTES);
 
-    let code = 'EXPORTED';
-    let reason: unknown = undefined;
-    try {
-      await exportThreeMf(documentOf(soup(triangles)));
-    } catch (error) {
-      if (!isAppError(error)) throw error;
-      code = error.code;
-      reason = exportRefusalOf(error);
-    }
-    expect(code).toBe('RESOURCE_LIMIT_EXCEEDED');
-    expect(reason).toBe(ExportRefusal.SerialisedTooLarge);
-    expect(reason).not.toBe(ExportRefusal.ValidationUnreadable);
-  }, 900_000);
+    const bytes = await exportThreeMf(documentOf(soup(triangles)));
+    expect(bytes.byteLength).toBeGreaterThan(0);
+
+    // Validated by `exportDocument` already; read once more here so the
+    // assertion is about the geometry rather than about the export not throwing.
+    const parsed = await read3mf(bytes, testReadContext());
+    expect(documentTriangleCount(parsed.document)).toBe(triangles);
+    expect(parsed.document.unit).toBe(LengthUnit.Millimeter);
+  }, 600_000);
 
   it('A4-L25: validation ROUTES — a generated entry past the threshold is streamed', async () => {
     /*
      * Export validation reads with `auto`, so an artifact whose model entry
      * crosses `THREEMF_STREAMING_THRESHOLD_BYTES` is validated by the streamed
-     * path rather than held twice over. Proven by reading the SAME artifact
-     * three ways and requiring the documents to agree: if validation were
-     * pinned to one mode, the other two would be untested against real
-     * generated output.
+     * path. Proven by reading the SAME artifact three ways and requiring the
+     * documents to agree: if validation were pinned to one mode, the other two
+     * would be untested against real generated output.
      */
     const triangles = trianglesForXmlBytes(THREEMF_STREAMING_THRESHOLD_BYTES) + 200_000;
-    expect(triangles * BYTES_PER_TRIANGLE).toBeLessThan(MAX_THREEMF_MODEL_ENTRY_BYTES);
     const bytes = await exportThreeMf(documentOf(soup(triangles)));
 
     const counts: number[] = [];
@@ -143,4 +132,25 @@ describe('6E-A4: the writer can never produce a model entry the reader refuses',
     }
     expect(counts).toEqual([triangles, triangles, triangles]);
   }, 600_000);
+
+  it('A4-L27: a document past the entry ceiling is refused by the WRITER, not the validator', async () => {
+    /*
+     * THE POINT IS WHICH LAYER REFUSES. A resource refusal from the writer is a
+     * decision CAD Fixer can explain; a refusal from parse-back is CAD Fixer
+     * saying it wrote a file it cannot read, which is an internal failure. The
+     * writer's ceiling is now the reader's, so the first one fires.
+     */
+    const triangles = trianglesForXmlBytes(MAX_THREEMF_MODEL_ENTRY_BYTES) + 500_000;
+    let code = 'EXPORTED';
+    let reason: unknown = undefined;
+    try {
+      await exportThreeMf(documentOf(soup(triangles)));
+    } catch (error) {
+      if (!isAppError(error)) throw error;
+      code = error.code;
+      reason = exportRefusalOf(error);
+    }
+    expect(code).toBe('RESOURCE_LIMIT_EXCEEDED');
+    expect(reason).toBe(ExportRefusal.SerialisedTooLarge);
+  }, 900_000);
 });

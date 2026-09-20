@@ -1,7 +1,13 @@
 # Format support matrix and known limitations
 
-Internal reference for the next Technical Preview release candidate. Written in
-Stage 6D-A4 from **measured behaviour** — the production import pipeline run over
+Internal reference for the next Technical Preview release candidate.
+
+**THIS DESCRIBES `main`, NOT THE LIVE SITE.** The 3MF per-entry ceiling was
+raised from 256 MiB to 320 MiB in Stage 6E-A4 and has not been released;
+production still runs v0.2.0 and still refuses above 256 MiB. The row and the
+limitation below are marked accordingly.
+
+Written in Stage 6D-A4 from **measured behaviour** — the production import pipeline run over
 2,130 real and reference files and a deterministic mutation campaign — not from intent. Every "yes" below is
 bounded by the resource policy in [RESOURCE_POLICY.md](RESOURCE_POLICY.md); every
 "no" is a typed refusal that names what was not supported, never a partial
@@ -26,7 +32,7 @@ section _Stage 6D-A4_.
 | 3MF Production Alternatives (model resolution)           | **no**    | `THREEMF_MODEL_RESOLUTION_UNSUPPORTED`. Truthful unsupported.                                                                                                                                                                                                                               |
 | 3MF Secure Content                                       | **no**    | Refused as a required extension CAD Fixer does not implement.                                                                                                                                                                                                                               |
 | Any other required 3MF extension                         | **no**    | Materials-required, slice, beam lattice, booleans, displacement, volumetric, triangle sets: `THREEMF_UNSUPPORTED_EXTENSION`. Optional (not required) extension content is ignored per core's must-ignore rule; since A4 a foreign-namespace element can no longer be read as core geometry. |
-| A 3MF entry that expands beyond 256 MiB                  | **no**    | `ZIP_ENTRY_TOO_LARGE`, naming the size and the limit. BETA-002's class. Streaming import required.                                                                                                                                                                                          |
+| A 3MF entry that expands beyond 320 MiB                  | **no**    | `ZIP_ENTRY_TOO_LARGE`, naming the size and the limit. **Raised from 256 MiB in Stage 6E-A4 and NOT YET RELEASED — v0.2.0 in production still refuses above 256 MiB.** Entries from 128 MiB up are read by streaming; the whole package still expands to at most 512 MiB.                    |
 | A 3MF package expanding beyond 512 MiB, or ratio > 200:1 | no        | Resource refusals naming the metric, value and limit.                                                                                                                                                                                                                                       |
 
 ## Export
@@ -50,7 +56,12 @@ before it is offered; there is no way to skip that.
 - **Topology is exact-coordinate.** Nothing is merged by proximity.
 - **One step of undo, no redo.**
 - **No unit conversion.** A unit labels numbers; nothing is ever rescaled.
-- **No streaming import yet.** A 3MF entry above 256 MiB is refused (BETA-002).
+- **Streaming 3MF import, above 128 MiB per model entry.** A 3MF entry above
+  **320 MiB** is refused; the whole package still expands to at most 512 MiB.
+  **This is the NEXT release's limit, qualified in Stage 6E-A4 and not
+  deployed** — the live v0.2.0 build refuses above 256 MiB, which is BETA-002's
+  class. Which path an entry takes is invisible: the document, the warnings and
+  every refusal are identical either way.
 - **3MF extensions other than the production model-part subset are refused**,
   and colours, materials and textures are not imported or written.
 - **OBJ polygons are refused**, not triangulated.

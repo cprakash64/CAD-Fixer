@@ -1319,17 +1319,141 @@ and no monotonic growth across the cycle.
   still prefers buffering ABOVE 128 MiB was not measured, because the fixture
   generator's object ceiling is the document's part ceiling.
 
+## Stage 6E-A4 — the raised ceiling, and the export defect it exposed
+
+A4 had two jobs: choose a production per-entry ceiling above 256 MiB from
+full-product measurement, and resolve the export-validation problem A3 recorded
+on its way out. The second turned out to be a live defect rather than a
+tidiness item, and it had to be fixed before the first could ship.
+
+### The export defect, found and reproduced
+
+**The 3MF writer bounded its model XML by `maxSerialisedBytes` (512 MiB) while
+the reader refused a model entry over `maxEntryBytes` (256 MiB).** Every
+validated export reads its own artifact back with the production reader, so a
+document landing between those two numbers was serialised in full, compressed,
+and only then refused — surfacing as `EXPORT_VALIDATION_UNREADABLE`, an INTERNAL
+error, after all the work.
+
+Reproduced before anything was changed: a document of 1,500,000 unshared
+triangles serialises to about 277 MiB of model XML inside a **22.7 MiB**
+archive, and the production reader refuses that archive with
+`ZIP_ENTRY_TOO_LARGE`.
+
+**IT WAS REACHABLE ON `main` BEFORE A4.** 1.5 M triangles is an ordinary
+multi-part package — Stage 6E-A3's own `pkg-250-250` fixture carries 2,833,988
+— so importing a package and exporting it back to 3MF could fail with an
+internal error. Raising the import ceiling would have made it commonplace.
+
+### The fix, in three parts
+
+- **ONE SOURCE OF TRUTH.** `threemf/size-limits.ts` is a leaf module importing
+  nothing, holding `MAX_THREEMF_MODEL_ENTRY_BYTES` and
+  `MAX_THREEMF_PACKAGE_BYTES`. `DEFAULT_ZIP_LIMITS` reads them; so does the
+  writer; so do the end-to-end fixtures. Nothing restates either number.
+- **THE WRITER IS BOUNDED BY WHAT THE READER WILL TAKE BACK.** Its model XML
+  ceiling is now `min(maxSerialisedBytes, MAX_THREEMF_MODEL_ENTRY_BYTES)`. A
+  document too large is refused by the WRITER, cleanly and before the work, as
+  `EXPORT_SERIALISED_TOO_LARGE`. A resource refusal from the writer is a
+  decision CAD Fixer can explain; one from the validator is CAD Fixer saying it
+  wrote a file it cannot read.
+- **VALIDATION ROUTES LIKE AN IMPORT, REVERSING A3.** A3 pinned parse-back to
+  `buffered` so that a routing defect could not let an invalid file validate.
+  That was affordable at a 256 MiB ceiling and is not at 320 MiB: buffered
+  parse-back holds the whole entry twice over, so validating a maximum-sized
+  export would cost more than importing it does — the exact cost Stage 6E
+  exists to remove, paid at the end of every large export instead. What replaces
+  the pin is stronger: routing is qualified by a 2,474-file three-way
+  differential and by `ingestion-routing.test.ts`. **The artifact is still fully
+  parsed and fully validated; nothing is trusted because we wrote it.** The
+  export worker and `testExportReadContext` now supply `createTextDecoder`.
+
+### Large export, measured through the product
+
+A 297.15 MiB indexed import of 4,458,098 triangles, exported to all three
+targets from the real convert dialog:
+
+| Target | Artifact  | Duration  | Result |
+| ------ | --------- | --------- | ------ |
+| 3MF    | 30.9 MiB  | 16,004 ms | ok     |
+| STL    | 212.6 MiB | 2,306 ms  | ok     |
+| OBJ    | 133.4 MiB | 6,110 ms  | ok     |
+
+Renderer `phys_footprint_peak` 1,185 MiB after the import, 1,815 MiB after all
+three exports. **The 3MF artifact's own model entry is about 297 MiB**, so under
+the old validation path this export would have been refused as unreadable — the
+defect above, met at exactly the size A4 set out to support.
+
+### Why the first proposed ceiling was withdrawn
+
+A4's first ladder was built from the generator Stage 6E had used throughout:
+unshared triangle soup at ~185 bytes a triangle. On that shape a 377 MiB entry
+measured 1,295–1,487 MiB renderer, and 384 MiB looked comfortable.
+
+**It was not, and the reason is that 3MF shares vertices.** An indexed grid
+carries a triangle every ~70 bytes — roughly twice the density — and the 3MF
+Consortium's own large positive cases are exactly that shape. Remeasured on
+maximally dense indexed content the same declared size carries 5,438,402
+triangles and peaks at **1,990–1,998 MiB renderer and 2,499–2,506 MiB
+whole-browser**, back in the region Stage 6D-B3 rejected. The soup ladder had
+understated the worst case by about 650 MiB.
+
+The proposal was withdrawn on that evidence and the ceiling set at **320 MiB**,
+whose largest admissible file — 319.52 MiB, 4,786,418 triangles — measures
+1,513–1,619 MiB renderer and 1,977–2,083 MiB whole-browser over five fresh
+browsers. The full ladder, the cliff between 336.60 MiB and 363.94 MiB, and the
+8 GiB rationale are in `docs/release/RESOURCE_POLICY.md`.
+
+**The lesson is durable and is recorded in `CLAUDE.md`: any future ceiling
+argument must be made on maximally dense INDEXED content.** A soup ladder will
+say the ceiling can be higher than it can.
+
+### What this ceiling does and does not reach
+
+- **BETA-002's class is supported**: an indexed 297.15 MiB entry imports at
+  1,162–1,184 MiB renderer, and the tester's file class is no longer refused for
+  its size. It is not deployed — v0.2.0 still refuses above 256 MiB.
+- **The 3MF Consortium's ~363 MiB positives are still refused**, and
+  deliberately. `P_XXX_0909_04.3mf` and `P_XPX_0909_04.3mf` import correctly
+  when the ceiling is raised far enough to admit them, at 1,878–1,970 MiB
+  whole-browser; they are simply larger than this ceiling should allow on the
+  supported machine. Supporting them needs a ~384 MiB ceiling, which measures
+  2,506 MiB.
+- **Corpus regression: 2,474 files, ZERO changed outcomes** against the 256 MiB
+  ceiling, and 2,474 identical across buffered, streamed and routed reads.
+
+### Responsiveness is bounded by triangles, and STL already permits more
+
+Longest gap between animation frames, shipped build, one fresh browser each:
+
+| Case                                     | Triangles | Longest gap   |
+| ---------------------------------------- | --------- | ------------- |
+| Text-heavy 294 MiB                       | 4         | 139 ms        |
+| BETA-002 indexed 297 MiB                 | 4,458,098 | 13,663 ms     |
+| Largest admissible 3MF, 319.52 MiB       | 4,786,418 | 14,591 ms     |
+| **250 MiB binary STL — supported TODAY** | 5,242,878 | **15,184 ms** |
+
+The gap is the non-indexed render snapshot and its upload, which is main-thread
+work by construction and which A4 did not touch; it tracks TRIANGLES, not entry
+size or route. **A 250 MiB STL, fully supported before this stage and unchanged
+by it, stalls longer than anything the new 3MF ceiling admits**, so A4
+introduces no new class or magnitude of main-thread stall. Idle gap is
+18–23 ms throughout and Cancel stays actionable (hover 38–119 ms). Reducing the
+stall itself means changing how geometry reaches the GPU, which is not this
+stage's question.
+
 ## Staging plan
 
 - **6E-A2 — DONE.** Production-quality streamed ingestion behind a non-default
   seam; see the section above.
 - **6E-A3 — DONE.** Automatic per-entry routing at 128 MiB; see the section
   above.
-- **6E-A4** — choose a large-entry ceiling from A3's evidence, as its own
-  decision.
+- **6E-A4 — DONE.** Per-entry ceiling raised to 320 MiB; large-export
+  validation fixed and routed. See the section above.
 - **6E-A5** — release qualification.
 
-Until A4 decides otherwise, **the production limit is unchanged — 256 MiB.**
+On `main` the per-entry limit is **320 MiB**; production still runs v0.2.0 at
+**256 MiB** until A5 deploys.
 
 ## Reproduction
 
