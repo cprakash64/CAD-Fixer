@@ -20,7 +20,7 @@
  * Run:
  *   node scripts/streaming-import.qualify.mjs \
  *     [--cases dense:128,dense:300,dense-cjk:250,text:300,objects,placements] \
- *     [--modes whole,stream] [--runs 1] [--slice 65536] [--cancel 0.1,0.5,0.9]
+ *     [--modes buffered-onewrite,buffered,stream] [--runs 1] [--slice 65536] [--cancel 0.1,0.5,0.9]
  *
  *   node scripts/streaming-import.qualify.mjs --cases dense:250 --emit /abs/dir
  *     writes the fixtures only, and prints `file:<triangles>:<path>` specs for
@@ -29,6 +29,7 @@
  */
 import { chromium } from 'playwright';
 import { build } from 'vite';
+import { threeMfProductionPackage } from './fixtures.qualify.mjs';
 import { deflateRawSync } from 'node:zlib';
 import { createServer } from 'node:http';
 import { execFileSync } from 'node:child_process';
@@ -264,7 +265,20 @@ function placementHeavy() {
 }
 
 function fixture(directory, spec) {
-  const [kind, size] = spec.split(':');
+  const [kind, size, each] = spec.split(':');
+  if (kind === 'package') {
+    // `package:<parts>:<triangles each>` — the Stage 6D-A2 production package
+    // `qualify:import-phases` measures as `3mf-package`, from the same generator.
+    const archive = threeMfProductionPackage(Number(size), Number(each));
+    const path = join(directory, `${spec.replaceAll(':', '-')}.3mf`);
+    writeFileSync(path, archive);
+    return {
+      path,
+      entryBytes: 0,
+      archiveBytes: archive.length,
+      triangles: Number(size) * Number(each),
+    };
+  }
   const built =
     kind === 'dense'
       ? dense(Number(size))
@@ -437,12 +451,13 @@ async function measure(url, target, small, options) {
 
 async function main() {
   const cases = argument('cases', 'dense:128,dense:250,dense:300,dense:377').split(',');
-  const modes = argument('modes', 'whole,stream').split(',').filter(Boolean);
+  const modes = argument('modes', 'buffered-onewrite,buffered,stream').split(',').filter(Boolean);
   // `--modes ''` runs only the cancellation plans. Anything else unknown is an
-  // error: the worker treats every mode but `stream` as whole, so a typo would
-  // silently measure the wrong path under the wrong label.
+  // error: a typo would otherwise measure some other path under its label.
   for (const mode of modes) {
-    if (mode !== 'whole' && mode !== 'stream') throw new Error(`unknown mode ${mode}`);
+    if (!['buffered-onewrite', 'buffered', 'stream'].includes(mode)) {
+      throw new Error(`unknown mode ${mode}`);
+    }
   }
   const runs = Number(argument('runs', '1'));
   const sliceBytes = Number(argument('slice', '65536'));
@@ -484,7 +499,7 @@ async function main() {
     writeFileSync(join(directory, 'index.html'), PAGE);
     const { server, url } = await serve(directory);
     const small = fixture(directory, 'dense:1');
-    process.stdout.write(`Stage 6E-A1 streaming qualification — ${url}\n  slice ${sliceBytes} B\n`);
+    process.stdout.write(`Stage 6E streaming qualification — ${url}\n  slice ${sliceBytes} B\n`);
     try {
       for (const spec of cases) {
         const target = fixture(directory, spec);
@@ -520,7 +535,11 @@ async function main() {
             const label =
               plan.cancelAtFraction === undefined ? plan.mode : `cancel@${plan.cancelAtFraction}`;
             const outcome = result.ok
-              ? `ok ${result.triangles.toLocaleString('en-US')} tris, read ${result.readMs.toFixed(0)} ms, total ${result.totalMs.toFixed(0)} ms, geometry ${result.geometryMiB.toFixed(0)} MiB, gate ${result.gate.slice(0, 40)}`
+              ? `ok ${result.triangles.toLocaleString('en-US')} tris, read ${result.readMs.toFixed(0)} ms` +
+                (result.pass1Ms === undefined
+                  ? ''
+                  : ` (security ${result.pass1Ms.toFixed(0)} + elements ${result.pass2Ms.toFixed(0)})`) +
+                `, gates ${result.gatesMs.toFixed(0)} ms, render ${result.renderMs.toFixed(0)} ms, total ${result.totalMs.toFixed(0)} ms, geometry ${result.geometryMiB.toFixed(0)} MiB, gate ${result.gate.slice(0, 40)}`
               : `${result.code} (${String(result.message).slice(0, 90)}) after ${result.totalMs.toFixed(0)} ms` +
                 (result.cancelTailMs === undefined
                   ? ''

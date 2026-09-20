@@ -6,10 +6,18 @@ import {
   type OperationHandler,
 } from '@cadfixer/geometry-runtime';
 import { malformedFile } from '@cadfixer/shared';
-import { EMPTY_COMPATIBILITY } from '@cadfixer/file-formats';
+import {
+  createThreeMfReader,
+  DEFAULT_ZIP_LIMITS,
+  EMPTY_COMPATIBILITY,
+  ThreeMfIngestion,
+} from '@cadfixer/file-formats';
 import { assertGeometryDocument, distinctMeshes } from '@cadfixer/mesh-core';
 import {
   commitImportedDocument,
+  createModelImportHandler,
+  PRODUCTION_IMPORT_CONFIG,
+  type ModelImportConfig,
   modelAnalyzeHandler,
   modelExportHandler,
   modelReleaseHandler,
@@ -84,13 +92,37 @@ const endpoint: MessageEndpoint = {
  * how a document becomes authoritative is reimplemented here — if it were, this
  * harness would be evidence about the harness.
  */
+/**
+ * THE REAL IMPORT PIPELINE, WITH A HARNESS-CHOSEN 3MF READER — Stage 6E-A2.
+ *
+ * A file that is not a fixture id goes through `createModelImportHandler`, the
+ * production handler's own factory: identification, the mesh gate, the document
+ * gate, the resource gate, the render snapshot and the resident commit are all
+ * production code. What the harness may choose — and only through the
+ * `harness/ingestion` message below, which is outside the protocol — is the 3MF
+ * reader: buffered or streamed ingestion, and for the memory previews a wider
+ * per-entry ceiling than the product's. None of that exists in the shipped
+ * worker, which registers `modelImportHandler` built from
+ * `PRODUCTION_IMPORT_CONFIG`; a boundary test holds that line.
+ */
+let realImport: OperationHandler<'model/import'> =
+  createModelImportHandler(PRODUCTION_IMPORT_CONFIG);
+
+/** The longest fixture id is a few dozen characters; a real file is not one. */
+const FIXTURE_ID_MAX_BYTES = 128;
+const FIXTURE_ID_SHAPE = /^[a-z0-9-]+$/;
+
 const harnessImportHandler: OperationHandler<'model/import'> = (payload, context) => {
   const source = payload.bytes;
   if (!(source instanceof ArrayBuffer)) {
     throw malformedFile('The harness import payload did not contain a transferable buffer.');
   }
 
-  const requested = new TextDecoder().decode(new Uint8Array(source)).trim();
+  const requested =
+    source.byteLength <= FIXTURE_ID_MAX_BYTES
+      ? new TextDecoder().decode(new Uint8Array(source)).trim()
+      : '';
+  if (!FIXTURE_ID_SHAPE.test(requested)) return realImport(payload, context);
   if (!isHarnessFixtureId(requested)) {
     // Refused with a reason, exactly as an unrecognised file would be. A harness
     // that silently substituted a default fixture would let a typo in a spec
@@ -217,8 +249,12 @@ workerScope.addEventListener('message', (event: MessageEvent) => {
     kind: 'harness/digest-result',
     ok: true,
     distinctMeshes: meshIndex.size,
+    // Stage 6E-A2: the authoritative unit, not the page's mirror of it.
+    unit: document.unit ?? null,
     parts: document.parts.map((part) => ({
       partId: part.id,
+      name: part.name ?? null,
+      materialRef: part.materialRef ?? null,
       meshResourceIndex: meshIndex.get(part.mesh) ?? -1,
       transform: [...part.transform],
       positionBytes: part.mesh.positions.byteLength,
@@ -227,4 +263,50 @@ workerScope.addEventListener('message', (event: MessageEvent) => {
       indexDigest: digestBytes(part.mesh.indices),
     })),
   });
+});
+
+/**
+ * WHICH 3MF READER THE REAL IMPORT USES, set by the harness page — Stage 6E-A2.
+ *
+ * Its own message kind, invisible to `GeometryWorkerHost`, like the digest.
+ * `buffered` with no ceiling is the production configuration itself;
+ * anything else builds a reader with `createThreeMfReader`, which is exactly
+ * how the shipped worker could NOT be configured.
+ */
+interface IngestionRequest {
+  readonly kind: 'harness/ingestion';
+  readonly mode: 'buffered' | 'streaming';
+  /** A wider per-entry ceiling, for memory previews above the product's. */
+  readonly maxEntryBytes?: number;
+}
+
+function isIngestionRequest(value: unknown): value is IngestionRequest {
+  if (typeof value !== 'object' || value === null) return false;
+  const candidate = value as { kind?: unknown; mode?: unknown; maxEntryBytes?: unknown };
+  return (
+    candidate.kind === 'harness/ingestion' &&
+    (candidate.mode === 'buffered' || candidate.mode === 'streaming') &&
+    (candidate.maxEntryBytes === undefined ||
+      (typeof candidate.maxEntryBytes === 'number' &&
+        Number.isSafeInteger(candidate.maxEntryBytes)))
+  );
+}
+
+workerScope.addEventListener('message', (event: MessageEvent) => {
+  if (!isIngestionRequest(event.data)) return;
+  const { mode, maxEntryBytes } = event.data;
+  const config: ModelImportConfig =
+    mode === 'buffered' && maxEntryBytes === undefined
+      ? PRODUCTION_IMPORT_CONFIG
+      : {
+          threeMfReader: createThreeMfReader({
+            ingestion:
+              mode === 'streaming' ? ThreeMfIngestion.Streaming : ThreeMfIngestion.Buffered,
+            ...(maxEntryBytes === undefined
+              ? {}
+              : { zipLimits: { ...DEFAULT_ZIP_LIMITS, maxEntryBytes } }),
+          }),
+        };
+  realImport = createModelImportHandler(config);
+  workerScope.postMessage({ kind: 'harness/ingestion-set', mode, maxEntryBytes });
 });

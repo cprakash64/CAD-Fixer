@@ -64,6 +64,22 @@ export interface FormatReadContext {
    * supply one.
    */
   readonly inflateRaw?: (compressed: Uint8Array) => AsyncIterable<Uint8Array>;
+  /**
+   * A FRESH streaming UTF-8 decoder, for a reader that ingests text in pieces.
+   *
+   * Injected for the reason `decodeText` is, and with the same semantics: it
+   * must behave exactly as `new TextDecoder('utf-8', { fatal: false })`, whose
+   * `{ stream: true }` mode holds an incomplete multi-byte sequence for the next
+   * call — which is what makes a piece boundary inside a character invisible.
+   * Optional because only the streamed 3MF path needs one (Stage 6E-A2); a
+   * streamed read without it is a wiring fault and is refused as one.
+   */
+  readonly createTextDecoder?: () => TextStreamDecoder;
+}
+
+/** The part of the platform's `TextDecoder` a streamed reader uses. */
+export interface TextStreamDecoder {
+  decode(input?: Uint8Array, options?: { readonly stream?: boolean }): string;
 }
 
 export interface FormatWriteContext {

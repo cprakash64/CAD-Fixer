@@ -1,6 +1,6 @@
 import { uncancellable, type CancellationToken } from '@cadfixer/shared';
 import { DEFAULT_IMPORT_BUDGET, type ImportBudget } from './budget';
-import type { FormatReadContext, FormatProgressReporter } from './context';
+import type { FormatReadContext, FormatProgressReporter, TextStreamDecoder } from './context';
 import { createSlicedInflater, type RawInflater } from './threemf/inflate';
 
 /**
@@ -74,6 +74,11 @@ export async function* inflateRawWholeWriteForTests(
   }
 }
 
+/** A fresh streaming UTF-8 decoder, as the production worker supplies one. */
+export function createTextDecoderForTests(): TextStreamDecoder {
+  return new TextDecoder('utf-8', { fatal: false });
+}
+
 export interface TestContextOptions {
   readonly cancellation?: CancellationToken;
   readonly budget?: ImportBudget;
@@ -83,6 +88,8 @@ export interface TestContextOptions {
   readonly withInflater?: boolean;
   /** Replaces the production-shaped inflater, e.g. to move chunk boundaries. */
   readonly inflateRaw?: RawInflater;
+  /** Omit to test a streamed read whose caller forgot the decoder. */
+  readonly withTextDecoder?: boolean;
 }
 
 export function testReadContext(options: TestContextOptions = {}): FormatReadContext {
@@ -95,5 +102,6 @@ export function testReadContext(options: TestContextOptions = {}): FormatReadCon
     ...(options.withInflater === false
       ? {}
       : { inflateRaw: options.inflateRaw ?? inflateRawForTests }),
+    ...(options.withTextDecoder === false ? {} : { createTextDecoder: createTextDecoderForTests }),
   };
 }

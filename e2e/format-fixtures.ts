@@ -769,3 +769,24 @@ export function threeMfProductionLarge(children: number, trianglesPerChild: numb
     })),
   ]);
 }
+
+/**
+ * A 3MF whose model part DECLARES more than the 256 MiB per-entry ceiling —
+ * Stage 6E-A2's eligibility proof. Two mebibytes of incompressible bytes behind
+ * a 300 MiB declaration: the declared-to-compressed ratio (~150:1) stays inside
+ * the 200:1 directory check, so the refusal is the per-entry one, and it lands
+ * before anything is inflated — the bytes are never read.
+ */
+export function threeMfOverEntryCeiling(): Buffer {
+  const noise = Buffer.alloc(2 * 1024 * 1024);
+  let seed = 0x6e2;
+  for (let at = 0; at < noise.length; at += 4) {
+    seed = (Math.imul(seed, 1_103_515_245) + 12_345) >>> 0;
+    noise.writeUInt32LE(seed, at);
+  }
+  return buildZip([
+    { name: '[Content_Types].xml', content: CONTENT_TYPES },
+    { name: '_rels/.rels', content: RELS },
+    { name: '3D/3dmodel.model', content: noise, declaredUncompressedSize: 300 * 1024 * 1024 },
+  ]);
+}

@@ -51,8 +51,8 @@ import {
   createInflationBudget,
   DEFAULT_ZIP_LIMITS,
   readZipDirectory,
+  openTwoPassEntry,
   readZipEntry,
-  streamZipEntry,
   type InflationBudget,
   type ZipEntry,
   type ZipLimits,
@@ -67,12 +67,7 @@ import {
   type XmlHandlers,
   type XmlLimits,
 } from './xml-scan';
-import {
-  scanXmlByteStream,
-  type StreamScanStats,
-  type StreamXmlLimits,
-  type TextStreamDecoder,
-} from './xml-stream';
+import { scanXmlByteStream, type StreamScanStats, type StreamXmlLimits } from './xml-stream';
 import { ModelPartRole, PackageModelGraph, type ModelPart } from './package-graph';
 import {
   canonicalisePackagePartName,
@@ -1674,34 +1669,89 @@ export interface ThreeMfReadOptions {
    */
   readonly budget?: InflationBudget;
   /**
-   * STREAMING INGESTION — Stage 6E-A1 PROTOTYPE, RESEARCH AND QUALIFICATION
-   * ONLY. When present, every MODEL PART is read with `streamZipEntry` and
-   * `scanXmlByteStream` instead of `readZipEntry` + `decodeText` + `scanXml`,
-   * feeding the same `createModelXmlParser` handlers. Nothing in the
-   * application passes it, and a boundary test asserts that; the shipped
-   * import is the whole-buffer path, unchanged.
+   * How each MODEL PART's bytes become XML events — Stage 6E-A2.
+   *
+   * `buffered`, THE DEFAULT AND THE ONLY MODE THE PRODUCT USES: the whole entry
+   * is inflated into one buffer, decoded into one string and scanned. v0.2.0's
+   * path.
+   *
+   * `streaming`: the entry is read twice through `openTwoPassEntry` — a security
+   * pass, then an element pass — and never held whole, in bytes or in text. The
+   * SAME element handlers (`createModelXmlParser`) interpret both, so the modes
+   * differ in memory and in nothing a user can see, with one exception written
+   * down in `StreamXmlLimits.maxTagLength`. It needs
+   * `FormatReadContext.createTextDecoder`.
+   *
+   * Only model parts stream. The root relationships are always buffered: they
+   * are a few hundred bytes, and reading them twice would buy nothing.
+   *
+   * NOT A RESOURCE CEILING. Choosing `streaming` admits nothing `buffered` would
+   * refuse: `zipLimits`, and so the 256 MiB per-entry ceiling, apply to both.
    */
-  readonly ingestion?: StreamingIngestion;
+  readonly ingestion?: ThreeMfIngestion;
 }
 
-/** How the streaming prototype reaches the platform. See `ThreeMfReadOptions.ingestion`. */
-export interface StreamingIngestion {
-  /** Must feed the compressed input in bounded slices; see `streamZipEntry`. */
-  readonly inflateRaw: (compressed: Uint8Array) => AsyncIterable<Uint8Array>;
-  readonly createDecoder: () => TextStreamDecoder;
+/** See `ThreeMfReadOptions.ingestion`. */
+export const ThreeMfIngestion = {
+  Buffered: 'buffered',
+  Streaming: 'streaming',
+} as const;
+export type ThreeMfIngestion = (typeof ThreeMfIngestion)[keyof typeof ThreeMfIngestion];
+
+/**
+ * INSTRUMENTATION FOR THE STREAMED PATH — tests and qualification only.
+ *
+ * Deliberately NOT part of `ThreeMfReadOptions`: nothing about how the product
+ * reads a file may depend on an observer, and a caller holding production
+ * options cannot reach these. `read3mfForQualification` is the only entry that
+ * takes them; the package index does not export it, and a boundary test keeps
+ * it out of `apps/web/src`.
+ */
+export interface ThreeMfStreamingQualification {
+  /** Narrower stream limits, to reach the tag refusal at test scale. */
   readonly streamLimits?: StreamXmlLimits;
+  /** Yield more often than production does, to exercise every yield point. */
   readonly yieldEveryPieces?: number;
   readonly stats?: StreamScanStats;
+  /** Each piece's byte length, per pass. For cancellation at a byte position. */
   readonly onBytes?: (pass: 1 | 2, byteLength: number) => void;
+  /** Pass boundaries, for the phase timings the design document reports. */
+  readonly onPass?: (pass: 1 | 2, event: 'start' | 'end') => void;
 }
 
-export async function read3mf(
+/**
+ * Reads a 3MF package into a document. The product's entry point: buffered
+ * unless `options.ingestion` says otherwise.
+ */
+export function read3mf(
   bytes: Uint8Array,
   context: FormatReadContext,
   options: ThreeMfReadOptions = {},
 ): Promise<DocumentReadResult> {
+  return readThreeMfPackage(bytes, context, options, undefined);
+}
+
+/**
+ * `read3mf` with streaming instrumentation. QUALIFICATION ONLY — see
+ * `ThreeMfStreamingQualification`.
+ */
+export function read3mfForQualification(
+  bytes: Uint8Array,
+  context: FormatReadContext,
+  options: ThreeMfReadOptions,
+  qualification: ThreeMfStreamingQualification,
+): Promise<DocumentReadResult> {
+  return readThreeMfPackage(bytes, context, options, qualification);
+}
+
+async function readThreeMfPackage(
+  bytes: Uint8Array,
+  context: FormatReadContext,
+  options: ThreeMfReadOptions,
+  qualification: ThreeMfStreamingQualification | undefined,
+): Promise<DocumentReadResult> {
   try {
-    return await readThreeMfPackage(bytes, context, options);
+    return await readThreeMfPackageUnguarded(bytes, context, options, qualification);
   } finally {
     // However the read ends — document, refusal, cancellation — the engine's
     // match state must not be left holding a slice of any part. See
@@ -1710,10 +1760,11 @@ export async function read3mf(
   }
 }
 
-async function readThreeMfPackage(
+async function readThreeMfPackageUnguarded(
   bytes: Uint8Array,
   context: FormatReadContext,
   options: ThreeMfReadOptions,
+  qualification: ThreeMfStreamingQualification | undefined,
 ): Promise<DocumentReadResult> {
   const limits = options.limits ?? DEFAULT_3MF_LIMITS;
   const zipLimits = options.zipLimits ?? DEFAULT_ZIP_LIMITS;
@@ -1724,6 +1775,12 @@ async function readThreeMfPackage(
     // A caller that dispatched 3MF without supplying an inflater is a wiring
     // fault, not a bad file, and must not be reported to the user as one.
     throw internalRefusal('3MF import needs a decompressor, and none was provided.');
+  }
+  const streaming = (options.ingestion ?? ThreeMfIngestion.Buffered) === ThreeMfIngestion.Streaming;
+  const createTextDecoder = context.createTextDecoder;
+  if (streaming && createTextDecoder === undefined) {
+    // The same wiring fault, for the streamed path's other platform primitive.
+    throw internalRefusal('Streamed 3MF import needs a text decoder, and none was provided.');
   }
 
   context.progress.report(0, ThreeMfImportPhase.ReadingPackage);
@@ -1808,58 +1865,14 @@ async function readThreeMfPackage(
   };
 
   /**
-   * Reads ONE model part: inflate, decode, parse, materialise, release.
+   * The buffered read of one model part: v0.2.0's path.
    *
-   * THE ONLY PLACE A MODEL PART'S BYTES EXIST. The entry buffer and the decoded
-   * XML string are locals of this function, so both become collectible the
-   * moment it returns; `materialiseMeshes` releases the parser's Float64
-   * scratch before that. What survives is canonical geometry and the object
-   * table's metadata, which is what the walk needs and all it needs.
-   *
-   * ONE AT A TIME, guaranteed by the walk awaiting each call before it
-   * continues — never by anything in here.
+   * ITS OWN FUNCTION SO ITS FRAME ENDS BEFORE MATERIALISATION. The inflated
+   * entry and the decoded string are locals HERE, so they are unreachable the
+   * moment this returns — before `materialiseMeshes` allocates the canonical
+   * buffers — rather than for as long as the caller's frame lives.
    */
-  const loadModelPart = async (
-    entry: ZipEntry,
-    key: ModelPartKey,
-    role: ModelPartRole,
-  ): Promise<{ parsed: ParsedModel; unit: string | undefined }> => {
-    throwIfCancelled(context.cancellation);
-    const ingestion = options.ingestion;
-    if (ingestion !== undefined) {
-      reportPartProgress(ThreeMfImportPhase.Decompressing);
-      reportPartProgress(ThreeMfImportPhase.Parsing);
-      const parser = createModelXmlParser(limits, xmlLimits, poll, role);
-      await scanXmlByteStream(
-        (pass) =>
-          streamZipEntry(bytes, entry, {
-            ...zipOptions,
-            inflateRaw: ingestion.inflateRaw,
-            charge: pass === 1,
-          }),
-        parser.handlers,
-        xmlLimits,
-        {
-          createDecoder: ingestion.createDecoder,
-          poll,
-          yieldToEventLoop: context.yieldToEventLoop,
-          ...(ingestion.streamLimits === undefined ? {} : { streamLimits: ingestion.streamLimits }),
-          ...(ingestion.yieldEveryPieces === undefined
-            ? {}
-            : { yieldEveryPieces: ingestion.yieldEveryPieces }),
-          ...(ingestion.stats === undefined ? {} : { stats: ingestion.stats }),
-          ...(ingestion.onBytes === undefined ? {} : { onBytes: ingestion.onBytes }),
-        },
-      );
-      throwIfCancelled(context.cancellation);
-      const streamed = parser.finish();
-      throwIfCancelled(context.cancellation);
-      materialiseMeshes(streamed, options.stats, poll);
-      throwIfCancelled(context.cancellation);
-      partsLoaded += 1;
-      void key;
-      return { parsed: streamed, unit: streamed.unit };
-    }
+  const parseBufferedPart = async (entry: ZipEntry, role: ModelPartRole): Promise<ParsedModel> => {
     reportPartProgress(ThreeMfImportPhase.Decompressing);
     const partBytes = await readZipEntry(bytes, entry, zipOptions);
     throwIfCancelled(context.cancellation);
@@ -1868,9 +1881,8 @@ async function readThreeMfPackage(
     const partXml = context.decodeText(partBytes);
     throwIfCancelled(context.cancellation);
 
-    let parsed: ParsedModel;
     try {
-      parsed = parseModelXml(
+      return parseModelXml(
         partXml,
         limits,
         xmlLimits,
@@ -1894,6 +1906,75 @@ async function readThreeMfPackage(
       // This part's text must not stay reachable while the next part loads.
       forgetRegExpMatch();
     }
+  };
+
+  /**
+   * The streamed read of one model part — Stage 6E-A2.
+   *
+   * The parser is created INSIDE the factory `scanXmlByteStream` calls after
+   * the security pass has cleared, so a part refused for a DOCTYPE, an ENTITY or
+   * an external identifier never instantiates one. The progress phases are the
+   * buffered path's, reported at the matching moments: `Decompressing` as the
+   * part opens, `Parsing` as its element pass begins.
+   */
+  const parseStreamedPart = async (entry: ZipEntry, role: ModelPartRole): Promise<ParsedModel> => {
+    if (createTextDecoder === undefined) {
+      throw internalRefusal('Streamed 3MF import needs a text decoder, and none was provided.');
+    }
+    reportPartProgress(ThreeMfImportPhase.Decompressing);
+    let parser: ReturnType<typeof createModelXmlParser> | undefined;
+    await scanXmlByteStream(
+      openTwoPassEntry(bytes, entry, zipOptions),
+      () => {
+        reportPartProgress(ThreeMfImportPhase.Parsing);
+        parser = createModelXmlParser(limits, xmlLimits, poll, role);
+        return parser.handlers;
+      },
+      xmlLimits,
+      {
+        createDecoder: createTextDecoder,
+        poll,
+        yieldToEventLoop: context.yieldToEventLoop,
+        ...(qualification?.streamLimits === undefined
+          ? {}
+          : { streamLimits: qualification.streamLimits }),
+        ...(qualification?.yieldEveryPieces === undefined
+          ? {}
+          : { yieldEveryPieces: qualification.yieldEveryPieces }),
+        ...(qualification?.stats === undefined ? {} : { stats: qualification.stats }),
+        ...(qualification?.onBytes === undefined ? {} : { onBytes: qualification.onBytes }),
+        ...(qualification?.onPass === undefined ? {} : { onPass: qualification.onPass }),
+      },
+    );
+    if (parser === undefined) {
+      throw internalRefusal('A streamed model part finished without its element pass.');
+    }
+    throwIfCancelled(context.cancellation);
+    return parser.finish();
+  };
+
+  /**
+   * Reads ONE model part: inflate, decode, parse, materialise, release.
+   *
+   * THE ONLY PLACE A MODEL PART'S BYTES EXIST. Buffered, the entry buffer and
+   * the decoded XML string are locals of `parseBufferedPart`, collectible before
+   * materialisation starts; streamed, neither ever exists whole. Either way
+   * `materialiseMeshes` releases the parser's Float64 scratch once the canonical
+   * buffers exist. What survives is canonical geometry and the object
+   * table's metadata, which is what the walk needs and all it needs.
+   *
+   * ONE AT A TIME, guaranteed by the walk awaiting each call before it
+   * continues — never by anything in here.
+   */
+  const loadModelPart = async (
+    entry: ZipEntry,
+    key: ModelPartKey,
+    role: ModelPartRole,
+  ): Promise<{ parsed: ParsedModel; unit: string | undefined }> => {
+    throwIfCancelled(context.cancellation);
+    const parsed = streaming
+      ? await parseStreamedPart(entry, role)
+      : await parseBufferedPart(entry, role);
     throwIfCancelled(context.cancellation);
     materialiseMeshes(parsed, options.stats, poll);
     throwIfCancelled(context.cancellation);

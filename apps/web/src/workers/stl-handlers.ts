@@ -34,6 +34,7 @@ import {
   requireWriter,
   MeshFormatId,
   type FormatProgressReporter,
+  type DocumentReader,
   type FormatReadContext,
   type ImportBudget,
   type ImportCompatibility,
@@ -430,6 +431,7 @@ function readContext(
     decodeText: (input: Uint8Array): string =>
       new TextDecoder('utf-8', { fatal: false }).decode(input),
     inflateRaw,
+    createTextDecoder: () => new TextDecoder('utf-8', { fatal: false }),
     progress: progressReporter(
       (fraction, note) => {
         context.reportProgress(fraction, note);
@@ -456,7 +458,43 @@ function readContext(
  * so a malformed OBJ or a hostile 3MF leaves the previously resident document
  * exactly as it was.
  */
-export const modelImportHandler: OperationHandler<'model/import'> = async (payload, context) => {
+/**
+ * Which readers `model/import` uses — A CONSTRUCTION SEAM, Stage 6E-A2.
+ *
+ * The product builds exactly one import handler, from
+ * `PRODUCTION_IMPORT_CONFIG`, which overrides nothing: every format is read by
+ * the reader the registry holds, and for 3MF that is the BUFFERED reader under
+ * the production limits. A boundary test asserts that the shipped worker
+ * registers `modelImportHandler` and that nothing under `apps/web/src` builds a
+ * handler from any other configuration.
+ *
+ * The seam exists so the end-to-end harness can drive the SAME handler — the
+ * same identification, mesh gate, document gate, resource gate, render snapshot
+ * and resident commit — with a streamed 3MF reader, which is the only honest
+ * way to qualify streaming through the whole pipeline. It is not a switch:
+ * there is no flag, query parameter or setting in the product that reaches it.
+ */
+export interface ModelImportConfig {
+  /** Replaces the registry's 3MF reader. Absent in production. */
+  readonly threeMfReader?: DocumentReader;
+}
+
+export const PRODUCTION_IMPORT_CONFIG: ModelImportConfig = Object.freeze({});
+
+export function createModelImportHandler(
+  config: ModelImportConfig,
+): OperationHandler<'model/import'> {
+  return (payload, context) => importModel(payload, context, config);
+}
+
+export const modelImportHandler: OperationHandler<'model/import'> =
+  createModelImportHandler(PRODUCTION_IMPORT_CONFIG);
+
+async function importModel(
+  payload: Parameters<OperationHandler<'model/import'>>[0],
+  context: OperationContext,
+  config: ModelImportConfig,
+): Promise<HandlerOutcome<ModelImportResult>> {
   const source = payload.bytes;
   if (!(source instanceof ArrayBuffer)) {
     throw malformedFile('The import payload did not contain a transferable file buffer.');
@@ -474,7 +512,10 @@ export const modelImportHandler: OperationHandler<'model/import'> = async (paylo
   const identified = identifyFormat(bytes, payload.fileName);
   throwIfCancelled(cancellation);
 
-  const reader = requireReader(identified.formatId);
+  const reader =
+    identified.formatId === MeshFormatId.ThreeMf && config.threeMfReader !== undefined
+      ? config.threeMfReader
+      : requireReader(identified.formatId);
   const parsed = await reader.read(bytes, readContext(payload, context, 0.02, PARSE_SHARE));
 
   throwIfCancelled(cancellation);
@@ -503,7 +544,7 @@ export const modelImportHandler: OperationHandler<'model/import'> = async (paylo
     },
     context,
   );
-};
+}
 
 /** What `commitImportedDocument` needs that it cannot derive from the document. */
 export interface DocumentCommitInput {

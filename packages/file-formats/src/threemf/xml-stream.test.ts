@@ -2,14 +2,16 @@ import { describe, expect, it } from 'vitest';
 import { isAppError } from '@cadfixer/shared';
 import { ImportRefusal, refusalOf } from '../import-errors';
 import { DEFAULT_XML_LIMITS, describeUnsafeXml, scanXml, type XmlLimits } from './xml-scan';
-import { isEcmaWhitespace } from './xml-security';
+import type { TextStreamDecoder } from '../context';
+import { isEcmaWhitespace, XmlSecurityStream } from './xml-security';
 import {
   createStreamScanStats,
+  DEFAULT_STREAM_XML_LIMITS,
+  MAX_TAG_ATTRIBUTE_WIDTHS,
   scanXmlByteStream,
-  XmlSecurityStream,
   XmlStreamScanner,
   type StreamXmlLimits,
-  type TextStreamDecoder,
+  type TwoPassByteSource,
 } from './xml-stream';
 
 /**
@@ -299,13 +301,7 @@ describe('6E-S2: limits are the same limits, counted across pieces', () => {
   });
 });
 
-describe('6E-S3: the security stream is describeUnsafeXml, on arbitrary text', () => {
-  it("its whitespace class is JavaScript's \\s, for every UTF-16 code unit", () => {
-    for (let code = 0; code <= 0xffff; code += 1) {
-      expect(isEcmaWhitespace(code), code.toString(16)).toBe(/\s/.test(String.fromCharCode(code)));
-    }
-  });
-
+describe('6E-S3: the security stream is the v0.2.0 rules, on arbitrary text', () => {
   const alphabet = [
     '<',
     '!',
@@ -380,6 +376,41 @@ describe('6E-S3: the security stream is describeUnsafeXml, on arbitrary text', (
       }
     });
   }
+
+  it("its whitespace class is JavaScript's \\s, for every UTF-16 code unit", () => {
+    for (let code = 0; code <= 0xffff; code += 1) {
+      expect(isEcmaWhitespace(code), code.toString(16)).toBe(/\s/.test(String.fromCharCode(code)));
+    }
+  });
+
+  it('restarts a partial match on a `<` inside it, across any boundary', () => {
+    for (const text of [
+      '<<!ENTITY x>',
+      '<!<!ENTITY x>',
+      '<!EN<!ENTITY>',
+      '<!DOC<!DOCTYPE m><m/>',
+    ]) {
+      for (let point = 0; point <= text.length; point += 1) {
+        const security = new XmlSecurityStream();
+        for (const piece of splitAt(text, [point])) security.push(piece);
+        expect(security.finish(), `${text} at ${String(point)}`).toBe(
+          describeUnsafeXmlOracle(text),
+        );
+      }
+    }
+  });
+
+  it('folds case in ASCII only, as /i does without the u flag', () => {
+    // U+0131 DOTLESS I and U+017F LONG S upper-case to I and S under full case
+    // mapping; /i refuses to map a non-ASCII character to an ASCII one.
+    for (const text of [
+      '<!ENT\u0131TY x>',
+      '<!DOCTYPE\u017F><m/>',
+      '<!-- \u017FYSTEM "x" --><m/>',
+    ]) {
+      expect(describeUnsafeXml(text), text).toBe(describeUnsafeXmlOracle(text));
+    }
+  });
 });
 
 describe('6E-S4: UTF-8, split between the bytes of a character', () => {
@@ -428,6 +459,12 @@ describe('6E-S5: what the scanner holds between pieces is bounded', () => {
     expect(stats.maxTagChars).toBeLessThan(8);
   });
 
+  it('the default tag limit is expressed in attribute widths, not a free number', () => {
+    expect(DEFAULT_STREAM_XML_LIMITS.maxTagLength).toBe(
+      MAX_TAG_ATTRIBUTE_WIDTHS * DEFAULT_XML_LIMITS.maxAttributeLength,
+    );
+  });
+
   it('a tag longer than the stream limit is a typed refusal, not growth', () => {
     const limits: StreamXmlLimits = { maxTagLength: 1_024 };
     const at = `<m a="${'x'.repeat(1_017)}"/>`; // inner is exactly 1,024 characters
@@ -443,61 +480,91 @@ describe('6E-S5: what the scanner holds between pieces is bounded', () => {
 });
 
 describe('6E-S6: the byte-stream driver runs the security pass over the whole part first', () => {
-  const bytes = (text: string, size: number): (() => AsyncIterable<Uint8Array>) => {
+  /** A two-pass source over `text`, in `size`-byte chunks, recording each pass. */
+  const source = (text: string, size: number, opened: string[] = []): TwoPassByteSource => {
     const all = new TextEncoder().encode(text);
-    return async function* chunks() {
-      for (let at = 0; at < all.length; at += size) {
-        await Promise.resolve();
-        yield all.subarray(at, at + size);
-      }
+    const chunks = (): AsyncIterable<Uint8Array> => ({
+      async *[Symbol.asyncIterator](): AsyncGenerator<Uint8Array> {
+        for (let at = 0; at < all.length; at += size) {
+          await Promise.resolve();
+          yield all.subarray(at, at + size);
+        }
+      },
+    });
+    return {
+      security: (): AsyncIterable<Uint8Array> => {
+        opened.push('security');
+        return chunks();
+      },
+      semantic: (): AsyncIterable<Uint8Array> => {
+        opened.push('semantic');
+        return chunks();
+      },
     };
   };
   const decoder = (): TextStreamDecoder => new TextDecoder('utf-8', { fatal: false });
+  const options = {
+    createDecoder: decoder,
+    poll: (): void => undefined,
+    yieldToEventLoop: (): Promise<void> => Promise.resolve(),
+  };
 
   it('produces the whole-string events for every chunk size from 1 to 64 bytes', async () => {
     const expected = whole(VALID_MODEL);
     for (let size = 1; size <= 64; size += 1) {
       const events: Event[] = [];
       const result = await scanXmlByteStream(
-        bytes(VALID_MODEL, size),
-        recorder(events),
+        source(VALID_MODEL, size),
+        () => recorder(events),
         DEFAULT_XML_LIMITS,
-        {
-          createDecoder: decoder,
-        },
+        options,
       );
       expect({ events, result }, `chunk ${String(size)}`).toEqual(expected);
     }
   });
 
-  it('refuses a late ENTITY before emitting a single element event', async () => {
+  it('refuses a late ENTITY without ever creating the element handlers', async () => {
     const text = `<m>${'<v/>'.repeat(1_000)}<!ENTITY x "y"></m>`;
-    const events: Event[] = [];
+    const opened: string[] = [];
+    let created = 0;
     let caught: unknown;
     try {
-      await scanXmlByteStream(bytes(text, 97), recorder(events), DEFAULT_XML_LIMITS, {
-        createDecoder: decoder,
-      });
+      await scanXmlByteStream(
+        source(text, 97, opened),
+        () => {
+          created += 1;
+          return {};
+        },
+        DEFAULT_XML_LIMITS,
+        options,
+      );
     } catch (error) {
       caught = error;
     }
     expect(isAppError(caught) && refusalOf(caught)).toBe(ImportRefusal.XmlEntityRefused);
-    expect(events).toEqual([]);
+    expect(created).toBe(0);
+    expect(opened).toEqual(['security']);
   });
 
-  it('asks for the bytes twice, and polls in both passes', async () => {
-    const passes: number[] = [];
+  it('opens the security pass, then the element pass, and polls in both', async () => {
+    const opened: string[] = [];
+    const passes: string[] = [];
     let polls = 0;
     await scanXmlByteStream(
-      (pass) => {
-        passes.push(pass);
-        return bytes(VALID_MODEL, 50)();
+      source(VALID_MODEL, 50, opened),
+      () => {
+        passes.push(`handlers after ${opened.join('+')}`);
+        return {};
       },
-      {},
       DEFAULT_XML_LIMITS,
-      { createDecoder: decoder, poll: () => (polls += 1) },
+      {
+        ...options,
+        poll: () => (polls += 1),
+        onPass: (pass, event) => passes.push(`${String(pass)} ${event}`),
+      },
     );
-    expect(passes).toEqual([1, 2]);
+    expect(opened).toEqual(['security', 'semantic']);
+    expect(passes).toEqual(['1 start', '1 end', '2 start', 'handlers after security', '2 end']);
     expect(polls).toBeGreaterThanOrEqual(2 * Math.floor(VALID_MODEL.length / 50));
   });
 });

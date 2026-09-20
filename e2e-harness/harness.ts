@@ -71,6 +71,20 @@ export interface HarnessState {
   readonly selfIntersectionReportPartId?: string;
   readonly repairPartId?: string;
   readonly repairCandidatePartId?: string;
+  /** Stage 6E-A2 — import facts, as scalars. See `harness-bar.tsx`. */
+  readonly formatId?: string;
+  readonly encoding?: string;
+  readonly unit: string | null;
+  readonly unsupportedFeatures: readonly string[];
+  readonly externalReferenceCount: number;
+  readonly warningCodes: readonly string[];
+  readonly bounds: unknown;
+  readonly vertexCount: number;
+  readonly validationValid: boolean | null;
+  readonly validationIssueCount: number;
+  readonly renderPartCount: number;
+  readonly renderVertexCount: number;
+  readonly renderPositionFloats: number;
 }
 
 /** Everything the viewport publishes about what it actually drew. */

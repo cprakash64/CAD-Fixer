@@ -231,7 +231,8 @@ npm run qualify:threemf-corpus # real producer 3MF files; CADFIXER_CORPUS=<dir>,
 npm run qualify:interop-corpus # STL + OBJ + 3MF through every import gate, optional export
                                # (CADFIXER_CORPUS, CADFIXER_CORPUS_REPORT, CADFIXER_EXPORT=1)
 npm run qualify:import-phases  # Chromium footprint, ATTRIBUTED BY PHASE (NOT in CI)
-npm run qualify:streaming-import # Stage 6E-A1 whole vs streamed 3MF read in Chromium (NOT in CI)
+npm run qualify:streaming-import # buffered vs streamed 3MF read, worker-side, in Chromium (NOT in CI)
+npm run qualify:streaming-corpus # buffered vs streamed over a real 3MF corpus; CADFIXER_CORPUS=<dir>
 npm run check:node     # runtime version guard; also runs before test/build/verify
 ```
 
@@ -613,42 +614,61 @@ materialise -> RELEASE -> next`. The entry buffer and the decoded XML are
   a negative case that changes GEOMETRY; each accepted negative is classified in
   the Stage 6D-A4 design section, and a new one must be too.
 
-## Streaming 3MF prototype invariants (Stage 6E-A1)
+## Streaming 3MF ingestion invariants (Stage 6E-A1 prototype, 6E-A2 production)
 
-- **THE PROTOTYPE IS ON NO SHIPPED PATH.** `ThreeMfReadOptions.ingestion`
-  selects `streamZipEntry` + `scanXmlByteStream`; nothing in `apps/web` passes
-  it, the package index exports none of it, and a boundary test asserts both.
-  `maxEntryBytes` is still 256 MiB. Promoting it is Stage 6E-A2's decision, and
-  choosing a larger ceiling is 6E-A4's. See
-  `docs/design/STAGE_6E_STREAMING_3MF_IMPORT.md`.
-- **EQUALITY WITH THE SHIPPED READER IS THE CONTRACT, QUIRKS INCLUDED.** A tag
+- **BUFFERED IS THE DEFAULT AND THE ONLY MODE THE PRODUCT USES.**
+  `ThreeMfReadOptions.ingestion` is `'buffered' | 'streaming'`, defaulting to
+  buffered; the registry's `threeMfReader` is `createThreeMfReader({})`. The
+  shipped worker registers `modelImportHandler`, built from
+  `PRODUCTION_IMPORT_CONFIG` (`Object.freeze({})`), and nothing under
+  `apps/web/src` names a streaming mode, `createThreeMfReader`, `zipLimits` or
+  `maxEntryBytes`. `maxEntryBytes` is still 256 MiB. Boundary tests hold all of
+  it. Switching the product over is Stage 6E-A3's decision; a larger ceiling is
+  6E-A4's.
+- **THE SEAM IS A CONSTRUCTION SEAM, NOT A SWITCH.** `createModelImportHandler`
+  takes an optional 3MF reader. Only the end-to-end harness passes one, chosen
+  through a harness-only `harness/ingestion` message the shipped worker has no
+  listener for. No flag, query parameter, setting or storage key reaches it.
+- **QUALIFICATION HOOKS ARE NOT PRODUCT OPTIONS.** Stream statistics, byte and
+  pass callbacks, yield cadence and narrower stream limits exist only on
+  `read3mfForQualification`, which the package index does not export.
+- **EQUALITY WITH THE BUFFERED READER IS THE CONTRACT, QUIRKS INCLUDED.** A tag
   ends at the first `>`; `<?>` and `<!-->` are complete; text is never
-  delivered. Both paths feed ONE `createModelXmlParser`, and `applyTag` is the
-  one tag decoder. Never fix a quirk in only one of them.
-- **TWO PASSES, AND THE FIRST DECIDES.** Pass 1 runs `XmlSecurityStream` over
-  the WHOLE part, because `describeUnsafeXml`'s precedence (DOCTYPE > ENTITY >
-  external id) can only be known at the end. No element event may be emitted
-  before it clears. Pass 1 charges the inflation budget; pass 2 does not, and is
-  still held to every per-entry rule.
-- **FEED THE INFLATER IN SLICES.** Chromium's `DecompressionStream` inflates a
-  whole input write into its queue; one write of the payload is not streaming.
-- **`XML_TAG_TOO_LONG` (1 MiB) IS THE ONLY NEW REFUSAL**, and only the streamed
-  path can produce it.
+  delivered. Both modes feed ONE `createModelXmlParser` through ONE `applyTag`.
+  Never fix a quirk in only one of them. The single intended difference is
+  `XML_TAG_TOO_LONG` (16 attribute widths = 1 MiB), which only the streamed
+  path can raise.
+- **TWO PASSES, AND THE FIRST DECIDES — STRUCTURALLY.** `openTwoPassEntry`
+  charges the package budget in `security()` only and refuses to open
+  `semantic()` until `security()` reached its verified end; `scanXmlByteStream`
+  creates the element handlers only after the security verdict. A part refused
+  for a DOCTYPE, ENTITY or external identifier never instantiates a parser.
+- **ONE SECURITY IMPLEMENTATION, AND IT RUNS NO REGULAR EXPRESSION.**
+  `XmlSecurityStream` (`xml-security.ts`) is the rule set for both modes:
+  `describeUnsafeXml` pushes the whole text through it. The v0.2.0 regular
+  expressions live in `xml-stream.test.ts` as the oracle it is held to.
 - **NO DECODED MODEL PART OUTLIVES THE IMPORT (finding R1).** V8 keeps a
   substring's parent alive, and two routes used to keep the WHOLE decoded part
   reachable after an import — up to 256 MiB, twice that with one character above
   U+00FF: the regular-expression last-match state, and a kept object name of 13+
   characters. They are closed where they open: `detachedCopy` on the stored name,
   and `forgetRegExpMatch` after every buffered part and in a `finally` around
-  every read. `scripts/xml-retention.test.ts` measures the heap and fails if
-  either half is removed. **Do not copy every tag instead**: that closed the same
-  routes and raised a two-part package's peak by ~350 MiB in Chromium.
-- **ONE INFLATER, FED IN SLICES (finding R3).** `createSlicedInflater`
+  every read. `scripts/xml-retention.test.ts` measures the heap for both modes,
+  both routes and a refusal, and fails if either half is removed. **Do not copy
+  every tag instead**: that closed the same routes and raised a two-part
+  package's peak by ~350 MiB in Chromium, by shifting when the worker collected
+  the previous part's garbage.
+- **ONE INFLATER, FED IN SLICES.** `createSlicedInflater`
   (`INFLATE_INPUT_SLICE_BYTES`, 64 KiB) is the only raw-deflate shape; the
   workers build theirs in `apps/web/src/workers/platform-inflate.ts`, the one
   `new DecompressionStream` in the application. One write of the whole payload
   made Chromium inflate the entire entry into its queue. It is an explicit
   iterator, not an `async function*`, and releases both sides on every exit.
+- **NO CRC IS VERIFIED, in either mode, as in v0.2.0.** Corruption surfaces as a
+  decode error ("damaged") or a size mismatch, identically in both modes.
+- **Namespaces resolve from `<model>` only**, in both modes. 3MF Core defines an
+  XML namespace as one declared on the `<model>` element; the Stage 6E design
+  document records the evidence and the residual risk.
 
 ## Export invariants (Stage 4A-2B2)
 

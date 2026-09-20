@@ -65,6 +65,8 @@ const geometryClient = new GeometryClient({
 
 interface HarnessPartDigest {
   readonly partId: string;
+  readonly name?: string | null;
+  readonly materialRef?: string | null;
   readonly meshResourceIndex: number;
   readonly transform: readonly number[];
   readonly positionBytes: number;
@@ -76,6 +78,7 @@ interface HarnessPartDigest {
 interface HarnessDigest {
   readonly ok: boolean;
   readonly distinctMeshes?: number;
+  readonly unit?: string | null;
   readonly parts: readonly HarnessPartDigest[];
 }
 
@@ -412,6 +415,8 @@ declare global {
   interface Window {
     cadfixerHarness?: {
       digest(documentId: string, revision: number): Promise<HarnessDigest>;
+      /** Stage 6E-A2: which 3MF reader the harness worker's real import uses. */
+      setIngestion(mode: 'buffered' | 'streaming', maxEntryBytes?: number): Promise<void>;
       exportDocument(
         documentId: string,
         revision: number,
@@ -448,8 +453,38 @@ declare global {
   }
 }
 
+/**
+ * Chooses the 3MF reader the harness worker's REAL import uses — Stage 6E-A2.
+ *
+ * Only here, on the harness page, on a message kind of its own: the shipped
+ * application has no way to send it and the shipped worker no listener for it.
+ */
+function setIngestion(mode: 'buffered' | 'streaming', maxEntryBytes?: number): Promise<void> {
+  return new Promise<void>((resolve) => {
+    const listener = (event: MessageEvent): void => {
+      const data: unknown = event.data;
+      if (
+        typeof data !== 'object' ||
+        data === null ||
+        (data as { kind?: unknown }).kind !== 'harness/ingestion-set'
+      ) {
+        return;
+      }
+      harnessWorker.removeEventListener('message', listener);
+      resolve();
+    };
+    harnessWorker.addEventListener('message', listener);
+    harnessWorker.postMessage({
+      kind: 'harness/ingestion',
+      mode,
+      ...(maxEntryBytes === undefined ? {} : { maxEntryBytes }),
+    });
+  });
+}
+
 window.cadfixerHarness = {
   digest: requestDigest,
+  setIngestion,
   exportDocument: runExport,
   beginExport,
   awaitExport,

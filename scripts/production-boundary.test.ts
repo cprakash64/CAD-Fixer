@@ -1701,68 +1701,139 @@ describe('A4: the inflation loop pulls the decompressor directly', () => {
   });
 });
 
-describe('6E-A1: the streaming ingestion prototype is on no shipped path', () => {
-  const STREAMING_SYMBOLS = [
-    'streamZipEntry',
-    'scanXmlByteStream',
-    'XmlStreamScanner',
-    'XmlSecurityStream',
-    'StreamingIngestion',
-    'inflateRawSlicedForTests',
-    'xml-stream',
-  ];
-
-  it('the package index exports none of it', () => {
-    const index = readFileSync(
-      join(REPO_ROOT, 'packages', 'file-formats', 'src', 'index.ts'),
-      'utf8',
+describe('6E-A2: streamed 3MF ingestion is productionised and OFF by default', () => {
+  const read = (...path: string[]): string => readFileSync(join(REPO_ROOT, ...path), 'utf8');
+  const appSources = (): string[] =>
+    sourceFilesUnder(join(REPO_ROOT, 'apps', 'web', 'src')).filter(
+      (file) => !/\.test\.(ts|tsx)$/.test(file),
     );
-    for (const symbol of STREAMING_SYMBOLS) expect(index).not.toContain(symbol);
-  });
 
-  it('nothing in the application names it or passes an ingestion option', () => {
-    for (const file of sourceFilesUnder(join(REPO_ROOT, 'apps', 'web'))) {
-      const text = readFileSync(file, 'utf8');
-      for (const symbol of STREAMING_SYMBOLS) {
-        expect(text.includes(symbol), `${relative(REPO_ROOT, file)} names ${symbol}`).toBe(false);
-      }
-      expect(/\bingestion\s*:/.test(text), `${relative(REPO_ROOT, file)} passes ingestion`).toBe(
-        false,
-      );
+  it('the package index exports no qualification hook and no streaming internal', () => {
+    const index = read('packages', 'file-formats', 'src', 'index.ts');
+    for (const symbol of [
+      'read3mfForQualification',
+      'ThreeMfStreamingQualification',
+      'openTwoPassEntry',
+      'scanXmlByteStream',
+      'XmlStreamScanner',
+      'XmlSecurityStream',
+      'createStreamScanStats',
+      'StreamScanStats',
+      'xml-stream',
+      'xml-security',
+      'test-context',
+    ]) {
+      expect(index, symbol).not.toContain(symbol);
     }
   });
-});
 
-describe('6E-A2: the buffered reader releases what it read', () => {
-  const read = (...path: string[]): string => readFileSync(join(REPO_ROOT, ...path), 'utf8');
-
-  it('R1: the kept name is detached, and the match state is released per part and per read', () => {
-    const reader = read('packages', 'file-formats', 'src', 'threemf', 'threemf-reader.ts');
-    expect(reader).toMatch(/name:\s*attrs\.name === undefined\s*\? undefined\s*: detachedCopy\(/);
-    // One after every model part, one around the whole read — both in `finally`.
-    expect(reader.match(/forgetRegExpMatch\(\);/g)).toHaveLength(2);
-    expect(reader.match(/finally \{[\s\S]{0,240}?forgetRegExpMatch\(\);/g)).toHaveLength(2);
-    const scan = read('packages', 'file-formats', 'src', 'threemf', 'xml-scan.ts');
-    expect(scan).toContain("EMPTY_MATCH.exec('');");
+  it('the application never names a streaming mode, a 3MF reader factory or a wider limit', () => {
+    for (const file of appSources()) {
+      const text = readFileSync(file, 'utf8');
+      const where = relative(REPO_ROOT, file);
+      for (const symbol of [
+        'ThreeMfIngestion',
+        'createThreeMfReader',
+        'read3mfForQualification',
+        'harness/ingestion',
+        'zipLimits',
+        'maxEntryBytes',
+        "'streaming'",
+      ]) {
+        expect(text.includes(symbol), `${where} names ${symbol}`).toBe(false);
+      }
+      expect(/\bingestion\s*:/.test(text), `${where} passes an ingestion option`).toBe(false);
+    }
   });
 
-  it('R1: no regular expression runs over a document', () => {
+  it('the shipped worker registers the ONE import handler built from the production config', () => {
+    const worker = read('apps', 'web', 'src', 'workers', 'geometry.worker.ts');
+    expect(worker).toContain("host.register('model/import', modelImportHandler);");
+    expect(worker).not.toContain('createModelImportHandler');
+
+    const handlers = read('apps', 'web', 'src', 'workers', 'stl-handlers.ts');
+    expect(handlers).toContain(
+      'export const PRODUCTION_IMPORT_CONFIG: ModelImportConfig = Object.freeze({});',
+    );
+    expect(handlers).toContain(
+      "export const modelImportHandler: OperationHandler<'model/import'> =\n  createModelImportHandler(PRODUCTION_IMPORT_CONFIG);",
+    );
+    const builders = appSources().filter((file) =>
+      readFileSync(file, 'utf8').includes('createModelImportHandler('),
+    );
+    // The definition and the one production call, both in the import module.
+    expect(builders.map((file) => relative(REPO_ROOT, file))).toEqual([
+      join('apps', 'web', 'src', 'workers', 'stl-handlers.ts'),
+    ]);
+    expect(handlers.match(/createModelImportHandler\(/g)).toHaveLength(2);
+  });
+
+  it('the registry reads 3MF buffered, under the production limits', () => {
+    const codec = read('packages', 'file-formats', 'src', 'threemf', 'codec.ts');
+    expect(codec).toContain(
+      'export const threeMfReader: DocumentReader = createThreeMfReader({});',
+    );
+    const reader = read('packages', 'file-formats', 'src', 'threemf', 'threemf-reader.ts');
+    expect(reader).toContain(
+      'const streaming = (options.ingestion ?? ThreeMfIngestion.Buffered) === ThreeMfIngestion.Streaming;',
+    );
+  });
+
+  it('pass 2 cannot begin before pass 1 has decided: the order is in the source', () => {
+    const stream = read('packages', 'file-formats', 'src', 'threemf', 'xml-stream.ts');
+    const body = stream.slice(stream.indexOf('export async function scanXmlByteStream('));
+    const verdict = body.indexOf('const unsafe = security.finish();');
+    const refused = body.indexOf('if (unsafe !== undefined) refuseUnsafeXml(unsafe);');
+    const handlers = body.indexOf('createHandlers()');
+    const secondPass = body.indexOf('source.semantic()');
+    expect(verdict).toBeGreaterThan(body.indexOf('source.security()'));
+    expect(refused).toBeGreaterThan(verdict);
+    expect(handlers).toBeGreaterThan(refused);
+    expect(secondPass).toBeGreaterThan(handlers);
+    expect(body.match(/createHandlers\(\)/g)).toHaveLength(1);
+  });
+
+  it('only the first pass is charged, and only the two-pass entry can open a streamed read', () => {
+    const zip = read('packages', 'file-formats', 'src', 'threemf', 'zip.ts');
+    expect(zip).not.toMatch(/export function streamZipEntry/);
+    // The definition, the charged security pass and the uncharged element pass.
+    expect(zip.match(/streamZipEntry\(/g)).toHaveLength(3);
+    expect(zip).toContain(
+      'return streamZipEntry(this.bytes, this.entry, this.options, true, () => {',
+    );
+    expect(zip).toContain(
+      'return streamZipEntry(this.bytes, this.entry, this.options, false, undefined);',
+    );
+    expect(zip).toContain("if (this.state !== 'cleared') {");
+  });
+
+  it('no regular expression runs over a document: the security rules are a state machine', () => {
     const security = read('packages', 'file-formats', 'src', 'threemf', 'xml-security.ts');
     const code = security.replace(/\/\*[\s\S]*?\*\/|\/\/.*$/gm, '');
     expect(code).not.toMatch(/RegExp\(|\.test\(|\.exec\(|\.match\(|\.search\(|\.replace\(/);
     const scan = read('packages', 'file-formats', 'src', 'threemf', 'xml-scan.ts');
-    const describeUnsafe = scan.slice(
+    const describe = scan.slice(
       scan.indexOf('export function describeUnsafeXml('),
       scan.indexOf('function refuseUnsafe('),
     );
-    expect(describeUnsafe).toContain('new XmlSecurityStream()');
-    expect(describeUnsafe).not.toMatch(/\.test\(/);
+    expect(describe).toContain('new XmlSecurityStream()');
+    expect(describe).not.toMatch(/\.test\(/);
+    // R1: the kept name is detached, and the engine's match state is released
+    // after every part and whenever a read ends — including by refusal.
+    const reader = read('packages', 'file-formats', 'src', 'threemf', 'threemf-reader.ts');
+    expect(reader).toMatch(/name:\s*attrs\.name === undefined\s*\? undefined\s*: detachedCopy\(/);
+    expect(reader.match(/forgetRegExpMatch\(\);/g)).toHaveLength(2);
+    const guarded = reader.slice(reader.indexOf('async function readThreeMfPackage('));
+    expect(
+      guarded.slice(0, guarded.indexOf('async function readThreeMfPackageUnguarded(')),
+    ).toMatch(/try \{[\s\S]*\} finally \{[\s\S]*forgetRegExpMatch\(\);/);
+    expect(scan).toContain("EMPTY_MATCH.exec('');");
   });
 
-  it('R3: there is ONE decompressor construction in the application, and it is sliced', () => {
-    const constructing = sourceFilesUnder(join(REPO_ROOT, 'apps', 'web', 'src'))
-      .filter((file) => !/\.test\.(ts|tsx)$/.test(file))
-      .filter((file) => readFileSync(file, 'utf8').includes('new DecompressionStream('));
+  it('there is ONE decompressor construction in the application, and it is sliced', () => {
+    const constructing = appSources().filter((file) =>
+      readFileSync(file, 'utf8').includes('new DecompressionStream('),
+    );
     expect(constructing.map((file) => relative(REPO_ROOT, file))).toEqual([
       join('apps', 'web', 'src', 'workers', 'platform-inflate.ts'),
     ]);

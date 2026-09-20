@@ -11,7 +11,7 @@ import { ImportRefusal, refusalOf } from './import-errors';
 import { registerBuiltInFormats } from './register';
 import { requireReader } from './registry';
 import { inflateRawSlicedForTests, testReadContext } from './test-context';
-import { read3mf, type StreamingIngestion } from './threemf/threemf-reader';
+import { read3mf, read3mfForQualification, ThreeMfIngestion } from './threemf/threemf-reader';
 import { buildAsciiStl, buildBinaryStl, triangleAt, UNIT_TRIANGLE } from './stl/fixtures';
 import { buildZip, CONTENT_TYPES, RELS, TETRAHEDRON_MESH } from './threemf/zip-fixtures';
 
@@ -962,20 +962,16 @@ async function fingerprint3mf(
   bytes: Uint8Array,
   streaming: { readonly sliceBytes: number; readonly yieldEveryPieces: number } | undefined,
 ): Promise<string> {
-  const ingestion: StreamingIngestion | undefined =
-    streaming === undefined
-      ? undefined
-      : {
-          inflateRaw: inflateRawSlicedForTests(streaming.sliceBytes),
-          createDecoder: () => new TextDecoder('utf-8', { fatal: false }),
-          yieldEveryPieces: streaming.yieldEveryPieces,
-        };
   try {
-    const result = await read3mf(
-      bytes,
-      testReadContext(),
-      ingestion === undefined ? {} : { ingestion },
-    );
+    const result =
+      streaming === undefined
+        ? await read3mf(bytes, testReadContext())
+        : await read3mfForQualification(
+            bytes,
+            testReadContext({ inflateRaw: inflateRawSlicedForTests(streaming.sliceBytes) }),
+            { ingestion: ThreeMfIngestion.Streaming },
+            { yieldEveryPieces: streaming.yieldEveryPieces },
+          );
     const meshes = new Map<unknown, number>();
     const parts = result.document.parts.map((part) => {
       if (!meshes.has(part.mesh)) meshes.set(part.mesh, meshes.size);

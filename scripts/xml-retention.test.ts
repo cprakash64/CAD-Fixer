@@ -1,7 +1,7 @@
 import { setFlagsFromString } from 'node:v8';
 import { runInNewContext } from 'node:vm';
 import { describe, expect, it } from 'vitest';
-import { read3mf } from '../packages/file-formats/src/threemf/threemf-reader';
+import { read3mf, ThreeMfIngestion } from '../packages/file-formats/src/threemf/threemf-reader';
 import { testReadContext } from '../packages/file-formats/src/test-context';
 import {
   buildZip,
@@ -74,7 +74,7 @@ async function packageOf(model: string): Promise<Uint8Array> {
 }
 
 describe('R1: no decoded model part is retained after an import', () => {
-  for (const ingestion of ['buffered']) {
+  for (const ingestion of [ThreeMfIngestion.Buffered, ThreeMfIngestion.Streaming]) {
     for (const [label, extra] of [
       ['ASCII', 'plain'],
       ['with CJK text', '模型'],
@@ -88,7 +88,7 @@ describe('R1: no decoded model part is retained after an import', () => {
         // Held through an object so the test can DROP it: the resident store
         // holds a document by reference, and releases it the same way.
         const held: { result?: Awaited<ReturnType<typeof read3mf>> } = {
-          result: await read3mf(bytes, testReadContext()),
+          result: await read3mf(bytes, testReadContext(), { ingestion }),
         };
         // The document is still held here, as the resident store holds it: a
         // kept object name must not keep the part alive.
@@ -105,13 +105,15 @@ describe('R1: no decoded model part is retained after an import', () => {
     }
   }
 
-  for (const ingestion of ['buffered']) {
+  for (const ingestion of [ThreeMfIngestion.Buffered, ThreeMfIngestion.Streaming]) {
     it(`${ingestion}: a REFUSED import leaves nothing of the part behind`, async () => {
       // Malformed at the very end, so the whole part is scanned — and matched
       // against — before the refusal.
       const bytes = await packageOf(`${largeModel('plain')}<broken`);
       const before = heapUsed();
-      await expect(read3mf(bytes, testReadContext())).rejects.toThrow(/malformed XML/);
+      await expect(read3mf(bytes, testReadContext(), { ingestion })).rejects.toThrow(
+        /malformed XML/,
+      );
       expect((heapUsed() - before) / MIB, 'retained after the refusal').toBeLessThan(4);
     });
   }

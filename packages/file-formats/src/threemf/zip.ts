@@ -1,5 +1,6 @@
 import { formatBytes, formatCount, formatRatio, isAppError } from '@cadfixer/shared';
-import { ImportRefusal, importMalformed, importTooLarge } from '../import-errors';
+import { ImportRefusal, importMalformed, importTooLarge, internalRefusal } from '../import-errors';
+import type { TwoPassByteSource } from './xml-stream';
 
 /**
  * A BOUNDED, DEPENDENCY-FREE ZIP READER.
@@ -818,49 +819,102 @@ export async function readZipEntry(
 
 /* ==================================================== streaming reads === */
 
-export interface ZipStreamOptions extends ZipReadOptions {
-  /**
-   * Whether the bytes this read produces are charged to `budget`.
-   *
-   * THE SECOND READ OF AN ENTRY IS NOT CHARGED AGAIN. The streaming XML path
-   * reads a model part twice — once for the fail-closed security pass, once for
-   * elements — and the package budget bounds what the ARCHIVE expands to, not
-   * how many times CAD Fixer chooses to look at it. The replay is still held to
-   * every per-entry rule below, including producing exactly the declared size,
-   * so it cannot be a different, larger stream.
-   */
-  readonly charge: boolean;
-  /** Slice length for STORED entries, which need no inflater. */
-  readonly storedSliceBytes?: number;
-}
-
 /**
- * One entry's inflated bytes, as a sequence of chunks — Stage 6E-A1 PROTOTYPE,
- * reached only through the research-only streaming ingestion option.
+ * ONE ENTRY, READ TWICE, IN ORDER — the streamed model-part read, Stage 6E.
  *
- * EVERY RULE `readZipEntry` APPLIES, EXCEPT THE ALLOCATION. The declared size is
- * still bounded by `maxEntryBytes` before anything is inflated, and the stream
- * is still held to it chunk by chunk: per-entry ceiling, package budget (when
- * charged), compression ratio against the compressed size, overrun past the
- * declaration, and a shortfall at the end. A damaged deflate stream is still a
- * typed "damaged" refusal. What is gone is the one `Uint8Array` of the declared
- * size: each chunk is handed on and released.
+ * The streamed XML path reads a model part twice: a SECURITY pass over the
+ * whole part, then — only if that pass cleared — a SEMANTIC pass for elements
+ * (`scanXmlByteStream` records why). This object is the only way to obtain
+ * those reads, and it owns the two rules that make reading twice safe:
  *
- * THE INFLATER MUST BE FED IN SLICES. Chromium's DecompressionStream inflates an
- * entire input write into its readable queue at once — measured in Stage 6E-A1
- * at 109 MiB queued from one write of a 109 MiB entry — so streaming the OUTPUT
- * is only streaming if the INPUT is written in bounded slices under the
- * stream's own backpressure. That is the injected `inflateRaw`'s job; see
- * `inflateRawSlicedForTests` for the reference shape.
+ * 1. THE FIRST READ IS CHARGED TO THE PACKAGE BUDGET; THE SECOND IS NOT. The
+ *    budget bounds what the ARCHIVE expands to, not how many times CAD Fixer
+ *    chooses to look at it. Not charging the replay is safe because:
+ *      - the archive bytes are immutable for the life of the import — they are
+ *        the transferred file, which nothing writes;
+ *      - raw DEFLATE is deterministic, so the same compressed bytes inflate to
+ *        the same output;
+ *      - the first read charged the bytes it ACTUALLY produced, chunk by chunk,
+ *        not the declaration;
+ *      - the second read is still held to every per-entry rule — per-entry
+ *        ceiling, ratio, overrun, and an EXACT-size end — so if it were somehow a
+ *        different stream it would be refused, not silently larger;
+ *      - nothing resets or credits the budget between the two reads.
+ * 2. THE SECOND READ CANNOT BEGIN UNTIL THE FIRST HAS REACHED ITS VERIFIED END.
+ *    `semantic()` refuses as an internal fault unless `security()` was read to
+ *    completion — its shortfall check included. That is what makes "no element
+ *    event before the security verdict" a property of this object rather than
+ *    of its caller's discipline.
  *
- * A CLASS, NOT AN ASYNC GENERATOR, and a direct `next()` pull — the reasoning
- * `readZipEntry` records for its loop, and the boundary test that keeps async
- * generators out of this file.
+ * Every entry is opened with `readZipEntry`'s rules except the allocation: the
+ * declared size is bounded by `maxEntryBytes` before anything is inflated, and
+ * a STORED entry is refused and charged exactly as `readZipEntry` refuses and
+ * charges it, all at once, before its first slice.
  */
-export function streamZipEntry(
+export function openTwoPassEntry(
   bytes: Uint8Array,
   entry: ZipEntry,
-  options: ZipStreamOptions,
+  options: ZipReadOptions,
+): TwoPassByteSource {
+  return new TwoPassEntry(bytes, entry, options);
+}
+
+type PassState = 'unopened' | 'security' | 'cleared' | 'semantic';
+
+class TwoPassEntry implements TwoPassByteSource {
+  private readonly bytes: Uint8Array;
+  private readonly entry: ZipEntry;
+  private readonly options: ZipReadOptions;
+  private state: PassState = 'unopened';
+
+  public constructor(bytes: Uint8Array, entry: ZipEntry, options: ZipReadOptions) {
+    this.bytes = bytes;
+    this.entry = entry;
+    this.options = options;
+  }
+
+  public security(): AsyncIterable<Uint8Array> {
+    if (this.state !== 'unopened') {
+      throw internalRefusal('A model part’s security pass was opened more than once.');
+    }
+    this.state = 'security';
+    return streamZipEntry(this.bytes, this.entry, this.options, true, () => {
+      this.state = 'cleared';
+    });
+  }
+
+  public semantic(): AsyncIterable<Uint8Array> {
+    if (this.state !== 'cleared') {
+      throw internalRefusal(
+        'A model part’s element pass was opened before its security pass had read the whole part.',
+      );
+    }
+    this.state = 'semantic';
+    return streamZipEntry(this.bytes, this.entry, this.options, false, undefined);
+  }
+}
+
+/** Slice length for a STORED entry, which needs no inflater. */
+const STORED_SLICE_BYTES = 65_536;
+
+/**
+ * One entry's inflated bytes, as a sequence of chunks.
+ *
+ * EVERY RULE `readZipEntry` APPLIES, EXCEPT THE ALLOCATION: the declared size
+ * bounded before anything is inflated; per chunk, the per-entry ceiling, the
+ * package budget (when `charge`), the ratio against the compressed size, and
+ * overrun past the declaration, in `readZipEntry`'s order; a shortfall at the
+ * end; a damaged stream as a typed "damaged" refusal. What is gone is the one
+ * buffer of the declared size — each chunk is handed on and released.
+ *
+ * NOT EXPORTED. Reached only through `openTwoPassEntry`, which decides `charge`.
+ */
+function streamZipEntry(
+  bytes: Uint8Array,
+  entry: ZipEntry,
+  options: ZipReadOptions,
+  charge: boolean,
+  onComplete: (() => void) | undefined,
 ): AsyncIterable<Uint8Array> {
   const limits = options.limits ?? DEFAULT_ZIP_LIMITS;
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
@@ -874,7 +928,32 @@ export function streamZipEntry(
     throw importMalformed(ImportRefusal.ZipMalformed, 'This archive’s file data is truncated.');
   }
   const compressed = bytes.subarray(start, start + entry.compressedSize);
-  const declared = entry.method === 0 ? compressed.byteLength : entry.uncompressedSize;
+
+  if (entry.method === 0) {
+    // `readZipEntry`'s stored-entry checks, word for word, and its charge: the
+    // whole entry at once, before a byte is handed on.
+    if (compressed.byteLength > limits.maxEntryBytes) {
+      throw importTooLarge(
+        ImportRefusal.ZipEntryTooLarge,
+        `A file inside this archive is ${formatBytes(compressed.byteLength)}; CAD Fixer's per-entry expansion limit is ${formatBytes(limits.maxEntryBytes)}.`,
+        { declared: compressed.byteLength, limit: limits.maxEntryBytes },
+      );
+    }
+    if (charge) {
+      const budget = options.budget;
+      const prospectiveTotal = budget.totalProducedBytes + compressed.byteLength;
+      if (prospectiveTotal > budget.maxTotalBytes) {
+        throw totalTooLarge(budget, prospectiveTotal, entry);
+      }
+      budget.totalProducedBytes = prospectiveTotal;
+    }
+    return {
+      [Symbol.asyncIterator]: () =>
+        new StoredEntryChunks(compressed, options.throwIfCancelled, onComplete),
+    };
+  }
+
+  const declared = entry.uncompressedSize;
   if (declared > limits.maxEntryBytes) {
     throw importTooLarge(
       ImportRefusal.ZipEntryTooLarge,
@@ -883,17 +962,76 @@ export function streamZipEntry(
     );
   }
   return {
-    [Symbol.asyncIterator]: () => new ZipEntryChunks(compressed, entry, declared, limits, options),
+    [Symbol.asyncIterator]: () =>
+      new InflatedEntryChunks(compressed, entry, declared, limits, options, charge, onComplete),
   };
 }
 
-class ZipEntryChunks implements AsyncIterator<Uint8Array> {
-  private readonly compressed: Uint8Array;
+function totalTooLarge(budget: InflationBudget, prospective: number, entry: ZipEntry): Error {
+  return importTooLarge(
+    ImportRefusal.ZipTotalTooLarge,
+    `This archive expands beyond the ${formatBytes(budget.maxTotalBytes)} of data CAD Fixer will extract in total. That limit is on expanded data, not on the size of the file.`,
+    { produced: prospective, limit: budget.maxTotalBytes, entry: entry.name.slice(0, 128) },
+  );
+}
+
+/** A stored entry, in slices of its own bytes. Already charged, if charged. */
+class StoredEntryChunks implements AsyncIterator<Uint8Array> {
+  private readonly bytes: Uint8Array;
+  private readonly throwIfCancelled: (() => void) | undefined;
+  private readonly onComplete: (() => void) | undefined;
+  private at = 0;
+  private finished = false;
+
+  public constructor(
+    bytes: Uint8Array,
+    throwIfCancelled: (() => void) | undefined,
+    onComplete: (() => void) | undefined,
+  ) {
+    this.bytes = bytes;
+    this.throwIfCancelled = throwIfCancelled;
+    this.onComplete = onComplete;
+  }
+
+  public next(): Promise<IteratorResult<Uint8Array>> {
+    if (this.finished) return Promise.resolve({ done: true, value: undefined });
+    if (this.at >= this.bytes.byteLength) {
+      this.finished = true;
+      this.onComplete?.();
+      return Promise.resolve({ done: true, value: undefined });
+    }
+    const chunk = this.bytes.subarray(this.at, this.at + STORED_SLICE_BYTES);
+    this.at += chunk.byteLength;
+    try {
+      this.throwIfCancelled?.();
+    } catch (error) {
+      this.finished = true;
+      return Promise.reject(error instanceof Error ? error : new Error(String(error)));
+    }
+    return Promise.resolve({ done: false, value: chunk });
+  }
+
+  public return(): Promise<IteratorResult<Uint8Array>> {
+    this.finished = true;
+    return Promise.resolve({ done: true, value: undefined });
+  }
+}
+
+/**
+ * A deflated entry, chunk by chunk from the injected inflater.
+ *
+ * A CLASS, NOT AN ASYNC GENERATOR, and a direct `next()` pull — the reasoning
+ * `readZipEntry` records for its loop, and the boundary test that keeps async
+ * generators out of this file.
+ */
+class InflatedEntryChunks implements AsyncIterator<Uint8Array> {
   private readonly entry: ZipEntry;
   private readonly declared: number;
   private readonly limits: ZipLimits;
-  private readonly options: ZipStreamOptions;
-  private readonly source: AsyncIterator<Uint8Array> | undefined;
+  private readonly options: ZipReadOptions;
+  private readonly charge: boolean;
+  private readonly onComplete: (() => void) | undefined;
+  private readonly source: AsyncIterator<Uint8Array>;
   private produced = 0;
   private finished = false;
 
@@ -902,125 +1040,99 @@ class ZipEntryChunks implements AsyncIterator<Uint8Array> {
     entry: ZipEntry,
     declared: number,
     limits: ZipLimits,
-    options: ZipStreamOptions,
+    options: ZipReadOptions,
+    charge: boolean,
+    onComplete: (() => void) | undefined,
   ) {
-    this.compressed = compressed;
     this.entry = entry;
     this.declared = declared;
     this.limits = limits;
     this.options = options;
-    this.source =
-      entry.method === 0 ? undefined : options.inflateRaw(compressed)[Symbol.asyncIterator]();
+    this.charge = charge;
+    this.onComplete = onComplete;
+    this.source = options.inflateRaw(compressed)[Symbol.asyncIterator]();
   }
 
   public async next(): Promise<IteratorResult<Uint8Array>> {
     if (this.finished) return { done: true, value: undefined };
-    let chunk: Uint8Array;
-    if (this.source === undefined) {
-      if (this.produced >= this.compressed.byteLength) return this.end();
-      const slice = Math.max(1, this.options.storedSliceBytes ?? 65_536);
-      chunk = this.compressed.subarray(this.produced, this.produced + slice);
-    } else {
-      let step: IteratorResult<Uint8Array>;
-      try {
-        step = await this.source.next();
-      } catch (error) {
-        this.finished = true;
-        if (isAppError(error)) throw error;
+    let step: IteratorResult<Uint8Array>;
+    try {
+      step = await this.source.next();
+    } catch (error) {
+      // The inflater releases its own stream when its `next()` rejects.
+      this.finished = true;
+      if (isAppError(error)) throw error;
+      throw importMalformed(
+        ImportRefusal.ZipMalformed,
+        'A file inside this archive is damaged: its compressed data cannot be decompressed.',
+        { reasonDetail: 'corrupt compressed data', entry: this.entry.name.slice(0, 128) },
+      );
+    }
+    if (step.done === true) {
+      this.finished = true;
+      if (this.produced !== this.declared) {
         throw importMalformed(
-          ImportRefusal.ZipMalformed,
-          'A file inside this archive is damaged: its compressed data cannot be decompressed.',
-          { reasonDetail: 'corrupt compressed data', entry: this.entry.name.slice(0, 128) },
+          ImportRefusal.ZipDeclaredSizeShortfall,
+          'A file inside this archive is smaller than the archive says it is, so CAD Fixer will not read it.',
+          { declared: this.declared, produced: this.produced },
         );
       }
-      if (step.done === true) return this.end();
-      chunk = step.value;
+      this.onComplete?.();
+      return { done: true, value: undefined };
     }
-    await this.account(chunk);
-    return { done: false, value: chunk };
+    try {
+      this.account(step.value);
+    } catch (error) {
+      await this.return();
+      throw error;
+    }
+    return { done: false, value: step.value };
   }
 
+  /** Early exit — a refusal, a cancel, a consumer that stopped reading. */
   public async return(): Promise<IteratorResult<Uint8Array>> {
     if (!this.finished) {
       this.finished = true;
-      await this.source?.return?.();
-    }
-    return { done: true, value: undefined };
-  }
-
-  private end(): IteratorResult<Uint8Array> {
-    this.finished = true;
-    if (this.produced !== this.declared) {
-      throw importMalformed(
-        ImportRefusal.ZipDeclaredSizeShortfall,
-        'A file inside this archive is smaller than the archive says it is, so CAD Fixer will not read it.',
-        { declared: this.declared, produced: this.produced },
-      );
+      await this.source.return?.();
     }
     return { done: true, value: undefined };
   }
 
   /** The `readZipEntry` checks, in its order, on the prospective totals. */
-  private async account(chunk: Uint8Array): Promise<void> {
+  private account(chunk: Uint8Array): void {
     const prospective = this.produced + chunk.byteLength;
-    const fail = async (error: Error): Promise<never> => {
-      await this.return();
-      throw error;
-    };
     if (prospective > this.limits.maxEntryBytes) {
-      await fail(
-        importTooLarge(
-          ImportRefusal.ZipEntryTooLarge,
-          `A file inside this archive expands beyond CAD Fixer's per-entry expansion limit of ${formatBytes(this.limits.maxEntryBytes)}.`,
-          { limit: this.limits.maxEntryBytes },
-        ),
+      throw importTooLarge(
+        ImportRefusal.ZipEntryTooLarge,
+        `A file inside this archive expands beyond CAD Fixer's per-entry expansion limit of ${formatBytes(this.limits.maxEntryBytes)}.`,
+        { limit: this.limits.maxEntryBytes },
       );
     }
     const budget = this.options.budget;
     const prospectiveTotal = budget.totalProducedBytes + chunk.byteLength;
-    if (this.options.charge && prospectiveTotal > budget.maxTotalBytes) {
-      await fail(
-        importTooLarge(
-          ImportRefusal.ZipTotalTooLarge,
-          `This archive expands beyond the ${formatBytes(budget.maxTotalBytes)} of data CAD Fixer will extract in total. That limit is on expanded data, not on the size of the file.`,
-          {
-            produced: prospectiveTotal,
-            limit: budget.maxTotalBytes,
-            entry: this.entry.name.slice(0, 128),
-          },
-        ),
-      );
+    if (this.charge && prospectiveTotal > budget.maxTotalBytes) {
+      throw totalTooLarge(budget, prospectiveTotal, this.entry);
     }
     if (
-      this.entry.method !== 0 &&
       this.entry.compressedSize > 0 &&
       prospective / this.entry.compressedSize > this.limits.maxCompressionRatio
     ) {
-      await fail(
-        importTooLarge(
-          ImportRefusal.ZipRatioExceeded,
-          `A file inside this archive expands beyond CAD Fixer's compression-ratio limit of ${formatCount(this.limits.maxCompressionRatio)}:1.`,
-          { limit: this.limits.maxCompressionRatio },
-        ),
+      throw importTooLarge(
+        ImportRefusal.ZipRatioExceeded,
+        `A file inside this archive expands beyond CAD Fixer's compression-ratio limit of ${formatCount(this.limits.maxCompressionRatio)}:1.`,
+        { limit: this.limits.maxCompressionRatio },
       );
     }
     if (prospective > this.declared) {
-      await fail(
-        importMalformed(
-          ImportRefusal.ZipDeclaredSizeOverrun,
-          'A file inside this archive contains more data than the archive says it does, so CAD Fixer will not read it.',
-          { declared: this.declared, atLeast: prospective },
-        ),
+      throw importMalformed(
+        ImportRefusal.ZipDeclaredSizeOverrun,
+        'A file inside this archive contains more data than the archive says it does, so CAD Fixer will not read it.',
+        { declared: this.declared, atLeast: prospective },
       );
     }
     this.produced = prospective;
-    if (this.options.charge) budget.totalProducedBytes = prospectiveTotal;
-    try {
-      this.options.throwIfCancelled?.();
-    } catch (error) {
-      await this.return();
-      throw error;
-    }
+    if (this.charge) budget.totalProducedBytes = prospectiveTotal;
+    this.options.throwIfCancelled?.();
   }
 }
 

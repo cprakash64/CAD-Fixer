@@ -38,6 +38,8 @@ export default defineConfig({
       'scripts/**/*.bench-suite.ts',
       'scripts/threemf-corpus.suite.ts',
       'scripts/interop-corpus.suite.ts',
+      // Stage 6E-A2: buffered versus streamed ingestion over the same corpus.
+      'scripts/streaming-corpus.suite.ts',
     ],
     pool: 'forks',
     maxWorkers: 1,

@@ -115,6 +115,28 @@ export function HarnessBar(): ReactNode {
     selfIntersectionReportPartId: selfIntersection.report?.partId,
     repairPartId: repair.partId,
     repairCandidatePartId: repair.candidate?.partId,
+    /*
+     * STAGE 6E-A2 — what an import produced, as SCALARS, so a spec can compare
+     * a buffered and a streamed import of one file field by field through the
+     * whole pipeline: source facts, statistics, validation, and the render
+     * snapshot the page actually received. Sums and counts, never coordinates.
+     */
+    formatId: model?.source.formatId,
+    encoding: model?.source.encoding,
+    unit: model?.source.unit ?? null,
+    unsupportedFeatures: model?.source.unsupportedFeatures ?? [],
+    externalReferenceCount: model?.source.externalReferences.length ?? 0,
+    warningCodes: (model?.warnings ?? []).map((warning) => warning.code),
+    bounds: model?.bounds ?? null,
+    vertexCount: model?.vertexCount ?? 0,
+    validationValid: model?.validation.valid ?? null,
+    validationIssueCount: model?.validation.issueCount ?? 0,
+    renderPartCount: model?.render.parts.length ?? 0,
+    renderVertexCount: (model?.render.parts ?? []).reduce((sum, part) => sum + part.vertexCount, 0),
+    renderPositionFloats: (model?.render.parts ?? []).reduce(
+      (sum, part) => sum + part.positions.length,
+      0,
+    ),
   };
 
   return (

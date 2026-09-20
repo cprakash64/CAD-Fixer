@@ -42,6 +42,11 @@
  * Run: npm run preview   (in another terminal)
  *      npm run qualify:import-phases -- stl:100,stl:200,stl:300
  *      npm run qualify:import-phases -- file:6920:/path/outside/the/repo/package.3mf
+ *
+ * Stage 6E-A2, against the end-to-end HARNESS page instead (npm run
+ * preview:harness), with the 3MF reader chosen through its bridge:
+ *      CADFIXER_QUALIFY_URL=http://localhost:4175/ npm run qualify:import-phases -- \
+ *        file:1646975:/abs/dense-300.3mf --ingestion=streaming --max-entry-mib=512 --worker-heap
  */
 
 import { chromium } from 'playwright';
@@ -357,6 +362,58 @@ async function importOnce(page, pid, path, options) {
   };
 }
 
+/**
+ * The GEOMETRY worker's isolate heap after a forced collection — Stage 6E-A2.
+ *
+ * Renderer footprint cannot say whether memory is still REACHABLE or merely not
+ * returned to the operating system; the worker heap after a collection can.
+ * Attached by title, because several workers may exist.
+ */
+async function geometryWorkerHeap(browserSession) {
+  const { targetInfos } = await browserSession.send('Target.getTargets');
+  const worker = targetInfos.find(
+    (target) => target.type === 'worker' && /geometry/i.test(`${target.title} ${target.url}`),
+  );
+  if (worker === undefined) return undefined;
+  const { sessionId } = await browserSession.send('Target.attachToTarget', {
+    targetId: worker.targetId,
+    flatten: false,
+  });
+  let nextId = 1;
+  const pending = new Map();
+  const listener = (event) => {
+    if (event.sessionId !== sessionId) return;
+    const message = JSON.parse(event.message);
+    pending.get(message.id)?.(message);
+    pending.delete(message.id);
+  };
+  browserSession.on('Target.receivedMessageFromTarget', listener);
+  const call = (method, params = {}) =>
+    new Promise((resolve, reject) => {
+      const id = nextId;
+      nextId += 1;
+      pending.set(id, (message) =>
+        message.error ? reject(new Error(message.error.message)) : resolve(message.result),
+      );
+      browserSession
+        .send('Target.sendMessageToTarget', {
+          sessionId,
+          message: JSON.stringify({ id, method, params }),
+        })
+        .catch(reject);
+    });
+  try {
+    await call('HeapProfiler.enable');
+    await call('HeapProfiler.collectGarbage');
+    await call('HeapProfiler.collectGarbage');
+    const usage = await call('Runtime.getHeapUsage');
+    return usage.usedSize + usage.backingStorageSize;
+  } finally {
+    browserSession.off('Target.receivedMessageFromTarget', listener);
+    await browserSession.send('Target.detachFromTarget', { sessionId }).catch(ignore);
+  }
+}
+
 async function qualify(directory, spec, options) {
   const primary = writeFixture(spec, directory);
   const secondary = options.then === undefined ? undefined : writeFixture(options.then, directory);
@@ -375,12 +432,33 @@ async function qualify(directory, spec, options) {
     );
     const pid = renderers[renderers.length - 1]?.id;
     if (pid === undefined) throw new Error('no renderer process found');
+    if (options.ingestion !== undefined) {
+      // HARNESS PAGES ONLY: the shipped application has no such bridge, which
+      // is the point — see `e2e-harness/streaming-import.spec.ts`.
+      await page.evaluate(
+        async (request) => {
+          if (globalThis.cadfixerHarness === undefined) {
+            throw new Error(
+              '--ingestion needs the end-to-end harness page (npm run preview:harness)',
+            );
+          }
+          await globalThis.cadfixerHarness.setIngestion(request.mode, request.maxEntryBytes);
+        },
+        {
+          mode: options.ingestion,
+          ...(options.maxEntryMiB === undefined
+            ? {}
+            : { maxEntryBytes: options.maxEntryMiB * MIB }),
+        },
+      );
+    }
     const baseline = footprint(pid);
 
     const first = await importOnce(page, pid, primary.path, options);
     const second =
       secondary === undefined ? undefined : await importOnce(page, pid, secondary.path, options);
 
+    const workerHeap = options.workerHeap ? await geometryWorkerHeap(session) : undefined;
     const lost = (await page.getByTestId('session-lost').count()) > 0;
     const crashed = (await page.getByTestId('app-crashed').count()) > 0;
     const whole = await browserFootprint(session);
@@ -419,6 +497,9 @@ async function qualify(directory, spec, options) {
         .map(([type, bytes]) => `${type} ${(bytes / MIB).toFixed(0)}`)
         .join(', ')})`,
     );
+    if (workerHeap !== undefined) {
+      lines.push(`    geometry worker heap after GC ${mib(workerHeap)} MiB`);
+    }
     lines.push(`    ${hostPressure()}`);
     lines.push(`    sessionLost=${String(lost)} appCrashed=${String(crashed)}`);
     process.stdout.write(`${lines.join('\n')}\n\n`);
@@ -439,7 +520,17 @@ const specs = (positional[0] ?? 'stl:100')
   .split(',')
   .map((entry) => entry.trim())
   .filter(Boolean);
+const valueOf = (name) => args.find((entry) => entry.startsWith(`--${name}=`))?.split('=')[1];
+const ingestion = valueOf('ingestion');
+if (ingestion !== undefined && ingestion !== 'buffered' && ingestion !== 'streaming') {
+  throw new Error(`--ingestion must be buffered or streaming, not ${ingestion}`);
+}
+const maxEntryMiB =
+  valueOf('max-entry-mib') === undefined ? undefined : Number(valueOf('max-entry-mib'));
 const options = {
+  ...(ingestion === undefined ? {} : { ingestion }),
+  ...(maxEntryMiB === undefined ? {} : { maxEntryMiB }),
+  workerHeap: flags.has('--worker-heap'),
   cancelAnalysis: flags.has('--cancel-analysis'),
   ...(thenFlag === undefined ? {} : { then: thenFlag.slice('--then='.length) }),
 };
@@ -448,6 +539,7 @@ const directory = mkdtempSync(join(tmpdir(), 'cadfixer-r3-'));
 process.stdout.write(
   `Stage 6D-R3 phase qualification against ${BASE_URL}\n` +
     `cases: ${specs.join(', ')}${options.then === undefined ? '' : ` (each followed by ${options.then})`}` +
+    `${options.ingestion === undefined ? '' : `, harness ingestion ${options.ingestion}${options.maxEntryMiB === undefined ? '' : ` (entry ceiling ${String(options.maxEntryMiB)} MiB)`}`}` +
     `${options.cancelAnalysis ? ', analysis cancelled on sight' : ''}\n` +
     `host: ${process.platform}, settle ${String(SETTLE_MS)} ms\n\n`,
 );

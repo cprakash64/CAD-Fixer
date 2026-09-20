@@ -59,9 +59,10 @@ export {
   read3mf,
   THREE_MF_UNITS,
   ThreeMfImportPhase,
+  ThreeMfIngestion,
 } from './threemf/threemf-reader';
-export type { ThreeMfLimits } from './threemf/threemf-reader';
-export { threeMfReader } from './threemf/codec';
+export type { ThreeMfLimits, ThreeMfReadOptions } from './threemf/threemf-reader';
+export { createThreeMfReader, threeMfReader } from './threemf/codec';
 export { createSlicedInflater, INFLATE_INPUT_SLICE_BYTES } from './threemf/inflate';
 export type { DecompressorLike, RawInflater } from './threemf/inflate';
 
@@ -118,6 +119,7 @@ export type { AllocationPlan, ImportBudget } from './budget';
 export type {
   FormatProgressReporter,
   FormatReadContext,
+  TextStreamDecoder,
   FormatWriteContext,
   MeshReadResult,
 } from './context';

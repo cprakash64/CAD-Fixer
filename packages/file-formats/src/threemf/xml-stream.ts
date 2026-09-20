@@ -1,9 +1,10 @@
+import { formatCount } from '@cadfixer/shared';
+import type { TextStreamDecoder } from '../context';
 import { ImportRefusal, importTooLarge } from '../import-errors';
 import { XmlSecurityStream } from './xml-security';
-
-export { XmlSecurityStream };
 import {
   applyTag,
+  DEFAULT_XML_LIMITS,
   malformedXml,
   refuseUnsafeXml,
   type XmlHandlers,
@@ -12,43 +13,68 @@ import {
 } from './xml-scan';
 
 /**
- * STREAMING XML INGESTION — Stage 6E-A1 PROTOTYPE. NOT ON ANY SHIPPED PATH.
+ * STREAMING XML INGESTION — Stage 6E-A1 prototype, productionised in 6E-A2.
  *
  * `scanXml` needs the whole model part as one JavaScript string, which needs the
- * whole inflated entry as one byte array first. For a 297 MiB entry that is the
- * ~2.1 GiB renderer footprint Stage 6D-B3 measured. This module does the same
- * work on the document in PIECES, retaining only what one construct needs:
+ * whole inflated entry as one byte array first. This module does the same work
+ * on the document in PIECES, retaining only what one construct needs:
  *
- *   - `XmlSecurityStream` answers exactly what `describeUnsafeXml` answers for
- *     the concatenation of everything pushed into it;
+ *   - `XmlSecurityStream` (in `xml-security.ts`) answers the security rules for
+ *     the concatenation of everything pushed into it. Since Stage 6E-A2 it is
+ *     ALSO the whole-string check: `describeUnsafeXml` pushes the whole text
+ *     through it, so the two ingestion paths share one implementation;
  *   - `XmlStreamScanner` emits exactly the `onOpen` / `onClose` / `onProgress`
  *     events `scanXml` emits, in the same order, with the same refusals;
- *   - `scanXmlByteStream` drives both over an inflating byte source.
+ *   - `scanXmlByteStream` drives both over a two-pass byte source.
  *
- * "EXACTLY" IS THE CONTRACT, and it is proven by the tests in
- * `xml-stream.test.ts`: every split position of every marker, one-character
- * chunks, and seeded random partitions, compared against the whole-string
- * functions. A chunk boundary is invisible to both classes by construction —
- * nothing here assumes a construct is complete inside one chunk.
+ * "EXACTLY" IS THE CONTRACT, proven in `xml-stream.test.ts`: every split
+ * position of every marker, one-character chunks and seeded random partitions,
+ * against the whole-string scanner and against the regular-expression
+ * statement of the security rules kept there as the oracle.
  */
 
 /** Limits that exist only because the input arrives in pieces. */
 export interface StreamXmlLimits {
   /**
    * The longest tag — text between `<` and the first `>` — held while waiting
-   * for its `>`. `scanXml` has no such bound because the whole string is
-   * already resident. 1 MiB is sixteen maximum-length attribute values; every
-   * tag in the qualification corpus is under 64 KiB.
+   * for its `>`.
+   *
+   * A NEW RESOURCE POLICY, AND IT SAYS SO. `scanXml` needs no such bound because
+   * its whole input is already one resident string, so this cannot be derived
+   * from anything the whole-string reader enforces: XML puts no ceiling on how
+   * many attributes an element carries, and 3MF's `anyAttribute` extension
+   * points admit any number from foreign namespaces. It is therefore EXPRESSED
+   * in the unit that is bounded — `maxAttributeLength` — as sixteen maximum-
+   * length attribute values. The widest core element, `<object>`, defines seven
+   * attributes; the longest tag in every fixture and producer file Stage 6E has
+   * measured is under 1 KiB. A tag past it is refused as `XML_TAG_TOO_LONG`, a
+   * resource refusal naming the limit, and that is the ONE refusal the streamed
+   * path can produce that the whole-string path cannot.
    */
   readonly maxTagLength: number;
 }
 
+/** How many attribute-length values one tag may hold. See `maxTagLength`. */
+export const MAX_TAG_ATTRIBUTE_WIDTHS = 16;
+
 export const DEFAULT_STREAM_XML_LIMITS: StreamXmlLimits = Object.freeze({
-  maxTagLength: 1_048_576,
+  maxTagLength: MAX_TAG_ATTRIBUTE_WIDTHS * DEFAULT_XML_LIMITS.maxAttributeLength,
 });
+
+/**
+ * Pieces between event-loop yields. Each piece is at most one decompressor
+ * chunk — 64 KiB in Chromium — so sixteen is about a megabyte of XML between
+ * the points where a cancel MESSAGE can be delivered. Cancellation is still
+ * POLLED after every piece; this only bounds how long a message waits.
+ */
+export const STREAM_YIELD_EVERY_PIECES = 16;
 
 /* ================================================================ scanner */
 
+/**
+ * The scanner's states. EXHAUSTIVE: every `switch` over it has no `default`, so
+ * a new state is a compile error at every place that must handle it.
+ */
 type ScanMode = 'text' | 'open' | 'tag' | 'pi' | 'comment' | 'cdata';
 
 const COMMENT_OPEN = '!--';
@@ -58,6 +84,7 @@ const TERMINATOR: Readonly<Record<'pi' | 'comment' | 'cdata', string>> = {
   comment: '-->',
   cdata: ']]>',
 };
+/** The refusal for input ending in each state — `scanXml`'s own words. */
 const UNTERMINATED: Readonly<Record<ScanMode, string | undefined>> = {
   text: undefined,
   open: 'unterminated tag',
@@ -67,7 +94,11 @@ const UNTERMINATED: Readonly<Record<ScanMode, string | undefined>> = {
   cdata: 'unterminated CDATA section',
 };
 
-/** What a streaming scan held at its largest, for tests and qualification. */
+/**
+ * What a streaming scan held at its largest. QUALIFICATION INSTRUMENTATION: the
+ * product never passes one, and updating it costs one comparison per piece and
+ * per tag — never per character.
+ */
 export interface StreamScanStats {
   /** Longest tag buffered while waiting for its `>`, in characters. */
   maxTagChars: number;
@@ -102,7 +133,7 @@ export function createStreamScanStats(): StreamScanStats {
  *   - inside a tag, the tag so far — at most `maxTagLength` characters, then a
  *     typed refusal rather than growth;
  *   - just after `<`, at most seven characters while deciding between a tag, a
- *     comment and a CDATA section;
+ *     comment and a CDATA section — the longest proper prefix of `![CDATA[`;
  *   - inside a comment, PI or CDATA section, at most the terminator's length
  *     minus one — their CONTENT is never held, however long it is;
  *   - between elements, nothing: character data is skipped, as `scanXml`
@@ -212,27 +243,49 @@ export class XmlStreamScanner {
     return at;
   }
 
+  /**
+   * SECURITY-SENSITIVE: the opener is the initial carry, because `scanXml`
+   * searches for the terminator starting AT the `<`. That is what makes `<?>`
+   * a complete processing instruction and `<!-->` a complete comment, in both
+   * readers alike; starting after the opener would disagree with the
+   * whole-string scanner about where a construct ends.
+   */
   private enterSkip(mode: 'pi' | 'comment' | 'cdata', opened: string): void {
     this.mode = mode;
     this.buffer = '';
     this.carry = opened;
   }
 
-  /** Skips to just past `terminator`, holding only `terminator.length - 1` characters. */
+  /**
+   * Skips to just past `terminator`, retaining at most `terminator.length - 1`
+   * characters.
+   *
+   * WHY THAT CARRY IS ENOUGH. An occurrence that starts inside the carry ends
+   * within the first `terminator.length - 1` characters of this piece, so it is
+   * found in `head`; any other occurrence lies wholly in this piece and is found
+   * by `indexOf` on the piece itself. Neither search concatenates the piece.
+   */
   private skipTo(terminator: string, text: string, at: number): number {
-    const joined = this.carry + text.slice(at);
-    const found = joined.indexOf(terminator);
-    if (found === -1) {
-      this.carry = joined.slice(-(terminator.length - 1));
-      if (this.stats !== undefined) {
-        this.stats.maxCarryChars = Math.max(this.stats.maxCarryChars, this.carry.length);
-      }
-      return text.length;
+    const width = terminator.length - 1;
+    const head = this.carry + text.slice(at, at + width);
+    const spanning = head.indexOf(terminator);
+    if (spanning !== -1) {
+      const resume = at + spanning + terminator.length - this.carry.length;
+      this.carry = '';
+      this.mode = 'text';
+      return resume;
     }
-    const resume = at + (found + terminator.length - this.carry.length);
-    this.carry = '';
-    this.mode = 'text';
-    return resume;
+    const found = text.indexOf(terminator, at);
+    if (found !== -1) {
+      this.carry = '';
+      this.mode = 'text';
+      return found + terminator.length;
+    }
+    this.carry = text.length - at >= width ? text.slice(text.length - width) : head.slice(-width);
+    if (this.stats !== undefined) {
+      this.stats.maxCarryChars = Math.max(this.stats.maxCarryChars, this.carry.length);
+    }
+    return text.length;
   }
 
   private appendTag(piece: string): void {
@@ -240,6 +293,7 @@ export class XmlStreamScanner {
     this.noteTag();
   }
 
+  /** Refuses BEFORE growth past the bound, never after. */
   private noteTag(): void {
     if (this.stats !== undefined) {
       this.stats.maxTagChars = Math.max(this.stats.maxTagChars, this.buffer.length);
@@ -247,7 +301,7 @@ export class XmlStreamScanner {
     if (this.buffer.length > this.streamLimits.maxTagLength) {
       throw importTooLarge(
         ImportRefusal.XmlTagTooLong,
-        `This 3MF file contains an XML tag longer than ${String(this.streamLimits.maxTagLength)} characters, which is CAD Fixer's limit for one tag.`,
+        `This 3MF file contains an XML tag longer than ${formatCount(this.streamLimits.maxTagLength)} characters, which is CAD Fixer's limit for one tag.`,
         { limit: this.streamLimits.maxTagLength },
       );
     }
@@ -263,84 +317,100 @@ export class XmlStreamScanner {
 
 /* ================================================================= driver */
 
-/** The platform's streaming UTF-8 decoder, injected like `decodeText`. */
-export interface TextStreamDecoder {
-  decode(input?: Uint8Array, options?: { readonly stream?: boolean }): string;
+/**
+ * The bytes of one model part, readable TWICE, in order.
+ *
+ * `security()` is the first read and the only one charged to the package
+ * inflation budget; `semantic()` is the second, and an implementation must
+ * refuse to open it until the first has been read to its end. `zip.ts`'s
+ * `openTwoPassEntry` is the implementation, and owns both rules.
+ */
+export interface TwoPassByteSource {
+  security(): AsyncIterable<Uint8Array>;
+  semantic(): AsyncIterable<Uint8Array>;
 }
 
 export interface ByteStreamScanOptions {
   /** A fresh decoder per pass. Must behave as `TextDecoder('utf-8', { fatal: false })`. */
   readonly createDecoder: () => TextStreamDecoder;
-  readonly streamLimits?: StreamXmlLimits;
   /** Polled after every piece, in both passes. */
-  readonly poll?: () => void;
+  readonly poll: () => void;
   /** Awaited every `yieldEveryPieces` pieces, so a cancel MESSAGE can be delivered. */
-  readonly yieldToEventLoop?: () => Promise<void>;
+  readonly yieldToEventLoop: () => Promise<void>;
+  readonly streamLimits?: StreamXmlLimits;
   readonly yieldEveryPieces?: number;
+  /** Qualification only. See `StreamScanStats`. */
   readonly stats?: StreamScanStats;
-  /** Called with each piece's byte length, per pass. For progress and tests. */
+  /** Qualification only: each piece's byte length, per pass. */
   readonly onBytes?: (pass: 1 | 2, byteLength: number) => void;
+  /** Qualification only: pass boundaries, for phase timings. */
+  readonly onPass?: (pass: 1 | 2, event: 'start' | 'end') => void;
 }
 
 /**
- * Scans a byte source as `scanXml` would scan it decoded, without ever holding
- * the decoded text or the bytes.
+ * Scans a model part's bytes as `scanXml` would scan them decoded, without ever
+ * holding the decoded text or the bytes.
  *
- * TWO PASSES, AND THE SECOND IS WHY THE FIRST IS TRUSTWORTHY. `scanXml` refuses
- * an unsafe document before a single element is scanned for meaning, with a
- * fixed precedence between its three rules — and a DOCTYPE late in a prolog, or
- * an ENTITY anywhere, can only be known once the input has been read. So pass 1
- * reads the WHOLE part through `XmlSecurityStream`, and only a part it clears
- * is read again, by pass 2, for elements. The price is inflating and decoding
- * twice; the guarantee is the whole-string one, with the same precedence, not
- * an approximation of it.
+ * TWO PASSES, AND THE FIRST DECIDES. `scanXml` refuses an unsafe document before
+ * a single element is scanned for meaning, with a fixed precedence between its
+ * three rules — and a DOCTYPE late in a prolog, or an ENTITY anywhere, can only
+ * be known once the input has been read. So pass 1 reads the WHOLE part through
+ * `XmlSecurityStream`, and only a part it clears is read again, by pass 2, for
+ * elements.
  *
- * `openBytes(pass)` must yield the same bytes both times; the ZIP layer checks
- * that the second pass produces exactly the declared size, and charges the
- * package inflation budget only once.
+ * THE ORDER IS STRUCTURAL, NOT A CONVENTION. The element handlers do not exist
+ * until pass 1 has cleared: `createHandlers` is called after `finish()` returns
+ * no refusal, and not before. A caller cannot hand this function handlers that
+ * pass 1 might invoke, and the byte source refuses to open pass 2 early. A
+ * boundary test pins the call order in this function's source.
  */
 export async function scanXmlByteStream(
-  openBytes: (pass: 1 | 2) => AsyncIterable<Uint8Array>,
-  handlers: XmlHandlers,
+  source: TwoPassByteSource,
+  createHandlers: () => XmlHandlers,
   limits: XmlLimits,
   options: ByteStreamScanOptions,
 ): Promise<{ readonly elements: number }> {
-  const every = Math.max(1, options.yieldEveryPieces ?? 16);
+  const every = Math.max(1, options.yieldEveryPieces ?? STREAM_YIELD_EVERY_PIECES);
+  let pieces = 0;
+  const afterPiece = async (): Promise<void> => {
+    options.poll();
+    pieces += 1;
+    if (pieces % every === 0) {
+      await options.yieldToEventLoop();
+      options.poll();
+    }
+  };
 
+  // PASS 1 — security. Nothing here can emit an element event.
+  options.onPass?.(1, 'start');
   const security = new XmlSecurityStream();
   const first = options.createDecoder();
-  let pieces = 0;
-  for await (const chunk of openBytes(1)) {
+  for await (const chunk of source.security()) {
     options.onBytes?.(1, chunk.byteLength);
     security.push(first.decode(chunk, { stream: true }));
-    options.poll?.();
-    pieces += 1;
-    if (options.yieldToEventLoop !== undefined && pieces % every === 0) {
-      await options.yieldToEventLoop();
-      options.poll?.();
-    }
+    await afterPiece();
   }
   security.push(first.decode());
   const unsafe = security.finish();
+  options.onPass?.(1, 'end');
   if (unsafe !== undefined) refuseUnsafeXml(unsafe);
 
+  // PASS 2 — elements. The handlers are created only now.
+  options.onPass?.(2, 'start');
   const scanner = new XmlStreamScanner(
-    handlers,
+    createHandlers(),
     limits,
     options.streamLimits ?? DEFAULT_STREAM_XML_LIMITS,
     options.stats,
   );
   const second = options.createDecoder();
-  for await (const chunk of openBytes(2)) {
+  for await (const chunk of source.semantic()) {
     options.onBytes?.(2, chunk.byteLength);
     scanner.push(second.decode(chunk, { stream: true }));
-    options.poll?.();
-    pieces += 1;
-    if (options.yieldToEventLoop !== undefined && pieces % every === 0) {
-      await options.yieldToEventLoop();
-      options.poll?.();
-    }
+    await afterPiece();
   }
   scanner.push(second.decode());
-  return scanner.finish();
+  const result = scanner.finish();
+  options.onPass?.(2, 'end');
+  return result;
 }

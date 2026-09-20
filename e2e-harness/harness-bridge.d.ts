@@ -10,6 +10,8 @@ export {};
 
 interface HarnessPartDigest {
   readonly partId: string;
+  readonly name?: string | null;
+  readonly materialRef?: string | null;
   readonly meshResourceIndex: number;
   readonly transform: readonly number[];
   readonly positionBytes: number;
@@ -60,12 +62,15 @@ interface HarnessExportResult {
 declare global {
   interface Window {
     readonly cadfixerHarness?: {
+      /** Stage 6E-A2: which 3MF reader the harness worker's real import uses. */
+      setIngestion(mode: 'buffered' | 'streaming', maxEntryBytes?: number): Promise<void>;
       digest(
         documentId: string,
         revision: number,
       ): Promise<{
         ok: boolean;
         distinctMeshes?: number;
+        unit?: string | null;
         parts: readonly HarnessPartDigest[];
       }>;
       exportDocument(
