@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { isAppError } from '@cadfixer/shared';
 import { ImportRefusal, refusalOf } from '../import-errors';
 import { DEFAULT_XML_LIMITS, describeUnsafeXml, scanXml, type XmlLimits } from './xml-scan';
+import { isEcmaWhitespace } from './xml-security';
 import {
   createStreamScanStats,
   scanXmlByteStream,
@@ -23,6 +24,34 @@ import {
  */
 
 /* ---------------------------------------------------------------- oracle -- */
+
+/**
+ * THE SECURITY RULES AS v0.2.0 SHIPPED THEM — three regular expressions over
+ * the prolog and the whole text. Production no longer runs them (Stage 6E-A2:
+ * a successful match kept the document alive through the engine's last-match
+ * state), so they live here, as the statement the state machine is held to.
+ */
+function prologOracle(text: string): string {
+  let at = 0;
+  for (;;) {
+    const open = text.indexOf('<', at);
+    if (open === -1) return text;
+    const next = text.charCodeAt(open + 1);
+    if (next === 63 || next === 33) {
+      at = open + 1;
+      continue;
+    }
+    return text.slice(0, open);
+  }
+}
+
+function describeUnsafeXmlOracle(text: string): string | undefined {
+  const prolog = prologOracle(text);
+  if (/<!DOCTYPE/i.test(prolog)) return ImportRefusal.XmlDoctypeRefused;
+  if (/<!ENTITY/i.test(text)) return ImportRefusal.XmlEntityRefused;
+  if (/\b(SYSTEM|PUBLIC)\s+["']/i.test(prolog)) return ImportRefusal.XmlExternalIdRefused;
+  return undefined;
+}
 
 type Event =
   | readonly ['open', string, string, boolean]
@@ -271,6 +300,12 @@ describe('6E-S2: limits are the same limits, counted across pieces', () => {
 });
 
 describe('6E-S3: the security stream is describeUnsafeXml, on arbitrary text', () => {
+  it("its whitespace class is JavaScript's \\s, for every UTF-16 code unit", () => {
+    for (let code = 0; code <= 0xffff; code += 1) {
+      expect(isEcmaWhitespace(code), code.toString(16)).toBe(/\s/.test(String.fromCharCode(code)));
+    }
+  });
+
   const alphabet = [
     '<',
     '!',
@@ -319,7 +354,10 @@ describe('6E-S3: the security stream is describeUnsafeXml, on arbitrary text', (
       }
       const security = new XmlSecurityStream();
       for (const piece of randomPartition(text, next)) security.push(piece);
-      expect(security.finish(), JSON.stringify(text)).toBe(describeUnsafeXml(text));
+      const expected = describeUnsafeXmlOracle(text);
+      expect(security.finish(), JSON.stringify(text)).toBe(expected);
+      // The whole-string entry point is the same machine in one piece.
+      expect(describeUnsafeXml(text), JSON.stringify(text)).toBe(expected);
     }
   });
 
@@ -338,7 +376,7 @@ describe('6E-S3: the security stream is describeUnsafeXml, on arbitrary text', (
       for (let point = 0; point <= text.length; point += 1) {
         const security = new XmlSecurityStream();
         for (const piece of splitAt(text, [point])) security.push(piece);
-        expect(security.finish(), `split at ${String(point)}`).toBe(describeUnsafeXml(text));
+        expect(security.finish(), `split at ${String(point)}`).toBe(describeUnsafeXmlOracle(text));
       }
     });
   }

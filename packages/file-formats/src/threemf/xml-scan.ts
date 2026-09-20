@@ -10,6 +10,7 @@ import { ImportRefusal, importMalformed, importTooLarge } from '../import-errors
  * existing caller is unaffected.
  */
 import { xmlSafeText } from './xml-text';
+import { XmlSecurityStream } from './xml-security';
 
 export { xmlSafeText, xmlTextChangesOnWrite } from './xml-text';
 
@@ -49,36 +50,6 @@ export const DEFAULT_XML_LIMITS: XmlLimits = Object.freeze({
   maxAttributeLength: 65_536,
   maxNameLength: 1_024,
 });
-
-/**
- * Everything before the first ELEMENT start tag — the prolog, however long.
- *
- * WHY NOT A FIXED WINDOW. This used to slice the first 8 KiB, on the reasoning
- * that a DOCTYPE may only legally appear in the prolog. But a prolog can be
- * padded to any length with comments and processing instructions, so eight
- * kilobytes of `<!-- … -->` followed by
- * `<!DOCTYPE model SYSTEM "http://…">` slipped past the window while remaining
- * well-formed. Nothing downstream fetches anything, so the file was still not
- * dangerous — but "CAD Fixer refuses a DOCTYPE" has to be true of every DOCTYPE
- * or it is not a rule, and a security check with a bypass in it is worse than
- * no check because it is trusted.
- *
- * `<?` and `<!` keep the scan inside the prolog; the first anything-else is the
- * document element and ends it.
- */
-function prologOf(text: string): string {
-  let at = 0;
-  for (;;) {
-    const open = text.indexOf('<', at);
-    if (open === -1) return text;
-    const next = text.charCodeAt(open + 1);
-    if (next === 63 /* ? */ || next === 33 /* ! */) {
-      at = open + 1;
-      continue;
-    }
-    return text.slice(0, open);
-  }
-}
 
 /**
  * Escapes a string so it is XML DATA and can never be anything else.
@@ -126,16 +97,29 @@ export function escapeXml(value: string): string {
 /**
  * Names the unsafe construct in a document, or `undefined`.
  *
- * Checked against the WHOLE PROLOG for declarations that may only legally
- * appear there, and against the WHOLE text for `<!ENTITY`, which a malformed
- * document could place anywhere.
+ * The rules — a DOCTYPE or an external identifier in the PROLOG, an ENTITY
+ * anywhere — and their precedence are `XmlSecurityStream`'s, and since Stage
+ * 6E-A2 this IS `XmlSecurityStream`, fed the whole text in one piece. The
+ * streamed reader feeds the same class in pieces, so the two ingestion paths
+ * cannot disagree about what is unsafe.
+ *
+ * WHY THE PROLOG IS NOT A FIXED WINDOW. It used to be the first 8 KiB, on the
+ * reasoning that a DOCTYPE may only legally appear there. But a prolog can be
+ * padded to any length with comments and processing instructions, so eight
+ * kilobytes of `<!-- … -->` followed by `<!DOCTYPE model SYSTEM "http://…">`
+ * slipped past the window while remaining well-formed. "CAD Fixer refuses a
+ * DOCTYPE" has to be true of every DOCTYPE or it is not a rule: the prolog is
+ * everything before the first `<` that is not followed by `?` or `!`, however
+ * long.
+ *
+ * NO REGULAR EXPRESSION RUNS OVER THE TEXT, which is Stage 6E-A2's fix for the
+ * retention finding in `docs/design/STAGE_6E_STREAMING_3MF_IMPORT.md`: a
+ * successful match left the engine's last-match state holding the document.
  */
 export function describeUnsafeXml(text: string): ImportRefusal | undefined {
-  const prolog = prologOf(text);
-  if (/<!DOCTYPE/i.test(prolog)) return ImportRefusal.XmlDoctypeRefused;
-  if (/<!ENTITY/i.test(text)) return ImportRefusal.XmlEntityRefused;
-  if (/\b(SYSTEM|PUBLIC)\s+["']/i.test(prolog)) return ImportRefusal.XmlExternalIdRefused;
-  return undefined;
+  const security = new XmlSecurityStream();
+  security.push(text);
+  return security.finish();
 }
 
 function refuseUnsafe(refusal: ImportRefusal): never {
@@ -214,6 +198,12 @@ export interface XmlScanState {
  * preserve exactly: an attribute value containing `>` ends the tag early. That
  * is a known quirk of this scanner, recorded in the Stage 6E design document;
  * changing it is a semantic decision, not a streaming one.
+ *
+ * A TAG IS A SLICE OF THE DOCUMENT, and V8 keeps a slice's parent alive. The
+ * two ways that used to keep a whole decoded model part reachable after an
+ * import are closed where they are opened — see `detachedCopy` and
+ * `forgetRegExpMatch` — rather than by copying every tag, which Stage 6E-A2
+ * measured raising the peak of a multi-part import by ~350 MiB.
  */
 export function applyTag(
   inner: string,
@@ -264,6 +254,52 @@ export function applyTag(
   // between elements, so a cancellation token can be polled at a bounded
   // interval without the scanner knowing anything about cancellation.
   if (onProgress !== undefined && (state.elements & 0xffff) === 0) onProgress(state.elements);
+}
+
+/**
+ * A copy of `text` that shares no storage with the string it was cut from.
+ *
+ * WHY THIS EXISTS — Stage 6E-A2, finding R1. V8 represents a substring of 13 or
+ * more characters as a VIEW onto its parent string, so an attribute value kept
+ * past the import — an object name is the one the reader keeps — kept the
+ * ENTIRE decoded model part reachable for as long as the document lived: up to
+ * 256 MiB, twice that if the part held one character above U+00FF.
+ *
+ * HOW IT COPIES. JavaScript has no operation specified to copy a string, so this
+ * uses the representation V8 produces: prefixing a character makes a fresh
+ * string whose storage is materialised when it is first sliced, and slicing the
+ * prefix off then views THAT copy — one name long — instead of the document.
+ * `scripts/xml-retention.test.ts` measures the heap to prove the effect rather
+ * than trusting this description.
+ *
+ * APPLIED WHERE A STRING IS KEPT, NOT TO EVERY TAG. Copying every tag closed the
+ * same route, but the extra allocation shifted garbage collection enough to
+ * raise a two-part package's peak by ~350 MiB in Chromium; one copy per kept
+ * name costs nothing measurable.
+ */
+export function detachedCopy(text: string): string {
+  return (' ' + text).slice(1);
+}
+
+const EMPTY_MATCH = /(?:)/;
+
+/**
+ * Replaces the engine's last-successful-match state with a match on a constant.
+ *
+ * WHY THIS EXISTS — Stage 6E-A2, finding R1. After a successful regular-
+ * expression match V8 keeps its SUBJECT reachable (the legacy `RegExp.input`
+ * and friends) until another match succeeds anywhere in the realm. The reader's
+ * last successful match is on an attribute list or a value — a slice of the
+ * decoded model part — so the whole part stayed reachable after the import, and
+ * after a refusal, until something else happened to match. A successful match
+ * on the empty string makes the empty string the subject instead.
+ *
+ * Called after each model part is scanned and when a read ends, however it
+ * ends. `scripts/xml-retention.test.ts` measures the heap to prove it works in
+ * the engine we ship on, for success, refusal and both ingestion modes.
+ */
+export function forgetRegExpMatch(): void {
+  EMPTY_MATCH.exec('');
 }
 
 /** The refusal for an unsafe construct, as `scanXml` raises it. */

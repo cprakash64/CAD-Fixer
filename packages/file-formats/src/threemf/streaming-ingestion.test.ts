@@ -75,7 +75,7 @@ describe('6E-Z: streamZipEntry delivers the entry readZipEntry delivers, under e
       });
       const streamed = await collect(
         streamZipEntry(archive, entry, {
-          inflateRaw: (bytes) => inflateRawSlicedForTests(bytes, 64),
+          inflateRaw: inflateRawSlicedForTests(64),
           budget: createInflationBudget(),
           charge: true,
           storedSliceBytes: 1_000,
@@ -95,7 +95,7 @@ describe('6E-Z: streamZipEntry delivers the entry readZipEntry delivers, under e
           limits: { ...DEFAULT_ZIP_LIMITS, maxEntryBytes: 1_000 },
           inflateRaw: (bytes) => {
             inflations += 1;
-            return inflateRawSlicedForTests(bytes);
+            return inflateRawForTests(bytes);
           },
           budget: createInflationBudget(),
           charge: true,
@@ -128,7 +128,7 @@ describe('6E-Z: streamZipEntry delivers the entry readZipEntry delivers, under e
       const result = await refusal(() =>
         collect(
           streamZipEntry(archive, entry, {
-            inflateRaw: (bytes) => inflateRawSlicedForTests(bytes, 256),
+            inflateRaw: inflateRawSlicedForTests(256),
             budget: createInflationBudget(),
             charge: true,
           }),
@@ -147,7 +147,7 @@ describe('6E-Z: streamZipEntry delivers the entry readZipEntry delivers, under e
     const result = await refusal(() =>
       collect(
         streamZipEntry(damaged, entry, {
-          inflateRaw: (bytes) => inflateRawSlicedForTests(bytes, 256),
+          inflateRaw: inflateRawSlicedForTests(256),
           budget: createInflationBudget(),
           charge: true,
         }),
@@ -165,7 +165,11 @@ describe('6E-Z: streamZipEntry delivers the entry readZipEntry delivers, under e
     const budget = createInflationBudget();
     for (const charge of [true, false, false]) {
       await collect(
-        streamZipEntry(archive, entry, { inflateRaw: inflateRawSlicedForTests, budget, charge }),
+        streamZipEntry(archive, entry, {
+          inflateRaw: inflateRawSlicedForTests(65_536),
+          budget,
+          charge,
+        }),
       );
     }
     expect(budget.totalProducedBytes).toBe(PAYLOAD.byteLength);
@@ -177,7 +181,7 @@ describe('6E-Z: streamZipEntry delivers the entry readZipEntry delivers, under e
     const result = await refusal(() =>
       collect(
         streamZipEntry(archive, entry, {
-          inflateRaw: inflateRawSlicedForTests,
+          inflateRaw: inflateRawSlicedForTests(65_536),
           budget: tight,
           charge: true,
         }),
@@ -195,7 +199,7 @@ describe('6E-Z: streamZipEntry delivers the entry readZipEntry delivers, under e
     const result = await refusal(() =>
       collect(
         streamZipEntry(archive, entry, {
-          inflateRaw: inflateRawSlicedForTests,
+          inflateRaw: inflateRawSlicedForTests(65_536),
           budget: createInflationBudget(),
           charge: true,
         }),
@@ -237,7 +241,7 @@ async function packageOf(model: string, extra: Record<string, string> = {}): Pro
 
 function streaming(extra: Partial<StreamingIngestion> = {}): StreamingIngestion {
   return {
-    inflateRaw: (bytes) => inflateRawSlicedForTests(bytes, 4_096),
+    inflateRaw: inflateRawSlicedForTests(4_096),
     createDecoder: () => new TextDecoder('utf-8', { fatal: false }),
     ...extra,
   };
@@ -278,7 +282,7 @@ describe('6E-R: the streaming read', () => {
       ingestion: streaming({
         inflateRaw: (compressed) => {
           inflations += 1;
-          return inflateRawSlicedForTests(compressed, 128);
+          return inflateRawSlicedForTests(128)(compressed);
         },
       }),
     });
@@ -346,7 +350,7 @@ describe('6E-R: the streaming read', () => {
     for (const slice of [1, 2, 3, 5, 8, 13]) {
       const result = await refusal(() =>
         read3mf(bytes, testReadContext(), {
-          ingestion: streaming({ inflateRaw: (b) => inflateRawSlicedForTests(b, slice) }),
+          ingestion: streaming({ inflateRaw: inflateRawSlicedForTests(slice) }),
         }),
       );
       expect(result.reason).toBe(ImportRefusal.ThreeMfUnsupportedExtension);
@@ -426,7 +430,7 @@ describe('6E-U: unsupported features are refused identically however the part ar
       for (const slice of [1, 2, 3, 7, 64, 4_096]) {
         const streamed = await refusalWithDetails(() =>
           read3mf(bytes, testReadContext(), {
-            ingestion: streaming({ inflateRaw: (b) => inflateRawSlicedForTests(b, slice) }),
+            ingestion: streaming({ inflateRaw: inflateRawSlicedForTests(slice) }),
           }),
         );
         expect(streamed).toEqual(whole);

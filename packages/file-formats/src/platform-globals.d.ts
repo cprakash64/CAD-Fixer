@@ -24,11 +24,14 @@ interface TextEncoderLike {
 interface StreamReaderLike {
   read(): Promise<{ value?: Uint8Array; done: boolean }>;
   cancel(): Promise<void>;
+  releaseLock(): void;
 }
 
 interface StreamWriterLike {
   write(chunk: Uint8Array): Promise<void>;
   close(): Promise<void>;
+  abort(reason?: unknown): Promise<void>;
+  releaseLock(): void;
 }
 
 interface TransformStreamLike {

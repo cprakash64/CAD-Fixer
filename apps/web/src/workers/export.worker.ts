@@ -8,6 +8,7 @@ import {
 } from '@cadfixer/file-formats';
 import { toAppError, uncancellable } from '@cadfixer/shared';
 import { resolveExportTarget } from './export-protocol';
+import { inflateRaw } from './platform-inflate';
 import type {
   ExportPortMessage,
   ExportSnapshotMessage,
@@ -90,28 +91,10 @@ async function* deflateRaw(bytes: Uint8Array): AsyncIterable<Uint8Array> {
   }
 }
 
-/** Raw inflate, for reading our own output back during validation. */
-async function* inflateRaw(compressed: Uint8Array): AsyncIterable<Uint8Array> {
-  const stream = new DecompressionStream('deflate-raw');
-  const writer = stream.writable.getWriter();
-  const payload = new Uint8Array(compressed.byteLength);
-  payload.set(compressed);
-  void writer
-    .write(payload)
-    .then(() => writer.close())
-    .catch(() => undefined);
-
-  const reader = stream.readable.getReader();
-  try {
-    for (;;) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      yield value;
-    }
-  } finally {
-    await reader.cancel().catch(() => undefined);
-  }
-}
+/*
+ * Raw inflate, for reading our own output back during validation: the shared
+ * sliced inflater from `platform-inflate.ts` (Stage 6E-A2).
+ */
 
 const decoder = new TextDecoder('utf-8', { fatal: false });
 

@@ -38,6 +38,7 @@ import {
   type ImportBudget,
   type ImportCompatibility,
 } from '@cadfixer/file-formats';
+import { inflateRaw } from './platform-inflate';
 import { analyseTopology, estimateTopologyWorkspaceBytes } from '@cadfixer/mesh-topology';
 import {
   HoleFillCandidateStore,
@@ -413,46 +414,6 @@ function summariseDocument(document: GeometryDocument): MeshValidationSummary {
   }
 
   return { valid, issueCount, warningCount, truncated, codes: [...codes] };
-}
-
-/**
- * Inflates a raw DEFLATE stream, chunk by chunk.
- *
- * SUPPLIED BY THE WORKER because `DecompressionStream` is a platform primitive
- * and `@cadfixer/file-formats` compiles without DOM or Node types — the same
- * reason `yieldToEventLoop` is injected. Chunked rather than whole-buffer so
- * the ZIP reader can abandon a bomb after the first chunk over budget.
- */
-async function* inflateRaw(compressed: Uint8Array): AsyncIterable<Uint8Array> {
-  const stream = new DecompressionStream('deflate-raw');
-  const writer = stream.writable.getWriter();
-  /*
-   * COPIED INTO A PLAIN `ArrayBuffer` VIEW. `compressed` is a subarray of the
-   * transferred file buffer, whose type is `ArrayBufferLike` — which may be a
-   * `SharedArrayBuffer`, and `WritableStream.write` will not accept one. The
-   * copy is one entry's compressed bytes, already bounded by the archive caps.
-   */
-  const payload = new Uint8Array(compressed.byteLength);
-  payload.set(compressed);
-  // Written without awaiting so the reader below can consume as it goes; a
-  // rejection here surfaces as the reader ending early.
-  void writer
-    .write(payload)
-    .then(() => writer.close())
-    .catch(() => undefined);
-
-  const reader = stream.readable.getReader();
-  try {
-    for (;;) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      yield value;
-    }
-  } finally {
-    // Releases the underlying resources whether the consumer finished or threw
-    // — a budget refusal exits this loop through the `finally`.
-    await reader.cancel().catch(() => undefined);
-  }
 }
 
 /** The read context every codec receives. One shape, whatever the format. */

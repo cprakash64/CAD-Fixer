@@ -62,6 +62,8 @@ export {
 } from './threemf/threemf-reader';
 export type { ThreeMfLimits } from './threemf/threemf-reader';
 export { threeMfReader } from './threemf/codec';
+export { createSlicedInflater, INFLATE_INPUT_SLICE_BYTES } from './threemf/inflate';
+export type { DecompressorLike, RawInflater } from './threemf/inflate';
 
 /*
  * STAGE 6D-A1 PACKAGE-GRAPH FOUNDATION.

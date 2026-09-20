@@ -634,10 +634,21 @@ materialise -> RELEASE -> next`. The entry buffer and the decoded XML are
   whole input write into its queue; one write of the payload is not streaming.
 - **`XML_TAG_TOO_LONG` (1 MiB) IS THE ONLY NEW REFUSAL**, and only the streamed
   path can produce it.
-- **Two shipped-path findings are RECORDED, NOT FIXED, by A1**: the whole path
-  retains the last decoded model part through V8's RegExp last-match info (a
-  sliced string of it), and one character above U+00FF makes that string
-  two-byte. Both are measured in the design doc.
+- **NO DECODED MODEL PART OUTLIVES THE IMPORT (finding R1).** V8 keeps a
+  substring's parent alive, and two routes used to keep the WHOLE decoded part
+  reachable after an import — up to 256 MiB, twice that with one character above
+  U+00FF: the regular-expression last-match state, and a kept object name of 13+
+  characters. They are closed where they open: `detachedCopy` on the stored name,
+  and `forgetRegExpMatch` after every buffered part and in a `finally` around
+  every read. `scripts/xml-retention.test.ts` measures the heap and fails if
+  either half is removed. **Do not copy every tag instead**: that closed the same
+  routes and raised a two-part package's peak by ~350 MiB in Chromium.
+- **ONE INFLATER, FED IN SLICES (finding R3).** `createSlicedInflater`
+  (`INFLATE_INPUT_SLICE_BYTES`, 64 KiB) is the only raw-deflate shape; the
+  workers build theirs in `apps/web/src/workers/platform-inflate.ts`, the one
+  `new DecompressionStream` in the application. One write of the whole payload
+  made Chromium inflate the entire entry into its queue. It is an explicit
+  iterator, not an `async function*`, and releases both sides on every exit.
 
 ## Export invariants (Stage 4A-2B2)
 

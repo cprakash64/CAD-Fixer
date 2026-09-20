@@ -1732,3 +1732,41 @@ describe('6E-A1: the streaming ingestion prototype is on no shipped path', () =>
     }
   });
 });
+
+describe('6E-A2: the buffered reader releases what it read', () => {
+  const read = (...path: string[]): string => readFileSync(join(REPO_ROOT, ...path), 'utf8');
+
+  it('R1: the kept name is detached, and the match state is released per part and per read', () => {
+    const reader = read('packages', 'file-formats', 'src', 'threemf', 'threemf-reader.ts');
+    expect(reader).toMatch(/name:\s*attrs\.name === undefined\s*\? undefined\s*: detachedCopy\(/);
+    // One after every model part, one around the whole read — both in `finally`.
+    expect(reader.match(/forgetRegExpMatch\(\);/g)).toHaveLength(2);
+    expect(reader.match(/finally \{[\s\S]{0,240}?forgetRegExpMatch\(\);/g)).toHaveLength(2);
+    const scan = read('packages', 'file-formats', 'src', 'threemf', 'xml-scan.ts');
+    expect(scan).toContain("EMPTY_MATCH.exec('');");
+  });
+
+  it('R1: no regular expression runs over a document', () => {
+    const security = read('packages', 'file-formats', 'src', 'threemf', 'xml-security.ts');
+    const code = security.replace(/\/\*[\s\S]*?\*\/|\/\/.*$/gm, '');
+    expect(code).not.toMatch(/RegExp\(|\.test\(|\.exec\(|\.match\(|\.search\(|\.replace\(/);
+    const scan = read('packages', 'file-formats', 'src', 'threemf', 'xml-scan.ts');
+    const describeUnsafe = scan.slice(
+      scan.indexOf('export function describeUnsafeXml('),
+      scan.indexOf('function refuseUnsafe('),
+    );
+    expect(describeUnsafe).toContain('new XmlSecurityStream()');
+    expect(describeUnsafe).not.toMatch(/\.test\(/);
+  });
+
+  it('R3: there is ONE decompressor construction in the application, and it is sliced', () => {
+    const constructing = sourceFilesUnder(join(REPO_ROOT, 'apps', 'web', 'src'))
+      .filter((file) => !/\.test\.(ts|tsx)$/.test(file))
+      .filter((file) => readFileSync(file, 'utf8').includes('new DecompressionStream('));
+    expect(constructing.map((file) => relative(REPO_ROOT, file))).toEqual([
+      join('apps', 'web', 'src', 'workers', 'platform-inflate.ts'),
+    ]);
+    const inflater = read('apps', 'web', 'src', 'workers', 'platform-inflate.ts');
+    expect(inflater).toContain('createSlicedInflater(openDecompressor)');
+  });
+});

@@ -60,6 +60,8 @@ import {
 } from './zip';
 import {
   DEFAULT_XML_LIMITS,
+  detachedCopy,
+  forgetRegExpMatch,
   readAttrs,
   scanXml,
   type XmlHandlers,
@@ -785,7 +787,12 @@ export function createModelXmlParser(
 
         const record: ObjectRecord = {
           id,
-          name: attrs.name?.slice(0, DEFAULT_DOCUMENT_LIMITS.maxNameLength),
+          // DETACHED: the name outlives the import, and a slice would keep the
+          // whole decoded model part alive with it. See `detachedCopy`.
+          name:
+            attrs.name === undefined
+              ? undefined
+              : detachedCopy(attrs.name.slice(0, DEFAULT_DOCUMENT_LIMITS.maxNameLength)),
           ...(pid === undefined ? {} : { materialRef: pid }),
           positions: [],
           triangles: [],
@@ -1693,6 +1700,21 @@ export async function read3mf(
   context: FormatReadContext,
   options: ThreeMfReadOptions = {},
 ): Promise<DocumentReadResult> {
+  try {
+    return await readThreeMfPackage(bytes, context, options);
+  } finally {
+    // However the read ends — document, refusal, cancellation — the engine's
+    // match state must not be left holding a slice of any part. See
+    // `forgetRegExpMatch`.
+    forgetRegExpMatch();
+  }
+}
+
+async function readThreeMfPackage(
+  bytes: Uint8Array,
+  context: FormatReadContext,
+  options: ThreeMfReadOptions,
+): Promise<DocumentReadResult> {
   const limits = options.limits ?? DEFAULT_3MF_LIMITS;
   const zipLimits = options.zipLimits ?? DEFAULT_ZIP_LIMITS;
   const xmlLimits = options.xmlLimits ?? DEFAULT_XML_LIMITS;
@@ -1846,26 +1868,32 @@ export async function read3mf(
     const partXml = context.decodeText(partBytes);
     throwIfCancelled(context.cancellation);
 
-    const parsed = parseModelXml(
-      partXml,
-      limits,
-      xmlLimits,
-      () => {
-        /*
-         * POLLED EVERY 65,536 ELEMENTS, AND SINCE STAGE 6D-B2 THAT POLL IS
-         * REAL. This site existed from the beginning and did nothing:
-         * `model/import` was not dispatched as interruptible, so the token it
-         * reads was backed only by a `cancel` MESSAGE — and a message cannot be
-         * delivered while this synchronous scan is running, because delivering
-         * it needs the worker's event loop. The flag could not change, so
-         * polling it could not help. Import now carries a `SharedArrayBuffer`
-         * control word that the main thread writes with `Atomics.store`, which
-         * this observes mid-scan.
-         */
-        throwIfCancelled(context.cancellation);
-      },
-      role,
-    );
+    let parsed: ParsedModel;
+    try {
+      parsed = parseModelXml(
+        partXml,
+        limits,
+        xmlLimits,
+        () => {
+          /*
+           * POLLED EVERY 65,536 ELEMENTS, AND SINCE STAGE 6D-B2 THAT POLL IS
+           * REAL. This site existed from the beginning and did nothing:
+           * `model/import` was not dispatched as interruptible, so the token it
+           * reads was backed only by a `cancel` MESSAGE — and a message cannot be
+           * delivered while this synchronous scan is running, because delivering
+           * it needs the worker's event loop. The flag could not change, so
+           * polling it could not help. Import now carries a `SharedArrayBuffer`
+           * control word that the main thread writes with `Atomics.store`, which
+           * this observes mid-scan.
+           */
+          throwIfCancelled(context.cancellation);
+        },
+        role,
+      );
+    } finally {
+      // This part's text must not stay reachable while the next part loads.
+      forgetRegExpMatch();
+    }
     throwIfCancelled(context.cancellation);
     materialiseMeshes(parsed, options.stats, poll);
     throwIfCancelled(context.cancellation);

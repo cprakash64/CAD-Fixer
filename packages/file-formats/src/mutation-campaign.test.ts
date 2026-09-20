@@ -966,7 +966,7 @@ async function fingerprint3mf(
     streaming === undefined
       ? undefined
       : {
-          inflateRaw: (compressed) => inflateRawSlicedForTests(compressed, streaming.sliceBytes),
+          inflateRaw: inflateRawSlicedForTests(streaming.sliceBytes),
           createDecoder: () => new TextDecoder('utf-8', { fatal: false }),
           yieldEveryPieces: streaming.yieldEveryPieces,
         };
