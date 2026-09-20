@@ -616,15 +616,17 @@ materialise -> RELEASE -> next`. The entry buffer and the decoded XML are
 
 ## Streaming 3MF ingestion invariants (Stage 6E-A1 prototype, 6E-A2 production)
 
-- **BUFFERED IS THE DEFAULT AND THE ONLY MODE THE PRODUCT USES.**
-  `ThreeMfReadOptions.ingestion` is `'buffered' | 'streaming'`, defaulting to
-  buffered; the registry's `threeMfReader` is `createThreeMfReader({})`. The
-  shipped worker registers `modelImportHandler`, built from
-  `PRODUCTION_IMPORT_CONFIG` (`Object.freeze({})`), and nothing under
-  `apps/web/src` names a streaming mode, `createThreeMfReader`, `zipLimits` or
-  `maxEntryBytes`. `maxEntryBytes` is still 256 MiB. Boundary tests hold all of
-  it. Switching the product over is Stage 6E-A3's decision; a larger ceiling is
-  6E-A4's.
+- **BUFFERED IS `read3mf`'s DEFAULT; THE PRODUCT ROUTES — Stage 6E-A3
+  SUPERSEDES THIS PARAGRAPH'S FIRST SENTENCE.**
+  `ThreeMfReadOptions.ingestion` is `'buffered' | 'streaming' | 'auto'`,
+  defaulting to buffered, and the registry's `threeMfReader` is
+  `createThreeMfReader({ ingestion: ThreeMfIngestion.Auto })` — see the
+  automatic-routing invariants below. The shipped worker still registers
+  `modelImportHandler`, built from `PRODUCTION_IMPORT_CONFIG`
+  (`Object.freeze({})`), and nothing under `apps/web/src` names an ingestion
+  mode, `createThreeMfReader`, `zipLimits` or `maxEntryBytes`. `maxEntryBytes`
+  is still 256 MiB. Boundary tests hold all of it. A larger ceiling is 6E-A4's
+  decision.
 - **THE SEAM IS A CONSTRUCTION SEAM, NOT A SWITCH.** `createModelImportHandler`
   takes an optional 3MF reader. Only the end-to-end harness passes one, chosen
   through a harness-only `harness/ingestion` message the shipped worker has no
@@ -669,6 +671,69 @@ materialise -> RELEASE -> next`. The entry buffer and the decoded XML are
 - **Namespaces resolve from `<model>` only**, in both modes. 3MF Core defines an
   XML namespace as one declared on the `<model>` element; the Stage 6E design
   document records the evidence and the residual risk.
+
+## Automatic ingestion routing invariants (Stage 6E-A3)
+
+- **THE ROUTE IS DECIDED PER MODEL ENTRY, FROM ITS DECLARED UNCOMPRESSED SIZE,
+  BEFORE A BYTE IS DECOMPRESSED.** `routeModelEntryIngestion` in
+  `threemf/ingestion-route.ts` — a leaf module that imports NOTHING — streams an
+  entry declaring `THREEMF_STREAMING_THRESHOLD_BYTES` (128 MiB) or more and
+  buffers anything below it. One literal, one decision, asked once in
+  `loadModelPart`. A package may legitimately buffer its root and stream a
+  child; a package-wide choice would make small parts pay two passes or make a
+  large one hold a quarter of a gibibyte.
+- **NOTHING BUT THE DECLARATION MAY ENTER IT.** Not available memory, a heap
+  estimate, elapsed time, host load, the file name, the producer, the
+  compression ratio alone, or whether the part holds characters above U+00FF. A
+  boundary test forbids all of them, so the same file routes the same way on
+  every machine and a refusal stays reproducible. There is NO Unicode rule and
+  none is needed — the shapes that suffer most on the buffered path are the
+  shapes that grow.
+- **THE DECLARATION IS A HINT, NEVER AN INTEGRITY CLAIM.** The per-entry
+  ceiling, the package ceiling, the 200:1 ratio, the package inflation budget,
+  the overrun check against the declaration and the shortfall check at the end
+  of the stream are enforced by `zip.ts` on BOTH paths. An upward lie is bounded
+  by the RATIO, which is checked against the declaration at the directory before
+  any route is chosen; a downward lie is caught by the overrun check, which
+  bounds the buffered allocation by the lie. No mode is the one that catches a
+  lie, which is why no mode can be the one that misses it.
+- **THE THRESHOLD IS DERIVED FROM MEASUREMENT AND THE ERRORS ARE NOT
+  SYMMETRIC.** Streaming too early costs at most ~101 MiB and is bounded,
+  because the streamed peak hardly moves with size; buffering too late costs
+  292 MiB at 142 MiB dense, 642 MiB at 128 MiB text-heavy, and grows without
+  limit. 128 MiB sits ~10 MiB below the sharp buffered step at ~140 MiB, so no
+  supported input depends on buffered behaviour near it. Moving it needs the
+  full ladder in `docs/design/STAGE_6E_STREAMING_3MF_IMPORT.md` re-run, not an
+  argument.
+- **ROUTING IS NOT A CEILING AND CHANGES NO ELIGIBILITY.** `maxEntryBytes` is
+  still 256 MiB, the package total still 512 MiB. Crossing the threshold
+  refuses nothing and admits nothing. **BETA-002 IS STILL UNSUPPORTED**: A3
+  raised no limit, and A4 decides the new maximum.
+- **THE PRODUCT'S ONE CHOICE IS ONE LINE IN `codec.ts`**:
+  `createThreeMfReader({ ingestion: ThreeMfIngestion.Auto })`. Nothing under
+  `apps/web/src` names a mode, a reader factory or a ZIP limit.
+- **`read3mf`'s OWN DEFAULT STAYS BUFFERED, AND BOTH FORCED MODES SURVIVE.**
+  v0.2.0's path is the ORACLE every differential holds the other two to; a
+  default of `auto` would make those suites compare routing with itself. The
+  harness bridge's `buffered` no longer aliases the production config — `auto`
+  does — for exactly the same reason. Never delete a forced mode.
+- **A MODE THAT MAY STREAM NEEDS A TEXT DECODER AND REFUSES UP FRONT.** `auto`
+  raises the wiring fault when it is asked for, never at whichever file happens
+  to be first past the threshold. A silent fallback to buffered would undo the
+  routing on exactly the entries that need it, and say nothing.
+- **ROUTING IS INVISIBLE TO THE USER.** No message, no warning, no setting, no
+  choice, no progress change. The ONE observable difference is
+  `XML_TAG_TOO_LONG`, which only the streamed scanner can raise and which
+  routing therefore makes size-dependent; it needs more than sixteen
+  maximum-length attributes on one element and no producer file has come close.
+- **`onRoute` IS QUALIFICATION-ONLY AND IS NOT TELEMETRY.** It exists because a
+  mixed-mode package is otherwise unprovable from outside — both paths produce
+  the same document, which is the point. Reached only through
+  `read3mfForQualification`, which the package index does not export.
+- **EXPORT VALIDATION READS BUFFERED ON PURPOSE, AND SAYS SO.**
+  `exportDocument` states `ingestion: Buffered` rather than inheriting a
+  default. Making the validator depend on the routing decision would let a
+  routing defect pass an invalid file; making it independent means it cannot.
 
 ## Export invariants (Stage 4A-2B2)
 

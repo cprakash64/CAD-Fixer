@@ -416,7 +416,7 @@ declare global {
     cadfixerHarness?: {
       digest(documentId: string, revision: number): Promise<HarnessDigest>;
       /** Stage 6E-A2: which 3MF reader the harness worker's real import uses. */
-      setIngestion(mode: 'buffered' | 'streaming', maxEntryBytes?: number): Promise<void>;
+      setIngestion(mode: 'buffered' | 'streaming' | 'auto', maxEntryBytes?: number): Promise<void>;
       exportDocument(
         documentId: string,
         revision: number,
@@ -459,7 +459,10 @@ declare global {
  * Only here, on the harness page, on a message kind of its own: the shipped
  * application has no way to send it and the shipped worker no listener for it.
  */
-function setIngestion(mode: 'buffered' | 'streaming', maxEntryBytes?: number): Promise<void> {
+function setIngestion(
+  mode: 'buffered' | 'streaming' | 'auto',
+  maxEntryBytes?: number,
+): Promise<void> {
   return new Promise<void>((resolve) => {
     const listener = (event: MessageEvent): void => {
       const data: unknown = event.data;

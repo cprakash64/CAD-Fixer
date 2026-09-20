@@ -63,7 +63,7 @@ declare global {
   interface Window {
     readonly cadfixerHarness?: {
       /** Stage 6E-A2: which 3MF reader the harness worker's real import uses. */
-      setIngestion(mode: 'buffered' | 'streaming', maxEntryBytes?: number): Promise<void>;
+      setIngestion(mode: 'buffered' | 'streaming' | 'auto', maxEntryBytes?: number): Promise<void>;
       digest(
         documentId: string,
         revision: number,

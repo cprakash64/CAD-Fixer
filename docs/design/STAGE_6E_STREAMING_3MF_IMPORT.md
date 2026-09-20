@@ -760,13 +760,571 @@ viewport and automatic analysis, buffered then streamed:
 - **Eligibility**: under production limits an entry declared past 256 MiB is
   refused in both modes, and by the shipped application.
 
+## Stage 6E-A3 — automatic per-entry routing
+
+A2 qualified a streamed reader and shipped it switched off, because the two
+paths are **not ordered**: streaming is dramatically cheaper for a large model
+part and slightly more expensive for a small one. A3's job was to find where
+they cross, route each entry automatically, and settle the buffered-memory
+trade-off A2 recorded.
+
+**A3 changed no ceiling.** `maxEntryBytes` is still 256 MiB, the package
+expansion ceiling is still 512 MiB, the ratio is still 200:1, and the geometry,
+topology and boundary-inventory gates are untouched. Routing decides **how** an
+eligible entry is read, never **whether** it may be.
+
+### Host and method
+
+Apple M1, 8 GiB, macOS 26A5421a, Node 22.22.2, Playwright 1.62.1, Chromium
+151.0.7922.34. Renderer `phys_footprint_peak` from macOS `footprint(1)`, read at
+phase boundaries by `qualify:import-phases` driving the real file chooser
+against a production build; whole-browser peak summed across processes; the
+geometry worker's isolate heap read over CDP after two forced collections. **One
+browser per measurement**, because `phys_footprint_peak` is a process-lifetime
+maximum.
+
+**Modes are interleaved PER CASE, and the order alternates.** A first attempt
+ran all of one mode and then all of the other, and the host's load climbed
+monotonically through the sequence — so the second mode was systematically
+measured on a busier machine. That run was discarded rather than reported. The
+driver now runs a case's two modes back to back with an eight-second cooldown
+and alternates which goes first.
+
+**THE HOST WAS NOT QUIET, AND THAT IS STATED RATHER THAN HIDDEN.** A macOS
+software update was staging for part of the session (`UpdateBrainService` at up
+to 146% CPU) and iCloud Drive was syncing throughout (`fileproviderd` at
+60–92%); one-minute load averages during the ladders ranged from 4 to 34, and
+swap was in use. Three consequences, each handled:
+
+- **Peak footprint is the robust signal and timing is not.** A process's
+  high-water allocation is set by what the code allocates; elapsed time is set
+  by what else is running. Every memory figure below is a median of three fresh
+  browsers with the min and max quoted beside it; every timing figure is
+  reported as an indication and no decision rests on one.
+- **The decision needs the SIGN and the MARGIN, not a precise crossover.** The
+  differences that decide the threshold are 200–1,200 MiB, one to two orders of
+  magnitude above the run-to-run spread, and they reproduce in the same
+  direction across all three rounds.
+- **The 126 MiB dense result has now been measured three times on three
+  different days** — A2's preview, the discarded run and this one — and lands in
+  the same place each time, which is what makes it safe to treat the narrow band
+  where buffering wins as real rather than as noise.
+
+### Threshold ladder — dense geometry
+
+One object of unshared triangles: the Stage 6D-B3 shape, and the most expensive
+one the product supports. Renderer `phys_footprint_peak`, MiB, min / median /
+max of three runs; **delta is buffered minus streamed, so positive means
+streaming is cheaper**.
+
+| Model entry | Buffered          | Streamed         | Delta | Import ms, buf / str |
+| ----------- | ----------------- | ---------------- | ----: | -------------------- |
+| 63.21 MiB   | 519 / 519 / 520   | 426 / 427 / 428  |   +92 | 2,524 / 2,455        |
+| 95.51 MiB   | 670 / 670 / 672   | 563 / 563 / 563  |  +107 | 3,380 / 3,875        |
+| 125.74 MiB  | 561 / 568 / 572   | 650 / 669 / 723  |  −101 | 5,159 / 4,534        |
+| 133.86 MiB  | 579 / 579 / 580   | 663 / 667 / 699  |   −88 | 4,679 / 4,870        |
+| 137.66 MiB  | 598 / 599 / 600   | 616 / 669 / 670  |   −70 | 4,650 / 4,927        |
+| 141.63 MiB  | 865 / 1,024/1,026 | 732 / 732 / 759  |  +292 | 5,023 / 5,304        |
+| 150.00 MiB  | 878 / 880 / 1,036 | 667 / 685 / 686  |  +195 | 5,205 / 5,239        |
+| 157.52 MiB  | 906 / 907 / 1,073 | 748 / 802 / 820  |  +105 | 6,722 / 5,497        |
+| 170.67 MiB  | 954 /1,116/1,116  | 748 / 749 / 793  |  +367 | 6,080 / 6,095        |
+| 186.39 MiB  | 766 / 767 / 1,032 | 647 / 738 / 742  |   +29 | 6,473 / 6,583        |
+| 202.28 MiB  | 803 /1,095/1,096  | 688 / 691 / 926  |  +404 | 7,509 / 7,940        |
+| 218.18 MiB  | 1,413/1,421/1,425 | 839 / 845 / 882  |  +576 | 7,991 / 7,771        |
+| 234.07 MiB  | 1,295/1,296/1,330 | 853 / 873 / 979  |  +423 | 8,663 / 8,074        |
+| 242.01 MiB  | 1,319/1,320/1,356 | 870 / 870 /1,040 |  +450 | 10,503 / 8,688       |
+
+**THE STREAMED PATH IS FLAT AND THE BUFFERED PATH IS NOT.** Streamed peaks stay
+between 427 and 873 MiB across a four-fold range of entry sizes; buffered peaks
+climb to 1,421.
+
+**THE CROSSOVER IS BETWEEN 137.66 MiB AND 141.63 MiB, AND THE STEP IS SHARP.**
+Buffered moves from 599 MiB to 1,024 MiB across four megabytes of input while
+streamed does not move at all. Below the step there is a narrow band — 126 to
+138 MiB — where buffering genuinely wins, by 70 to 101 MiB. Below THAT, at 63
+and 95 MiB, streaming wins again.
+
+### Threshold ladder — text-heavy XML
+
+Hundreds of megabytes of comments, metadata and vendor elements around one
+tetrahedron: a document that is almost entirely not geometry. Two runs each.
+
+| Model entry | Buffered          | Streamed        |  Delta | Import ms, buf / str |
+| ----------- | ----------------- | --------------- | -----: | -------------------- |
+| 64.00 MiB   | 492 / 503 / 503   | 261 / 263 / 263 |   +240 | 880 / 853            |
+| 96.00 MiB   | 661 / 695 / 695   | 259 / 265 / 265 |   +430 | 856 / 1,506          |
+| 128.00 MiB  | 862 / 915 / 915   | 270 / 273 / 273 |   +642 | 1,545 / 1,463        |
+| 160.00 MiB  | 1,045/1,050/1,050 | 282 / 285 / 285 |   +765 | 1,526 / 1,884        |
+| 192.00 MiB  | 1,185/1,220/1,220 | 302 / 302 / 302 |   +918 | 1,979 / 2,356        |
+| 224.00 MiB  | 1,391/1,409/1,409 | 325 / 332 / 332 | +1,077 | 1,953 / 2,448        |
+| 248.00 MiB  | 1,533/1,543/1,543 | 337 / 341 / 341 | +1,202 | 4,584 / 2,927        |
+
+**THERE IS NO CROSSOVER HERE.** Streaming wins at every supported size, from
+64 MiB upwards, and the streamed peak barely moves — 263 to 341 MiB for a
+four-fold range of input — because the part is never decoded into a string at
+all. **Buffered reaches 1,543 MiB at 248 MiB, which is the 1,536 MiB working
+budget.** This is the shape the threshold has to protect, not dense geometry.
+
+### Threshold ladder — one character above U+00FF
+
+The dense fixtures again, identical but for a single object name, `模型`. V8
+stores a string with any character above U+00FF at two bytes a character, so one
+name decides whether the buffered path's decoded part costs 1× or 2×. Two runs
+each.
+
+| Model entry | Buffered          | Streamed        | Delta | Import ms, buf / str |
+| ----------- | ----------------- | --------------- | ----: | -------------------- |
+| 125.74 MiB  | 907 / 908 / 908   | 631 / 631 / 631 |  +277 | 5,104 / 4,720        |
+| 157.52 MiB  | 1,087/1,089/1,089 | 777 / 795 / 795 |  +294 | 5,929 / 6,427        |
+| 186.39 MiB  | 1,218/1,273/1,273 | 634 / 797 / 797 |  +476 | 8,012 / 6,958        |
+| 218.18 MiB  | 1,665/1,673/1,673 | 846 / 846 / 846 |  +827 | 8,653 / 8,220        |
+| 242.01 MiB  | 1,787/1,812/1,812 | 895 / 949 / 949 |  +863 | 9,174 / 8,273        |
+
+**ONE CJK CHARACTER FLIPS THE 126 MiB VERDICT.** The same bytes of geometry that
+buffer at 568 MiB with an ASCII name buffer at 908 MiB with a CJK one, and the
+streamed figure barely changes (669 → 631). At 242 MiB the buffered path reaches
+**1,812 MiB — past the working budget** — for a file that is entirely legitimate.
+
+**NO UNICODE RULE WAS ADDED, AND NONE IS NEEDED.** Routing on content would mean
+deciding after decompression, which is the one thing the decision must precede.
+The size threshold already covers it: under 128 MiB the worst CJK case measured
+buffers at 908 MiB, inside the envelope, and everything above it streams.
+
+### Selected threshold — 128 MiB
+
+`THREEMF_STREAMING_THRESHOLD_BYTES = 128 * 1024 * 1024` (134,217,728 bytes), in
+`packages/file-formats/src/threemf/ingestion-route.ts`, the leaf module that also
+owns the mode names and the decision. One literal; nothing restates it.
+
+**THE ERRORS ARE NOT SYMMETRIC, AND THAT IS THE WHOLE ARGUMENT.** Streaming a
+little too early costs at most the 101 MiB measured at 126 MiB, and it is
+bounded, because the streamed peak hardly moves with size. Buffering a little
+too late costs 292 MiB at 142 MiB for dense geometry, 642 MiB at 128 MiB for
+text-heavy XML, and grows without limit thereafter. The margin therefore goes on
+the streaming side.
+
+128 MiB sits about ten megabytes BELOW the sharp buffered step, so **no
+supported input depends on buffered behaviour anywhere near it**. Under this
+threshold the worst buffered peak any eligible file can reach is about 915 MiB —
+text-heavy XML just under the line — against 1,812 MiB with no routing at all.
+
+**IT IS NOT LOWER, EVEN THOUGH STREAMING ALSO WINS AT 63 AND 95 MiB**, for two
+reasons that are not about peak memory. Buffered is v0.2.0's path, qualified in
+Stage 6D-A4 against 2,130 real and reference files and shipped to users; real
+producer output is a few megabytes, so a threshold here leaves essentially every
+file anyone actually opens on the proven path. And a second pass is real work —
+within run-to-run noise on this host, but never free, and there is nothing to
+buy with it below the line, because a buffered import under 128 MiB has never
+been near the envelope.
+
+### Real-producer impact
+
+From the committed Stage 6D-A4 manifest,
+[`docs/beta/A4_REAL_PRODUCER_CORPUS.tsv`](../beta/A4_REAL_PRODUCER_CORPUS.tsv) —
+113 real producer-authored 3MF files that import, from PrusaSlicer, Bambu
+Studio, OrcaSlicer and Cura. The manifest records archive bytes and triangles
+rather than entry sizes, so the entry is bounded from the triangle count at
+72–190 bytes per triangle (welded indexed geometry to unshared soup, the two
+ends the generators span):
+
+| Percentile | Triangles | Largest model entry, estimated |
+| ---------- | --------: | ------------------------------ |
+| median     |     7,126 | 0.49 – 1.29 MiB                |
+| p90        |    20,806 | 1.43 – 3.77 MiB                |
+| p95        |    55,668 | 3.82 – 10.09 MiB               |
+| p99        |   225,154 | 15.46 – 40.80 MiB              |
+| max        |   256,568 | 17.62 – 46.49 MiB              |
+
+Archive sizes: median 0.06 MiB, p95 0.93 MiB, max 3.02 MiB.
+
+**AT 128 MiB, ZERO OF THE 113 WOULD STREAM — at either end of the estimate.**
+
+### Corpus differential: every file, three ways
+
+The estimate above is corroborated by measurement. `qualify:streaming-corpus`
+gained a THIRD read — `auto`, the shipped configuration — beside the buffered
+and streamed ones A2 added, and records every routing decision it makes. The
+tree was fetched to scratch at the Stage 6D-A4 commits and deleted afterwards;
+the repository stays dataless.
+
+| Source                    | Commit         | 3MF files |
+| ------------------------- | -------------- | --------: |
+| 3MFConsortium/test_suites | `f483d3beee06` |     2,351 |
+| 3MFConsortium/3mf-samples | `665e20dc4d77` |        80 |
+| 3MFConsortium/lib3mf      | `bfb5df00057f` |        98 |
+| prusa3d/PrusaSlicer       | `6f510128d7c2` |         8 |
+| bambulab/BambuStudio      | `77b9dd94d1e3` |         6 |
+| SoftFever/OrcaSlicer      | `db91d4b63046` |        11 |
+| **Total**                 |                | **2,474** |
+
+**2,474 files — 567 imported, 1,907 refused, 2,474 IDENTICAL, 0 DIFFERENT.**
+Every file produces the same document digest or the same typed refusal, field
+for field, whether it was read buffered, streamed, or routed. The refusals are
+dominated by `THREEMF_UNSUPPORTED_EXTENSION` (1,860) — the conformance suites
+exercise extensions CAD Fixer does not implement — and no mode produced an
+untyped error.
+
+**THE ROUTE CENSUS: 2,534 model entries opened, 2,534 BUFFERED, 0 STREAMED.**
+The largest model entry in the whole corpus is **55,581,229 bytes — 53.01 MiB**,
+less than half the threshold.
+
+That is the intended outcome and not an argument for lowering the threshold:
+routing exists for the large files A4 will decide about, and for the tail of
+legitimate user models between 128 MiB and the ceiling, not for slicer output.
+**It is also why auto routing expands no user-facing capability whatsoever** —
+for every file in the qualified corpus, the product reads exactly what v0.2.0
+read, by exactly the same path.
+
+Two of the user's own real 3MF files were read the same three ways as a spot
+check: identical in all three, and one of them — a 30 MiB Hi3D package whose
+model entry expands past 256 MiB — is refused as `ZIP_ENTRY_TOO_LARGE` in every
+mode. That is BETA-002 met in the wild, and A3 does not change it.
+
+### Routing granularity: the model entry
+
+**PER ENTRY, NOT PER PACKAGE, AND THE DESIGN WAS CHECKED RATHER THAN ASSUMED.**
+A production-extension package legitimately holds one large root beside several
+tiny referenced parts, or the reverse; a package-wide choice would either make
+the small parts pay two passes or make the large one hold a quarter of a
+gibibyte. `readThreeMfPackage` therefore asks
+`routeModelEntryIngestion(entry.uncompressedSize, mode)` once in `loadModelPart`
+— the single place a model part's bytes are ever read — and a boundary test
+asserts there is exactly one such call.
+
+What makes mixing safe is that nothing in the package walk is per-mode:
+
+- **One inflation budget for the archive.** A buffered entry charges its bytes
+  once; a streamed one charges its SECURITY pass and not its element pass. Both
+  charge the same `InflationBudget` object, so a mixed package spends the sum of
+  its parts and nothing else. Proven by narrowing the package ceiling to just
+  under that sum and requiring the refusal, in all three modes.
+- **One part open at a time**, guaranteed by the walk awaiting each load, not by
+  anything inside either path. The walk is strictly sequential and a boundary
+  test still forbids `Promise.all`.
+- **Package-wide counters.** Triangles, vertices, parts and component depth are
+  one quantity across every reachable model part and none of them resets at a
+  part boundary, whichever way a part was read.
+- **Parse-once.** A child referenced several times is loaded once by
+  `PackageModelGraph`, so it is routed once — which for a streamed entry is the
+  difference between one full decompression of the largest thing in the archive
+  and several.
+- **Namespaces resolve from `<model>`**, per part, in both paths.
+
+`3D/3dmodel.model` may buffer while `3D/Objects/big.model` streams and
+`3D/Objects/small.model` buffers, in one package, in one walk, producing one
+document. That is asserted directly, with the routing decisions compared against
+the expected list and the resulting document compared against the buffered
+oracle.
+
+### The routing input, and what it is not trusted for
+
+The input is the **declared uncompressed size** of the model entry, read from
+the ZIP directory. It is the one figure known before a byte is decompressed,
+which is what makes the decision precede every allocation that depends on it.
+
+**IT IS ATTACKER-CONTROLLED, AND IT IS A HINT AND NOTHING ELSE.** Every safety
+property is enforced by `zip.ts`, on both paths, against the same declaration:
+
+- the per-entry ceiling (256 MiB) and the package ceiling (512 MiB), applied at
+  the directory and again where the number becomes an allocation;
+- the 200:1 compression ratio, applied to the DECLARATION at the directory —
+  which is what bounds how far a declaration can lie upward, because a claim more
+  than 200 times the compressed data is refused before an entry is opened and
+  before a path is chosen;
+- the overrun check, which refuses at the first chunk that would exceed the
+  declaration, so the buffered allocation is bounded by the lie;
+- the shortfall check at the end of the stream, which refuses an entry that ends
+  before its declaration does.
+
+The two routing attacks are tested from both directions. A declaration BELOW the
+threshold steers an entry onto the buffered path and the content then tries to
+be far larger: `ZIP_DECLARED_SIZE_OVERRUN`, identically in every mode. A
+declaration ABOVE the threshold, to reach the streamed path: refused for the
+ratio before any route is chosen, and within the ratio, refused for the
+shortfall. **No mode is the one that catches a lie, which is why no mode can be
+the one that misses it.**
+
+**NOTHING ELSE MAY ENTER THE DECISION**: not available memory, heap estimates,
+elapsed time, host load, the file name, the producer, the compression ratio
+alone, or whether the part carries characters above U+00FF. A boundary test
+holds `ingestion-route.ts` to importing nothing at all and to naming none of
+those, so the same file routes the same way on every machine and a refusal stays
+reproducible.
+
+### Auto-mode invariants
+
+- **THE PRODUCT'S ONE CHOICE IS `codec.ts`, AND IT IS ONE LINE.**
+  `threeMfReader = createThreeMfReader({ ingestion: ThreeMfIngestion.Auto })`.
+  Nothing under `apps/web/src` names an ingestion mode, a reader factory or a
+  ZIP limit, and the shipped worker still registers exactly one import handler
+  built from `PRODUCTION_IMPORT_CONFIG`. Boundary tests hold all of it.
+- **`read3mf`'s OWN DEFAULT STAYS BUFFERED.** That is not an inconsistency: it
+  keeps v0.2.0's path as the oracle every differential holds the other two to. A
+  default of `auto` would mean the suites comparing "the reader" against "the
+  streamed reader" were comparing routing against itself.
+- **BOTH FORCED MODES SURVIVE, AND THEY ARE HONOURED WHATEVER THE SIZE.** The
+  corpus differential, the mutation campaign and the harness suites read the
+  same file every way; a `buffered` that quietly resolved to the production
+  default would silently stop being a comparison. The end-to-end harness bridge
+  gained `auto` for the same reason, and its `buffered` branch no longer aliases
+  to the production config — the alias moved to `auto`, where it now belongs.
+- **A MODE THAT MAY STREAM NEEDS A TEXT DECODER AND SAYS SO UP FRONT.** `auto`
+  raises the wiring fault when it is asked for, not at whichever file happens to
+  be first past the threshold. A silent fallback to buffered would undo the
+  stage precisely on the entries that need it most, and say nothing.
+- **ROUTING IS INVISIBLE.** No message, no warning, no setting, no user choice,
+  no progress change. Two paths that produced observably different results would
+  not be a routing policy; they would be two readers.
+- **THE ONE OBSERVABLE DIFFERENCE IS STILL `XML_TAG_TOO_LONG`**, the refusal only
+  the streamed scanner can raise (16 attribute widths, 1 MiB). Under `auto` it
+  becomes size-dependent: a megabyte-long tag inside a 100 MiB entry is read,
+  and the same tag in a 200 MiB entry is refused. It needs more than sixteen
+  maximum-length attributes on one element, the longest tag in every producer
+  file Stage 6E has measured is under 1 KiB, and the alternative — imposing the
+  streamed limit on the buffered path — would be a new refusal for files the
+  product accepts today. Recorded as the known consequence of routing.
+- **EXPORT VALIDATION DELIBERATELY DOES NOT FOLLOW THE ROUTE.**
+  `exportDocument` reads its own artifact back with `ingestion: Buffered`,
+  stated explicitly rather than inherited from a default. What has to be true of
+  an exported file is that it survives the production reader's ceilings and
+  refusals; making the validator depend on the routing decision would mean a
+  routing defect could let an invalid file validate, and making it independent
+  means it cannot. It is also why the export worker needs no text decoder.
+  **A consequence worth recording for A4**: validating a near-ceiling 3MF export
+  still pays the buffered cost that A3 removes from import. It is bounded by
+  `maxOutputBytes` (256 MiB) today and was not in A3's scope.
+
+### Route observability
+
+`read3mfForQualification` gained `onRoute`, which reports the entry name, the
+declared size and the selected path. **It is qualification-only and it is not
+telemetry**: the package index does not export `read3mfForQualification`, a
+boundary test keeps it out of `apps/web/src`, `file-formats` compiles with no
+DOM and no Node types, and the repository bans every network API. The entry name
+is included because a mixed-mode package cannot be checked without knowing which
+part is which, and it never leaves the process that read the file. The corpus
+differential uses it to count how a real corpus routes; no user-visible surface
+consumes it, and nothing in the product could.
+
+### Small files and other shapes
+
+Below the threshold everything buffers, which is the point; these confirm there
+is nothing to buy by lowering the line. Three runs each, medians.
+
+| Case                                  | Buffered | Streamed | Delta | Import ms, buf / str |
+| ------------------------------------- | -------: | -------: | ----: | -------------------- |
+| dense 0.98 MiB                        |      152 |      153 |    −1 | 351 / 482            |
+| dense 5.01 MiB                        |      173 |      178 |    −5 | 553 / 485            |
+| dense 19.43 MiB                       |      320 |      323 |    −3 | 1,225 / 1,276        |
+| dense 50.04 MiB                       |      344 |      397 |   −53 | 1,984 / 2,074        |
+| dense 95.51 MiB                       |      670 |      564 |  +106 | 3,392 / 3,455        |
+| object-heavy 98.62 MiB, 4,000 objects |      442 |      544 |  −102 | 5,908 / 5,967        |
+| placement-heavy 8.62 MiB, 4,000 items |      124 |      129 |    −5 | 274 / 249            |
+
+**Memory is a wash below 50 MiB and time is not free.** A 1 MiB import costs
+351 ms buffered and 482 ms streamed — 130 ms, but 37% — and every one of these
+routes buffered under the selected threshold.
+
+**OBJECT-HEAVY XML IS THE ONE SHAPE THAT PREFERS BUFFERING NEAR THE LINE**, by
+102 MiB at 98.62 MiB, and it buffers. Its cost is dominated by the object table
+and the part expansion rather than by the entry, which is why streaming buys
+less here than for one large mesh.
+
+**PLACEMENT-HEAVY IS A REFUSAL, AND IT IS THE SAME REFUSAL IN BOTH MODES**:
+4,000 placements of 50,000 triangles is 20,050,000 triangles, refused by the
+document's triangle ceiling, with identical wording. Routing did not reach it,
+because the entry is 8.62 MiB.
+
+### Multi-part packages
+
+Production-extension packages with parts deliberately straddling the threshold.
+Two runs each, medians; the routes are what `auto` selects at 128 MiB.
+
+| Package                                            | Routes under `auto`                | Buffered | Streamed |
+| -------------------------------------------------- | ---------------------------------- | -------: | -------: |
+| M1 — tiny root, 200.8 MiB child                    | buffered + **streamed**            |      800 |      693 |
+| M2 — 200.8 MiB root, 19.4 MiB child                | **streamed** + buffered            |    1,221 |      779 |
+| M3 — 180.3 MiB root, 180.3 MiB child               | **streamed** + **streamed**        |    1,131 |      846 |
+| M4 — 7.7 MiB root, 99.5 MiB and 200.8 MiB children | buffered + buffered + **streamed** |      971 |      631 |
+| M5 — tiny root, one 200.8 MiB child placed twice   | **streamed**, loaded ONCE          |      800 |      642 |
+
+Every package imports the same triangle count in both modes — 1,133,595;
+1,246,954; 2,040,472; 1,745,735; 2,267,190 — and M5 confirms parse-once: two
+placements of a 200.8 MiB child cost the same as M1's one (642 against 693
+streamed, 800 against 800 buffered).
+
+**M2 IS THE CASE A PACKAGE-WIDE DECISION WOULD GET WRONG.** Its large part is
+the ROOT — the one resolved through the OPC relationship and the only one whose
+`<build>` is walked — so a policy that inspected the first entry, or the
+smallest, or took the root's answer and applied it to the rest, would pass M1 and
+fail here. It is the widest gap in the set: 1,221 MiB buffered against 779
+streamed.
+
+**M4 IS A THREE-WAY MIX IN ONE WALK**: two buffered parts and one streamed,
+against one inflation budget, one set of package counters and one part open at a
+time.
+
+### The buffered-memory trade-off — controlled A/B
+
+A2 recorded a real concern and asked A3 to settle it: `662ed8e` removes the
+permanent retention of a decoded model part, but the preview also showed one
+shape — a two-part package of 1.2 M triangles each — peaking about 350 MiB
+higher with it than v0.2.0 did.
+
+**THAT COMPARISON CONFOUNDED TWO CHANGES.** v0.2.0 predates the whole of Stage
+6E; comparing it with A2 as committed measures `662ed8e` AND everything else A1
+and A2 landed. A3 isolated the commit instead. Two disposable worktrees at
+`54cfd3c`, both built and served as production:
+
+- **FIXED** — `54cfd3c` unmodified.
+- **REVERTED** — the same source, the same streaming implementation, with ONLY
+  the three functional changes of `662ed8e` undone: the kept object name keeps
+  its slice of the decoded part instead of `detachedCopy`, `forgetRegExpMatch`
+  becomes a no-op, and `INFLATE_INPUT_SLICE_BYTES` becomes large enough that the
+  inflater writes the whole compressed entry in one call.
+
+Neither worktree was committed and `main` was not touched. The two builds were
+served on separate ports and measured with the arms **interleaved per case, in
+alternating order**, three fresh browsers each. Renderer
+`phys_footprint_peak`, MiB, min / median / max; the heap column is the geometry
+worker's isolate heap after two forced collections, at the end of the session.
+
+| Case                              | FIXED             | REVERTED          | Δ median | Worker heap, fixed / reverted |
+| --------------------------------- | ----------------- | ----------------- | -------: | ----------------------------- |
+| B1 — dense 125.74 MiB             | 567 / 568 / 573   | 749 / 755 / 756   | **−187** | **34 / 160 MiB**              |
+| B2 — dense 202.28 MiB             | 798 / 1,055/1,055 | 1,057/1,058/1,076 |       −3 | **53 / 256**                  |
+| B3 — dense 242.01 MiB             | 1,316/1,317/1,323 | 1,319/1,320/1,320 |       −3 | **64 / 306**                  |
+| B4 — text-heavy 248.00 MiB        | 1,521/1,523/1,531 | 1,859/1,860/1,860 | **−337** | **1 / 248**                   |
+| B5 — CJK-named dense 242.01 MiB   | 1,782/1,782/1,802 | 1,784/1,785/1,794 |       −3 | **63 / 306**                  |
+| B6 — package, 2 × 1.2 M triangles | 1,535/1,539/1,609 | 1,565/1,588/1,605 |  **−49** | **111 / 324**                 |
+| B7 — large replaced by large      | 1,316/1,317/1,317 | 1,319/1,319/1,319 |       −2 | **62 / 296**                  |
+
+### Decision: KEEP `662ed8e`
+
+**THE FIX IS BETTER OR EQUAL AT THE MEDIAN IN ALL SEVEN CASES**, by 187 MiB at
+125.74 MiB and 337 MiB for text-heavy XML, and within the run-to-run spread
+everywhere else. It is never worse.
+
+**THE RETENTION IT REMOVES IS REAL, LARGE AND PERMANENT.** Without it the
+geometry worker still holds 160 to 324 MiB after the import has finished and two
+collections have run — for the rest of the session, on every large 3MF. With it,
+1 to 111 MiB.
+
+**THE REGRESSION A2 RECORDED DOES NOT REPRODUCE WHEN THE COMMIT IS ISOLATED.**
+B6 is the exact shape A2 named, and here the fix is 49 MiB BETTER. A2's ~350 MiB
+was a difference between v0.2.0 and A2-as-committed — two stages apart — on a
+shape Stage 6D-A4 had already recorded swinging between 1,285 and 1,730 MiB for
+a single unchanged build. Attributing it to this commit was the cautious
+reading; measured against its own base, it is not there.
+
+**AND ROUTING RETIRES THE QUESTION FOR THAT SHAPE ANYWAY.** B6's model parts are
+about 222 MiB each, so under `auto` they stream and the buffered path — the only
+path `662ed8e` changes — never runs for them at all.
+
+No workaround was added and no collection is forced. Explicit GC is not product
+behaviour, and asking for one would be treating a scheduling observation as a
+defect.
+
+### Auto mode through the shipped build
+
+The production build as committed — `threeMfReader` registered with `auto`,
+nothing forced — driven through the real file chooser by
+`qualify:import-phases`. Two fresh browsers per case. The forced columns are the
+harness measurements above, for comparison.
+
+| Case                                  | `auto`, run 1 / run 2 | Forced buffered | Forced streamed | Path taken      |
+| ------------------------------------- | --------------------- | --------------: | --------------: | --------------- |
+| dense 95.51 MiB                       | 666 / 665             |             670 |             564 | buffered        |
+| dense 125.74 MiB                      | 572 / 567             |             568 |             669 | buffered        |
+| dense 242.01 MiB                      | 1,043 / 957           |           1,320 |             870 | streamed        |
+| text-heavy 248.00 MiB                 | **331 / 332**         |       **1,523** |             341 | streamed        |
+| CJK-named dense 242.01 MiB            | 1,016 / 883           |       **1,802** |             949 | streamed        |
+| M1 — tiny root + 200.8 MiB child      | 897 / 636             |             800 |             693 | mixed           |
+| M2 — 200.8 MiB root + 19.4 MiB child  | **665 / 703**         |       **1,221** |             779 | mixed           |
+| M3 — 180.3 + 180.3 MiB                | 903 / 845             |           1,131 |             846 | both streamed   |
+| M4 — 7.7 + 99.5 + 200.8 MiB           | 673 / 674             |             971 |             631 | three-way mixed |
+| M5 — one 200.8 MiB child placed twice | 888 / 631             |             800 |             642 | streamed, once  |
+
+**THE ROUTING IS VISIBLE IN THE NUMBERS AND NOWHERE ELSE.** Below the threshold
+`auto` tracks the buffered figure to within a few megabytes (666 against 670,
+572 against 568); above it, it tracks the streamed one (331 against 341 for
+text-heavy, against 1,523 buffered). M2 is the clearest single case: its large
+part is the ROOT, and under `auto` it costs 665–703 MiB rather than the 1,221 a
+package-wide buffered choice would have cost.
+
+**THE WORST CASE IN THE SET FALLS FROM 1,802 MiB TO 1,043 MiB**, and every
+import returns the same triangle count it returned before.
+
+**REPLACEMENT AND RETENTION.** A 242.01 MiB import followed by a two-triangle
+STL peaks at 903–1,035 MiB and leaves **3 MiB** of geometry-worker heap after
+two forced collections — the Stage 6E-A2 retention fix holding under routing,
+and no monotonic growth across the cycle.
+
+### What A3 did NOT change
+
+- **No resource ceiling moved.** `maxEntryBytes` 256 MiB, package expansion
+  512 MiB, ratio 200:1, `MAX_IMPORT_GEOMETRY_BYTES` 768 MiB, the topology and
+  boundary-inventory gates, the hole-fill ceilings: all untouched. An entry
+  declared past 256 MiB is refused in every mode, before a route is chosen, and
+  the end-to-end harness asserts it in the browser.
+- **BETA-002 remains unsupported.** Routing makes today's envelope cheaper; it
+  does not widen it. **STREAMING IMPORT REQUIRED — ROUTING QUALIFIED,
+  PRODUCTION CEILING NOT YET RAISED.**
+- **The support matrix is functionally unchanged**, and deliberately: for every
+  one of the 113 real producer 3MF files in the A4 corpus, `auto` reads exactly
+  what v0.2.0 read, by exactly the same path.
+- **No progress UI, no message, no setting.** The two-pass byte progress the
+  streamed path already reports is unchanged and still internally monotonic; a
+  progress surface remains a later polish task.
+- **Main-thread responsiveness is unchanged, and the stall that exists is not
+  the import's.** Longest gap between animation frames, shipped build against
+  the pre-A3 build, same files, one fresh browser each:
+
+  | Case                                    | A3 (`auto`) | Pre-A3 (buffered) |
+  | --------------------------------------- | ----------: | ----------------: |
+  | dense 125.74 MiB — 713,921 triangles    |    2,691 ms |          2,336 ms |
+  | dense 242.01 MiB — 1,361,499 triangles  |    4,371 ms |          4,484 ms |
+  | text-heavy 248.00 MiB — **4** triangles |      139 ms |            161 ms |
+  | mixed package M4 — 1,745,735 triangles  |    5,243 ms |                 — |
+  | dense 5.01 MiB — 29,786 triangles       |       66 ms |                 — |
+
+  **THE GAP TRACKS TRIANGLE COUNT, NOT ENTRY SIZE AND NOT THE ROUTE.** A
+  248 MiB entry holding four triangles blocks the main thread for 139 ms; a
+  242 MiB entry holding 1.36 M triangles blocks it for about 4.4 seconds, and by
+  the same amount on both builds. It is the non-indexed render snapshot and its
+  upload, which is main-thread work by construction and which A3 did not touch.
+  Idle gap is 18–26 ms throughout, analysis gap 18–22 ms, and Cancel stays
+  actionable — hover latency 43–104 ms at every size.
+
+  **This is a PRE-EXISTING cost, recorded rather than introduced.** Reducing it
+  means changing how geometry reaches the GPU, which is neither A3's question
+  nor A4's.
+
+### Open questions for A4
+
+- **The new ceiling.** A3 deliberately did not choose one. The streamed path is
+  flat to 242 MiB on every shape measured; what it does above 256 MiB, and what
+  the render snapshot and automatic analysis do with the geometry that implies,
+  is A4's measurement.
+- **Export validation still buffers.** `exportDocument` reads its own artifact
+  back with `ingestion: Buffered`, for the reason recorded above. It is bounded
+  by `maxOutputBytes` (256 MiB) today; if A4 raises the import ceiling, whether
+  the export ceiling follows — and whether validation should then route — is a
+  question A4 inherits.
+- **`XML_TAG_TOO_LONG` is now size-dependent.** Whether the streamed limit
+  should be imposed on the buffered path, making it uniform at the cost of a new
+  refusal for files the product accepts today, is not decided here.
+- **Object-heavy XML prefers buffering at 98.62 MiB** by 102 MiB, the only shape
+  that does near the line. It buffers under the selected threshold; whether it
+  still prefers buffering ABOVE 128 MiB was not measured, because the fixture
+  generator's object ceiling is the document's part ceiling.
+
 ## Staging plan
 
 - **6E-A2 — DONE.** Production-quality streamed ingestion behind a non-default
   seam; see the section above.
-- **6E-A3** — the product path: enable streaming through the full-product
-  qualification harness, measure page, render upload and diagnostics, compare
-  routing strategies, and settle the buffered peak regression A2 recorded.
+- **6E-A3 — DONE.** Automatic per-entry routing at 128 MiB; see the section
+  above.
 - **6E-A4** — choose a large-entry ceiling from A3's evidence, as its own
   decision.
 - **6E-A5** — release qualification.
@@ -783,6 +1341,12 @@ npm run qualify:streaming-import -- --cases dense:300 --modes whole,stream --run
 npm run qualify:streaming-import -- --cases dense:300 --modes stream --cancel 0.1,0.5,0.9
 npm run qualify:streaming-import -- --cases dense-cjk:250,text:300,objects,placements
 npm run qualify:streaming-import -- --cases dense:250 --emit /abs/dir/outside/repo
+
+# Stage 6E-A3: the shipped build, which routes; and either path forced.
+npm run build --workspace @cadfixer/web
+npm run preview --workspace @cadfixer/web                # :4173, in another terminal
+npm run qualify:import-phases -- file:1361499:/abs/dense-248.3mf --worker-heap
+npx vitest run packages/file-formats/src/threemf/ingestion-routing.test.ts
 
 # Stage 6E-A2: the same reader through the whole product, buffered or streamed.
 npm run build:harness --workspace @cadfixer/web

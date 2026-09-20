@@ -1768,15 +1768,67 @@ describe('6E-A2: streamed 3MF ingestion is productionised and OFF by default', (
     expect(handlers.match(/createModelImportHandler\(/g)).toHaveLength(2);
   });
 
-  it('the registry reads 3MF buffered, under the production limits', () => {
+  it('the registry reads 3MF routed per entry, under the production limits', () => {
+    /*
+     * STAGE 6E-A3 CHANGED THIS LINE, AND IT IS STILL ONE LINE. The product's
+     * only choice about ingestion is the registry's reader; A2 asserted it was
+     * built with no options at all, A3 asserts it is built with `auto` and
+     * nothing else. `zipLimits` still does not appear, so the 256 MiB per-entry
+     * ceiling is untouched by routing.
+     */
     const codec = read('packages', 'file-formats', 'src', 'threemf', 'codec.ts');
     expect(codec).toContain(
-      'export const threeMfReader: DocumentReader = createThreeMfReader({});',
+      'export const threeMfReader: DocumentReader = createThreeMfReader({\n  ingestion: ThreeMfIngestion.Auto,\n});',
     );
+    expect(codec).not.toContain('zipLimits');
+    expect(codec).not.toContain('maxEntryBytes');
+
+    // The MODE is read once from the options; the PATH is chosen per entry.
     const reader = read('packages', 'file-formats', 'src', 'threemf', 'threemf-reader.ts');
+    expect(reader).toContain('const mode = options.ingestion ?? ThreeMfIngestion.Buffered;');
     expect(reader).toContain(
-      'const streaming = (options.ingestion ?? ThreeMfIngestion.Buffered) === ThreeMfIngestion.Streaming;',
+      'const route: ThreeMfIngestionRoute = routeModelEntryIngestion(entry.uncompressedSize, mode);',
     );
+    // ONE CALL SITE, counted in CODE — the prose above it names the function too.
+    const readerCode = reader
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .split('\n')
+      .filter((line) => !line.trim().startsWith('//'))
+      .join('\n');
+    expect(readerCode.match(/routeModelEntryIngestion\(/g)).toHaveLength(1);
+  });
+
+  it('6E-A3: the route is decided from the declaration alone, by one leaf module', () => {
+    /*
+     * The routing input must be a deterministic function of the archive's own
+     * metadata. A module that could reach for available memory, a heap
+     * estimate, a clock, the file name or the producer would make the same file
+     * import two different ways on two machines — and make a refusal stop being
+     * reproducible. The module imports nothing at all, which is the strongest
+     * available statement of that.
+     */
+    const route = read('packages', 'file-formats', 'src', 'threemf', 'ingestion-route.ts');
+    expect(route).not.toMatch(/^\s*import\s/m);
+    for (const forbidden of [
+      'performance',
+      'Date.',
+      'navigator',
+      'deviceMemory',
+      'memory',
+      'random',
+      'compressedSize',
+      'name',
+    ]) {
+      const code = route
+        .replace(/\/\*[\s\S]*?\*\//g, '')
+        .split('\n')
+        .filter((line) => !line.trim().startsWith('//'))
+        .join('\n');
+      expect(code.includes(forbidden), `ingestion-route.ts reads ${forbidden}`).toBe(false);
+    }
+    // ONE threshold literal, and the decision reads it rather than restating it.
+    expect(route.match(/1024 \* 1024/g)).toHaveLength(1);
+    expect(route).toContain('declaredUncompressedBytes >= THREEMF_STREAMING_THRESHOLD_BYTES');
   });
 
   it('pass 2 cannot begin before pass 1 has decided: the order is in the source', () => {

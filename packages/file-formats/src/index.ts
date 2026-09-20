@@ -61,7 +61,15 @@ export {
   ThreeMfImportPhase,
   ThreeMfIngestion,
 } from './threemf/threemf-reader';
-export type { ThreeMfLimits, ThreeMfReadOptions } from './threemf/threemf-reader';
+export type {
+  ThreeMfIngestionRoute,
+  ThreeMfLimits,
+  ThreeMfReadOptions,
+} from './threemf/threemf-reader';
+export {
+  routeModelEntryIngestion,
+  THREEMF_STREAMING_THRESHOLD_BYTES,
+} from './threemf/ingestion-route';
 export { createThreeMfReader, threeMfReader } from './threemf/codec';
 export { createSlicedInflater, INFLATE_INPUT_SLICE_BYTES } from './threemf/inflate';
 export type { DecompressorLike, RawInflater } from './threemf/inflate';

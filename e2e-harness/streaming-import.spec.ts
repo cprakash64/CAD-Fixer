@@ -44,7 +44,7 @@ import {
  * only `PRODUCTION_IMPORT_CONFIG`; a boundary test holds that.
  */
 
-type Mode = 'buffered' | 'streaming';
+type Mode = 'buffered' | 'streaming' | 'auto';
 
 interface Chosen {
   readonly name: string;
@@ -155,7 +155,12 @@ function comparableState(state: HarnessState): Partial<HarnessState> {
   return rest;
 }
 
-async function importBothWays(
+/**
+ * The same file imported under EVERY ingestion mode — Stage 6E-A3 added the
+ * third. `auto` is what the product registers, so a comparison that omitted it
+ * would prove the two forced paths agree and say nothing about the shipped one.
+ */
+async function importEveryWay(
   page: Page,
   file: Chosen,
 ): Promise<
@@ -164,7 +169,7 @@ async function importBothWays(
   const out: Partial<
     Record<Mode, { readonly state: Partial<HarnessState>; readonly digest: DocumentDigest }>
   > = {};
-  for (const mode of ['buffered', 'streaming'] as const) {
+  for (const mode of ['buffered', 'streaming', 'auto'] as const) {
     await setIngestion(page, mode);
     const state = await importSettled(page, file);
     out[mode] = { state: comparableState(state), digest: await digest(page, state) };
@@ -307,18 +312,34 @@ test.describe('6E-A2: a streamed import is the same import, through the whole pi
       page,
     }) => {
       test.setTimeout(300_000);
-      const both = await importBothWays(page, file);
-      expect(both.streaming.state).toEqual(both.buffered.state);
-      expect(both.streaming.digest).toEqual(both.buffered.digest);
-      expect(both.streaming.state.partCount).toBeGreaterThan(0);
+      // BUFFERED IS THE ORACLE: v0.2.0's path is what the product produced
+      // before Stage 6E, so both newer paths are compared against it rather
+      // than against each other.
+      const every = await importEveryWay(page, file);
+      expect(every.streaming.state).toEqual(every.buffered.state);
+      expect(every.streaming.digest).toEqual(every.buffered.digest);
+      expect(every.auto.state).toEqual(every.buffered.state);
+      expect(every.auto.digest).toEqual(every.buffered.digest);
+      expect(every.buffered.state.partCount).toBeGreaterThan(0);
     });
   }
 
-  test('exporting a streamed import writes the same STL, OBJ and 3MF bytes', async ({ page }) => {
+  test('A3-R19: exporting writes the same STL, OBJ and 3MF bytes under every ingestion mode', async ({
+    page,
+  }) => {
+    /*
+     * STAGE 6E-A3 ADDED `auto` TO THIS COMPARISON. Exporting is a read of the
+     * resident document, so if two ingestion paths produce the same document
+     * they must produce the same bytes — and the artifact is validated by being
+     * read back, so a difference would surface twice. The product now registers
+     * `auto`, which makes it the mode a user's export actually goes through;
+     * comparing only the two forced modes would have stopped describing the
+     * shipped path.
+     */
     test.setTimeout(300_000);
     const file: Chosen = { name: 'family.3mf', buffer: productionFamily() };
-    const hashes: Record<Mode, string[]> = { buffered: [], streaming: [] };
-    for (const mode of ['buffered', 'streaming'] as const) {
+    const hashes: Record<Mode, string[]> = { buffered: [], streaming: [], auto: [] };
+    for (const mode of ['buffered', 'streaming', 'auto'] as const) {
       await setIngestion(page, mode);
       await importSettled(page, file);
       await page.getByTestId('open-convert').click();
@@ -335,7 +356,9 @@ test.describe('6E-A2: a streamed import is the same import, through the whole pi
       }
       await page.getByTestId('convert-close').click();
     }
+    expect(hashes.buffered).toHaveLength(3);
     expect(hashes.streaming).toEqual(hashes.buffered);
+    expect(hashes.auto).toEqual(hashes.buffered);
   });
 });
 
@@ -508,13 +531,20 @@ test.describe('6E-A2: a streamed import that fails commits nothing and leaves th
   });
 });
 
-test.describe('6E-A2: streaming admits nothing the per-entry ceiling refuses', () => {
-  test('an entry declared past 256 MiB is refused in both modes under production limits', async ({
+test.describe('6E-A2: no ingestion mode admits what the per-entry ceiling refuses', () => {
+  test('A3-R05: an entry declared past 256 MiB is refused in EVERY mode under production limits', async ({
     page,
   }) => {
-    test.setTimeout(120_000);
+    /*
+     * ROUTING IS NOT A CEILING, and this is where that is proved end to end.
+     * `auto` sends a 256 MiB-plus declaration towards the streamed path — and
+     * it is refused at the ZIP directory before any path is taken, exactly as
+     * the forced modes refuse it. A3 did not move `maxEntryBytes`, and nothing
+     * a user can do reaches a mode that would.
+     */
+    test.setTimeout(180_000);
     await openHarness(page);
-    for (const mode of ['buffered', 'streaming'] as const) {
+    for (const mode of ['buffered', 'streaming', 'auto'] as const) {
       await setIngestion(page, mode);
       await choose(page, { name: `${mode}-over.3mf`, buffer: threeMfOverEntryCeiling() });
       await expect(page.getByTestId('status-list')).toContainText(

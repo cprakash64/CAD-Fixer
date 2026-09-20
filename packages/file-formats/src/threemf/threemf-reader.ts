@@ -32,6 +32,11 @@ import { MeshFormatId } from '../formats';
  * for six strings. Re-exported so every existing caller is unaffected.
  */
 import { THREE_MF_DEFAULT_UNIT, THREE_MF_UNITS } from './units';
+import {
+  routeModelEntryIngestion,
+  ThreeMfIngestion,
+  type ThreeMfIngestionRoute,
+} from './ingestion-route';
 
 export { THREE_MF_DEFAULT_UNIT, THREE_MF_UNITS };
 import {
@@ -1669,34 +1674,51 @@ export interface ThreeMfReadOptions {
    */
   readonly budget?: InflationBudget;
   /**
-   * How each MODEL PART's bytes become XML events — Stage 6E-A2.
+   * How each MODEL PART's bytes become XML events — Stage 6E-A2, routed
+   * automatically since 6E-A3.
    *
-   * `buffered`, THE DEFAULT AND THE ONLY MODE THE PRODUCT USES: the whole entry
-   * is inflated into one buffer, decoded into one string and scanned. v0.2.0's
-   * path.
+   * `buffered`, THE DEFAULT HERE: the whole entry is inflated into one buffer,
+   * decoded into one string and scanned. v0.2.0's path.
    *
    * `streaming`: the entry is read twice through `openTwoPassEntry` — a security
    * pass, then an element pass — and never held whole, in bytes or in text. The
    * SAME element handlers (`createModelXmlParser`) interpret both, so the modes
    * differ in memory and in nothing a user can see, with one exception written
-   * down in `StreamXmlLimits.maxTagLength`. It needs
-   * `FormatReadContext.createTextDecoder`.
+   * down in `StreamXmlLimits.maxTagLength`.
    *
-   * Only model parts stream. The root relationships are always buffered: they
-   * are a few hundred bytes, and reading them twice would buy nothing.
+   * `auto`, WHAT THE PRODUCT REGISTERS: each model entry takes whichever path
+   * its DECLARED uncompressed size selects — see `routeModelEntryIngestion`. The
+   * two forced modes remain, because the differential suites have to be able to
+   * read the same file both ways whatever its size.
    *
-   * NOT A RESOURCE CEILING. Choosing `streaming` admits nothing `buffered` would
-   * refuse: `zipLimits`, and so the 256 MiB per-entry ceiling, apply to both.
+   * THE DEFAULT IS STILL `buffered`, and deliberately: `read3mf` with no options
+   * behaves exactly as it did in v0.2.0, so every test that does not ask for a
+   * route is the buffered oracle the streamed and routed paths are held to. The
+   * product's choice is made once, visibly, in `codec.ts`.
+   *
+   * Anything but `buffered` needs `FormatReadContext.createTextDecoder`.
+   *
+   * Only model parts are routed. The root relationships are always buffered:
+   * they are a few hundred bytes, and reading them twice would buy nothing.
+   *
+   * NOT A RESOURCE CEILING. No mode admits anything another would refuse:
+   * `zipLimits`, and so the 256 MiB per-entry ceiling, apply to all of them.
    */
   readonly ingestion?: ThreeMfIngestion;
 }
 
-/** See `ThreeMfReadOptions.ingestion`. */
-export const ThreeMfIngestion = {
-  Buffered: 'buffered',
-  Streaming: 'streaming',
-} as const;
-export type ThreeMfIngestion = (typeof ThreeMfIngestion)[keyof typeof ThreeMfIngestion];
+/*
+ * THE MODE NAMES, THE THRESHOLD AND THE DECISION LIVE IN `ingestion-route.ts`
+ * — Stage 6E-A3 — and are re-exported here so the reader stays the one import
+ * a caller needs. Defining them twice would be two answers to which path an
+ * entry takes.
+ */
+export {
+  routeModelEntryIngestion,
+  ThreeMfIngestion,
+  THREEMF_STREAMING_THRESHOLD_BYTES,
+} from './ingestion-route';
+export type { ThreeMfIngestionRoute } from './ingestion-route';
 
 /**
  * INSTRUMENTATION FOR THE STREAMED PATH — tests and qualification only.
@@ -1717,6 +1739,33 @@ export interface ThreeMfStreamingQualification {
   readonly onBytes?: (pass: 1 | 2, byteLength: number) => void;
   /** Pass boundaries, for the phase timings the design document reports. */
   readonly onPass?: (pass: 1 | 2, event: 'start' | 'end') => void;
+  /**
+   * Which path each model entry took — Stage 6E-A3.
+   *
+   * THE ONLY WAY TO OBSERVE A ROUTE, and it is qualification-only: routing is
+   * an implementation choice about memory, so nothing a user sees, nothing the
+   * document carries and no refusal may depend on having watched it. It exists
+   * because "this package buffered its root and streamed its child" is
+   * otherwise unprovable from the outside — both paths produce the same
+   * document, which is the whole point.
+   *
+   * IT IS NOT TELEMETRY. Nothing sends it anywhere: `file-formats` compiles
+   * with no DOM and no Node types, the repository bans every network API, and
+   * the package index does not export `read3mfForQualification` at all. The
+   * entry NAME is included because a mixed-mode package cannot be checked
+   * without knowing which part is which, and it never leaves the process that
+   * read the file.
+   */
+  readonly onRoute?: (decision: ThreeMfRouteDecision) => void;
+}
+
+/** One model entry's routing decision. See `ThreeMfStreamingQualification.onRoute`. */
+export interface ThreeMfRouteDecision {
+  /** The model part's archive path, e.g. `3D/3dmodel.model`. */
+  readonly entry: string;
+  /** What the ZIP directory declared — the routing input, and untrusted. */
+  readonly declaredUncompressedBytes: number;
+  readonly route: ThreeMfIngestionRoute;
 }
 
 /**
@@ -1776,10 +1825,23 @@ async function readThreeMfPackageUnguarded(
     // fault, not a bad file, and must not be reported to the user as one.
     throw internalRefusal('3MF import needs a decompressor, and none was provided.');
   }
-  const streaming = (options.ingestion ?? ThreeMfIngestion.Buffered) === ThreeMfIngestion.Streaming;
+  /*
+   * THE ROUTE IS DECIDED PER MODEL ENTRY — Stage 6E-A3. This is the MODE; the
+   * PATH an entry takes is `routeModelEntryIngestion(entry.uncompressedSize,
+   * mode)`, asked once per model part in `loadModelPart`, so a package may
+   * legitimately buffer its root and stream a child.
+   */
+  const mode = options.ingestion ?? ThreeMfIngestion.Buffered;
   const createTextDecoder = context.createTextDecoder;
-  if (streaming && createTextDecoder === undefined) {
-    // The same wiring fault, for the streamed path's other platform primitive.
+  if (mode !== ThreeMfIngestion.Buffered && createTextDecoder === undefined) {
+    /*
+     * The same wiring fault, for the streamed path's other platform primitive —
+     * and it is raised for `auto` UP FRONT rather than at the first entry that
+     * happens to cross the threshold. A caller that cannot stream must find out
+     * when it asks to be able to, not on whichever file is first large enough:
+     * falling back to buffered instead would silently undo the routing this
+     * stage exists to perform, on the exact entries that need it most.
+     */
     throw internalRefusal('Streamed 3MF import needs a text decoder, and none was provided.');
   }
 
@@ -1972,9 +2034,24 @@ async function readThreeMfPackageUnguarded(
     role: ModelPartRole,
   ): Promise<{ parsed: ParsedModel; unit: string | undefined }> => {
     throwIfCancelled(context.cancellation);
-    const parsed = streaming
-      ? await parseStreamedPart(entry, role)
-      : await parseBufferedPart(entry, role);
+    /*
+     * ONE DECISION, FROM THE DECLARATION ALONE, BEFORE A BYTE IS INFLATED.
+     * `entry.uncompressedSize` has already been bounded by `readZipDirectory`
+     * against `maxEntryBytes`, the package total and the ratio; it is still a
+     * CLAIM, and both paths re-check it while they read — overrun against the
+     * declaration, shortfall at the end of the stream — so a lying size chooses
+     * a route and never escapes a limit.
+     */
+    const route: ThreeMfIngestionRoute = routeModelEntryIngestion(entry.uncompressedSize, mode);
+    qualification?.onRoute?.({
+      entry: entry.name,
+      declaredUncompressedBytes: entry.uncompressedSize,
+      route,
+    });
+    const parsed =
+      route === ThreeMfIngestion.Streaming
+        ? await parseStreamedPart(entry, role)
+        : await parseBufferedPart(entry, role);
     throwIfCancelled(context.cancellation);
     materialiseMeshes(parsed, options.stats, poll);
     throwIfCancelled(context.cancellation);

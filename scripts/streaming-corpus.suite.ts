@@ -10,6 +10,7 @@ import {
   read3mf,
   read3mfForQualification,
   ThreeMfIngestion,
+  type ThreeMfRouteDecision,
 } from '../packages/file-formats/src/threemf/threemf-reader';
 import { createStreamScanStats } from '../packages/file-formats/src/threemf/xml-stream';
 import {
@@ -126,7 +127,7 @@ async function nestedDeclarations(bytes: Uint8Array): Promise<number> {
   return count;
 }
 
-it('reads every 3MF in CADFIXER_CORPUS identically, buffered and streamed', async () => {
+it('reads every 3MF in CADFIXER_CORPUS identically: buffered, streamed and routed', async () => {
   const root = process.env.CADFIXER_CORPUS ?? '';
   if (root === '') {
     process.stdout.write('\nCADFIXER_CORPUS is not set: nothing to read.\n');
@@ -143,6 +144,15 @@ it('reads every 3MF in CADFIXER_CORPUS identically, buffered and streamed', asyn
   const differing: string[] = [];
   const untyped: string[] = [];
   const reasons = new Map<string, number>();
+  /*
+   * A3 — HOW THE ROUTED READER ACTUALLY ROUTED THIS CORPUS. Recorded per entry
+   * so the design document can report what share of REAL producer output takes
+   * each path, which is the product-impact half of the threshold decision. It
+   * is a count, in this process, written to a local report; nothing is sent
+   * anywhere and no model path leaves the run.
+   */
+  const routed = { buffered: 0, streaming: 0 };
+  const entrySizes: number[] = [];
 
   for (const file of files(root)) {
     total += 1;
@@ -157,6 +167,29 @@ it('reads every 3MF in CADFIXER_CORPUS identically, buffered and streamed', asyn
         { stats },
       ),
     );
+    /*
+     * THE THIRD READ IS THE SHIPPED ONE. `auto` is what the registry holds, so
+     * a differential that compared only the two forced modes would no longer be
+     * comparing the product against anything.
+     */
+    const routes: ThreeMfRouteDecision[] = [];
+    const auto = await outcome(() =>
+      read3mfForQualification(
+        bytes,
+        testReadContext(),
+        { ingestion: ThreeMfIngestion.Auto },
+        {
+          onRoute: (decision) => {
+            routes.push(decision);
+          },
+        },
+      ),
+    );
+    for (const decision of routes) {
+      entrySizes.push(decision.declaredUncompressedBytes);
+      if (decision.route === ThreeMfIngestion.Streaming) routed.streaming += 1;
+      else routed.buffered += 1;
+    }
     longestTag = Math.max(longestTag, stats.maxTagChars);
     const declarations = await nestedDeclarations(bytes);
     nested += declarations;
@@ -169,14 +202,22 @@ it('reads every 3MF in CADFIXER_CORPUS identically, buffered and streamed', asyn
     }
     if (buffered !== streamed)
       differing.push(`${name}\n    buffered: ${buffered}\n    streamed: ${streamed}`);
-    if (buffered.startsWith('UNTYPED') || streamed.startsWith('UNTYPED')) untyped.push(name);
+    if (buffered !== auto) differing.push(`${name}\n    buffered: ${buffered}\n    auto: ${auto}`);
+    if (
+      buffered.startsWith('UNTYPED') ||
+      streamed.startsWith('UNTYPED') ||
+      auto.startsWith('UNTYPED')
+    )
+      untyped.push(name);
     if (report !== '') {
       appendFileSync(
         report,
         `${JSON.stringify({
           file: name,
           bytes: bytes.byteLength,
-          same: buffered === streamed,
+          same: buffered === streamed && buffered === auto,
+          modelEntryBytes: routes.map((decision) => decision.declaredUncompressedBytes),
+          routes: routes.map((decision) => decision.route),
           outcome: buffered.slice(0, 160),
           maxTagChars: stats.maxTagChars,
           nestedNamespaceDeclarations: declarations,
@@ -190,6 +231,8 @@ it('reads every 3MF in CADFIXER_CORPUS identically, buffered and streamed', asyn
       `${String(total - differing.length)} identical, ${String(differing.length)} different; ` +
       `longest streamed tag ${String(longestTag)} characters; ` +
       `${String(nested)} namespace declarations below <model>\n` +
+      `model entries routed: ${String(routed.buffered)} buffered, ${String(routed.streaming)} streamed` +
+      `${entrySizes.length === 0 ? '' : ` (largest ${String(Math.max(...entrySizes))} bytes)`}\n` +
       `refusals by reason: ${JSON.stringify(Object.fromEntries(reasons))}\n` +
       differing.map((line) => `  DIFFERENT ${line}\n`).join(''),
   );

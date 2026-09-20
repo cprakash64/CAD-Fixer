@@ -4,7 +4,7 @@ import { MeshFormatId } from '../formats';
 import { readObj } from '../obj/obj-reader';
 import { singlePartDocument } from '@cadfixer/mesh-core';
 import { readStl } from '../stl/stl-reader';
-import { read3mf } from '../threemf/threemf-reader';
+import { read3mf, ThreeMfIngestion } from '../threemf/threemf-reader';
 import {
   expectedObjRoundTrip,
   expectedStlRoundTrip,
@@ -102,7 +102,25 @@ export async function exportDocument(options: ExportDocumentOptions): Promise<Wr
              * rather than against a shape only validation ever builds.
              */
             { document: singlePartDocument((await readStl(written.bytes, read)).mesh) }
-          : await read3mf(written.bytes, read);
+          : /*
+             * VALIDATION READS BUFFERED, AND SAYS SO — Stage 6E-A3.
+             *
+             * The product registers `auto`, so a user's import of a large 3MF
+             * is streamed. Validation deliberately does NOT follow it. What has
+             * to be true of an exported file is that it survives the production
+             * READER — every resource ceiling, every refusal — and the buffered
+             * path is v0.2.0's, the oracle both other paths are held to. Making
+             * the validator depend on the routing decision would mean a routing
+             * defect could let an invalid file validate; making it independent
+             * means it cannot.
+             *
+             * It is also the reason this call does not need
+             * `FormatReadContext.createTextDecoder`, which the export worker
+             * does not supply. Stated explicitly rather than inherited from the
+             * default, so a later change to that default cannot silently move
+             * what validation proves.
+             */
+            await read3mf(written.bytes, read, { ingestion: ThreeMfIngestion.Buffered });
   } catch (cause) {
     if (isAppError(cause) && cause.code === 'OPERATION_CANCELLED') throw cause;
     throw exportInternal(

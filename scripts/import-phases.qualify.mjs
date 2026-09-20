@@ -522,8 +522,8 @@ const specs = (positional[0] ?? 'stl:100')
   .filter(Boolean);
 const valueOf = (name) => args.find((entry) => entry.startsWith(`--${name}=`))?.split('=')[1];
 const ingestion = valueOf('ingestion');
-if (ingestion !== undefined && ingestion !== 'buffered' && ingestion !== 'streaming') {
-  throw new Error(`--ingestion must be buffered or streaming, not ${ingestion}`);
+if (ingestion !== undefined && !['buffered', 'streaming', 'auto'].includes(ingestion)) {
+  throw new Error(`--ingestion must be buffered, streaming or auto, not ${ingestion}`);
 }
 const maxEntryMiB =
   valueOf('max-entry-mib') === undefined ? undefined : Number(valueOf('max-entry-mib'));

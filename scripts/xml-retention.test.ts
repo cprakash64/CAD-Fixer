@@ -73,8 +73,23 @@ async function packageOf(model: string): Promise<Uint8Array> {
   ]);
 }
 
+/**
+ * EVERY MODE, INCLUDING THE ONE THE PRODUCT REGISTERS — Stage 6E-A3, A3-R20.
+ *
+ * `auto` routes by size, and these parts are ~24 MiB, so `auto` resolves to the
+ * BUFFERED path here. That is exactly why it belongs in the list: the buffered
+ * path is the one the retention fix guards, it is the path the product still
+ * takes for everything below the threshold, and a regression in it would
+ * otherwise only be visible through a mode the product no longer uses.
+ */
+const MODES = [
+  ThreeMfIngestion.Buffered,
+  ThreeMfIngestion.Streaming,
+  ThreeMfIngestion.Auto,
+] as const;
+
 describe('R1: no decoded model part is retained after an import', () => {
-  for (const ingestion of [ThreeMfIngestion.Buffered, ThreeMfIngestion.Streaming]) {
+  for (const ingestion of MODES) {
     for (const [label, extra] of [
       ['ASCII', 'plain'],
       ['with CJK text', '模型'],
@@ -105,7 +120,7 @@ describe('R1: no decoded model part is retained after an import', () => {
     }
   }
 
-  for (const ingestion of [ThreeMfIngestion.Buffered, ThreeMfIngestion.Streaming]) {
+  for (const ingestion of MODES) {
     it(`${ingestion}: a REFUSED import leaves nothing of the part behind`, async () => {
       // Malformed at the very end, so the whole part is scanned — and matched
       // against — before the refusal.

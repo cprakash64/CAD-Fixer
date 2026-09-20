@@ -269,13 +269,18 @@ workerScope.addEventListener('message', (event: MessageEvent) => {
  * WHICH 3MF READER THE REAL IMPORT USES, set by the harness page — Stage 6E-A2.
  *
  * Its own message kind, invisible to `GeometryWorkerHost`, like the digest.
- * `buffered` with no ceiling is the production configuration itself;
- * anything else builds a reader with `createThreeMfReader`, which is exactly
- * how the shipped worker could NOT be configured.
+ *
+ * `auto` WITH NO CEILING IS THE PRODUCTION CONFIGURATION ITSELF — Stage 6E-A3
+ * moved the product from buffered to routed, so that is now which mode aliases
+ * to `PRODUCTION_IMPORT_CONFIG`. Every other request builds a reader with
+ * `createThreeMfReader`, which is exactly how the shipped worker could NOT be
+ * configured. FORCING `buffered` MUST KEEP FORCING IT: the differential suites
+ * read the same file both ways, and a `buffered` that quietly resolved to the
+ * production default would compare routing against itself.
  */
 interface IngestionRequest {
   readonly kind: 'harness/ingestion';
-  readonly mode: 'buffered' | 'streaming';
+  readonly mode: 'buffered' | 'streaming' | 'auto';
   /** A wider per-entry ceiling, for memory previews above the product's. */
   readonly maxEntryBytes?: number;
 }
@@ -285,7 +290,9 @@ function isIngestionRequest(value: unknown): value is IngestionRequest {
   const candidate = value as { kind?: unknown; mode?: unknown; maxEntryBytes?: unknown };
   return (
     candidate.kind === 'harness/ingestion' &&
-    (candidate.mode === 'buffered' || candidate.mode === 'streaming') &&
+    (candidate.mode === 'buffered' ||
+      candidate.mode === 'streaming' ||
+      candidate.mode === 'auto') &&
     (candidate.maxEntryBytes === undefined ||
       (typeof candidate.maxEntryBytes === 'number' &&
         Number.isSafeInteger(candidate.maxEntryBytes)))
@@ -295,13 +302,18 @@ function isIngestionRequest(value: unknown): value is IngestionRequest {
 workerScope.addEventListener('message', (event: MessageEvent) => {
   if (!isIngestionRequest(event.data)) return;
   const { mode, maxEntryBytes } = event.data;
+  const ingestion =
+    mode === 'streaming'
+      ? ThreeMfIngestion.Streaming
+      : mode === 'auto'
+        ? ThreeMfIngestion.Auto
+        : ThreeMfIngestion.Buffered;
   const config: ModelImportConfig =
-    mode === 'buffered' && maxEntryBytes === undefined
+    mode === 'auto' && maxEntryBytes === undefined
       ? PRODUCTION_IMPORT_CONFIG
       : {
           threeMfReader: createThreeMfReader({
-            ingestion:
-              mode === 'streaming' ? ThreeMfIngestion.Streaming : ThreeMfIngestion.Buffered,
+            ingestion,
             ...(maxEntryBytes === undefined
               ? {}
               : { zipLimits: { ...DEFAULT_ZIP_LIMITS, maxEntryBytes } }),
