@@ -77,6 +77,35 @@ export function formatBytes(bytes: number): string {
 }
 
 /**
+ * Renders `bytes` so it cannot read as EQUAL to the limit it is being refused
+ * against.
+ *
+ * WHY THIS EXISTS — Stage 6E-A4. `formatBytes` rounds to whole units above ten,
+ * which is the right answer almost everywhere and the wrong one in exactly one
+ * place: a refusal that names a value and the ceiling it crossed. A model entry
+ * of 402,704,688 bytes refused against a 402,653,184-byte ceiling rendered as
+ * "expands to 384 MiB; CAD Fixer's per-entry expansion limit is 384 MiB" — a
+ * true sentence that reads as a contradiction and makes the product look
+ * broken to the person whose file was refused.
+ *
+ * Two decimals only when the plain rendering would collide, so every refusal
+ * that is not near its ceiling keeps the shorter wording. It never claims the
+ * values differ when they do not: an exact tie renders as a tie.
+ */
+export function formatBytesAgainst(bytes: number, limit: number): string {
+  const plain = formatBytes(bytes);
+  if (bytes === limit || plain !== formatBytes(limit)) return plain;
+  if (!Number.isFinite(bytes) || bytes < BYTES_PER_STEP) return plain;
+  let value = bytes;
+  let step = 0;
+  while (value >= BYTES_PER_STEP && step < IEC_UNITS.length - 1) {
+    value /= BYTES_PER_STEP;
+    step += 1;
+  }
+  return `${value.toFixed(2)} ${IEC_UNITS[step] ?? 'B'}`;
+}
+
+/**
  * Renders an expansion ratio as `243:1`.
  *
  * Rounded, because the exact quotient is a float whose extra digits say nothing

@@ -1,4 +1,5 @@
 import { deflateRawSync } from 'node:zlib';
+import { MAX_THREEMF_MODEL_ENTRY_BYTES } from '../packages/file-formats/src/threemf/size-limits';
 
 /**
  * OBJ and 3MF fixture builders for the end-to-end suite.
@@ -778,15 +779,30 @@ export function threeMfProductionLarge(children: number, trianglesPerChild: numb
  * before anything is inflated — the bytes are never read.
  */
 export function threeMfOverEntryCeiling(): Buffer {
-  const noise = Buffer.alloc(2 * 1024 * 1024);
+  /*
+   * ONE BYTE PAST THE CEILING, DERIVED FROM IT — Stage 6E-A4.
+   *
+   * This used to declare a flat 300 MiB, which meant "over the ceiling" only
+   * while the ceiling was 256 MiB; when A4 raised it to 384 MiB the fixture
+   * silently became a file the product ACCEPTS, and the tests built on it would
+   * have gone on passing for the wrong reason or failing for an unrelated one.
+   * It now reads the production constant, so it keeps meaning what its name
+   * says whatever that constant becomes.
+   *
+   * THE NOISE IS SIZED FROM THE DECLARATION TOO, at about 100:1, so the
+   * COMPRESSION RATIO never fires first. A fixture that tripped the ratio would
+   * still be refused and would no longer be testing the entry ceiling.
+   */
+  const declared = MAX_THREEMF_MODEL_ENTRY_BYTES + 1;
+  const noise = Buffer.alloc(Math.ceil(declared / 100));
   let seed = 0x6e2;
-  for (let at = 0; at < noise.length; at += 4) {
+  for (let at = 0; at + 4 <= noise.length; at += 4) {
     seed = (Math.imul(seed, 1_103_515_245) + 12_345) >>> 0;
     noise.writeUInt32LE(seed, at);
   }
   return buildZip([
     { name: '[Content_Types].xml', content: CONTENT_TYPES },
     { name: '_rels/.rels', content: RELS },
-    { name: '3D/3dmodel.model', content: noise, declaredUncompressedSize: 300 * 1024 * 1024 },
+    { name: '3D/3dmodel.model', content: noise, declaredUncompressedSize: declared },
   ]);
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatBytes, formatCount, formatRatio } from './quantities';
+import { formatBytesAgainst, formatBytes, formatCount, formatRatio } from './quantities';
 
 /**
  * The formatter that puts numbers into refusal messages.
@@ -89,5 +89,44 @@ describe('formatRatio', () => {
 
   it('reports an unbounded ratio rather than Infinity:1', () => {
     expect(formatRatio(1000, 0)).toBe('an unbounded ratio');
+  });
+});
+
+describe('formatBytesAgainst: a refusal may not read as a contradiction', () => {
+  const MIB = 1024 * 1024;
+  const CEILING = 384 * MIB;
+
+  it('renders more precisely ONLY when the plain rendering would collide', () => {
+    /*
+     * STAGE 6E-A4. A model entry of 402,704,688 bytes refused against a
+     * 402,653,184-byte ceiling used to render as "expands to 384 MiB; CAD
+     * Fixer's per-entry expansion limit is 384 MiB" — true, and unreadable as
+     * anything but a bug by the person whose file was refused.
+     */
+    expect(formatBytes(402_704_688)).toBe(formatBytes(CEILING));
+    expect(formatBytesAgainst(402_704_688, CEILING)).toBe('384.05 MiB');
+    expect(formatBytesAgainst(402_704_688, CEILING)).not.toBe(formatBytes(CEILING));
+  });
+
+  it('leaves every refusal that is not near its ceiling exactly as it was', () => {
+    // The shorter wording is the right one almost everywhere, and this must not
+    // quietly add decimals to it.
+    for (const bytes of [0, 512, 4 * MIB, 100 * MIB, 512 * MIB, 1024 * MIB]) {
+      expect(formatBytesAgainst(bytes, CEILING)).toBe(formatBytes(bytes));
+    }
+  });
+
+  it('renders an exact tie as a tie, and never invents a difference', () => {
+    // A value EQUAL to the limit is not a contradiction; it is equality, and
+    // saying "384.00 MiB against 384 MiB" would imply a difference there is not.
+    expect(formatBytesAgainst(CEILING, CEILING)).toBe(formatBytes(CEILING));
+  });
+
+  it('works below the ceiling as well as above it', () => {
+    // The collision is symmetric: a value a little UNDER the limit rounds to
+    // the same string just as one a little over does.
+    const justUnder = CEILING - 40_000;
+    expect(formatBytes(justUnder)).toBe(formatBytes(CEILING));
+    expect(formatBytesAgainst(justUnder, CEILING)).not.toBe(formatBytes(CEILING));
   });
 });

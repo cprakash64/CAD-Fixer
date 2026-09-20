@@ -147,6 +147,13 @@ async function run(message: ExportSnapshotMessage): Promise<void> {
         yieldToEventLoop,
         decodeText: (bytes) => decoder.decode(bytes),
         inflateRaw,
+        /*
+         * PARSE-BACK ROUTES LIKE AN IMPORT — Stage 6E-A4, so a large generated
+         * 3MF is validated by streaming rather than held twice over. A fresh
+         * decoder per stream; the one above is the whole-buffer decoder the
+         * buffered path still uses below the routing threshold.
+         */
+        createTextDecoder: () => new TextDecoder('utf-8', { fatal: false }),
       },
     });
 

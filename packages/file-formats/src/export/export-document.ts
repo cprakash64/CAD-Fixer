@@ -103,24 +103,29 @@ export async function exportDocument(options: ExportDocumentOptions): Promise<Wr
              */
             { document: singlePartDocument((await readStl(written.bytes, read)).mesh) }
           : /*
-             * VALIDATION READS BUFFERED, AND SAYS SO — Stage 6E-A3.
+             * VALIDATION READS THE WAY A USER'S IMPORT READS — Stage 6E-A4,
+             * REVERSING 6E-A3's CHOICE, and the reversal is the point.
              *
-             * The product registers `auto`, so a user's import of a large 3MF
-             * is streamed. Validation deliberately does NOT follow it. What has
-             * to be true of an exported file is that it survives the production
-             * READER — every resource ceiling, every refusal — and the buffered
-             * path is v0.2.0's, the oracle both other paths are held to. Making
-             * the validator depend on the routing decision would mean a routing
-             * defect could let an invalid file validate; making it independent
-             * means it cannot.
+             * A3 pinned this to `buffered` so that a routing defect could not
+             * let an invalid file validate. That reasoning was sound when
+             * routing was one stage old and the biggest entry was 256 MiB. It
+             * stopped being affordable when A4 raised the per-entry ceiling:
+             * buffered parse-back holds the whole model entry twice over, so
+             * validating a maximum-sized export would cost more than importing
+             * it does — the exact cost 6E exists to remove, paid at the end of
+             * every large export instead.
              *
-             * It is also the reason this call does not need
-             * `FormatReadContext.createTextDecoder`, which the export worker
-             * does not supply. Stated explicitly rather than inherited from the
-             * default, so a later change to that default cannot silently move
-             * what validation proves.
+             * What replaces that safety is stronger than the pin was: routing
+             * is now qualified by a 2,474-file three-way differential in which
+             * buffered, streamed and routed reads are identical file for file,
+             * and by the parity tests in `ingestion-routing.test.ts`. The
+             * artifact is still fully parsed and fully validated; nothing is
+             * trusted because we wrote it.
+             *
+             * It needs `FormatReadContext.createTextDecoder`, which the export
+             * worker now supplies.
              */
-            await read3mf(written.bytes, read, { ingestion: ThreeMfIngestion.Buffered });
+            await read3mf(written.bytes, read, { ingestion: ThreeMfIngestion.Auto });
   } catch (cause) {
     if (isAppError(cause) && cause.code === 'OPERATION_CANCELLED') throw cause;
     throw exportInternal(

@@ -12,6 +12,7 @@ import {
   type FormatWriteDocumentContext,
   type WrittenDocument,
 } from './export-contract';
+import { MAX_THREEMF_MODEL_ENTRY_BYTES } from '../threemf/size-limits';
 import { ExportRefusal, exportBlocked, exportInternal, exportTooLarge } from './export-errors';
 import { writeFloat32Text, writeFloat64Text } from './numeric';
 import { buildZipArchive } from './zip-writer';
@@ -98,9 +99,26 @@ async function writeModelXml(
   unit: string,
   context: FormatWriteDocumentContext,
 ): Promise<Uint8Array> {
+  /*
+   * BOUNDED BY WHAT THE READER WILL TAKE BACK, NOT ONLY BY `maxSerialisedBytes`
+   * — Stage 6E-A4.
+   *
+   * This buffer becomes ONE ZIP ENTRY, so the ceiling that actually binds it is
+   * the reader's per-model-entry ceiling. Before A4 the writer used
+   * `maxSerialisedBytes` (512 MiB) alone while the reader refused an entry over
+   * 256 MiB, and the gap was reachable: a document of about 1.5 M triangles
+   * serialised to a 22.7 MiB archive whose model entry the production reader
+   * then refused as `ZIP_ENTRY_TOO_LARGE`. The export had already done all of
+   * its work and failed at parse-back as an INTERNAL error — CAD Fixer writing
+   * a file it could not read back.
+   *
+   * THE SMALLER OF THE TWO, so neither can be escaped: `maxSerialisedBytes`
+   * still bounds the pre-compression text for a caller that narrows it, and
+   * `MAX_THREEMF_MODEL_ENTRY_BYTES` guarantees the result is re-openable.
+   */
   const sink = createByteSink(
     context.encodeText,
-    context.limits.maxSerialisedBytes,
+    Math.min(context.limits.maxSerialisedBytes, MAX_THREEMF_MODEL_ENTRY_BYTES),
     ExportRefusal.SerialisedTooLarge,
   );
 

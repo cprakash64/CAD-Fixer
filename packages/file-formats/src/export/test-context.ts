@@ -1,5 +1,5 @@
 import { uncancellable, type CancellationToken } from '@cadfixer/shared';
-import { decodeUtf8, inflateRawForTests } from '../test-context';
+import { createTextDecoderForTests, decodeUtf8, inflateRawForTests } from '../test-context';
 import { DEFAULT_IMPORT_BUDGET } from '../budget';
 import type { FormatReadContext } from '../context';
 import {
@@ -73,7 +73,15 @@ export function testWriteContextWithDeflate(
   };
 }
 
-/** The read context parse-back validation uses. Production limits, no leniency. */
+/**
+ * The read context parse-back validation uses. Production limits, no leniency.
+ *
+ * MIRRORS THE EXPORT WORKER'S OWN CONTEXT, including `createTextDecoder` —
+ * Stage 6E-A4 made validation route like an import, so a generated 3MF above
+ * the streaming threshold is validated by streaming and needs the decoder. A
+ * test context without it would make every large export fail here as a wiring
+ * fault, which is exactly what it would do in the product.
+ */
 export function testExportReadContext(): FormatReadContext {
   return {
     cancellation: uncancellable,
@@ -82,5 +90,6 @@ export function testExportReadContext(): FormatReadContext {
     yieldToEventLoop: (): Promise<void> => Promise.resolve(),
     decodeText: decodeUtf8,
     inflateRaw: inflateRawForTests,
+    createTextDecoder: createTextDecoderForTests,
   };
 }

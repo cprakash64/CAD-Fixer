@@ -1,6 +1,13 @@
-import { formatBytes, formatCount, formatRatio, isAppError } from '@cadfixer/shared';
+import {
+  formatBytes,
+  formatBytesAgainst,
+  formatCount,
+  formatRatio,
+  isAppError,
+} from '@cadfixer/shared';
 import { ImportRefusal, importMalformed, importTooLarge, internalRefusal } from '../import-errors';
 import type { TwoPassByteSource } from './xml-stream';
+import { MAX_THREEMF_MODEL_ENTRY_BYTES, MAX_THREEMF_PACKAGE_BYTES } from './size-limits';
 
 /**
  * A BOUNDED, DEPENDENCY-FREE ZIP READER.
@@ -30,11 +37,17 @@ export interface ZipLimits {
   readonly maxPathLength: number;
 }
 
+/**
+ * THE TWO EXPANSION CEILINGS ARE READ FROM `size-limits.ts`, NEVER RESTATED —
+ * Stage 6E-A4. The 3MF WRITER has to know the per-entry ceiling too, because a
+ * model entry it writes past the reader's ceiling is a file CAD Fixer cannot
+ * open; before A4 those were two independent literals and they disagreed.
+ */
 export const DEFAULT_ZIP_LIMITS: ZipLimits = Object.freeze({
   maxArchiveBytes: 512 * 1024 * 1024,
   maxEntries: 4_096,
-  maxEntryBytes: 256 * 1024 * 1024,
-  maxTotalUncompressedBytes: 512 * 1024 * 1024,
+  maxEntryBytes: MAX_THREEMF_MODEL_ENTRY_BYTES,
+  maxTotalUncompressedBytes: MAX_THREEMF_PACKAGE_BYTES,
   maxCompressionRatio: 200,
   maxPathLength: 512,
 });
@@ -459,7 +472,7 @@ export function readZipDirectory(
     if (uncompressedSize > limits.maxEntryBytes) {
       throw importTooLarge(
         ImportRefusal.ZipEntryTooLarge,
-        `A file inside this archive expands to ${formatBytes(uncompressedSize)}; CAD Fixer's per-entry expansion limit is ${formatBytes(limits.maxEntryBytes)}.`,
+        `A file inside this archive expands to ${formatBytesAgainst(uncompressedSize, limits.maxEntryBytes)}; CAD Fixer's per-entry expansion limit is ${formatBytes(limits.maxEntryBytes)}.`,
         { declared: uncompressedSize, limit: limits.maxEntryBytes },
       );
     }
@@ -663,7 +676,7 @@ export async function readZipEntry(
     if (compressed.byteLength > limits.maxEntryBytes) {
       throw importTooLarge(
         ImportRefusal.ZipEntryTooLarge,
-        `A file inside this archive is ${formatBytes(compressed.byteLength)}; CAD Fixer's per-entry expansion limit is ${formatBytes(limits.maxEntryBytes)}.`,
+        `A file inside this archive is ${formatBytesAgainst(compressed.byteLength, limits.maxEntryBytes)}; CAD Fixer's per-entry expansion limit is ${formatBytes(limits.maxEntryBytes)}.`,
         { declared: compressed.byteLength, limit: limits.maxEntryBytes },
       );
     }
@@ -689,7 +702,7 @@ export async function readZipEntry(
   if (declared > limits.maxEntryBytes) {
     throw importTooLarge(
       ImportRefusal.ZipEntryTooLarge,
-      `A file inside this archive expands to ${formatBytes(declared)}; CAD Fixer's per-entry expansion limit is ${formatBytes(limits.maxEntryBytes)}.`,
+      `A file inside this archive expands to ${formatBytesAgainst(declared, limits.maxEntryBytes)}; CAD Fixer's per-entry expansion limit is ${formatBytes(limits.maxEntryBytes)}.`,
       { declared, limit: limits.maxEntryBytes },
     );
   }
@@ -935,7 +948,7 @@ function streamZipEntry(
     if (compressed.byteLength > limits.maxEntryBytes) {
       throw importTooLarge(
         ImportRefusal.ZipEntryTooLarge,
-        `A file inside this archive is ${formatBytes(compressed.byteLength)}; CAD Fixer's per-entry expansion limit is ${formatBytes(limits.maxEntryBytes)}.`,
+        `A file inside this archive is ${formatBytesAgainst(compressed.byteLength, limits.maxEntryBytes)}; CAD Fixer's per-entry expansion limit is ${formatBytes(limits.maxEntryBytes)}.`,
         { declared: compressed.byteLength, limit: limits.maxEntryBytes },
       );
     }
@@ -957,7 +970,7 @@ function streamZipEntry(
   if (declared > limits.maxEntryBytes) {
     throw importTooLarge(
       ImportRefusal.ZipEntryTooLarge,
-      `A file inside this archive expands to ${formatBytes(declared)}; CAD Fixer's per-entry expansion limit is ${formatBytes(limits.maxEntryBytes)}.`,
+      `A file inside this archive expands to ${formatBytesAgainst(declared, limits.maxEntryBytes)}; CAD Fixer's per-entry expansion limit is ${formatBytes(limits.maxEntryBytes)}.`,
       { declared, limit: limits.maxEntryBytes },
     );
   }
