@@ -13,6 +13,8 @@ import {
 import { deriveDocumentExportName, downloadBytes } from '../src/runtime/download';
 import { HoleFillService } from '../src/runtime/hole-fill-service';
 import { HarnessBar } from './harness-bar';
+import type { GeometryEditCandidateHandle } from '@cadfixer/geometry-runtime';
+import { SharedCancellationSource } from '@cadfixer/shared';
 import '../src/styles/app.css';
 
 /**
@@ -411,10 +413,155 @@ async function listBoundaryLoops(
     .promise;
 }
 
+let nextEditRequestId = 1;
+function beginTestEdit(
+  documentId: string,
+  revision: number,
+  partId: string,
+  dx: number,
+): Promise<GeometryEditCandidateHandle> {
+  const requestId = nextEditRequestId++;
+  return new Promise((resolve, reject) => {
+    const listener = (event: MessageEvent): void => {
+      const result = event.data as {
+        kind?: string;
+        requestId?: number;
+        ok?: boolean;
+        candidate?: GeometryEditCandidateHandle;
+        message?: string;
+      };
+      if (result.kind !== 'harness/edit-result' || result.requestId !== requestId) return;
+      harnessWorker.removeEventListener('message', listener);
+      if (result.ok && result.candidate) resolve(result.candidate);
+      else reject(new Error(result.message ?? 'Test edit failed.'));
+    };
+    harnessWorker.addEventListener('message', listener);
+    harnessWorker.postMessage({
+      kind: 'harness/edit-translate',
+      requestId,
+      documentId,
+      revision,
+      partId,
+      dx,
+    });
+  });
+}
+
+interface HarnessBooleanResult {
+  readonly status: string;
+  readonly triangles?: number;
+  readonly elapsedMs: number;
+  readonly stats: {
+    readonly active: number;
+    readonly created: number;
+    readonly terminated: number;
+  };
+  readonly phases: readonly { readonly phase: string; readonly at: number }[];
+}
+let nextBooleanRequestId = 1;
+let activeBooleanResult: Promise<HarnessBooleanResult> | undefined;
+let cancelActiveBoolean: (() => void) | undefined;
+let activeBooleanPhases: readonly { phase: string; at: number }[] = [];
+function beginTestBoolean(
+  operation: 'union' | 'difference' | 'intersection',
+  segments = 20,
+  rings = 12,
+  testCrash = false,
+): void {
+  const requestId = nextBooleanRequestId++;
+  const phases: { phase: string; at: number }[] = [];
+  const cancellation = new SharedCancellationSource();
+  activeBooleanPhases = phases;
+  activeBooleanResult = new Promise((resolve) => {
+    const listener = (event: MessageEvent): void => {
+      const data = event.data as {
+        kind?: string;
+        requestId?: number;
+        phase?: string;
+        at?: number;
+        status?: string;
+        triangles?: number;
+        elapsedMs?: number;
+        stats?: HarnessBooleanResult['stats'];
+      };
+      if (data.requestId !== requestId) return;
+      if (
+        data.kind === 'harness/boolean-phase' &&
+        data.phase !== undefined &&
+        data.at !== undefined
+      ) {
+        phases.push({ phase: data.phase, at: data.at });
+        return;
+      }
+      if (
+        data.kind !== 'harness/boolean-result' ||
+        data.status === undefined ||
+        data.elapsedMs === undefined ||
+        data.stats === undefined
+      )
+        return;
+      harnessWorker.removeEventListener('message', listener);
+      resolve({
+        status: data.status,
+        ...(data.triangles === undefined ? {} : { triangles: data.triangles }),
+        elapsedMs: data.elapsedMs,
+        stats: data.stats,
+        phases,
+      });
+    };
+    harnessWorker.addEventListener('message', listener);
+    harnessWorker.postMessage({
+      kind: 'harness/boolean-run',
+      requestId,
+      operation,
+      segments,
+      rings,
+      testCrash,
+      cancellation: cancellation.buffer,
+    });
+  });
+  cancelActiveBoolean = (): void => {
+    cancellation.cancel();
+    harnessWorker.postMessage({ kind: 'harness/boolean-cancel', requestId });
+  };
+}
+async function awaitTestBoolean(): Promise<HarnessBooleanResult> {
+  if (activeBooleanResult === undefined) throw new Error('No Boolean operation is active.');
+  const result = await activeBooleanResult;
+  activeBooleanResult = undefined;
+  cancelActiveBoolean = undefined;
+  activeBooleanPhases = result.phases;
+  return result;
+}
+
 declare global {
   interface Window {
     cadfixerHarness?: {
       digest(documentId: string, revision: number): Promise<HarnessDigest>;
+      beginTestEdit(
+        documentId: string,
+        revision: number,
+        partId: string,
+        dx: number,
+      ): Promise<GeometryEditCandidateHandle>;
+      previewTestEdit(candidate: GeometryEditCandidateHandle): Promise<{ vertexCount: number }>;
+      commitTestEdit(
+        candidate: GeometryEditCandidateHandle,
+        documentId: string,
+        revision: number,
+        partId: string,
+      ): Promise<{ revision: number; recordId: string }>;
+      discardTestEdit(candidate: GeometryEditCandidateHandle): Promise<boolean>;
+      undoTestEdit(documentId: string, revision: number, recordId: string): Promise<number>;
+      beginTestBoolean(
+        operation: 'union' | 'difference' | 'intersection',
+        segments?: number,
+        rings?: number,
+        testCrash?: boolean,
+      ): void;
+      awaitTestBoolean(): Promise<HarnessBooleanResult>;
+      cancelTestBoolean(): void;
+      testBooleanPhases(): readonly { phase: string; at: number }[];
       /** Stage 6E-A2: which 3MF reader the harness worker's real import uses. */
       setIngestion(mode: 'buffered' | 'streaming' | 'auto', maxEntryBytes?: number): Promise<void>;
       exportDocument(
@@ -487,6 +634,41 @@ function setIngestion(
 
 window.cadfixerHarness = {
   digest: requestDigest,
+  beginTestEdit,
+  previewTestEdit: async (candidate): Promise<{ vertexCount: number }> => {
+    const result = await geometryClient.previewGeometryEdit(candidate).promise;
+    return { vertexCount: result.render.vertexCount };
+  },
+  commitTestEdit: async (
+    candidate,
+    documentId,
+    revision,
+    partId,
+  ): Promise<{ revision: number; recordId: string }> => {
+    const result = await geometryClient.commitGeometryEdit(
+      candidate,
+      { documentId, revision } as never,
+      partId,
+    ).promise;
+    store.applyGeometryEditResult(result);
+    return { revision: result.handle.revision, recordId: result.recordId };
+  },
+  discardTestEdit: async (candidate): Promise<boolean> => {
+    const result = await geometryClient.discardGeometryEdit(candidate).promise;
+    return result.released;
+  },
+  undoTestEdit: async (documentId, revision, recordId): Promise<number> => {
+    const result = await geometryClient.undoRepair(
+      { documentId, revision } as never,
+      recordId,
+      () => undefined,
+    ).promise;
+    return result.handle.revision;
+  },
+  beginTestBoolean,
+  awaitTestBoolean,
+  cancelTestBoolean: (): void => cancelActiveBoolean?.(),
+  testBooleanPhases: (): readonly { phase: string; at: number }[] => activeBooleanPhases,
   setIngestion,
   exportDocument: runExport,
   beginExport,

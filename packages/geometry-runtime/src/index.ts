@@ -200,3 +200,33 @@ export type {
   HoleFillCandidateStats,
   HoleFillCommitRequest,
 } from './hole-fill-candidates';
+
+export {
+  GeometryEditStore,
+  validateGeometryEdit,
+  DEFAULT_GEOMETRY_EDIT_LIMITS,
+} from './geometry-edit';
+export type {
+  GeometryEditTicket,
+  GeometryEditCandidateHandle,
+  GeometryEditResourceAccounting,
+  GeometryEditCandidateSummary,
+  GeometryEditCommitResult,
+  GeometryEditLimits,
+} from './geometry-edit';
+export {
+  booleanUnion,
+  booleanDifference,
+  booleanIntersection,
+  runValidatedBoolean,
+} from './boolean-adapter';
+export type { BooleanBackend, BooleanKind, BooleanResult } from './boolean-adapter';
+
+export type {
+  EditPreviewPayload,
+  EditPreviewResult,
+  EditCommitPayload,
+  EditCommitResult,
+  EditDiscardPayload,
+  EditDiscardResult,
+} from './protocol';

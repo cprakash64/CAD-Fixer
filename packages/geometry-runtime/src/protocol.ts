@@ -15,6 +15,7 @@ import type {
 import type { DocumentHandle } from './resident-documents';
 import type { RepairCandidateHandle } from './repair-candidates';
 import type { HoleFillCandidateHandle } from './hole-fill-candidates';
+import type { GeometryEditCandidateHandle, GeometryEditResourceAccounting } from './geometry-edit';
 import type { UndoableChangeKind } from './repair-history';
 // Type-only, exactly as the topology and repair contracts are, so no engine
 // code is pulled into the main-thread bundle. The VALUES the interface compares
@@ -209,6 +210,43 @@ export interface OperationMap {
     payload: HoleFillCommitPayload;
     result: HoleFillCommitResult;
   };
+  'edit/preview': { payload: EditPreviewPayload; result: EditPreviewResult };
+  'edit/commit': { payload: EditCommitPayload; result: EditCommitResult };
+  'edit/discard': { payload: EditDiscardPayload; result: EditDiscardResult };
+}
+
+/* ------------------------------------------------------------- geometry edit -- */
+
+export interface EditPreviewPayload {
+  readonly candidate: GeometryEditCandidateHandle;
+}
+export interface EditPreviewResult {
+  readonly candidate: GeometryEditCandidateHandle;
+  readonly render: RenderSnapshot;
+}
+export interface EditCommitPayload {
+  readonly candidate: GeometryEditCandidateHandle;
+  readonly expectedSource: DocumentHandle;
+  readonly expectedPart: string;
+}
+export interface EditCommitResult {
+  readonly handle: DocumentHandle;
+  readonly parentRevision: number;
+  readonly recordId: string;
+  readonly partId: string;
+  readonly render: RenderSnapshot;
+  readonly parts: readonly PartDescriptor[];
+  readonly residentBytes: number;
+  readonly triangleCount: number;
+  readonly vertexCount: number;
+  readonly bounds: MeshBounds | undefined;
+  readonly resources: GeometryEditResourceAccounting;
+}
+export interface EditDiscardPayload {
+  readonly candidate: GeometryEditCandidateHandle;
+}
+export interface EditDiscardResult {
+  readonly released: boolean;
 }
 
 /* --------------------------------------------------------------- hole fill -- */

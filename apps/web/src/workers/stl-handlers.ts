@@ -5,6 +5,7 @@ import {
   type CancellationToken,
   type Diagnostic,
 } from '@cadfixer/shared';
+import { BooleanOperationController } from './boolean-operation-controller';
 import {
   assertGeometryDocument,
   assertMeshStructure,
@@ -43,6 +44,7 @@ import { inflateRaw } from './platform-inflate';
 import { analyseTopology, estimateTopologyWorkspaceBytes } from '@cadfixer/mesh-topology';
 import {
   HoleFillCandidateStore,
+  GeometryEditStore,
   RepairCandidateStore,
   RepairHistoryStore,
   TopologyReportCache,
@@ -130,6 +132,11 @@ export const holeFillCandidates = new HoleFillCandidateStore();
 export const topologyReports = new TopologyReportCache();
 
 export const residentDocuments = new ResidentDocumentStore();
+
+/** Shared Stage 7 candidate store. Future split and texture engines produce here. */
+export const geometryEdits = new GeometryEditStore(residentDocuments, repairHistory);
+/** Owns the one disposable nested Manifold worker, when a Boolean is active. */
+export const booleanOperations = new BooleanOperationController();
 
 /**
  * Returns control to the worker's event loop.
@@ -721,6 +728,8 @@ export const modelReleaseHandler: OperationHandler<'model/release'> = (payload) 
   // `prepareCommit` would refuse it — so retaining a whole part's geometry for
   // it would be a leak with no upside.
   holeFillCandidates.releaseDocument(documentId);
+  geometryEdits.releaseDocument(documentId);
+  booleanOperations.cancelDocument(documentId);
   topologyReports.release(documentId);
   const value: ModelReleaseResult = { released };
   return Promise.resolve({ value });

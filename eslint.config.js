@@ -76,6 +76,8 @@ export default tseslint.config(
       // single-line, and not authored here. The binding that produces it and the
       // worker that consumes it ARE linted.
       'packages/self-intersection-kernel/artifacts/**',
+      // Stage 7A: pinned upstream Emscripten output. The authored wrapper is linted.
+      'apps/web/src/workers/third-party/manifold/manifold-candidate.js',
       'experiments/browser-harness/.cases/**',
       'experiments/repair-kernels/*/artifacts/**',
     ],

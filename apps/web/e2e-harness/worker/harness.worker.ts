@@ -5,14 +5,28 @@ import {
   type MessageEndpoint,
   type OperationHandler,
 } from '@cadfixer/geometry-runtime';
-import { malformedFile } from '@cadfixer/shared';
+import {
+  adoptSharedCancellation,
+  CancellationSource,
+  combineCancellation,
+  isAppError,
+  malformedFile,
+  throwIfCancelled,
+} from '@cadfixer/shared';
 import {
   createThreeMfReader,
   DEFAULT_ZIP_LIMITS,
   EMPTY_COMPATIBILITY,
   ThreeMfIngestion,
 } from '@cadfixer/file-formats';
-import { assertGeometryDocument, distinctMeshes } from '@cadfixer/mesh-core';
+import {
+  assertGeometryDocument,
+  createIndexArray,
+  createPositionArray,
+  distinctMeshes,
+  partId,
+  type CanonicalMesh,
+} from '@cadfixer/mesh-core';
 import {
   commitImportedDocument,
   createModelImportHandler,
@@ -22,7 +36,11 @@ import {
   modelExportHandler,
   modelReleaseHandler,
   residentDocuments,
+  geometryEdits,
+  booleanOperations,
+  buildRenderSnapshot,
 } from '../../src/workers/stl-handlers';
+import { runValidatedBoolean, type BooleanKind } from '@cadfixer/geometry-runtime';
 import { modelSendForDiagnosticHandler } from '../../src/workers/self-intersection-handlers';
 import {
   holeFillDiscardHandler,
@@ -35,6 +53,11 @@ import {
   holeFillPatchPreviewHandler,
 } from '../../src/workers/hole-fill-workflow-handlers';
 import { documentSendForExportHandler } from '../../src/workers/export-handlers';
+import {
+  editPreviewHandler,
+  editCommitHandler,
+  editDiscardHandler,
+} from '../../src/workers/geometry-edit-handlers';
 import {
   repairCommitHandler,
   repairCreateCandidateHandler,
@@ -174,6 +197,9 @@ host.register('holefill/boundary-preview', holeFillBoundaryPreviewHandler);
 host.register('holefill/patch-preview', holeFillPatchPreviewHandler);
 host.register('holefill/commit', holeFillCommitHandler);
 host.register('document/send-for-export', documentSendForExportHandler);
+host.register('edit/preview', editPreviewHandler);
+host.register('edit/commit', editCommitHandler);
+host.register('edit/discard', editDiscardHandler);
 
 host.register('repair/plan', repairPlanHandler);
 host.register('repair/create-candidate', repairCreateCandidateHandler);
@@ -265,6 +291,165 @@ workerScope.addEventListener('message', (event: MessageEvent) => {
   });
 });
 
+let activeBoolean:
+  { readonly requestId: number; readonly cancellation: CancellationSource } | undefined;
+
+function sphere(cx: number, segments: number, rings: number): CanonicalMesh {
+  const vertexCount = 2 + (rings - 1) * segments;
+  const positions = createPositionArray(vertexCount * 3);
+  positions.set([cx, 0, 1], 0);
+  let vertex = 1;
+  for (let ring = 1; ring < rings; ring++) {
+    const phi = (Math.PI * ring) / rings;
+    for (let segment = 0; segment < segments; segment++) {
+      const theta = (Math.PI * 2 * segment) / segments;
+      positions.set(
+        [cx + Math.sin(phi) * Math.cos(theta), Math.sin(phi) * Math.sin(theta), Math.cos(phi)],
+        vertex * 3,
+      );
+      vertex += 1;
+    }
+  }
+  positions.set([cx, 0, -1], (vertexCount - 1) * 3);
+  const indices = createIndexArray(segments * (rings - 1) * 6);
+  let at = 0;
+  for (let segment = 0; segment < segments; segment++) {
+    const next = (segment + 1) % segments;
+    indices.set([0, 1 + segment, 1 + next], at);
+    at += 3;
+  }
+  for (let ring = 0; ring < rings - 2; ring++) {
+    const row = 1 + ring * segments,
+      nextRow = row + segments;
+    for (let segment = 0; segment < segments; segment++) {
+      const next = (segment + 1) % segments;
+      indices.set([row + segment, nextRow + segment, row + next], at);
+      at += 3;
+      indices.set([row + next, nextRow + segment, nextRow + next], at);
+      at += 3;
+    }
+  }
+  const south = vertexCount - 1,
+    last = 1 + (rings - 2) * segments;
+  for (let segment = 0; segment < segments; segment++) {
+    const next = (segment + 1) % segments;
+    indices.set([last + segment, south, last + next], at);
+    at += 3;
+  }
+  return { positions, indices, metadata: {} };
+}
+
+workerScope.addEventListener('message', (event: MessageEvent) => {
+  const data = event.data as {
+    kind?: string;
+    requestId?: number;
+    operation?: BooleanKind;
+    segments?: number;
+    rings?: number;
+    testCrash?: boolean;
+    cancellation?: SharedArrayBuffer;
+  };
+  if (data.kind === 'harness/boolean-cancel') {
+    activeBoolean?.cancellation.cancel();
+    return;
+  }
+  if (
+    data.kind !== 'harness/boolean-run' ||
+    data.requestId === undefined ||
+    data.operation === undefined
+  )
+    return;
+  activeBoolean?.cancellation.cancel();
+  const requestId = data.requestId,
+    operation = data.operation;
+  const cancellation = new CancellationSource();
+  activeBoolean = { requestId, cancellation };
+  const token =
+    data.cancellation === undefined
+      ? cancellation.token
+      : combineCancellation(adoptSharedCancellation(data.cancellation), cancellation.token);
+  const started = performance.now();
+  const segments = data.segments ?? 20,
+    rings = data.rings ?? 12;
+  const a = sphere(0, segments, rings),
+    b = sphere(0.35, segments, rings);
+  void (async (): Promise<void> => {
+    try {
+      const result = await runValidatedBoolean(
+        {
+          operate: async (kind, left, right, childToken) => {
+            const mesh = await booleanOperations.run(kind, left, right, childToken, {
+              owner: {
+                documentId: `harness-${String(requestId)}`,
+                generation: requestId,
+              },
+              ...(data.testCrash === undefined ? {} : { testCrash: data.testCrash }),
+              onPhase: (timing) => {
+                workerScope.postMessage({
+                  kind: 'harness/boolean-phase',
+                  requestId,
+                  ...timing,
+                });
+              },
+            });
+            workerScope.postMessage({
+              kind: 'harness/boolean-phase',
+              requestId,
+              phase: 'OUTPUT_VALIDATION',
+              at: performance.now(),
+            });
+            return mesh;
+          },
+        },
+        operation,
+        a,
+        b,
+        token,
+      );
+      workerScope.postMessage({
+        kind: 'harness/boolean-phase',
+        requestId,
+        phase: 'PREVIEW_CONSTRUCTION',
+        at: performance.now(),
+      });
+      // Qualification-only extension of the real preview preparation window.
+      // It touches the returned coordinates and polls the same shared token,
+      // making cancellation after the phase marker deterministic on fast hosts.
+      const previewDeadline = performance.now() + 200;
+      let previewChecksum = 0;
+      while (performance.now() < previewDeadline) {
+        for (let at = 0; at < result.mesh.positions.length; at += 1024) {
+          previewChecksum += result.mesh.positions[at] ?? 0;
+          throwIfCancelled(token);
+        }
+      }
+      const preview = buildRenderSnapshot(result.mesh);
+      void preview;
+      void previewChecksum;
+      throwIfCancelled(token);
+      workerScope.postMessage({
+        kind: 'harness/boolean-result',
+        requestId,
+        status: 'SUCCESS',
+        triangles: result.mesh.indices.length / 3,
+        elapsedMs: performance.now() - started,
+        stats: booleanOperations.stats,
+      });
+    } catch (cause) {
+      workerScope.postMessage({
+        kind: 'harness/boolean-result',
+        requestId,
+        status: isAppError(cause) ? cause.code : 'INTERNAL_ERROR',
+        message: cause instanceof Error ? cause.message : String(cause),
+        elapsedMs: performance.now() - started,
+        stats: booleanOperations.stats,
+      });
+    } finally {
+      if (activeBoolean.requestId === requestId) activeBoolean = undefined;
+    }
+  })();
+});
+
 /**
  * WHICH 3MF READER THE REAL IMPORT USES, set by the harness page — Stage 6E-A2.
  *
@@ -321,4 +506,57 @@ workerScope.addEventListener('message', (event: MessageEvent) => {
         };
   realImport = createModelImportHandler(config);
   workerScope.postMessage({ kind: 'harness/ingestion-set', mode, maxEntryBytes });
+});
+
+/** Harness-only deterministic edit producer. The production worker registers no
+ * create operation, so users cannot request this synthetic translation. */
+workerScope.addEventListener('message', (event: MessageEvent) => {
+  const data: unknown = event.data;
+  if (
+    typeof data !== 'object' ||
+    data === null ||
+    (data as { kind?: unknown }).kind !== 'harness/edit-translate'
+  )
+    return;
+  const request = data as {
+    kind: string;
+    requestId: number;
+    documentId: string;
+    revision: number;
+    partId: string;
+    dx: number;
+  };
+  try {
+    if (
+      !Number.isSafeInteger(request.requestId) ||
+      !Number.isFinite(request.dx) ||
+      Math.abs(request.dx) > 1000
+    )
+      throw new Error('Invalid test edit request.');
+    const source = { documentId: request.documentId as never, revision: request.revision };
+    const part = residentDocuments.resolvePart(source, partId(request.partId));
+    if (isAppError(part)) throw part;
+    const ticket = geometryEdits.begin(source, part.id, 'test-translate');
+    const positions = createPositionArray(part.mesh.positions.length);
+    positions.set(part.mesh.positions);
+    for (let at = 0; at < positions.length; at += 3)
+      positions[at] = (positions[at] ?? 0) + request.dx;
+    const indices = createIndexArray(part.mesh.indices.length);
+    indices.set(part.mesh.indices);
+    const candidate = geometryEdits.resolve(ticket, { ...part.mesh, positions, indices });
+    workerScope.postMessage({
+      kind: 'harness/edit-result',
+      requestId: request.requestId,
+      ok: true,
+      candidate: candidate.candidate,
+      resources: candidate.resources,
+    });
+  } catch (cause) {
+    workerScope.postMessage({
+      kind: 'harness/edit-result',
+      requestId: request.requestId,
+      ok: false,
+      message: cause instanceof Error ? cause.message : String(cause),
+    });
+  }
 });

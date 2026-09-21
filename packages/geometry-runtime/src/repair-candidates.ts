@@ -279,6 +279,12 @@ export class RepairCandidateStore {
     return this.discardById(handle.candidateId);
   }
 
+  /** Release the active draft when another edit changes this document. */
+  public releaseDocument(documentId: DocumentId): void {
+    const candidateId = this.activeByDocument.get(documentId);
+    if (candidateId !== undefined) this.discardById(candidateId);
+  }
+
   private discardById(candidateId: RepairCandidateId): boolean {
     const entry = this.candidates.get(candidateId);
     if (entry === undefined) return false;

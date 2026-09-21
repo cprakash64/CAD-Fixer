@@ -40,6 +40,7 @@ import {
   buildRenderSnapshot,
   describeParts,
   holeFillCandidates,
+  geometryEdits,
   repairCandidates,
   repairHistory,
   residentDocuments,
@@ -556,6 +557,7 @@ export function createRepairCommitHandler(
      * geometry rather than leaving it resident until something notices.
      */
     holeFillCandidates.releaseDocument(next.documentId);
+    geometryEdits.releaseDocument(next.documentId);
 
     return Promise.resolve({
       value: {
@@ -738,6 +740,7 @@ export function createRepairUndoHandler(work: RepairUndoWork): OperationHandler<
     repairHistory.markUndone(payload.recordId);
     // The revision moved, so any hole-fill candidate for this document is stale.
     holeFillCandidates.releaseDocument(next.documentId);
+    geometryEdits.releaseDocument(next.documentId);
 
     return Promise.resolve({
       value: {

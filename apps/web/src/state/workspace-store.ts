@@ -1,6 +1,7 @@
 import type {
   ConservativeRepairPlan,
   DocumentRenderSnapshot,
+  EditCommitResult,
   MeshBounds,
   DocumentHandle,
   PartDescriptor,
@@ -1807,6 +1808,53 @@ export class WorkspaceStore {
    * Analysis is reset to `Idle` for the NEW handle, which is what makes
    * diagnostics re-run automatically against the repaired geometry.
    */
+  /** Shared future split/texture commit path. Every diagnostic belongs to the old revision. */
+  public applyGeometryEditResult(result: EditCommitResult): boolean {
+    const model = this.state.model;
+    if (
+      model?.handle.documentId !== result.handle.documentId ||
+      model.handle.revision !== result.parentRevision
+    )
+      return false;
+    if (!model.parts.some((part) => part.partId === result.partId)) return false;
+    const revision = this.nextModelRevision;
+    this.nextModelRevision += 1;
+    this.currentAnalysisToken = undefined;
+    this.currentRepairToken = undefined;
+    this.currentSelfIntersectionToken = undefined;
+    this.currentHoleFillToken = undefined;
+    const edited = result.parts.find((part) => part.partId === result.partId);
+    this.update({
+      model: {
+        ...model,
+        handle: result.handle,
+        parts: result.parts,
+        render: withPartRender(model.render, result.partId, result.render, result.parts),
+        bounds: result.bounds,
+        triangleCount: result.triangleCount,
+        vertexCount: result.vertexCount,
+        residentBytes: result.residentBytes,
+        revision,
+      },
+      analysis: {
+        ...EMPTY_ANALYSIS,
+        state: AnalysisState.Idle,
+        handle: result.handle,
+        partId: this.state.activePartId,
+      },
+      selfIntersection: {
+        ...EMPTY_SELF_INTERSECTION,
+        handle: result.handle,
+        partId: this.state.activePartId,
+        band: bandForFaceCount(edited?.triangleCount ?? result.triangleCount),
+      },
+      overlays: OVERLAYS_HIDDEN,
+      repair: { ...EMPTY_REPAIR, handle: result.handle, partId: this.state.activePartId },
+      holeFill: { ...EMPTY_HOLE_FILL, handle: result.handle, partId: this.state.activePartId },
+    });
+    return true;
+  }
+
   public applyRepairResult(result: {
     readonly handle: DocumentHandle;
     readonly parentRevision: number;

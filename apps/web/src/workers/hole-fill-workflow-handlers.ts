@@ -25,6 +25,7 @@ import {
   buildRenderSnapshot,
   describeParts,
   holeFillCandidates,
+  geometryEdits,
   repairHistory,
   residentDocuments,
 } from './stl-handlers';
@@ -479,6 +480,7 @@ export function createHoleFillCommitHandler(
     const next = residentDocuments.replace(payload.expectedSource, successor);
     if (isAppError(next)) throw next;
     holeFillCandidates.markCommitted(payload.candidate);
+    geometryEdits.releaseDocument(next.documentId);
 
     /*
      * A DETERMINISTIC RECORD ID: lineage, part, both revisions and the opening.

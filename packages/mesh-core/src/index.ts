@@ -85,3 +85,22 @@ export type {
   MeshValidationOptions,
   MeshValidationReport,
 } from './validation';
+
+export {
+  classifyEditPlane,
+  createEditFrame,
+  growEditRegion,
+  measureEditPlanarity,
+  selectEditSurface,
+  transformEditNormal,
+  transformEditPoint,
+  triangleEditNormal,
+} from './edit-geometry';
+export type {
+  EditFrame,
+  EditPlane,
+  EditVector,
+  RegionGrowthOptions,
+  RegionPlanarity,
+  SurfaceRegion,
+} from './edit-geometry';

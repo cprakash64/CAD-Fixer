@@ -27,6 +27,7 @@ const FIXTURES: readonly { readonly id: FixtureId; readonly label: string }[] = 
   { id: HarnessFixtureId.CrossingAndOverlappingClean, label: 'Crossing + overlapping clean' },
   { id: HarnessFixtureId.SmallAndOversized, label: 'Small + oversized' },
   { id: HarnessFixtureId.Shared10, label: '10 shared placements' },
+  { id: HarnessFixtureId.SevenSharedMillimetre, label: '7 shared parts (mm)' },
   { id: HarnessFixtureId.Shared100, label: '100 shared placements' },
   { id: HarnessFixtureId.Shared1000, label: '1000 shared placements' },
   { id: HarnessFixtureId.SinglePart, label: 'Single part' },

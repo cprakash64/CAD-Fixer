@@ -19,6 +19,7 @@ export const Fixture = {
   CrossingAndOverlappingClean: 'crossing-and-overlapping-clean',
   SmallAndOversized: 'small-and-oversized',
   Shared10: 'shared-10',
+  SevenSharedMillimetre: 'seven-shared-millimetre',
   Shared100: 'shared-100',
   Shared1000: 'shared-1000',
   SinglePart: 'single-part',

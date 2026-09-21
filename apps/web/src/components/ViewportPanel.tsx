@@ -48,6 +48,9 @@ export function ViewportPanel(): ReactNode {
 
     try {
       const viewport = createViewport(container, {
+        onPick: (hit) => {
+          store.selectPart(hit.partId);
+        },
         onContextLost: () => {
           store.setViewportFailure(
             'The graphics context was lost. Reload the page to restore the viewport.',

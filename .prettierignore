@@ -45,3 +45,6 @@ experiments/self-intersection/generated-fixtures.json
 # Stage 3C-1B: the production kernel's Emscripten glue and WebAssembly. Written
 # by packages/self-intersection-kernel/build.sh, not by hand.
 packages/self-intersection-kernel/artifacts
+
+# Pinned, generated Manifold Emscripten glue. Keep the upstream artifact byte-for-byte.
+apps/web/src/workers/third-party/manifold/manifold-candidate.js

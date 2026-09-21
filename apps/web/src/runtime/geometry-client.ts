@@ -11,6 +11,10 @@ import {
   type ModelImportResult,
   type ModelReleaseResult,
   type RepairCandidateHandle,
+  type GeometryEditCandidateHandle,
+  type EditPreviewResult,
+  type EditCommitResult,
+  type EditDiscardResult,
   type RepairCandidateResult,
   type RepairCommitResult,
   type RepairDiscardResult,
@@ -449,6 +453,33 @@ export class GeometryClient {
       },
       request.onProgress === undefined ? {} : { onProgress: request.onProgress },
     );
+  }
+
+  /** Shared Stage 7 candidate preview; the returned buffers are disposable display data. */
+  public previewGeometryEdit(
+    candidate: GeometryEditCandidateHandle,
+  ): OperationHandle<EditPreviewResult> {
+    return this.coordinator.dispatch('edit/preview', { candidate }, {});
+  }
+
+  /** Applies the exact worker-resident candidate to its original document part. */
+  public commitGeometryEdit(
+    candidate: GeometryEditCandidateHandle,
+    expectedSource: DocumentHandle,
+    expectedPart: string,
+  ): OperationHandle<EditCommitResult> {
+    return this.coordinator.dispatch(
+      'edit/commit',
+      { candidate, expectedSource, expectedPart },
+      {},
+    );
+  }
+
+  /** Cancels a proposed edit and releases its canonical candidate mesh. */
+  public discardGeometryEdit(
+    candidate: GeometryEditCandidateHandle,
+  ): OperationHandle<EditDiscardResult> {
+    return this.coordinator.dispatch('edit/discard', { candidate }, {});
   }
 
   /**

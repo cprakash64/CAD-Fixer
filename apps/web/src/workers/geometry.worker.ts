@@ -23,6 +23,11 @@ import {
 } from './hole-fill-workflow-handlers';
 import { documentSendForExportHandler } from './export-handlers';
 import {
+  editPreviewHandler,
+  editCommitHandler,
+  editDiscardHandler,
+} from './geometry-edit-handlers';
+import {
   repairCommitHandler,
   repairCreateCandidateHandler,
   repairDiscardHandler,
@@ -76,6 +81,9 @@ host.register('holefill/boundary-preview', holeFillBoundaryPreviewHandler);
 host.register('holefill/patch-preview', holeFillPatchPreviewHandler);
 host.register('holefill/commit', holeFillCommitHandler);
 host.register('document/send-for-export', documentSendForExportHandler);
+host.register('edit/preview', editPreviewHandler);
+host.register('edit/commit', editCommitHandler);
+host.register('edit/discard', editDiscardHandler);
 
 // Conservative repair. Five operations so planning, preview, apply and undo
 // stay separate acts; see apps/web/src/workers/repair-handlers.ts. No geometry

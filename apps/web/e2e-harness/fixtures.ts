@@ -67,6 +67,7 @@ export const HarnessFixtureId = {
   SmallAndOversized: 'small-and-oversized',
   /** Ten placements of one mesh. */
   Shared10: 'shared-10',
+  SevenSharedMillimetre: 'seven-shared-millimetre',
   /** One hundred placements of one mesh. */
   Shared100: 'shared-100',
   /** One thousand placements of one mesh. */
@@ -297,6 +298,21 @@ export function buildHarnessDocument(id: HarnessFixtureId): GeometryDocument {
           named('a', mesh, 'Shared A'),
           named('b', mesh, 'Shared B', translation(PART_B_OFFSET_X, 0, 0)),
         ],
+      };
+    }
+
+    case HarnessFixtureId.SevenSharedMillimetre: {
+      const shared = tetrahedronMesh();
+      return {
+        unit: LengthUnit.Millimeter,
+        parts: Array.from({ length: 7 }, (_, index) =>
+          named(
+            `p${String(index + 1)}`,
+            shared,
+            `Part ${String(index + 1)}`,
+            translation(index * 5, 0, 0),
+          ),
+        ),
       };
     }
 

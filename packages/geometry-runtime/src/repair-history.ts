@@ -50,6 +50,7 @@ import type { DocumentHandle, DocumentId } from './resident-documents';
 export const UndoableChangeKind = {
   ConservativeRepair: 'conservative-repair',
   HoleFill: 'hole-fill',
+  GeometryEdit: 'geometry-edit',
 } as const;
 
 export type UndoableChangeKind = (typeof UndoableChangeKind)[keyof typeof UndoableChangeKind];

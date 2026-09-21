@@ -8,6 +8,15 @@
  */
 export {};
 
+interface GeometryEditCandidateHandle {
+  readonly documentId: string;
+  readonly sourceRevision: number;
+  readonly partId: string;
+  readonly operation: string;
+  readonly generation: number;
+  readonly candidateId: string;
+}
+
 interface HarnessPartDigest {
   readonly partId: string;
   readonly name?: string | null;
@@ -62,6 +71,36 @@ interface HarnessExportResult {
 declare global {
   interface Window {
     readonly cadfixerHarness?: {
+      beginTestEdit(
+        documentId: string,
+        revision: number,
+        partId: string,
+        dx: number,
+      ): Promise<GeometryEditCandidateHandle>;
+      previewTestEdit(candidate: GeometryEditCandidateHandle): Promise<{ vertexCount: number }>;
+      commitTestEdit(
+        candidate: GeometryEditCandidateHandle,
+        documentId: string,
+        revision: number,
+        partId: string,
+      ): Promise<{ revision: number; recordId: string }>;
+      discardTestEdit(candidate: GeometryEditCandidateHandle): Promise<boolean>;
+      undoTestEdit(documentId: string, revision: number, recordId: string): Promise<number>;
+      beginTestBoolean(
+        operation: 'union' | 'difference' | 'intersection',
+        segments?: number,
+        rings?: number,
+        testCrash?: boolean,
+      ): void;
+      awaitTestBoolean(): Promise<{
+        status: string;
+        triangles?: number;
+        elapsedMs: number;
+        stats: { active: number; created: number; terminated: number };
+        phases: readonly { phase: string; at: number }[];
+      }>;
+      cancelTestBoolean(): void;
+      testBooleanPhases(): readonly { phase: string; at: number }[];
       /** Stage 6E-A2: which 3MF reader the harness worker's real import uses. */
       setIngestion(mode: 'buffered' | 'streaming' | 'auto', maxEntryBytes?: number): Promise<void>;
       digest(
@@ -76,7 +115,7 @@ declare global {
       exportDocument(
         documentId: string,
         revision: number,
-        target: 'obj' | '3mf',
+        target: 'stl' | 'obj' | '3mf',
         sourceName: string,
         options?: { readonly download?: boolean; readonly cancelAfterMs?: number },
       ): Promise<HarnessExportResult>;

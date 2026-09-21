@@ -11,6 +11,9 @@ import {
   Matrix4,
   MeshStandardMaterial,
   PerspectiveCamera,
+  PlaneGeometry,
+  MeshBasicMaterial,
+  Quaternion,
   Scene,
   Vector3,
   WebGLRenderer,
@@ -18,6 +21,7 @@ import {
 import type { BufferGeometry } from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { buildPartGeometry, partMatrix, SharedPartGeometry } from './part-geometry';
+import { pickPartTriangle, type PartPick } from './pick-part';
 import {
   createOverlays,
   type OverlayHandle,
@@ -162,6 +166,12 @@ export interface ViewportChangeData {
  */
 export type ViewportHoleFillData = HoleFillOverlayData;
 
+export interface ViewportEditPlane {
+  readonly origin: readonly [number, number, number];
+  readonly normal: readonly [number, number, number];
+  readonly revision: number;
+}
+
 export interface ViewportHandle {
   /** Replaces the displayed model, disposing whatever was there. */
   setModel(model: ViewportModel | undefined): void;
@@ -180,6 +190,12 @@ export interface ViewportHandle {
    * unusable.
    */
   setActivePart(partId: string | undefined): void;
+  /** Raycast disposable render geometry and return stable part identity. */
+  pick(clientX: number, clientY: number): PartPick | undefined;
+  /** Internal split/texture plane control; part-local and never canonical. */
+  setEditPlane(plane: ViewportEditPlane | undefined): void;
+  moveEditPlaneAlongNormal(distance: number): void;
+  rotateEditPlane(axis: readonly [number, number, number], radians: number): void;
   /** Replaces the diagnostic overlays. `undefined` clears them. */
   setOverlays(data: ViewportOverlayData | undefined): void;
   /**
@@ -224,6 +240,7 @@ export interface ViewportHandle {
 
 export interface ViewportOptions {
   readonly onContextLost?: () => void;
+  readonly onPick?: (hit: PartPick) => void;
 }
 
 const MAX_PIXEL_RATIO = 2;
@@ -327,6 +344,19 @@ export function createViewport(
   // to agree.
   const holeFillOverlays: HoleFillOverlayHandle = createHoleFillOverlays();
   activePartGroup.add(holeFillOverlays.group);
+
+  const editPlaneGeometry = new PlaneGeometry(1, 1);
+  const editPlaneMaterial = new MeshBasicMaterial({
+    color: 0x54c7e8,
+    transparent: true,
+    opacity: 0.3,
+    side: DoubleSide,
+    depthWrite: false,
+  });
+  const editPlaneMesh = new Mesh(editPlaneGeometry, editPlaneMaterial);
+  editPlaneMesh.visible = false;
+  activePartGroup.add(editPlaneMesh);
+  let editPlane: ViewportEditPlane | undefined;
 
   /**
    * One mesh per part, keyed by part id.
@@ -559,6 +589,8 @@ export function createViewport(
     // a model change or a part change; carrying either across would draw the
     // previous selection's opening on geometry that does not have it.
     holeFillOverlays.setData(undefined);
+    editPlane = undefined;
+    editPlaneMesh.visible = false;
     currentModel = model;
 
     if (model === undefined) {
@@ -635,6 +667,8 @@ export function createViewport(
     // a model change or a part change; carrying either across would draw the
     // previous selection's opening on geometry that does not have it.
     holeFillOverlays.setData(undefined);
+    editPlane = undefined;
+    editPlaneMesh.visible = false;
 
     // A preview may have hidden the previously active part. Every part is drawn
     // once no candidate is on screen.
@@ -644,12 +678,81 @@ export function createViewport(
     render();
   };
 
+  const setEditPlane = (plane: ViewportEditPlane | undefined): void => {
+    if (
+      plane === undefined ||
+      plane.revision !== currentModel?.revision ||
+      activePartId === undefined
+    ) {
+      editPlane = undefined;
+      editPlaneMesh.visible = false;
+      render();
+      return;
+    }
+    const normal = new Vector3(...plane.normal);
+    if (
+      !plane.origin.every(Number.isFinite) ||
+      !normal.toArray().every(Number.isFinite) ||
+      normal.lengthSq() < 1e-30
+    ) {
+      editPlane = undefined;
+      editPlaneMesh.visible = false;
+      render();
+      return;
+    }
+    editPlane = plane;
+    editPlaneMesh.position.set(...plane.origin);
+    editPlaneMesh.quaternion.setFromUnitVectors(new Vector3(0, 0, 1), normal.normalize());
+    const size = Math.max(currentModel.radius, 1) * 1.4;
+    editPlaneMesh.scale.set(size, size, 1);
+    editPlaneMesh.visible = true;
+    render();
+  };
+  const moveEditPlaneAlongNormal = (distance: number): void => {
+    if (!editPlane || !Number.isFinite(distance)) return;
+    const n = new Vector3(...editPlane.normal).normalize();
+    const moved = new Vector3(...editPlane.origin).addScaledVector(n, distance);
+    setEditPlane({ ...editPlane, origin: [moved.x, moved.y, moved.z] });
+  };
+  const rotateEditPlane = (axis: readonly [number, number, number], radians: number): void => {
+    if (!editPlane || !Number.isFinite(radians)) return;
+    const a = new Vector3(...axis);
+    if (!a.toArray().every(Number.isFinite) || a.lengthSq() < 1e-30) return;
+    const n = new Vector3(...editPlane.normal)
+      .applyQuaternion(new Quaternion().setFromAxisAngle(a.normalize(), radians))
+      .normalize();
+    setEditPlane({ ...editPlane, normal: [n.x, n.y, n.z] });
+  };
+
   const handleContextLost = (event: Event): void => {
     event.preventDefault();
     options.onContextLost?.();
   };
 
   canvas.addEventListener('webglcontextlost', handleContextLost);
+  const pick = (clientX: number, clientY: number): PartPick | undefined => {
+    const rect = canvas.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return undefined;
+    return pickPartTriangle(
+      camera,
+      [((clientX - rect.left) / rect.width) * 2 - 1, 1 - ((clientY - rect.top) / rect.height) * 2],
+      partMeshes,
+    );
+  };
+  let pointerDown: { x: number; y: number } | undefined;
+  const onPointerDown = (event: PointerEvent): void => {
+    pointerDown = { x: event.clientX, y: event.clientY };
+  };
+  const onPointerUp = (event: PointerEvent): void => {
+    const from = pointerDown;
+    pointerDown = undefined;
+    if (from === undefined || Math.hypot(event.clientX - from.x, event.clientY - from.y) > 4)
+      return;
+    const hit = pick(event.clientX, event.clientY);
+    if (hit) options.onPick?.(hit);
+  };
+  canvas.addEventListener('pointerdown', onPointerDown);
+  canvas.addEventListener('pointerup', onPointerUp);
 
   const observer = new ResizeObserver(resize);
   observer.observe(container);
@@ -810,6 +913,10 @@ export function createViewport(
   return {
     setModel,
     setActivePart,
+    pick,
+    setEditPlane,
+    moveEditPlaneAlongNormal,
+    rotateEditPlane,
     setOverlays,
     setPreview,
     setChangeOverlays,
@@ -843,6 +950,8 @@ export function createViewport(
       disposed = true;
       observer.disconnect();
       canvas.removeEventListener('webglcontextlost', handleContextLost);
+      canvas.removeEventListener('pointerdown', onPointerDown);
+      canvas.removeEventListener('pointerup', onPointerUp);
       controls.removeEventListener('change', render);
       controls.dispose();
       disposePartMeshes();
@@ -853,6 +962,8 @@ export function createViewport(
       overlays.dispose();
       changeOverlays.dispose();
       holeFillOverlays.dispose();
+      editPlaneGeometry.dispose();
+      editPlaneMaterial.dispose();
       grid.geometry.dispose();
       disposeMaterial(grid);
       axes.geometry.dispose();
