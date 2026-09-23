@@ -59,6 +59,12 @@ import {
   editDiscardHandler,
 } from '../../src/workers/geometry-edit-handlers';
 import {
+  splitCommitHandler,
+  splitCreateHandler,
+  splitDiscardHandler,
+  setSplitQualificationObserver,
+} from '../../src/workers/split-handlers';
+import {
   repairCommitHandler,
   repairCreateCandidateHandler,
   repairDiscardHandler,
@@ -200,6 +206,12 @@ host.register('document/send-for-export', documentSendForExportHandler);
 host.register('edit/preview', editPreviewHandler);
 host.register('edit/commit', editCommitHandler);
 host.register('edit/discard', editDiscardHandler);
+host.register('split/create', splitCreateHandler);
+host.register('split/commit', splitCommitHandler);
+host.register('split/discard', splitDiscardHandler);
+setSplitQualificationObserver((detail) => {
+  workerScope.postMessage({ kind: 'harness/split-qualification', ...detail });
+});
 
 host.register('repair/plan', repairPlanHandler);
 host.register('repair/create-candidate', repairCreateCandidateHandler);

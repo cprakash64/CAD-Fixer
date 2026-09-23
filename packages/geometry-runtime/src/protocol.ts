@@ -16,6 +16,8 @@ import type { DocumentHandle } from './resident-documents';
 import type { RepairCandidateHandle } from './repair-candidates';
 import type { HoleFillCandidateHandle } from './hole-fill-candidates';
 import type { GeometryEditCandidateHandle, GeometryEditResourceAccounting } from './geometry-edit';
+import type { SplitCandidateHandle, SplitCandidateSummary } from './split-candidates';
+import type { SplitRequest } from './split-connectors';
 import type { UndoableChangeKind } from './repair-history';
 // Type-only, exactly as the topology and repair contracts are, so no engine
 // code is pulled into the main-thread bundle. The VALUES the interface compares
@@ -213,6 +215,9 @@ export interface OperationMap {
   'edit/preview': { payload: EditPreviewPayload; result: EditPreviewResult };
   'edit/commit': { payload: EditCommitPayload; result: EditCommitResult };
   'edit/discard': { payload: EditDiscardPayload; result: EditDiscardResult };
+  'split/create': { payload: SplitCreatePayload; result: SplitCreateResult };
+  'split/commit': { payload: SplitCommitPayload; result: SplitCommitResult };
+  'split/discard': { payload: SplitDiscardPayload; result: SplitDiscardResult };
 }
 
 /* ------------------------------------------------------------- geometry edit -- */
@@ -246,6 +251,39 @@ export interface EditDiscardPayload {
   readonly candidate: GeometryEditCandidateHandle;
 }
 export interface EditDiscardResult {
+  readonly released: boolean;
+}
+
+/* ------------------------------------------------------------------- split -- */
+export interface SplitCreatePayload {
+  readonly source: DocumentHandle;
+  readonly partId: string;
+  readonly request: SplitRequest;
+}
+export interface SplitCreateResult extends SplitCandidateSummary {
+  readonly render: DocumentRenderSnapshot;
+  readonly parts: readonly PartDescriptor[];
+}
+export interface SplitCommitPayload {
+  readonly candidate: SplitCandidateHandle;
+  readonly expectedSource: DocumentHandle;
+  readonly expectedPart: string;
+}
+export interface SplitCommitResult extends SplitCandidateSummary {
+  readonly handle: DocumentHandle;
+  readonly parentRevision: number;
+  readonly recordId: string;
+  readonly render: DocumentRenderSnapshot;
+  readonly parts: readonly PartDescriptor[];
+  readonly residentBytes: number;
+  readonly triangleCount: number;
+  readonly vertexCount: number;
+  readonly bounds: MeshBounds | undefined;
+}
+export interface SplitDiscardPayload {
+  readonly candidate: SplitCandidateHandle;
+}
+export interface SplitDiscardResult {
   readonly released: boolean;
 }
 
@@ -634,6 +672,8 @@ export interface RepairUndoResult {
   readonly appliedOperations: readonly RepairOperation[];
   /** Drawable buffers for the RESTORED PART ONLY. See `RepairCommitResult.render`. */
   readonly render: RenderSnapshot;
+  /** Present when undo restores an entire ordered document graph after a split. */
+  readonly documentRender?: DocumentRenderSnapshot;
   /** Part metadata for the whole restored document. See `RepairCommitResult.parts`. */
   readonly parts: readonly PartDescriptor[];
   readonly residentBytes: number;

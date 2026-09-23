@@ -9,6 +9,7 @@ import { PartSelector } from './components/PartSelector';
 import { RepairPanel } from './components/RepairPanel';
 import { RuntimePanel } from './components/RuntimePanel';
 import { StatusPanel } from './components/StatusPanel';
+import { SplitPanel } from './components/SplitPanel';
 import { ViewportPanel } from './components/ViewportPanel';
 import { WorkflowNav } from './components/WorkflowNav';
 
@@ -44,6 +45,7 @@ export function App(): ReactNode {
             hardest to reach. The viewport keeps the middle and stays the working
             area at every width. */}
         <aside className="app__diagnostics">
+          <SplitPanel />
           <RepairPanel />
           {/* Beneath conservative repair, and that order is deliberate: several
               openings are only fillable AFTER neighbouring triangles have been

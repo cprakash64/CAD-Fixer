@@ -53,6 +53,35 @@ const harnessWorker = new Worker(new URL('./worker/harness.worker.ts', import.me
   type: 'module',
   name: 'cadfixer-geometry-harness',
 });
+interface HarnessSplitQualificationEvent {
+  readonly documentId: string;
+  readonly generation: number;
+  readonly booleanIndex: number;
+  readonly operation: string;
+  readonly phase: string;
+  readonly at: number;
+  readonly stats: {
+    readonly active: number;
+    readonly created: number;
+    readonly terminated: number;
+  };
+}
+let splitQualificationEvents: HarnessSplitQualificationEvent[] = [];
+harnessWorker.addEventListener('message', (event: MessageEvent) => {
+  const data = event.data as { kind?: string } & Partial<HarnessSplitQualificationEvent>;
+  if (
+    data.kind !== 'harness/split-qualification' ||
+    data.documentId === undefined ||
+    data.generation === undefined ||
+    data.booleanIndex === undefined ||
+    data.operation === undefined ||
+    data.phase === undefined ||
+    data.at === undefined ||
+    data.stats === undefined
+  )
+    return;
+  splitQualificationEvents.push(data as HarnessSplitQualificationEvent);
+});
 
 const geometryClient = new GeometryClient({
   createWorker: (): Worker => harnessWorker,
@@ -562,6 +591,8 @@ declare global {
       awaitTestBoolean(): Promise<HarnessBooleanResult>;
       cancelTestBoolean(): void;
       testBooleanPhases(): readonly { phase: string; at: number }[];
+      resetSplitQualification(): void;
+      splitQualificationEvents(): readonly HarnessSplitQualificationEvent[];
       /** Stage 6E-A2: which 3MF reader the harness worker's real import uses. */
       setIngestion(mode: 'buffered' | 'streaming' | 'auto', maxEntryBytes?: number): Promise<void>;
       exportDocument(
@@ -669,6 +700,11 @@ window.cadfixerHarness = {
   awaitTestBoolean,
   cancelTestBoolean: (): void => cancelActiveBoolean?.(),
   testBooleanPhases: (): readonly { phase: string; at: number }[] => activeBooleanPhases,
+  resetSplitQualification: (): void => {
+    splitQualificationEvents = [];
+  },
+  splitQualificationEvents: (): readonly HarnessSplitQualificationEvent[] =>
+    splitQualificationEvents,
   setIngestion,
   exportDocument: runExport,
   beginExport,

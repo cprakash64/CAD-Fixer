@@ -2,6 +2,7 @@ import type {
   ConservativeRepairPlan,
   DocumentRenderSnapshot,
   EditCommitResult,
+  SplitCommitResult,
   MeshBounds,
   DocumentHandle,
   PartDescriptor,
@@ -820,6 +821,21 @@ export interface WorkspaceState {
    * there is no render in which the selection points at a part that is gone.
    */
   readonly activePartId: string | undefined;
+  /** Disposable split preview; authoritative geometry remains worker-resident. */
+  readonly splitPreview:
+    | {
+        readonly source: DocumentHandle;
+        readonly render: DocumentRenderSnapshot;
+        readonly parts: readonly PartDescriptor[];
+      }
+    | undefined;
+  readonly splitPlane:
+    | {
+        readonly origin: readonly [number, number, number];
+        readonly normal: readonly [number, number, number];
+        readonly revision: number;
+      }
+    | undefined;
   readonly importProgress: ImportProgressState;
   readonly exportProgress: ExportProgressState;
   /**
@@ -875,6 +891,8 @@ const INITIAL_STATE: WorkspaceState = {
   selectedWorkflow: undefined,
   model: undefined,
   activePartId: undefined,
+  splitPreview: undefined,
+  splitPlane: undefined,
   importProgress: { state: ImportState.Idle, fraction: 0 },
   exportProgress: { state: ExportState.Idle, fraction: 0 },
   conversion: CONVERSION_CLOSED,
@@ -1003,7 +1021,83 @@ export class WorkspaceStore {
   };
 
   public selectWorkflow(workflow: WorkflowId | undefined): void {
-    this.update({ selectedWorkflow: workflow });
+    this.update({
+      selectedWorkflow: workflow,
+      ...(workflow === 'split' ? {} : { splitPreview: undefined, splitPlane: undefined }),
+    });
+  }
+
+  public setSplitPreview(
+    source: DocumentHandle,
+    render: DocumentRenderSnapshot,
+    parts: readonly PartDescriptor[],
+  ): boolean {
+    if (!sameHandle(this.state.model?.handle, source)) return false;
+    this.update({ splitPreview: { source, render, parts } });
+    return true;
+  }
+
+  public clearSplitPreview(): void {
+    if (this.state.splitPreview !== undefined) this.update({ splitPreview: undefined });
+  }
+
+  public setSplitPlane(plane: WorkspaceState['splitPlane']): void {
+    const current = this.state.splitPlane;
+    if (
+      current?.revision === plane?.revision &&
+      current?.origin.every((value, index) => value === plane?.origin[index]) &&
+      current.normal.every((value, index) => value === plane?.normal[index])
+    )
+      return;
+    if (current === undefined && plane === undefined) return;
+    this.update({ splitPlane: plane });
+  }
+
+  public applySplitResult(result: SplitCommitResult): boolean {
+    const model = this.state.model;
+    if (
+      model?.handle.documentId !== result.handle.documentId ||
+      model.handle.revision !== result.parentRevision
+    )
+      return false;
+    const revision = this.nextModelRevision;
+    this.nextModelRevision += 1;
+    this.currentAnalysisToken = undefined;
+    this.currentRepairToken = undefined;
+    this.currentSelfIntersectionToken = undefined;
+    this.currentHoleFillToken = undefined;
+    this.update({
+      model: {
+        ...model,
+        handle: result.handle,
+        parts: result.parts,
+        render: result.render,
+        bounds: result.bounds,
+        triangleCount: result.triangleCount,
+        vertexCount: result.vertexCount,
+        residentBytes: result.residentBytes,
+        revision,
+      },
+      activePartId: result.pieceAId,
+      splitPreview: undefined,
+      splitPlane: undefined,
+      analysis: {
+        ...EMPTY_ANALYSIS,
+        state: AnalysisState.Idle,
+        handle: result.handle,
+        partId: result.pieceAId,
+      },
+      selfIntersection: {
+        ...EMPTY_SELF_INTERSECTION,
+        handle: result.handle,
+        partId: result.pieceAId,
+        band: bandForFaceCount(result.resources.triangles),
+      },
+      holeFill: { ...EMPTY_HOLE_FILL, handle: result.handle, partId: result.pieceAId },
+      repair: { ...EMPTY_REPAIR, handle: result.handle },
+      overlays: OVERLAYS_HIDDEN,
+    });
+    return true;
   }
 
   public pushStatus(severity: StatusSeverity, message: string): void {
@@ -1994,6 +2088,7 @@ export class WorkspaceStore {
     readonly handle: DocumentHandle;
     readonly partId: string;
     readonly render: RenderSnapshot;
+    readonly documentRender?: DocumentRenderSnapshot;
     readonly parts: readonly PartDescriptor[];
     readonly bounds: MeshBounds | undefined;
     readonly triangleCount: number;
@@ -2016,7 +2111,9 @@ export class WorkspaceStore {
         ...model,
         handle: result.handle,
         parts: result.parts,
-        render: withPartRender(model.render, result.partId, result.render, result.parts),
+        render:
+          result.documentRender ??
+          withPartRender(model.render, result.partId, result.render, result.parts),
         bounds: result.bounds,
         triangleCount: result.triangleCount,
         vertexCount: result.vertexCount,

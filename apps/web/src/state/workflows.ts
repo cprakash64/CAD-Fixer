@@ -59,7 +59,7 @@ export const WORKFLOWS: readonly WorkflowDescriptor[] = Object.freeze([
     id: WorkflowId.Split,
     label: 'Split',
     summary: 'Cut oversized models into parts and add alignment connectors.',
-    implemented: false,
+    implemented: true,
   },
   {
     id: WorkflowId.Texture,

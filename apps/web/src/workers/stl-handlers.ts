@@ -45,6 +45,7 @@ import { analyseTopology, estimateTopologyWorkspaceBytes } from '@cadfixer/mesh-
 import {
   HoleFillCandidateStore,
   GeometryEditStore,
+  SplitCandidateStore,
   RepairCandidateStore,
   RepairHistoryStore,
   TopologyReportCache,
@@ -135,6 +136,12 @@ export const residentDocuments = new ResidentDocumentStore();
 
 /** Shared Stage 7 candidate store. Future split and texture engines produce here. */
 export const geometryEdits = new GeometryEditStore(residentDocuments, repairHistory);
+/** Split uses the same authoritative document and one-step history transaction. */
+export const splitCandidates = new SplitCandidateStore(
+  residentDocuments,
+  repairHistory,
+  geometryEdits,
+);
 /** Owns the one disposable nested Manifold worker, when a Boolean is active. */
 export const booleanOperations = new BooleanOperationController();
 
@@ -729,6 +736,7 @@ export const modelReleaseHandler: OperationHandler<'model/release'> = (payload) 
   // it would be a leak with no upside.
   holeFillCandidates.releaseDocument(documentId);
   geometryEdits.releaseDocument(documentId);
+  splitCandidates.releaseDocument(documentId);
   booleanOperations.cancelDocument(documentId);
   topologyReports.release(documentId);
   const value: ModelReleaseResult = { released };

@@ -221,6 +221,26 @@ export {
   runValidatedBoolean,
 } from './boolean-adapter';
 export type { BooleanBackend, BooleanKind, BooleanResult } from './boolean-adapter';
+export {
+  buildSplitCutters,
+  identifyCutSurface,
+  meshVolume,
+  roundSocketRadius,
+  dovetailFemaleDimensions,
+  splitTolerance,
+  splitWithConnectors,
+} from './split-connectors';
+export { SplitCandidateStore } from './split-candidates';
+export type { SplitCandidateHandle, SplitCandidateSummary } from './split-candidates';
+export type {
+  CutSurfaceSummary,
+  SplitConnector,
+  SplitMetrics,
+  SplitPlane,
+  SplitRequest,
+  SplitResult,
+  SplitVector,
+} from './split-connectors';
 
 export type {
   EditPreviewPayload,
@@ -229,4 +249,10 @@ export type {
   EditCommitResult,
   EditDiscardPayload,
   EditDiscardResult,
+  SplitCreatePayload,
+  SplitCreateResult,
+  SplitCommitPayload,
+  SplitCommitResult,
+  SplitDiscardPayload,
+  SplitDiscardResult,
 } from './protocol';

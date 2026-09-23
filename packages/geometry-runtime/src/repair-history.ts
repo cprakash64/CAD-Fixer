@@ -1,6 +1,6 @@
 import { invalidState, modelUnavailable, type AppError } from '@cadfixer/shared';
 import type { RepairOperation } from '@cadfixer/mesh-repair';
-import type { CanonicalMesh, PartId } from '@cadfixer/mesh-core';
+import type { CanonicalMesh, GeometryDocument, PartId } from '@cadfixer/mesh-core';
 import type { DocumentHandle, DocumentId } from './resident-documents';
 
 /**
@@ -107,6 +107,8 @@ export interface UndoableInverse {
   readonly sourceIndexCount: number;
   /** The mesh's own size. An upper bound on the record's cost — see the entry. */
   readonly byteLength: number;
+  /** Present when one source part was replaced by multiple ordered parts. */
+  readonly previousDocument?: GeometryDocument;
 }
 
 /** What a committed change did. Never carries geometry. */

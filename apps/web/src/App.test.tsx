@@ -98,12 +98,12 @@ describe('workflow navigation', () => {
 
   /**
    * Repair became the FIRST enabled workflow in Stage 3B-1B and Convert became
-   * the second in Stage 4A-2B3. The assertion is keyed off
+   * the second in Stage 4A-2B3; Split became the third in Stage 7B. The assertion is keyed off
    * `WORKFLOWS[].implemented` rather than a hard-coded name, and the explicit
    * list below is stated so that flipping a workflow's flag without shipping it
    * fails here rather than passing quietly.
    *
-   * CONVERT IS IMPLEMENTED AND STILL DISABLED IN THIS RENDER, because no model
+   * CONVERT AND SPLIT ARE IMPLEMENTED AND STILL DISABLED IN THIS RENDER, because no model
    * is loaded. That is not the same state as "not implemented", and the two are
    * asserted apart in the test below: one says the feature does not exist, the
    * other says it has nothing to act on.
@@ -121,8 +121,8 @@ describe('workflow navigation', () => {
       (workflow) => workflow.label,
     );
 
-    expect(implemented).toEqual(['Repair', 'Convert']);
-    // With an empty workspace, Convert has nothing to convert and says so.
+    expect(implemented).toEqual(['Repair', 'Convert', 'Split']);
+    // With an empty workspace, model-targeted workflows have nothing to act on.
     expect(enabled).toEqual(['Repair']);
   });
 
@@ -142,7 +142,7 @@ describe('workflow navigation', () => {
       // would be the mirror image of claiming a capability that is missing.
       expect(button).not.toHaveTextContent('Not implemented');
 
-      if (workflow.id === WorkflowId.Convert) {
+      if (workflow.id === WorkflowId.Convert || workflow.id === WorkflowId.Split) {
         // IMPLEMENTED, UNAVAILABLE, AND EXPLICIT ABOUT WHICH. A disabled button
         // with no reason beside it is indistinguishable from a broken one.
         expect(button).toBeDisabled();

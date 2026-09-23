@@ -274,6 +274,20 @@ export class GeometryEditStore {
   public discard(candidate: GeometryEditCandidateHandle): boolean {
     return this.discardById(candidate.candidateId);
   }
+  /** Shared currency check for multi-output specializations such as Split. */
+  public isCurrent(ticket: GeometryEditTicket): boolean {
+    return (
+      this.current.get(ticket.documentId) === ticket.generation &&
+      this.resident.has({ documentId: ticket.documentId, revision: ticket.sourceRevision })
+    );
+  }
+  /** Invalidate this operation only when it is still the latest request. */
+  public invalidate(ticket: GeometryEditTicket): void {
+    if (this.current.get(ticket.documentId) !== ticket.generation) return;
+    const active = this.active.get(ticket.documentId);
+    if (active) this.discardById(active);
+    this.current.set(ticket.documentId, ticket.generation + 1);
+  }
   public releaseDocument(documentId: DocumentId): void {
     const active = this.active.get(documentId);
     if (active) this.discardById(active);

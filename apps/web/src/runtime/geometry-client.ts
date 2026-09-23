@@ -32,6 +32,11 @@ import {
   type SendForFillResult,
   type SendForExportResult,
   type StlExportResult,
+  type SplitCandidateHandle,
+  type SplitRequest,
+  type SplitCreateResult,
+  type SplitCommitResult,
+  type SplitDiscardResult,
 } from '@cadfixer/geometry-runtime';
 import { modelUnavailable } from '@cadfixer/shared';
 
@@ -480,6 +485,35 @@ export class GeometryClient {
     candidate: GeometryEditCandidateHandle,
   ): OperationHandle<EditDiscardResult> {
     return this.coordinator.dispatch('edit/discard', { candidate }, {});
+  }
+
+  public createSplit(
+    source: DocumentHandle,
+    partId: string,
+    request: SplitRequest,
+    onProgress?: (update: ProgressUpdate) => void,
+  ): OperationHandle<SplitCreateResult> {
+    return this.coordinator.dispatch(
+      'split/create',
+      { source, partId, request },
+      onProgress === undefined ? {} : { onProgress },
+    );
+  }
+
+  public commitSplit(
+    candidate: SplitCandidateHandle,
+    expectedSource: DocumentHandle,
+    expectedPart: string,
+  ): OperationHandle<SplitCommitResult> {
+    return this.coordinator.dispatch(
+      'split/commit',
+      { candidate, expectedSource, expectedPart },
+      {},
+    );
+  }
+
+  public discardSplit(candidate: SplitCandidateHandle): OperationHandle<SplitDiscardResult> {
+    return this.coordinator.dispatch('split/discard', { candidate }, {});
   }
 
   /**

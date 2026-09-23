@@ -101,6 +101,16 @@ declare global {
       }>;
       cancelTestBoolean(): void;
       testBooleanPhases(): readonly { phase: string; at: number }[];
+      resetSplitQualification(): void;
+      splitQualificationEvents(): readonly {
+        documentId: string;
+        generation: number;
+        booleanIndex: number;
+        operation: string;
+        phase: string;
+        at: number;
+        stats: { active: number; created: number; terminated: number };
+      }[];
       /** Stage 6E-A2: which 3MF reader the harness worker's real import uses. */
       setIngestion(mode: 'buffered' | 'streaming' | 'auto', maxEntryBytes?: number): Promise<void>;
       digest(

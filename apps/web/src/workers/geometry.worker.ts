@@ -27,6 +27,7 @@ import {
   editCommitHandler,
   editDiscardHandler,
 } from './geometry-edit-handlers';
+import { splitCommitHandler, splitCreateHandler, splitDiscardHandler } from './split-handlers';
 import {
   repairCommitHandler,
   repairCreateCandidateHandler,
@@ -84,6 +85,9 @@ host.register('document/send-for-export', documentSendForExportHandler);
 host.register('edit/preview', editPreviewHandler);
 host.register('edit/commit', editCommitHandler);
 host.register('edit/discard', editDiscardHandler);
+host.register('split/create', splitCreateHandler);
+host.register('split/commit', splitCommitHandler);
+host.register('split/discard', splitDiscardHandler);
 
 // Conservative repair. Five operations so planning, preview, apply and undo
 // stay separate acts; see apps/web/src/workers/repair-handlers.ts. No geometry

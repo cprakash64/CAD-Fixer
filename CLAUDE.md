@@ -13,7 +13,8 @@ matter more than moving fast.
 Five workflows are planned: **Repair, Convert, Split, Texture, Hollow**. Target
 formats: **STL, OBJ, 3MF**.
 
-**Current stage: Stage 4B-1B2 complete — a PRODUCTION USER-FACING PLANAR
+**Current stage: Stage 7B qualified — a PRODUCTION SPLIT + CONNECTORS MVP on
+the qualified Stage 7A editing foundation, plus the PRODUCTION USER-FACING PLANAR
 HOLE-FILL WORKFLOW on top of the qualified engine, the user-facing format
 conversion workflow, the validated export engine, production STL/OBJ/3MF import,
 the multi-part geometry document foundation and conservative deterministic
@@ -60,7 +61,7 @@ booleans, remeshing, UNIT CONVERSION of any kind, OBJ polygons, MTL resolution,
 encrypted model parts, a `p:path` on a reference outside the root model part,
 3MF textures or materials, exported normals
 or texture coordinates, exported 3MF group or property resources, reconstruction
-of an imported 3MF's component hierarchy, splitting, connectors, texturing,
+of an imported 3MF's component hierarchy, texturing,
 hollowing, drainage holes, wall-thickness analysis, inter-part overlap
 detection, redo, multi-step undo, transform editing, a persistent "set model
 units" document edit, and any repair that is not one of the four conservative

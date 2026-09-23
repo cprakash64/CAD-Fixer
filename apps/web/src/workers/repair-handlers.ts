@@ -27,6 +27,7 @@ import {
   type OperationContext,
   type OperationHandler,
   type PartDescriptor,
+  type DocumentRenderSnapshot,
   type RenderSnapshot,
 } from '@cadfixer/geometry-runtime';
 import {
@@ -38,9 +39,12 @@ import {
 } from '@cadfixer/shared';
 import {
   buildRenderSnapshot,
+  buildDocumentRenderSnapshot,
+  documentRenderTransferables,
   describeParts,
   holeFillCandidates,
   geometryEdits,
+  splitCandidates,
   repairCandidates,
   repairHistory,
   residentDocuments,
@@ -633,10 +637,15 @@ export const repairDiscardHandler: OperationHandler<'repair/discard'> = (payload
  */
 export interface RepairUndoWork {
   readonly buildRenderSnapshot: (mesh: CanonicalMesh) => RenderSnapshot;
+  readonly buildDocumentRenderSnapshot?: (document: GeometryDocument) => DocumentRenderSnapshot;
   readonly describeParts: (document: GeometryDocument) => readonly PartDescriptor[];
 }
 
-export const PRODUCTION_UNDO_WORK: RepairUndoWork = { buildRenderSnapshot, describeParts };
+export const PRODUCTION_UNDO_WORK: RepairUndoWork = {
+  buildRenderSnapshot,
+  buildDocumentRenderSnapshot,
+  describeParts,
+};
 
 export function createRepairUndoHandler(work: RepairUndoWork): OperationHandler<'repair/undo'> {
   return (payload, context) => {
@@ -658,8 +667,6 @@ export function createRepairUndoHandler(work: RepairUndoWork): OperationHandler<
      * part's mesh, and applying it to another would reconstruct nonsense.
      */
     const repairedPart = preparation.entry.partId;
-    const currentPart = residentDocuments.resolvePart(payload.handle, repairedPart);
-    if (!isPart(currentPart)) throw currentPart;
 
     context.reportProgress(0.1, 'restoring previous version');
     const inverse = preparation.inverse;
@@ -706,7 +713,8 @@ export function createRepairUndoHandler(work: RepairUndoWork): OperationHandler<
       });
     }
 
-    const successor = successorDocument(current, repairedPart, restored, 'repair/undo');
+    const successor =
+      inverse.previousDocument ?? successorDocument(current, repairedPart, restored, 'repair/undo');
 
     /*
      * ---- EVERYTHING THAT CAN FAIL, BEFORE ANYTHING CHANGES ---- Stage 4B-1B2-R2.
@@ -723,6 +731,11 @@ export function createRepairUndoHandler(work: RepairUndoWork): OperationHandler<
      * built against a document the user has moved off is discarded here.
      */
     const render = work.buildRenderSnapshot(restored);
+    const documentRender = inverse.previousDocument
+      ? work.buildDocumentRenderSnapshot?.(successor)
+      : undefined;
+    if (inverse.previousDocument && documentRender === undefined)
+      throw invalidState('Split undo requires a whole-document render builder.');
     const parts = work.describeParts(successor);
     const residentBytes = documentByteLength(successor);
     const totalTriangles = documentTriangleCount(successor);
@@ -741,6 +754,7 @@ export function createRepairUndoHandler(work: RepairUndoWork): OperationHandler<
     // The revision moved, so any hole-fill candidate for this document is stale.
     holeFillCandidates.releaseDocument(next.documentId);
     geometryEdits.releaseDocument(next.documentId);
+    splitCandidates.releaseDocument(next.documentId);
 
     return Promise.resolve({
       value: {
@@ -752,13 +766,17 @@ export function createRepairUndoHandler(work: RepairUndoWork): OperationHandler<
         partId: repairedPart,
         appliedOperations: preparation.entry.appliedOperations,
         render,
+        ...(documentRender === undefined ? {} : { documentRender }),
         parts,
         residentBytes,
         triangleCount: totalTriangles,
         vertexCount: totalVertices,
         bounds,
       },
-      transfer: [render.positions.buffer, render.normals.buffer],
+      transfer:
+        documentRender === undefined
+          ? [render.positions.buffer, render.normals.buffer]
+          : documentRenderTransferables(documentRender),
     });
   };
 }

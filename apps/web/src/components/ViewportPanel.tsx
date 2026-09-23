@@ -19,8 +19,17 @@ export function ViewportPanel(): ReactNode {
   const containerRef = useRef<HTMLDivElement>(null);
   const viewportRef = useRef<ViewportHandle | undefined>(undefined);
   const store = useWorkspaceStore();
-  const { viewportFailure, model, activePartId, analysis, overlays, repair, holeFill } =
-    useWorkspaceState();
+  const {
+    viewportFailure,
+    model,
+    activePartId,
+    analysis,
+    overlays,
+    repair,
+    holeFill,
+    splitPreview,
+    splitPlane,
+  } = useWorkspaceState();
 
   /**
    * The candidate the viewport may legitimately draw.
@@ -95,10 +104,15 @@ export function ViewportPanel(): ReactNode {
      * transferred and the bounds are scalars the panel also displays. Joining by
      * part id keeps the two in step without sending either twice.
      */
-    const descriptorsById = new Map(model.parts.map((part) => [part.partId, part]));
+    const previewIsCurrent =
+      splitPreview?.source.documentId === model.handle.documentId &&
+      splitPreview.source.revision === model.handle.revision;
+    const shownRender = previewIsCurrent ? splitPreview.render : model.render;
+    const shownParts = previewIsCurrent ? splitPreview.parts : model.parts;
+    const descriptorsById = new Map(shownParts.map((part) => [part.partId, part]));
 
     viewport.setModel({
-      parts: model.render.parts.map((part) => {
+      parts: shownRender.parts.map((part) => {
         const descriptor = descriptorsById.get(part.partId);
         return {
           partId: part.partId,
@@ -113,7 +127,7 @@ export function ViewportPanel(): ReactNode {
       radius: model.bounds?.radius ?? 1,
       revision: model.revision,
     });
-  }, [model]);
+  }, [model, splitPreview]);
 
   /**
    * Points the overlay, preview and change-overlay frame at the active part.
@@ -130,6 +144,10 @@ export function ViewportPanel(): ReactNode {
   useEffect(() => {
     viewportRef.current?.setActivePart(activePartId);
   }, [activePartId, model]);
+
+  useEffect(() => {
+    viewportRef.current?.setEditPlane(splitPlane);
+  }, [splitPlane]);
 
   /**
    * Pushes diagnostic overlays for the model that is actually displayed.

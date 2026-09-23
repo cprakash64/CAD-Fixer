@@ -1,5 +1,7 @@
 import {
   IDENTITY_PART_TRANSFORM,
+  createIndexArray,
+  createPositionArray,
   partId,
   type CanonicalMesh,
   type GeometryDocument,
@@ -83,6 +85,10 @@ export const HarnessFixtureId = {
    * same geometry rather than only the refusal.
    */
   MillimetreTwoParts: 'millimetre-two-parts',
+  SplitCubeMillimetre: 'split-cube-millimetre',
+  SplitHeavySphereMillimetre: 'split-heavy-sphere-millimetre',
+  SplitSmallSphereMillimetre: 'split-small-sphere-millimetre',
+  SplitLargeSphereMillimetre: 'split-large-sphere-millimetre',
   MillimetreShared1000: 'millimetre-shared-1000',
   /*
    * LARGE, FOR EXPORT RESPONSIVENESS. Stage 4A-2B2-R1.
@@ -279,6 +285,64 @@ function sharedGridPlacements(side: number, count: number): GeometryDocument {
   };
 }
 
+function splitCube(size = 20): CanonicalMesh {
+  const h = size / 2,
+    values = [-h, -h, -h, h, -h, -h, -h, h, -h, h, h, -h, -h, -h, h, h, -h, h, -h, h, h, h, h, h],
+    faces = [
+      0, 2, 3, 0, 3, 1, 4, 5, 7, 4, 7, 6, 0, 1, 5, 0, 5, 4, 2, 6, 7, 2, 7, 3, 0, 4, 6, 0, 6, 2, 1,
+      3, 7, 1, 7, 5,
+    ],
+    positions = createPositionArray(values.length),
+    indices = createIndexArray(faces.length);
+  positions.set(values);
+  indices.set(faces);
+  return { positions, indices, metadata: {} };
+}
+function splitSphere(segments = 360, rings = 180, radius = 20): CanonicalMesh {
+  const vertexTotal = 2 + (rings - 1) * segments,
+    triangleTotal = segments * 2 + (rings - 2) * segments * 2,
+    positions = createPositionArray(vertexTotal * 3),
+    indices = createIndexArray(triangleTotal * 3);
+  positions.set([0, 0, radius], 0);
+  let p = 3;
+  for (let ring = 1; ring < rings; ring++) {
+    const phi = (ring / rings) * Math.PI,
+      z = Math.cos(phi) * radius,
+      ringRadius = Math.sin(phi) * radius;
+    for (let segment = 0; segment < segments; segment++) {
+      const theta = (segment / segments) * Math.PI * 2;
+      positions.set([Math.cos(theta) * ringRadius, Math.sin(theta) * ringRadius, z], p);
+      p += 3;
+    }
+  }
+  const south = vertexTotal - 1;
+  positions.set([0, 0, -radius], south * 3);
+  let at = 0;
+  for (let segment = 0; segment < segments; segment++) {
+    const next = (segment + 1) % segments;
+    indices.set([0, 1 + segment, 1 + next], at);
+    at += 3;
+  }
+  for (let ring = 0; ring < rings - 2; ring++) {
+    const row = 1 + ring * segments,
+      nextRow = row + segments;
+    for (let segment = 0; segment < segments; segment++) {
+      const next = (segment + 1) % segments;
+      indices.set([row + segment, nextRow + segment, row + next], at);
+      at += 3;
+      indices.set([row + next, nextRow + segment, nextRow + next], at);
+      at += 3;
+    }
+  }
+  const last = 1 + (rings - 2) * segments;
+  for (let segment = 0; segment < segments; segment++) {
+    const next = (segment + 1) % segments;
+    indices.set([last + segment, south, last + next], at);
+    at += 3;
+  }
+  return { positions, indices, metadata: {} };
+}
+
 export function buildHarnessDocument(id: HarnessFixtureId): GeometryDocument {
   switch (id) {
     case HarnessFixtureId.TwoIndependentParts:
@@ -369,6 +433,27 @@ export function buildHarnessDocument(id: HarnessFixtureId): GeometryDocument {
           named('a', tetrahedronMesh(1), 'Alpha'),
           named('b', tetrahedronMesh(2), 'Beta', translation(PART_B_OFFSET_X, 0, 0)),
         ],
+      };
+
+    case HarnessFixtureId.SplitCubeMillimetre:
+      return {
+        unit: LengthUnit.Millimeter,
+        parts: [makePart('cube', splitCube(), { name: 'Split cube' })],
+      };
+    case HarnessFixtureId.SplitHeavySphereMillimetre:
+      return {
+        unit: LengthUnit.Millimeter,
+        parts: [makePart('heavy-sphere', splitSphere(), { name: 'Heavy split sphere' })],
+      };
+    case HarnessFixtureId.SplitSmallSphereMillimetre:
+      return {
+        unit: LengthUnit.Millimeter,
+        parts: [makePart('small-sphere', splitSphere(72, 72), { name: '10k split sphere' })],
+      };
+    case HarnessFixtureId.SplitLargeSphereMillimetre:
+      return {
+        unit: LengthUnit.Millimeter,
+        parts: [makePart('large-sphere', splitSphere(500, 500), { name: '500k split sphere' })],
       };
 
     case HarnessFixtureId.MillimetreShared1000:
