@@ -175,8 +175,11 @@ describe('HV-C01–HV-C06 — the release artifact', () => {
     expect(existsSync(join(SITE_DIR, 'release-manifest.json'))).toBe(false);
   });
 
-  it.skipIf(!artifactBuilt)('HV-C04: the Geogram WASM is deployable', () => {
-    expect(siteFiles().filter((p) => p.endsWith('.wasm'))).toHaveLength(1);
+  it.skipIf(!artifactBuilt)('HV-C04: both qualified geometry kernels are deployable', () => {
+    const wasm = siteFiles().filter((path) => path.endsWith('.wasm'));
+    expect(wasm).toHaveLength(2);
+    expect(wasm.some((path) => path.includes('self-intersection-'))).toBe(true);
+    expect(wasm.some((path) => path.includes('manifold-candidate-'))).toBe(true);
   });
 
   it('HV-C05: the shipped kernel is the qualified artifact', () => {
