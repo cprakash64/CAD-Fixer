@@ -34,7 +34,9 @@ export function WorkflowNav(): ReactNode {
       <ul className="workflow-nav__list" aria-labelledby="workflow-nav-heading">
         {WORKFLOWS.map((workflow) => {
           const needsModel =
-            (workflow.id === WorkflowId.Convert || workflow.id === WorkflowId.Split) &&
+            (workflow.id === WorkflowId.Convert ||
+              workflow.id === WorkflowId.Split ||
+              workflow.id === WorkflowId.Texture) &&
             model === undefined;
           return (
             <li key={workflow.id}>

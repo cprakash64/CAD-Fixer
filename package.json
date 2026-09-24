@@ -42,6 +42,7 @@
     "bench:export": "vitest run --config vitest.bench.config.ts scripts/format-export.bench-suite.ts",
     "bench:hole-fill": "vitest run --config vitest.bench.config.ts scripts/hole-fill.bench-suite.ts",
     "bench:split": "vitest run --config vitest.bench.config.ts scripts/split-performance.bench-suite.ts",
+    "bench:texture": "vitest run --config vitest.bench.config.ts scripts/texture-performance.bench-suite.ts",
     "bench:large-entry": "vitest run --config vitest.bench.config.ts scripts/large-entry.bench-suite.ts",
     "qualify:chromium-memory": "node scripts/chromium-memory.qualify.mjs",
     "bench:resource-model": "vitest run --config vitest.bench.config.ts scripts/resource-model.bench-suite.ts",

@@ -18,6 +18,7 @@ import type { HoleFillCandidateHandle } from './hole-fill-candidates';
 import type { GeometryEditCandidateHandle, GeometryEditResourceAccounting } from './geometry-edit';
 import type { SplitCandidateHandle, SplitCandidateSummary } from './split-candidates';
 import type { SplitRequest } from './split-connectors';
+import type { SurfaceTextureRequest, SurfaceTextureResult } from './surface-texture';
 import type { UndoableChangeKind } from './repair-history';
 // Type-only, exactly as the topology and repair contracts are, so no engine
 // code is pulled into the main-thread bundle. The VALUES the interface compares
@@ -218,6 +219,8 @@ export interface OperationMap {
   'split/create': { payload: SplitCreatePayload; result: SplitCreateResult };
   'split/commit': { payload: SplitCommitPayload; result: SplitCommitResult };
   'split/discard': { payload: SplitDiscardPayload; result: SplitDiscardResult };
+  'texture/select': { payload: TextureSelectPayload; result: TextureSelectResult };
+  'texture/create': { payload: TextureCreatePayload; result: TextureCreateResult };
 }
 
 /* ------------------------------------------------------------- geometry edit -- */
@@ -285,6 +288,29 @@ export interface SplitDiscardPayload {
 }
 export interface SplitDiscardResult {
   readonly released: boolean;
+}
+
+/* --------------------------------------------------------- surface texture -- */
+export interface TextureSelectPayload {
+  readonly source: DocumentHandle;
+  readonly partId: string;
+  readonly seedTriangle: number;
+}
+export interface TextureSelectResult {
+  readonly source: DocumentHandle;
+  readonly partId: string;
+  readonly triangleIds: readonly number[];
+  readonly planarity: 'PLANAR' | 'NEAR_PLANAR';
+}
+export interface TextureCreatePayload {
+  readonly source: DocumentHandle;
+  readonly partId: string;
+  readonly request: SurfaceTextureRequest;
+}
+export interface TextureCreateResult extends Omit<SurfaceTextureResult, 'mesh'> {
+  readonly candidate: GeometryEditCandidateHandle;
+  readonly resources: GeometryEditResourceAccounting;
+  readonly render: RenderSnapshot;
 }
 
 /* --------------------------------------------------------------- hole fill -- */

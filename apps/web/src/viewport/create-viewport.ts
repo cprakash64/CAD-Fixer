@@ -2,6 +2,7 @@ import {
   AmbientLight,
   AxesHelper,
   BufferAttribute,
+  BufferGeometry,
   Color,
   DirectionalLight,
   DoubleSide,
@@ -18,7 +19,6 @@ import {
   Vector3,
   WebGLRenderer,
 } from 'three';
-import type { BufferGeometry } from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { buildPartGeometry, partMatrix, SharedPartGeometry } from './part-geometry';
 import { pickPartTriangle, type PartPick } from './pick-part';
@@ -171,6 +171,10 @@ export interface ViewportEditPlane {
   readonly normal: readonly [number, number, number];
   readonly revision: number;
 }
+export interface ViewportTextureSelection {
+  readonly positions: Float32Array;
+  readonly revision: number;
+}
 
 export interface ViewportHandle {
   /** Replaces the displayed model, disposing whatever was there. */
@@ -194,6 +198,8 @@ export interface ViewportHandle {
   pick(clientX: number, clientY: number): PartPick | undefined;
   /** Internal split/texture plane control; part-local and never canonical. */
   setEditPlane(plane: ViewportEditPlane | undefined): void;
+  /** Shows the worker-qualified connected surface before a Boolean preview exists. */
+  setTextureSelection(selection: ViewportTextureSelection | undefined): void;
   moveEditPlaneAlongNormal(distance: number): void;
   rotateEditPlane(axis: readonly [number, number, number], radians: number): void;
   /** Replaces the diagnostic overlays. `undefined` clears them. */
@@ -357,6 +363,34 @@ export function createViewport(
   editPlaneMesh.visible = false;
   activePartGroup.add(editPlaneMesh);
   let editPlane: ViewportEditPlane | undefined;
+  const textureSelectionMaterial = new MeshBasicMaterial({
+    color: 0xffc857,
+    transparent: true,
+    opacity: 0.58,
+    depthWrite: false,
+    polygonOffset: true,
+    polygonOffsetFactor: -2,
+  });
+  let textureSelectionMesh: Mesh | undefined;
+
+  const setTextureSelection = (selection: ViewportTextureSelection | undefined): void => {
+    if (textureSelectionMesh) {
+      activePartGroup.remove(textureSelectionMesh);
+      textureSelectionMesh.geometry.dispose();
+      textureSelectionMesh = undefined;
+    }
+    if (selection === undefined || selection.revision !== currentModel?.revision) {
+      render();
+      return;
+    }
+    const geometry = new BufferGeometry();
+    geometry.setAttribute('position', new BufferAttribute(selection.positions, 3));
+    const mesh = new Mesh(geometry, textureSelectionMaterial);
+    mesh.renderOrder = 8;
+    activePartGroup.add(mesh);
+    textureSelectionMesh = mesh;
+    render();
+  };
 
   /**
    * One mesh per part, keyed by part id.
@@ -915,6 +949,7 @@ export function createViewport(
     setActivePart,
     pick,
     setEditPlane,
+    setTextureSelection,
     moveEditPlaneAlongNormal,
     rotateEditPlane,
     setOverlays,
@@ -956,6 +991,7 @@ export function createViewport(
       controls.dispose();
       disposePartMeshes();
       disposePreviewMesh();
+      setTextureSelection(undefined);
       // Shared by every part and every model that was ever loaded, so it is
       // released with the viewport rather than with any one mesh.
       surfaceMaterial.dispose();
@@ -964,6 +1000,7 @@ export function createViewport(
       holeFillOverlays.dispose();
       editPlaneGeometry.dispose();
       editPlaneMaterial.dispose();
+      textureSelectionMaterial.dispose();
       grid.geometry.dispose();
       disposeMaterial(grid);
       axes.geometry.dispose();

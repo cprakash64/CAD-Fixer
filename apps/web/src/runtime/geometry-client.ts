@@ -37,6 +37,9 @@ import {
   type SplitCreateResult,
   type SplitCommitResult,
   type SplitDiscardResult,
+  type SurfaceTextureRequest,
+  type TextureCreateResult,
+  type TextureSelectResult,
 } from '@cadfixer/geometry-runtime';
 import { modelUnavailable } from '@cadfixer/shared';
 
@@ -514,6 +517,27 @@ export class GeometryClient {
 
   public discardSplit(candidate: SplitCandidateHandle): OperationHandle<SplitDiscardResult> {
     return this.coordinator.dispatch('split/discard', { candidate }, {});
+  }
+
+  public createSurfaceTexture(
+    source: DocumentHandle,
+    partId: string,
+    request: SurfaceTextureRequest,
+    onProgress?: (update: ProgressUpdate) => void,
+  ): OperationHandle<TextureCreateResult> {
+    return this.coordinator.dispatch(
+      'texture/create',
+      { source, partId, request },
+      onProgress === undefined ? {} : { onProgress },
+    );
+  }
+
+  public selectTextureSurface(
+    source: DocumentHandle,
+    partId: string,
+    seedTriangle: number,
+  ): OperationHandle<TextureSelectResult> {
+    return this.coordinator.dispatch('texture/select', { source, partId, seedTriangle }, {});
   }
 
   /**

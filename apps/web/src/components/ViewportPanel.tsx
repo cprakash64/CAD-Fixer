@@ -29,6 +29,9 @@ export function ViewportPanel(): ReactNode {
     holeFill,
     splitPreview,
     splitPlane,
+    texturePreview,
+    textureSelection,
+    selectedWorkflow,
   } = useWorkspaceState();
 
   /**
@@ -59,6 +62,8 @@ export function ViewportPanel(): ReactNode {
       const viewport = createViewport(container, {
         onPick: (hit) => {
           store.selectPart(hit.partId);
+          if (store.getSnapshot().selectedWorkflow === 'texture')
+            window.dispatchEvent(new CustomEvent('cadfixer:texture-surface-pick', { detail: hit }));
         },
         onContextLost: () => {
           store.setViewportFailure(
@@ -149,6 +154,34 @@ export function ViewportPanel(): ReactNode {
     viewportRef.current?.setEditPlane(splitPlane);
   }, [splitPlane]);
 
+  useEffect(() => {
+    const viewport = viewportRef.current;
+    const selection = textureSelection;
+    if (
+      !viewport ||
+      !model ||
+      selectedWorkflow !== 'texture' ||
+      selection?.source.documentId !== model.handle.documentId ||
+      selection.source.revision !== model.handle.revision ||
+      selection.partId !== activePartId
+    ) {
+      viewport?.setTextureSelection(undefined);
+      return;
+    }
+    const source = model.render.parts.find((part) => part.partId === activePartId)?.positions;
+    if (!source) {
+      viewport.setTextureSelection(undefined);
+      return;
+    }
+    // Render-only extraction from the worker's qualified triangle ids. This
+    // does not make a geometry decision or alter canonical data.
+    const positions = new Float32Array(selection.triangleIds.length * 9);
+    selection.triangleIds.forEach((triangleId, index) => {
+      positions.set(source.subarray(triangleId * 9, triangleId * 9 + 9), index * 9);
+    });
+    viewport.setTextureSelection({ positions, revision: model.revision });
+  }, [activePartId, model, selectedWorkflow, textureSelection]);
+
   /**
    * Pushes diagnostic overlays for the model that is actually displayed.
    *
@@ -202,8 +235,18 @@ export function ViewportPanel(): ReactNode {
     const viewport = viewportRef.current;
     if (viewport === undefined) return;
 
-    const render = previewable?.render;
-    if (previewable === undefined || render === undefined || model === undefined) {
+    const currentTexture = texturePreview;
+    const currentModel = model;
+    const texture =
+      selectedWorkflow === 'texture' &&
+      currentTexture?.source.documentId === currentModel?.handle.documentId &&
+      currentTexture?.source.revision === currentModel?.handle.revision &&
+      currentTexture?.partId === activePartId
+        ? currentTexture
+        : undefined;
+    const textureIsCurrent = texture !== undefined;
+    const render = texture?.render ?? previewable?.render;
+    if (render === undefined || model === undefined) {
       viewport.setPreview(undefined);
       return;
     }
@@ -215,13 +258,22 @@ export function ViewportPanel(): ReactNode {
       // otherwise. Conservative repair only removes and reorders, so the
       // source's sphere always contains the candidate — it is a safe fallback
       // rather than a guess.
-      center: previewable.bounds?.center ?? model.bounds?.center ?? [0, 0, 0],
-      radius: previewable.bounds?.radius ?? model.bounds?.radius ?? 1,
-      showing: repair.previewMode === RepairPreviewMode.After ? 'after' : 'before',
+      center: (textureIsCurrent
+        ? model.parts.find((part) => part.partId === activePartId)?.bounds?.center
+        : previewable?.bounds?.center) ??
+        model.bounds?.center ?? [0, 0, 0],
+      radius:
+        (textureIsCurrent
+          ? model.parts.find((part) => part.partId === activePartId)?.bounds?.radius
+          : previewable?.bounds?.radius) ??
+        model.bounds?.radius ??
+        1,
+      showing:
+        textureIsCurrent || repair.previewMode === RepairPreviewMode.After ? 'after' : 'before',
       revision: model.revision,
-      generation: previewable.candidate.generation,
+      generation: texture?.generation ?? previewable?.candidate.generation ?? 0,
     });
-  }, [model, previewable, repair.previewMode]);
+  }, [activePartId, model, previewable, repair.previewMode, selectedWorkflow, texturePreview]);
 
   /**
    * Pushes the repair change overlays.
@@ -326,6 +378,12 @@ export function ViewportPanel(): ReactNode {
   const showingPatch =
     holeFill.workState === HoleFillWorkState.Ready &&
     holeFill.candidate?.patchPositions !== undefined;
+  const currentTexture = texturePreview;
+  const currentModel = model;
+  const showingTexture =
+    selectedWorkflow === 'texture' &&
+    currentTexture?.source.documentId === currentModel?.handle.documentId &&
+    currentTexture?.source.revision === currentModel?.handle.revision;
 
   return (
     <section className="viewport" aria-label="3D workspace">
@@ -343,6 +401,12 @@ export function ViewportPanel(): ReactNode {
       {showingPatch && !showingPreview ? (
         <p className="viewport__preview-banner" role="status" data-testid="patch-preview-banner">
           Fill preview — not applied
+        </p>
+      ) : null}
+
+      {showingTexture && !showingPreview ? (
+        <p className="viewport__preview-banner" role="status" data-testid="texture-preview-banner">
+          Texture preview — not applied
         </p>
       ) : null}
 

@@ -65,7 +65,7 @@ export const WORKFLOWS: readonly WorkflowDescriptor[] = Object.freeze([
     id: WorkflowId.Texture,
     label: 'Texture',
     summary: 'Apply surface displacement patterns to printable faces.',
-    implemented: false,
+    implemented: true,
   },
   {
     id: WorkflowId.Hollow,

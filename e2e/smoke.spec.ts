@@ -111,7 +111,7 @@ test('every workflow says which of the three states it is in', async ({ page }) 
   await expect(page.getByTestId('workflow-repair')).toBeEnabled();
 
   // Implemented, and waiting for a model.
-  for (const workflow of ['convert', 'split']) {
+  for (const workflow of ['convert', 'split', 'texture']) {
     const item = page.getByTestId(`workflow-${workflow}`);
     await expect(item).toBeDisabled();
     await expect(item).toContainText('Open a model first');
@@ -119,7 +119,7 @@ test('every workflow says which of the three states it is in', async ({ page }) 
   }
 
   // Not implemented at all.
-  for (const workflow of ['texture', 'hollow']) {
+  for (const workflow of ['hollow']) {
     const item = page.getByTestId(`workflow-${workflow}`);
     await expect(item).toBeDisabled();
     await expect(item).toContainText('Not implemented');

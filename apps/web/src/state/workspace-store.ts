@@ -836,6 +836,23 @@ export interface WorkspaceState {
         readonly revision: number;
       }
     | undefined;
+  /** Disposable part-local Texture candidate render; canonical mesh remains worker-resident. */
+  readonly texturePreview:
+    | {
+        readonly source: DocumentHandle;
+        readonly partId: string;
+        readonly render: RenderSnapshot;
+        readonly generation: number;
+      }
+    | undefined;
+  /** Worker-qualified connected region used only for the pre-preview highlight. */
+  readonly textureSelection:
+    | {
+        readonly source: DocumentHandle;
+        readonly partId: string;
+        readonly triangleIds: readonly number[];
+      }
+    | undefined;
   readonly importProgress: ImportProgressState;
   readonly exportProgress: ExportProgressState;
   /**
@@ -893,6 +910,8 @@ const INITIAL_STATE: WorkspaceState = {
   activePartId: undefined,
   splitPreview: undefined,
   splitPlane: undefined,
+  texturePreview: undefined,
+  textureSelection: undefined,
   importProgress: { state: ImportState.Idle, fraction: 0 },
   exportProgress: { state: ExportState.Idle, fraction: 0 },
   conversion: CONVERSION_CLOSED,
@@ -1024,7 +1043,39 @@ export class WorkspaceStore {
     this.update({
       selectedWorkflow: workflow,
       ...(workflow === 'split' ? {} : { splitPreview: undefined, splitPlane: undefined }),
+      ...(workflow === 'texture' ? {} : { texturePreview: undefined, textureSelection: undefined }),
     });
+  }
+
+  public setTexturePreview(
+    source: DocumentHandle,
+    partId: string,
+    render: RenderSnapshot,
+    generation: number,
+  ): boolean {
+    if (!sameHandle(this.state.model?.handle, source) || this.state.activePartId !== partId)
+      return false;
+    this.update({ texturePreview: { source, partId, render, generation } });
+    return true;
+  }
+
+  public clearTexturePreview(): void {
+    if (this.state.texturePreview !== undefined) this.update({ texturePreview: undefined });
+  }
+
+  public setTextureSelection(
+    source: DocumentHandle,
+    partId: string,
+    triangleIds: readonly number[],
+  ): boolean {
+    if (!sameHandle(this.state.model?.handle, source) || this.state.activePartId !== partId)
+      return false;
+    this.update({ textureSelection: { source, partId, triangleIds } });
+    return true;
+  }
+
+  public clearTextureSelection(): void {
+    if (this.state.textureSelection !== undefined) this.update({ textureSelection: undefined });
   }
 
   public setSplitPreview(
@@ -1081,6 +1132,8 @@ export class WorkspaceStore {
       activePartId: result.pieceAId,
       splitPreview: undefined,
       splitPlane: undefined,
+      texturePreview: undefined,
+      textureSelection: undefined,
       analysis: {
         ...EMPTY_ANALYSIS,
         state: AnalysisState.Idle,
@@ -1213,6 +1266,10 @@ export class WorkspaceStore {
     this.update({
       model: { ...model, revision },
       activePartId: activePart?.partId,
+      splitPreview: undefined,
+      splitPlane: undefined,
+      texturePreview: undefined,
+      textureSelection: undefined,
       importProgress: { state: ImportState.Ready, fraction: 1 },
       analysis: {
         ...EMPTY_ANALYSIS,
@@ -1284,6 +1341,8 @@ export class WorkspaceStore {
 
     this.update({
       activePartId: partId,
+      texturePreview: undefined,
+      textureSelection: undefined,
       analysis: {
         ...EMPTY_ANALYSIS,
         state: AnalysisState.Idle,
@@ -1945,6 +2004,8 @@ export class WorkspaceStore {
       overlays: OVERLAYS_HIDDEN,
       repair: { ...EMPTY_REPAIR, handle: result.handle, partId: this.state.activePartId },
       holeFill: { ...EMPTY_HOLE_FILL, handle: result.handle, partId: this.state.activePartId },
+      texturePreview: undefined,
+      textureSelection: undefined,
     });
     return true;
   }

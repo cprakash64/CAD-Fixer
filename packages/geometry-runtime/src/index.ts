@@ -241,6 +241,21 @@ export type {
   SplitResult,
   SplitVector,
 } from './split-connectors';
+export {
+  buildSurfaceTextureLayout,
+  buildSurfaceTextureOperand,
+  textureSurface,
+  MAX_TEXTURE_ELEMENTS,
+  MAX_TEXTURE_PRIMITIVE_TRIANGLES,
+} from './surface-texture';
+export type {
+  SurfaceTextureLayout,
+  SurfaceTextureRequest,
+  SurfaceTextureResult,
+  TextureMode,
+  TexturePattern,
+  TexturePatternInstance,
+} from './surface-texture';
 
 export type {
   EditPreviewPayload,
@@ -255,4 +270,8 @@ export type {
   SplitCommitResult,
   SplitDiscardPayload,
   SplitDiscardResult,
+  TextureCreatePayload,
+  TextureCreateResult,
+  TextureSelectPayload,
+  TextureSelectResult,
 } from './protocol';

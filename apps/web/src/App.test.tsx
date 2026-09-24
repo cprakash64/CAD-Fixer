@@ -121,7 +121,7 @@ describe('workflow navigation', () => {
       (workflow) => workflow.label,
     );
 
-    expect(implemented).toEqual(['Repair', 'Convert', 'Split']);
+    expect(implemented).toEqual(['Repair', 'Convert', 'Split', 'Texture']);
     // With an empty workspace, model-targeted workflows have nothing to act on.
     expect(enabled).toEqual(['Repair']);
   });
@@ -142,7 +142,11 @@ describe('workflow navigation', () => {
       // would be the mirror image of claiming a capability that is missing.
       expect(button).not.toHaveTextContent('Not implemented');
 
-      if (workflow.id === WorkflowId.Convert || workflow.id === WorkflowId.Split) {
+      if (
+        workflow.id === WorkflowId.Convert ||
+        workflow.id === WorkflowId.Split ||
+        workflow.id === WorkflowId.Texture
+      ) {
         // IMPLEMENTED, UNAVAILABLE, AND EXPLICIT ABOUT WHICH. A disabled button
         // with no reason beside it is indistinguishable from a broken one.
         expect(button).toBeDisabled();

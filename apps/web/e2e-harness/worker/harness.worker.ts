@@ -65,6 +65,11 @@ import {
   setSplitQualificationObserver,
 } from '../../src/workers/split-handlers';
 import {
+  setTextureQualificationObserver,
+  textureCreateHandler,
+  textureSelectHandler,
+} from '../../src/workers/texture-handlers';
+import {
   repairCommitHandler,
   repairCreateCandidateHandler,
   repairDiscardHandler,
@@ -209,7 +214,12 @@ host.register('edit/discard', editDiscardHandler);
 host.register('split/create', splitCreateHandler);
 host.register('split/commit', splitCommitHandler);
 host.register('split/discard', splitDiscardHandler);
+host.register('texture/create', textureCreateHandler);
+host.register('texture/select', textureSelectHandler);
 setSplitQualificationObserver((detail) => {
+  workerScope.postMessage({ kind: 'harness/split-qualification', ...detail });
+});
+setTextureQualificationObserver((detail) => {
   workerScope.postMessage({ kind: 'harness/split-qualification', ...detail });
 });
 
