@@ -16,7 +16,7 @@ export function AppHeader(): ReactNode {
         <span className="app-header__mark" aria-hidden="true" />
         <h1 className="app-header__title">CAD Fixer</h1>
         <span className="app-header__stage" data-testid="release-stage">
-          Technical Preview
+          v0.4.0 Technical Preview
         </span>
       </div>
       <p className="app-header__privacy" data-testid="privacy-badge">

@@ -48,7 +48,7 @@ describe('application shell', () => {
     // Stage 6D-A4: the header read "Stage 0 — foundation" in public releases.
     renderApp();
 
-    expect(screen.getByTestId('release-stage')).toHaveTextContent('Technical Preview');
+    expect(screen.getByTestId('release-stage')).toHaveTextContent('v0.4.0 Technical Preview');
     expect(document.body.textContent).not.toMatch(/Stage \d|foundation/i);
   });
 

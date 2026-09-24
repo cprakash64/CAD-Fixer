@@ -1,8 +1,8 @@
 # Format support matrix and known limitations
 
-Internal reference for the **v0.3.0 Technical Preview**. The 3MF per-entry
-ceiling is 320 MiB, raised from 256 MiB in Stage 6E-A4 and released in v0.3.0;
-model entries from 128 MiB up are read by streaming.
+Released capability reference for the **v0.4.0 Technical Preview**. The 3MF
+per-entry ceiling remains 320 MiB; model entries from 128 MiB up are read by
+streaming.
 
 Written in Stage 6D-A4 from **measured behaviour** — the production import pipeline run over
 2,130 real and reference files and a deterministic mutation campaign — not from intent. Every "yes" below is
@@ -49,6 +49,14 @@ before it is offered; there is no way to skip that.
   triangles, and relative winding. No welding, no tolerance, no remeshing.
 - **Bounded planar hole fill** — one selected flat opening at a time, up to 512
   rim points on a part of up to 250,000 triangles. No batch fill, no curved rims.
+- **Split** — one selected part and one plane at a time, on an eligible closed
+  manifold solid. Connector choices are None, round Pin/Socket, and Dovetail.
+  Connector dimensions require an explicit-millimetre document. Preview,
+  Apply, Cancel, individual STL piece export, and one-step Undo are supported.
+- **Surface Texture** — one planar connected region on one part at a time.
+  Dots, Lines, and Diamond support Emboss and Engrave, with configurable size,
+  centre-to-centre spacing, height/depth, and rotation. Dimensions require an
+  explicit-millimetre document. Curved conformal mapping is not supported.
 - **Self-intersection is a diagnostic, not a correction.**
 - **Topology is exact-coordinate.** Nothing is merged by proximity.
 - **One step of undo, no redo.**
@@ -69,3 +77,5 @@ before it is offered; there is no way to skip that.
 - **No universal-compatibility claim.** The qualification corpus shows the files
   it contains importing; it does not show that every file a producer can write
   will. Model size is bounded by the resource policy, not unrestricted.
+- **Printer fit and printability are not guaranteed.** Connector clearances and
+  texture dimensions must be checked for the intended printer and material.
