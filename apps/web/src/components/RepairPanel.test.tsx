@@ -11,6 +11,7 @@ import { RepairPanel } from './RepairPanel';
 import { GeometryClientProvider } from '../runtime/client-context';
 import { GeometryClient } from '../runtime/geometry-client';
 import { WorkspaceProvider } from '../state/store-context';
+import { AnalysisControlsProvider, RepairControlsProvider } from '../state/workflow-controllers';
 import { WorkspaceStore } from '../state/workspace-store';
 import {
   REPAIR_EXCLUSIONS,
@@ -63,7 +64,11 @@ function renderPanel(configure: (store: WorkspaceStore) => void = () => undefine
   render(
     <WorkspaceProvider store={store}>
       <GeometryClientProvider client={client}>
-        <RepairPanel />
+        <AnalysisControlsProvider>
+          <RepairControlsProvider>
+            <RepairPanel />
+          </RepairControlsProvider>
+        </AnalysisControlsProvider>
       </GeometryClientProvider>
     </WorkspaceProvider>,
   );

@@ -15,7 +15,10 @@ import {
   PerspectiveCamera,
   PlaneGeometry,
   MeshBasicMaterial,
+  CanvasTexture,
   Quaternion,
+  Sprite,
+  SpriteMaterial,
   Scene,
   TOUCH,
   Vector3,
@@ -242,6 +245,19 @@ export interface ViewportHandle {
    */
   zoomToFit(): void;
   /**
+   * Marks ONE place on the active part — the selected issue occurrence.
+   *
+   * Presentation only: a marker in the active part's frame, never geometry.
+   * Refused (cleared) when `revision` is not the model on screen.
+   */
+  setIssueFocus(focus: ViewportIssueFocus | undefined): void;
+  /**
+   * Frames part-local `center` within `radius`, keeping the viewing direction.
+   * The orbit target moves to the region, so orbiting afterwards turns around
+   * the defect rather than around the whole model.
+   */
+  frameRegion(center: readonly [number, number, number], radius: number): void;
+  /**
    * Chooses what a LEFT drag does. The right button always pans and the wheel
    * always zooms, so neither mode takes a gesture away; it only decides which
    * one the primary button — and a single finger — performs.
@@ -293,6 +309,14 @@ export type ViewDirection = (typeof ViewDirection)[keyof typeof ViewDirection];
  * indicator shows which way the model faces, not where it is.
  */
 export type ViewOrientation = readonly number[];
+
+export interface ViewportIssueFocus {
+  /** Part-local. */
+  readonly center: readonly [number, number, number];
+  /** Part-local radius enclosing the occurrence. */
+  readonly radius: number;
+  readonly revision: number;
+}
 
 export interface ViewportOptions {
   readonly onContextLost?: () => void;
@@ -411,6 +435,23 @@ export function createViewport(
   const activePartGroup = new Group();
   activePartGroup.matrixAutoUpdate = false;
   modelGroup.add(activePartGroup);
+
+  /*
+   * THE ISSUE MARKER: a ring with a centre dot, always facing the camera and
+   * drawn over the model (no depth test), so an occurrence inside a cavity is
+   * still findable. A RING, not a filled disc: once zoomed in, the marker must
+   * frame the defect, not cover it. One texture, drawn once.
+   */
+  const markerMaterial = new SpriteMaterial({
+    map: createMarkerTexture(),
+    depthTest: false,
+    depthWrite: false,
+    transparent: true,
+  });
+  const marker = new Sprite(markerMaterial);
+  marker.renderOrder = 10;
+  marker.visible = false;
+  activePartGroup.add(marker);
 
   const overlays: OverlayHandle = createOverlays();
   activePartGroup.add(overlays.group);
@@ -729,6 +770,46 @@ export function createViewport(
     frameFrom(direction.lengthSq() > 0 ? direction.normalize() : VIEW_DIRECTION);
   };
 
+  const setIssueFocus = (focus: ViewportIssueFocus | undefined): void => {
+    if (currentModel === undefined || focus?.revision !== currentModel.revision) {
+      if (!marker.visible) return;
+      marker.visible = false;
+      render();
+      return;
+    }
+    const modelRadius = currentModel.radius > 0 ? currentModel.radius : 1;
+    // The ring encloses the occurrence with room to spare, and has a floor from
+    // the MODEL's size so a zero-length edge or a sliver face still gets a
+    // marker a person can see at the framing distance.
+    marker.scale.setScalar(Math.max(focus.radius * 2.6, modelRadius * 0.07));
+    marker.position.set(focus.center[0], focus.center[1], focus.center[2]);
+    marker.visible = true;
+    render();
+  };
+
+  const frameRegion = (center: readonly [number, number, number], radius: number): void => {
+    if (currentModel === undefined) return;
+    const modelRadius = currentModel.radius > 0 ? currentModel.radius : 1;
+    activePartGroup.updateWorldMatrix(true, false);
+    const target = activePartGroup.localToWorld(new Vector3(center[0], center[1], center[2]));
+    const direction = camera.position.clone().sub(controls.target);
+    if (direction.lengthSq() === 0) direction.copy(VIEW_DIRECTION);
+    direction.normalize();
+    // A floor on the framed radius keeps the neighbourhood in view: a defect
+    // framed at its own size fills the screen with one triangle and loses the
+    // context that says where on the model it is.
+    const framed = Math.max(radius, modelRadius * 0.08);
+    const halfFov = (camera.fov * Math.PI) / 180 / 2;
+    const distance = (framed / Math.sin(halfFov)) * FIT_PADDING;
+    camera.position.copy(target).addScaledVector(direction, distance);
+    camera.near = Math.max(distance / 10_000, framed / 10_000);
+    camera.far = distance + modelRadius * 10;
+    camera.updateProjectionMatrix();
+    controls.target.copy(target);
+    controls.update();
+    render();
+  };
+
   const setNavigationMode = (mode: NavigationMode): void => {
     // The right button stays on PAN in both modes; in pan mode the primary
     // button pans too. Zoom is the wheel's and the middle button's either way.
@@ -758,6 +839,7 @@ export function createViewport(
     // a model change or a part change; carrying either across would draw the
     // previous selection's opening on geometry that does not have it.
     holeFillOverlays.setData(undefined);
+    marker.visible = false;
     editPlane = undefined;
     editPlaneMesh.visible = false;
     currentModel = model;
@@ -836,6 +918,7 @@ export function createViewport(
     // a model change or a part change; carrying either across would draw the
     // previous selection's opening on geometry that does not have it.
     holeFillOverlays.setData(undefined);
+    marker.visible = false;
     editPlane = undefined;
     editPlaneMesh.visible = false;
 
@@ -1094,6 +1177,8 @@ export function createViewport(
     fitView,
     viewFrom,
     zoomToFit,
+    setIssueFocus,
+    frameRegion,
     setNavigationMode,
     get renderedObjectCount(): number {
       return partMeshes.size;
@@ -1139,6 +1224,8 @@ export function createViewport(
       editPlaneGeometry.dispose();
       editPlaneMaterial.dispose();
       textureSelectionMaterial.dispose();
+      markerMaterial.map?.dispose();
+      markerMaterial.dispose();
       grid.geometry.dispose();
       disposeMaterial(grid);
       axes.geometry.dispose();
@@ -1158,4 +1245,33 @@ function disposeMaterial(object: GridHelper | AxesHelper): void {
     return;
   }
   material.dispose();
+}
+
+/**
+ * The issue marker's image: a red ring, a faint fill and a centre dot, in the
+ * product's error colour. `null` where no 2D canvas exists (jsdom), in which
+ * case the sprite simply has no image.
+ */
+function createMarkerTexture(): CanvasTexture | null {
+  const size = 128;
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const context = canvas.getContext('2d');
+  if (context === null) return null;
+  const centre = size / 2;
+  context.fillStyle = 'rgba(242, 85, 101, 0.14)';
+  context.beginPath();
+  context.arc(centre, centre, centre - 6, 0, Math.PI * 2);
+  context.fill();
+  context.strokeStyle = '#f25565';
+  context.lineWidth = 7;
+  context.beginPath();
+  context.arc(centre, centre, centre - 8, 0, Math.PI * 2);
+  context.stroke();
+  context.fillStyle = '#f25565';
+  context.beginPath();
+  context.arc(centre, centre, 9, 0, Math.PI * 2);
+  context.fill();
+  return new CanvasTexture(canvas);
 }

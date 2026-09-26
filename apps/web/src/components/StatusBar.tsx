@@ -1,8 +1,7 @@
 import type { ReactNode } from 'react';
-import type { TopologyReport } from '@cadfixer/geometry-runtime';
 import { describeUnit } from '../state/model';
 import { useWorkspaceState, useWorkspaceStore } from '../state/store-context';
-import { TOPOLOGY_QUALIFIER, totalDefectCount } from '../state/topology-presentation';
+import { useIssueNavigation } from '../state/use-issue-navigation';
 import { WorkflowId } from '../state/workflows';
 import { AnalysisState, ImportState } from '../state/workspace-store';
 import { describePhase } from './ImportDropZone';
@@ -20,13 +19,13 @@ import { Icon, type IconName } from './shell/Icon';
  * THE UNIT IS A STATUS, NOT A SWITCH. CAD Fixer never converts or rescales
  * units, so a control that looked as though it could would be a false promise.
  *
- * THE TOPOLOGY ENTRY NEVER SAYS THE MODEL IS SOUND. A clean analysis is
- * reported as "Topology checked", with the unchecked qualifier as its tooltip:
- * the verdict "No topological defects detected" is shown, with its mandatory
- * qualifier, in Mesh Health, and nowhere is it allowed to stand alone.
+ * THE HEALTH ENTRY IS THE MESH ANALYSIS SUMMARY, from the same derivation
+ * (`deriveHealthSummary`), and it carries the same qualifier — as its tooltip
+ * and in its accessible name — so "No issues found" is never read without what
+ * the checks do not cover.
  */
 export function StatusBar(): ReactNode {
-  const { model, activePartId, importProgress, analysis } = useWorkspaceState();
+  const { model, importProgress, analysis } = useWorkspaceState();
   const store = useWorkspaceStore();
 
   const importing =
@@ -35,17 +34,24 @@ export function StatusBar(): ReactNode {
     importProgress.state === ImportState.Parsing ||
     importProgress.state === ImportState.Validating;
   const analysing = analysis.state === AnalysisState.Analyzing;
-  // THE STALE-REPORT GUARD, as the viewport applies it: a report counts only
-  // for the model revision and the part it was computed from.
-  const reportIsCurrent =
-    model !== undefined &&
-    analysis.handle?.documentId === model.handle.documentId &&
-    analysis.handle.revision === model.handle.revision &&
-    analysis.partId === activePartId;
-  const health =
+  // The same summary the Mesh analysis section shows, from the same derivation.
+  const { summary } = useIssueNavigation();
+  const health: HealthEntry | undefined =
     model === undefined
       ? undefined
-      : describeHealth(analysis.state, reportIsCurrent ? analysis.report : undefined);
+      : summary.tone === 'neutral'
+        ? {
+            text: analysing ? 'Checking topology' : 'Not analysed',
+            tooltip: summary.qualifier,
+            tone: 'neutral',
+            icon: 'info',
+          }
+        : {
+            text: summary.text,
+            tooltip: summary.qualifier,
+            tone: summary.tone,
+            icon: summary.tone === 'ok' ? 'ok' : summary.tone === 'error' ? 'error' : 'alert',
+          };
 
   return (
     <footer className="statusbar" data-testid="status-bar">
@@ -63,7 +69,7 @@ export function StatusBar(): ReactNode {
             <span className="statusbar__spinner" aria-hidden="true">
               <Icon name="loader" size={13} />
             </span>
-            <span className="statusbar__job-label">Analysing topology</span>
+            <span className="statusbar__job-label">Analyzing topology</span>
           </>
         ) : (
           <>
@@ -130,37 +136,6 @@ export function StatusBar(): ReactNode {
 interface HealthEntry {
   readonly text: string;
   readonly tooltip: string;
-  readonly tone: 'neutral' | 'warning' | 'success';
+  readonly tone: 'neutral' | 'warning' | 'error' | 'ok';
   readonly icon: IconName;
-}
-
-function describeHealth(
-  state: AnalysisState,
-  report: TopologyReport | undefined,
-): HealthEntry | undefined {
-  if (state === AnalysisState.Unavailable) return undefined;
-  if (report === undefined) {
-    if (state === AnalysisState.Analyzing)
-      return {
-        text: 'Checking topology',
-        tooltip: TOPOLOGY_QUALIFIER,
-        tone: 'neutral',
-        icon: 'info',
-      };
-    return {
-      text: 'Topology not checked',
-      tooltip: TOPOLOGY_QUALIFIER,
-      tone: 'neutral',
-      icon: 'info',
-    };
-  }
-  const issues = totalDefectCount(report);
-  if (issues === 0)
-    return { text: 'Topology checked', tooltip: TOPOLOGY_QUALIFIER, tone: 'success', icon: 'ok' };
-  return {
-    text: `${issues.toLocaleString()} topology ${issues === 1 ? 'issue' : 'issues'}`,
-    tooltip: TOPOLOGY_QUALIFIER,
-    tone: 'warning',
-    icon: 'alert',
-  };
 }

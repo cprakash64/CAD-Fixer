@@ -12,6 +12,11 @@ import {
   RepairPreviewMode,
   StatusSeverity,
 } from '../state/workspace-store';
+import { overlayForIssue } from '../state/repair-issues';
+import { useIssueNavigation } from '../state/use-issue-navigation';
+import { WorkflowId } from '../state/workflows';
+import { analysisKey } from '../state/workspace-store';
+import { IssueHud } from './IssueHud';
 import { Icon } from './shell/Icon';
 import { IconButton, SegmentedControl, type SegmentedOption } from './shell/primitives';
 
@@ -47,7 +52,21 @@ export function ViewportPanel(): ReactNode {
     texturePreview,
     textureSelection,
     selectedWorkflow,
+    frameRequest,
   } = useWorkspaceState();
+  const navigation = useIssueNavigation();
+  const issueSelection = navigation.selection;
+  const repairWorkspace = selectedWorkflow === undefined || selectedWorkflow === WorkflowId.Repair;
+  /**
+   * The selected issue's own overlay is drawn whatever the Mesh Health toggles
+   * say: selecting "Winding conflicts" must show every sampled conflict, with
+   * the active one marked. The user's toggles are not changed — this is what
+   * is DRAWN, not what is stored.
+   */
+  const focusedOverlay =
+    repairWorkspace && issueSelection !== undefined
+      ? overlayForIssue(issueSelection.issue.id)
+      : undefined;
 
   /**
    * The candidate the viewport may legitimately draw.
@@ -241,10 +260,50 @@ export function ViewportPanel(): ReactNode {
         sampleVertexIds: detail.sampleVertexIds,
         sampleVertexPositions: detail.sampleVertexPositions,
       },
-      visibility: overlays,
+      visibility: focusedOverlay === undefined ? overlays : { ...overlays, [focusedOverlay]: true },
       revision: model.revision,
     });
-  }, [activePartId, analysis.detail, analysis.handle, analysis.partId, model, overlays]);
+  }, [
+    activePartId,
+    analysis.detail,
+    analysis.handle,
+    analysis.partId,
+    focusedOverlay,
+    model,
+    overlays,
+  ]);
+
+  /**
+   * The active occurrence's marker. ONE small object, moved — never a rebuild
+   * of the diagnostic geometry, which the overlay above already owns.
+   */
+  const focusLocation = repairWorkspace ? issueSelection?.location : undefined;
+  useEffect(() => {
+    const viewport = viewportRef.current;
+    if (viewport === undefined) return;
+    viewport.setIssueFocus(
+      focusLocation === undefined || model === undefined
+        ? undefined
+        : { center: focusLocation.center, radius: focusLocation.radius, revision: model.revision },
+    );
+  }, [focusLocation, model]);
+
+  /**
+   * Frame requests are COMMANDS: each has a new sequence, so this runs once per
+   * request. One whose key names another revision or part is ignored — the
+   * place it names is not on screen any more.
+   */
+  const handledFrameRef = useRef(0);
+  useEffect(() => {
+    const viewport = viewportRef.current;
+    if (viewport === undefined || frameRequest === undefined) return;
+    // Each sequence is handled once, so a later model or part change cannot
+    // replay a request made for what was on screen before.
+    if (frameRequest.sequence === handledFrameRef.current) return;
+    handledFrameRef.current = frameRequest.sequence;
+    if (frameRequest.key !== analysisKey(model?.handle, activePartId)) return;
+    viewport.frameRegion(frameRequest.center, frameRequest.radius);
+  }, [activePartId, frameRequest, model]);
 
   /**
    * Pushes the repair preview.
@@ -420,6 +479,9 @@ export function ViewportPanel(): ReactNode {
           banner is text with a role, not a colour, so a user who cannot see the
           tint still learns that nothing has been applied. */}
       <div className="viewport__hud">
+        {repairWorkspace && issueSelection !== undefined && modelShown ? (
+          <IssueHud navigation={navigation} />
+        ) : null}
         {showingPreview ? (
           <p className="viewport__preview-banner" role="status" data-testid="preview-banner">
             Preview — not applied

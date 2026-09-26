@@ -1691,6 +1691,392 @@
   font: 500 var(--fs-meta) var(--font-mono);
 }
 
+/* ------------------------------------------------- repair workspace -- */
+
+.secondary-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  height: var(--shell-control-h);
+  padding: 0 12px;
+  border: 1px solid var(--cad-border-control);
+  border-radius: var(--radius-control);
+  background: var(--cad-control-raised);
+  color: var(--cad-text-strong);
+  font: 600 var(--fs-ui) var(--font-body);
+  cursor: pointer;
+}
+
+.secondary-action:hover:not(:disabled) {
+  border-color: var(--cad-border-strong);
+  background: var(--cad-hover);
+}
+
+.secondary-action:disabled {
+  color: var(--cad-text-muted);
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
+.spin {
+  animation: shell-spin 0.9s linear infinite;
+}
+
+.health-summary {
+  font: 600 var(--fs-meta) var(--font-mono);
+  white-space: nowrap;
+}
+
+.health-summary--error {
+  color: var(--cad-error);
+}
+
+.health-summary--warning {
+  color: var(--cad-warning);
+}
+
+.health-summary--ok {
+  color: var(--cad-success);
+}
+
+.health-summary--neutral {
+  color: var(--cad-text-muted);
+}
+
+.panel-section__body > .secondary-action + * {
+  margin-top: 10px;
+}
+
+.issue-list {
+  display: flex;
+  flex-direction: column;
+  margin: 10px 0 8px;
+  padding: 4px;
+  list-style: none;
+  background: var(--cad-well);
+  border: 1px solid #26343f;
+  border-radius: var(--radius-card);
+}
+
+.issue-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  height: 28px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--cad-text-strong);
+  font: 500 12.5px var(--font-body);
+  text-align: left;
+  cursor: pointer;
+}
+
+.issue-row:hover:not(:disabled) {
+  background: var(--cad-control-raised);
+  color: var(--cad-text-strong);
+}
+
+.issue-row[aria-pressed='true'] {
+  background: rgba(77, 148, 232, 0.14);
+  box-shadow: inset 0 0 0 1px var(--cad-info);
+}
+
+.issue-row__label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.issue-row__count {
+  font: 600 var(--fs-meta) var(--font-mono);
+}
+
+.issue-row--error .issue-row__icon,
+.issue-row--error .issue-row__count {
+  color: var(--cad-error);
+}
+
+.issue-row--warning .issue-row__icon,
+.issue-row--warning .issue-row__count {
+  color: var(--cad-warning);
+}
+
+.issue-row--ok .issue-row__icon,
+.issue-row--ok .issue-row__count {
+  color: var(--cad-success);
+}
+
+.issue-row--ok .issue-row__label,
+.issue-row--unchecked .issue-row__label {
+  color: var(--cad-text-muted);
+}
+
+.issue-row--unchecked .issue-row__icon,
+.issue-row--unchecked .issue-row__count {
+  color: var(--cad-text-subtle);
+}
+
+.mesh-analysis__qualifier {
+  font-size: var(--fs-meta);
+}
+
+.mesh-analysis__failed {
+  margin-top: 10px;
+  color: var(--cad-error);
+}
+
+.occurrence-nav {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.occurrence-nav__label {
+  flex: 1;
+  min-width: 0;
+  color: var(--cad-text-muted);
+  font-size: var(--fs-secondary);
+}
+
+.occurrence-nav__label strong {
+  color: var(--cad-text-strong);
+  font-weight: 600;
+}
+
+.occurrence-nav__step,
+.occurrence-nav__zoom {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid #34434f;
+  border-radius: 7px;
+  background: var(--cad-control-raised);
+  color: var(--cad-text);
+  font: 500 var(--fs-secondary) var(--font-body);
+  cursor: pointer;
+}
+
+.occurrence-nav__step {
+  width: 26px;
+  padding: 0;
+}
+
+.occurrence-nav__zoom:hover:not(:disabled) {
+  border-color: var(--cad-accent);
+  background: var(--cad-control-raised);
+  color: var(--cad-accent);
+}
+
+.occurrence-nav__note {
+  flex-basis: 100%;
+  margin: 2px 0 0;
+  color: var(--cad-text-subtle);
+  font-size: var(--fs-meta);
+}
+
+.severity-dot {
+  display: inline-block;
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--cad-text-subtle);
+}
+
+.severity-dot--error {
+  background: var(--cad-error);
+}
+
+.severity-dot--warning {
+  background: var(--cad-warning);
+}
+
+.severity-dot--ok {
+  background: var(--cad-success);
+}
+
+/* The viewport HUD: the selected issue as a floating capsule. */
+.issue-hud {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 4px 4px 4px 12px;
+  border: 1px solid var(--cad-border);
+  border-radius: 999px;
+  background: var(--cad-overlay-strong);
+  box-shadow: var(--shadow-floating);
+  white-space: nowrap;
+  pointer-events: auto;
+}
+
+.issue-hud__name {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--cad-text-strong);
+  font: 600 var(--fs-secondary) var(--font-body);
+  text-overflow: ellipsis;
+}
+
+.issue-hud__position {
+  padding: 0 2px;
+  color: var(--cad-text-muted);
+  font: 500 var(--fs-meta) var(--font-mono);
+}
+
+.issue-hud__step {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: var(--cad-hover);
+  color: var(--cad-text);
+  cursor: pointer;
+}
+
+.issue-hud__step:hover:not(:disabled) {
+  border: 0;
+  background: var(--cad-hover);
+  color: #ffffff;
+}
+
+.issue-hud__zoom {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--cad-accent);
+  color: var(--cad-on-accent);
+  font: 600 var(--fs-secondary) var(--font-body);
+  cursor: pointer;
+}
+
+.issue-hud__zoom:hover:not(:disabled) {
+  border: 0;
+  background: var(--cad-accent-hover);
+  color: var(--cad-on-accent);
+}
+
+.issue-hud__zoom:disabled,
+.issue-hud__step:disabled {
+  opacity: 0.5;
+}
+
+/* The inspector's selected issue. */
+.issue-inspector__title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 8px;
+}
+
+.issue-inspector__name {
+  flex: 1;
+  min-width: 0;
+  color: var(--cad-text-strong);
+  font: 600 var(--fs-ui) var(--font-body);
+}
+
+.issue-inspector__severity {
+  font: 600 var(--fs-meta) var(--font-mono);
+}
+
+.issue-inspector__severity--error {
+  color: var(--cad-error);
+}
+
+.issue-inspector__severity--warning {
+  color: var(--cad-warning);
+}
+
+.issue-inspector__severity--ok {
+  color: var(--cad-success);
+}
+
+.issue-inspector__severity--unchecked {
+  color: var(--cad-text-subtle);
+}
+
+.issue-inspector__coordinates {
+  margin: 0;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: var(--cad-well);
+  color: var(--cad-text-strong);
+  font: 500 var(--fs-secondary) var(--font-mono);
+  text-align: center;
+  white-space: pre;
+}
+
+.issue-inspector__coordinates-note {
+  margin: 4px 0 0;
+  color: var(--cad-text-subtle);
+  font-size: var(--fs-meta);
+}
+
+.suggested-fix {
+  margin-top: 14px;
+}
+
+.suggested-fix__eyebrow {
+  margin: 0 0 4px;
+  color: var(--cad-text-subtle);
+  font: 500 10px var(--font-mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.suggested-fix__text {
+  margin: 0;
+  color: var(--cad-text-strong);
+  font-size: var(--fs-secondary);
+}
+
+.suggested-fix__actions,
+.issue-inspector__actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.suggested-fix__actions .primary-action {
+  width: auto;
+  height: 32px;
+}
+
+.issue-inspector__actions .secondary-action {
+  width: auto;
+}
+
+/* The conservative repair's primary action, at the reference's prominence. */
+[data-testid='preview-repair'] {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  height: 40px;
+  font-size: 14px;
+}
+
 /* --------------------------------------------------------- focus rings -- */
 
 /*
@@ -1889,13 +2275,17 @@
     left: 8px;
   }
 
+  /* On a phone the HUD moves to the bottom edge at full width: at the top it
+     collided with the view cube and left the issue name a single letter. The
+     Compare bar lifts above it so the two never overlap. */
   .viewport__hud {
-    top: 10px;
-    max-width: calc(100% - 140px);
+    top: auto;
+    bottom: 12px;
+    max-width: calc(100% - 24px);
   }
 
   .viewport__actions {
-    bottom: 12px;
+    bottom: 60px;
   }
 
   .import__empty {

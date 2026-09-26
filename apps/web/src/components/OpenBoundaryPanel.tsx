@@ -1,7 +1,7 @@
 import { useEffect, useRef, type ReactNode } from 'react';
 import { HOLE_FILL_MAX_PART_FACES } from '@cadfixer/geometry-runtime';
 import { useWorkspaceState } from '../state/store-context';
-import { useHoleFillWorkflow } from '../state/use-hole-fill-workflow';
+import { useHoleFillControls } from '../state/workflow-controllers';
 import {
   HOLE_FILL_APPLIED_QUALIFIER,
   HOLE_FILL_APPLY_ACTION,
@@ -60,7 +60,7 @@ import { describeActivePart } from '../state/part-presentation';
  */
 export function OpenBoundaryPanel(): ReactNode {
   const { model, activePartId, holeFill } = useWorkspaceState();
-  const controls = useHoleFillWorkflow();
+  const controls = useHoleFillControls();
   const headingRef = useRef<HTMLHeadingElement>(null);
   const statusRef = useRef<HTMLDivElement>(null);
 

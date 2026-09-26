@@ -9,8 +9,8 @@ import type {
 } from '@cadfixer/geometry-runtime';
 import { isInterruptibleRepairSupported } from '../runtime/cancellation-support';
 import { useWorkspaceState, useWorkspaceStore } from '../state/store-context';
-import { useConservativeRepair } from '../state/use-conservative-repair';
-import { useTopologyAnalysis } from '../state/use-topology-analysis';
+import { useAnalysisControls, useRepairControls } from '../state/workflow-controllers';
+import { Icon } from './shell/Icon';
 import {
   DeltaMeaning,
   NO_REPAIRS_AVAILABLE_HEADLINE,
@@ -68,8 +68,8 @@ import { describeActivePart } from '../state/part-presentation';
 export function RepairPanel(): ReactNode {
   const { model, activePartId, analysis, repair, selectedWorkflow } = useWorkspaceState();
   const store = useWorkspaceStore();
-  const controls = useConservativeRepair();
-  const { runAnalysis, isAnalyzing, canRetry } = useTopologyAnalysis();
+  const controls = useRepairControls();
+  const { runAnalysis, isAnalyzing, canRetry } = useAnalysisControls();
   const headingRef = useRef<HTMLHeadingElement>(null);
 
   /**
@@ -330,6 +330,7 @@ export function RepairPanel(): ReactNode {
             disabled={isCommitting || !reportIsCurrent}
             data-testid="preview-repair"
           >
+            <Icon name="zap" size={16} />
             Preview repair
           </button>
         </div>

@@ -2,7 +2,7 @@ import type { ReactNode } from 'react';
 import type { TopologyReport, VolumeStatus } from '@cadfixer/geometry-runtime';
 import { describeEncoding, describeSourceFormat, describeUnit } from '../state/model';
 import { useWorkspaceState, useWorkspaceStore } from '../state/store-context';
-import { useTopologyAnalysis } from '../state/use-topology-analysis';
+import { useAnalysisControls } from '../state/workflow-controllers';
 import {
   DEFECT_EXPLANATIONS,
   describeBoundaryKind,
@@ -37,7 +37,7 @@ import { describeActivePart } from '../state/part-presentation';
 export function MeshHealthPanel(): ReactNode {
   const { model, activePartId, analysis, overlays } = useWorkspaceState();
   const store = useWorkspaceStore();
-  const { runAnalysis, cancelAnalysis, isAnalyzing, canRetry } = useTopologyAnalysis();
+  const { runAnalysis, cancelAnalysis, isAnalyzing, canRetry } = useAnalysisControls();
 
   if (model === undefined) {
     return (

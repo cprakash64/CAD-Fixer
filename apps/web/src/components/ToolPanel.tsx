@@ -2,6 +2,7 @@ import { useRef, type ReactNode } from 'react';
 import { WORKFLOWS, WorkflowId } from '../state/workflows';
 import { useWorkspaceState } from '../state/store-context';
 import { useDocumentConversion } from '../state/use-document-conversion';
+import { MeshAnalysisSection } from './MeshAnalysisSection';
 import { MeshHealthPanel } from './MeshHealthPanel';
 import { OpenBoundaryPanel } from './OpenBoundaryPanel';
 import { RepairPanel } from './RepairPanel';
@@ -9,7 +10,7 @@ import { SplitPanel } from './SplitPanel';
 import { StatusPanel } from './StatusPanel';
 import { TexturePanel } from './TexturePanel';
 import { keepTabWithin } from './shell/focus-trap';
-import { IconButton, PrimaryActionButton, WorkspaceHeader } from './shell/primitives';
+import { IconButton, PanelSection, PrimaryActionButton, WorkspaceHeader } from './shell/primitives';
 import { useShellLayout } from './shell/shell-layout';
 import { DEFAULT_WORKSPACE, WORKSPACE_PRESENTATION } from './shell/workspaces';
 
@@ -30,7 +31,7 @@ import { DEFAULT_WORKSPACE, WORKSPACE_PRESENTATION } from './shell/workspaces';
  * it is where every workflow reports what it did.
  */
 export function ToolPanel({ inert = false }: { readonly inert?: boolean }): ReactNode {
-  const { selectedWorkflow } = useWorkspaceState();
+  const { selectedWorkflow, repair } = useWorkspaceState();
   const layout = useShellLayout();
   const panelRef = useRef<HTMLElement>(null);
   const modal = layout.modalDrawer === 'tool';
@@ -70,7 +71,17 @@ export function ToolPanel({ inert = false }: { readonly inert?: boolean }): Reac
 
       <div className="tool-panel__body">
         <div className="tool-panel__group" hidden={current !== WorkflowId.Repair}>
-          <RepairPanel />
+          {/* What the checks found comes first, then what CAD Fixer can do
+              about it, then the per-boundary workflow, then the full report
+              every row above was derived from. */}
+          <MeshAnalysisSection />
+          <PanelSection
+            title="Auto repair"
+            testId="auto-repair"
+            meta={`${String(repair.selection.length)} of 4 selected`}
+          >
+            <RepairPanel />
+          </PanelSection>
           {/* Beneath conservative repair, and that order is deliberate: several
               openings are only fillable AFTER neighbouring triangles have been
               made to agree on their winding, so the workflow that can unblock

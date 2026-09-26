@@ -1,6 +1,8 @@
 import { useRef, type ReactNode } from 'react';
 import { useWorkspaceState } from '../state/store-context';
+import { WorkflowId } from '../state/workflows';
 import { ModelPanel } from './ModelPanel';
+import { IssueInspector } from './IssueInspector';
 import { PartSelector } from './PartSelector';
 import { RuntimePanel } from './RuntimePanel';
 import { Icon } from './shell/Icon';
@@ -20,7 +22,8 @@ import { useShellLayout } from './shell/shell-layout';
  * presentation applies; React only records the two flags.
  */
 export function Inspector({ inert = false }: { readonly inert?: boolean }): ReactNode {
-  const { model } = useWorkspaceState();
+  const { model, selectedWorkflow } = useWorkspaceState();
+  const repairWorkspace = selectedWorkflow === undefined || selectedWorkflow === WorkflowId.Repair;
   const layout = useShellLayout();
   const collapsed = layout.inspectorCollapsed;
   const panelRef = useRef<HTMLElement>(null);
@@ -73,15 +76,18 @@ export function Inspector({ inert = false }: { readonly inert?: boolean }): Reac
           </PanelSection>
 
           <PanelSection title="Selection">
-            {model === undefined ? (
+            {model !== undefined && model.parts.length > 1 ? <PartSelector /> : null}
+            {/* The selected finding is Repair's; other workspaces keep their
+                own selection surfaces for now. */}
+            {repairWorkspace ? (
+              <IssueInspector />
+            ) : model === undefined ? (
               <p className="panel__empty">Nothing is selected. Open a model to begin.</p>
             ) : model.parts.length <= 1 ? (
               <p className="panel__note" data-testid="selection-single-part">
                 This model has one part, so every workflow acts on the whole model.
               </p>
-            ) : (
-              <PartSelector />
-            )}
+            ) : null}
           </PanelSection>
 
           <PanelSection title="Runtime">

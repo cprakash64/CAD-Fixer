@@ -8,6 +8,7 @@ import { ToolPanel } from './components/ToolPanel';
 import { TopBar } from './components/TopBar';
 import { ViewportPanel } from './components/ViewportPanel';
 import { ShellLayoutProvider, useShellLayout } from './components/shell/shell-layout';
+import { WorkflowControllersProvider } from './state/workflow-controllers';
 
 /**
  * Application shell.
@@ -31,7 +32,9 @@ export function App(): ReactNode {
   return (
     <ShellLayoutProvider>
       <FileIntakeProvider>
-        <Shell />
+        <WorkflowControllersProvider>
+          <Shell />
+        </WorkflowControllersProvider>
       </FileIntakeProvider>
     </ShellLayoutProvider>
   );

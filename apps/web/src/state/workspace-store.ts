@@ -28,6 +28,7 @@ import {
   type SelfIntersectionStatus,
 } from '@cadfixer/mesh-self-intersection';
 import type { LoadedModel } from './model';
+import type { RepairIssueId } from './repair-issues';
 
 /**
  * Application/workspace state.
@@ -879,6 +880,25 @@ export interface WorkspaceState {
    */
   readonly holeFill: HoleFillSnapshot;
   readonly overlays: OverlayVisibility;
+  /**
+   * The issue selected in the Repair workspace, if any.
+   *
+   * ONE SELECTION, READ BY EVERY SURFACE: the Mesh analysis list, the viewport
+   * HUD and marker, and the inspector all resolve it through
+   * `resolveIssueSelection`, so none can show a different issue or occurrence.
+   *
+   * KEYED TO THE ANALYSIS IT WAS MADE AGAINST. `key` names a document revision
+   * and part; a selection whose key no longer matches the current analysis is
+   * stale and resolves to nothing, whatever changed the geometry — a repair, a
+   * fill, an undo, a new import, a part switch. No reset path can be missed.
+   *
+   * Open boundaries are the exception to `occurrence`: their current
+   * occurrence IS `holeFill.selectedLoopId`, so the openings list and this
+   * selection cannot drift apart.
+   */
+  readonly issueSelection: IssueSelection | undefined;
+  /** The latest request to frame a region of the active part. */
+  readonly frameRequest: FrameRequest | undefined;
   readonly status: readonly StatusEntry[];
   readonly runtime: RuntimeState;
   /**
@@ -901,6 +921,37 @@ export interface WorkspaceState {
   readonly geometrySessionLost: string | undefined;
 }
 
+export interface IssueSelection {
+  readonly issue: RepairIssueId;
+  readonly occurrence: number;
+  /** `documentId@revision/partId` of the analysis the selection was made in. */
+  readonly key: string;
+}
+
+/**
+ * A request to frame part-local `center` within `radius`.
+ *
+ * A COMMAND, not state: `sequence` increases on every request, so asking to
+ * frame the same place twice frames it twice. The viewport ignores a request
+ * whose `key` no longer names the model on screen.
+ */
+export interface FrameRequest {
+  readonly sequence: number;
+  readonly key: string;
+  readonly center: readonly [number, number, number];
+  readonly radius: number;
+}
+
+/** The key an issue selection and a frame request are tied to. */
+export function analysisKey(
+  handle: DocumentHandle | undefined,
+  partId: string | undefined,
+): string | undefined {
+  return handle === undefined || partId === undefined
+    ? undefined
+    : `${handle.documentId}@${String(handle.revision)}/${partId}`;
+}
+
 /** Bounded so a chatty session cannot grow the log without limit. */
 const MAX_STATUS_ENTRIES = 50;
 
@@ -920,6 +971,8 @@ const INITIAL_STATE: WorkspaceState = {
   repair: EMPTY_REPAIR,
   holeFill: EMPTY_HOLE_FILL,
   overlays: OVERLAYS_HIDDEN,
+  issueSelection: undefined,
+  frameRequest: undefined,
   status: [],
   runtime: { selfTest: SelfTestState.Idle, progress: 0 },
   viewportFailure: undefined,
@@ -2717,6 +2770,31 @@ export class WorkspaceStore {
 
   public isCurrentAnalysis(token: AnalysisToken): boolean {
     return this.currentAnalysisToken === token;
+  }
+
+  /** Selects an issue at its first occurrence, or clears the selection. */
+  public selectIssue(issue: RepairIssueId | undefined, key: string | undefined): void {
+    if (issue === undefined || key === undefined) {
+      if (this.state.issueSelection !== undefined) this.update({ issueSelection: undefined });
+      return;
+    }
+    this.update({ issueSelection: { issue, occurrence: 0, key } });
+  }
+
+  /** Moves the current selection to another occurrence of the same issue. */
+  public setIssueOccurrence(occurrence: number): void {
+    const selection = this.state.issueSelection;
+    if (selection === undefined || selection.occurrence === occurrence) return;
+    this.update({ issueSelection: { ...selection, occurrence } });
+  }
+
+  public requestFrame(
+    key: string,
+    center: readonly [number, number, number],
+    radius: number,
+  ): void {
+    const sequence = (this.state.frameRequest?.sequence ?? 0) + 1;
+    this.update({ frameRequest: { sequence, key, center, radius } });
   }
 
   public setOverlayVisible(overlay: OverlayId, visible: boolean): void {

@@ -78,6 +78,21 @@ const ICONS = {
   help: [circle(12, 12, 10), ...path('M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3', 'M12 17h.01')],
   'chev-down': path('m6 9 6 6 6-6'),
   'chev-right': path('m9 18 6-6-6-6'),
+  'chev-left': path('m15 18-6-6 6-6'),
+  target: [circle(12, 12, 10), circle(12, 12, 6), circle(12, 12, 2)],
+  zap: path(
+    'M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z',
+  ),
+  scan: [
+    ...path(
+      'M3 7V5a2 2 0 0 1 2-2h2',
+      'M17 3h2a2 2 0 0 1 2 2v2',
+      'M21 17v2a2 2 0 0 1-2 2h-2',
+      'M7 21H5a2 2 0 0 1-2-2v-2',
+    ),
+    circle(12, 12, 3),
+    ...path('m16 16-1.9-1.9'),
+  ],
   orbit: [
     { kind: 'ellipse', cx: 12, cy: 12, rx: 10, ry: 4.5 },
     circle(12, 12, 2.5),
@@ -120,6 +135,7 @@ const ICONS = {
     'M12 17h.01',
   ),
   ok: [circle(12, 12, 10), ...path('m9 12 2 2 4-4')],
+  error: [circle(12, 12, 10), ...path('m15 9-6 6', 'm9 9 6 6')],
   info: [circle(12, 12, 10), ...path('M12 16v-4', 'M12 8h.01')],
 } as const satisfies Readonly<Record<string, readonly Shape[]>>;
 

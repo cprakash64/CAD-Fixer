@@ -10,6 +10,7 @@ import type {
 } from '@cadfixer/geometry-runtime';
 import { OpenBoundaryPanel } from './OpenBoundaryPanel';
 import { WorkspaceProvider } from '../state/store-context';
+import { HoleFillControlsProvider } from '../state/workflow-controllers';
 import { WorkspaceStore, type HoleBoundaryRow } from '../state/workspace-store';
 import {
   HOLE_FILL_APPLIED_QUALIFIER,
@@ -167,7 +168,9 @@ function renderPanel(configure: (store: WorkspaceStore) => void = () => undefine
   configure(store);
   render(
     <WorkspaceProvider store={store}>
-      <OpenBoundaryPanel />
+      <HoleFillControlsProvider>
+        <OpenBoundaryPanel />
+      </HoleFillControlsProvider>
     </WorkspaceProvider>,
   );
   return store;
