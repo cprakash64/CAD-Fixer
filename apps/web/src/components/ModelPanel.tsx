@@ -3,12 +3,16 @@ import { describeEncoding, describeSourceFormat, describeUnit } from '../state/m
 import { useWorkspaceState } from '../state/store-context';
 import { useModelExport } from '../state/use-model-export';
 import { useDocumentConversion } from '../state/use-document-conversion';
+import { Icon } from './shell/Icon';
 
 /**
  * Model information and the two ways out of it.
  *
  * PRESENTATION ONLY. Every number shown here was computed in the worker during
  * import, and both export controls call hooks that own their operations.
+ *
+ * It sits in the inspector's "Model" section, which supplies the heading, so it
+ * draws none of its own.
  *
  * THERE ARE TWO EXPORTS AND THEY ARE NOT THE SAME OPERATION, which is why they
  * are not both called "Export":
@@ -32,7 +36,6 @@ export function ModelPanel(): ReactNode {
   if (model === undefined) {
     return (
       <section className="panel" aria-label="Model information">
-        <h2 className="panel__title">Model</h2>
         <p className="panel__empty" data-testid="model-empty">
           No model loaded.
         </p>
@@ -45,10 +48,17 @@ export function ModelPanel(): ReactNode {
 
   return (
     <section className="panel" aria-label="Model information">
-      <h2 className="panel__title">Model</h2>
+      {/* The file name is untrusted text from the user's file system; it is
+          rendered as text and truncated by CSS, with the whole name as the
+          tooltip. */}
+      <p className="file-card">
+        <Icon name="cube" size={18} className="file-card__icon" />
+        <span className="file-card__name" title={model.source.fileName} data-testid="fact-filename">
+          {model.source.fileName}
+        </span>
+      </p>
 
       <dl className="facts" data-testid="model-facts">
-        <Fact label="File" value={model.source.fileName} testId="fact-filename" />
         <Fact label="Format" value={describeSourceFormat(model.source)} testId="fact-format" />
         <Fact label="Encoding" value={describeEncoding(model.source)} testId="fact-encoding" />
         <Fact label="File size" value={formatBytes(model.source.fileBytes)} />

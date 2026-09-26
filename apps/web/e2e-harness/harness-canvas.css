@@ -1,0 +1,20 @@
+/*
+ * HARNESS ONLY: the viewport renders at a fixed 640 x 240 CSS px.
+ *
+ * Headless Chromium draws WebGL on the CPU (SwiftShader), and the cost of a
+ * frame there follows the pixels the model covers. The harness suite proves
+ * document logic, cancellation and main-thread budgets, and was qualified
+ * against the pre-UI-01 layout's ~1008 x 149 canvas. The UI-01 shell gives the
+ * viewport most of the window; on this page that tripled every frame's cost
+ * (a 250k-face load: 8.5 s at 1008 x 149, ~27 s at 1008 x 397 in either build,
+ * 52-56 s at 750 x 642) and pushed time-budgeted tests over their limits with
+ * identical application work. Holding the render size fixed keeps those
+ * budgets about the application. The shipped application is never affected:
+ * this file is imported only by the harness entry, and the full-size editor is
+ * covered by e2e/ui-shell.spec.ts. See docs/design/UI_SHELL.md.
+ */
+[data-testid='viewport-canvas'] {
+  inset: 0 auto auto 0;
+  width: 640px;
+  height: 240px;
+}

@@ -1,5 +1,10 @@
-import { useEffect, useRef, type ReactNode } from 'react';
-import { createViewport, type ViewportHandle } from '../viewport/create-viewport';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
+import {
+  createViewport,
+  NavigationMode,
+  ViewDirection,
+  type ViewportHandle,
+} from '../viewport/create-viewport';
 import { useWorkspaceState, useWorkspaceStore } from '../state/store-context';
 import {
   HoleFillWorkState,
@@ -7,6 +12,8 @@ import {
   RepairPreviewMode,
   StatusSeverity,
 } from '../state/workspace-store';
+import { Icon } from './shell/Icon';
+import { IconButton, SegmentedControl, type SegmentedOption } from './shell/primitives';
 
 /**
  * React owns the container element; `createViewport` owns everything inside it.
@@ -18,6 +25,14 @@ import {
 export function ViewportPanel(): ReactNode {
   const containerRef = useRef<HTMLDivElement>(null);
   const viewportRef = useRef<ViewportHandle | undefined>(undefined);
+  /**
+   * The view cube's rotating element. Written DIRECTLY from the viewport's
+   * orientation callback, never through React state: that callback fires on
+   * every orbit step, and routing it through state would re-render this panel
+   * — and everything below the store subscription — once per pointer move.
+   */
+  const cubeRef = useRef<HTMLDivElement>(null);
+  const [navigationMode, setNavigationMode] = useState<NavigationMode>(NavigationMode.Orbit);
   const store = useWorkspaceStore();
   const {
     viewportFailure,
@@ -64,6 +79,10 @@ export function ViewportPanel(): ReactNode {
           store.selectPart(hit.partId);
           if (store.getSnapshot().selectedWorkflow === 'texture')
             window.dispatchEvent(new CustomEvent('cadfixer:texture-surface-pick', { detail: hit }));
+        },
+        onOrientationChange: (orientation) => {
+          const cube = cubeRef.current;
+          if (cube !== null) cube.style.transform = `matrix3d(${orientation.join(',')})`;
         },
         onContextLost: () => {
           store.setViewportFailure(
@@ -153,6 +172,10 @@ export function ViewportPanel(): ReactNode {
   useEffect(() => {
     viewportRef.current?.setEditPlane(splitPlane);
   }, [splitPlane]);
+
+  useEffect(() => {
+    viewportRef.current?.setNavigationMode(navigationMode);
+  }, [navigationMode]);
 
   useEffect(() => {
     const viewport = viewportRef.current;
@@ -385,30 +408,40 @@ export function ViewportPanel(): ReactNode {
     currentTexture?.source.documentId === currentModel?.handle.documentId &&
     currentTexture?.source.revision === currentModel?.handle.revision;
 
+  const viewport = (): ViewportHandle | undefined => viewportRef.current;
+  const modelShown = model !== undefined && viewportFailure === undefined;
+
   return (
     <section className="viewport" aria-label="3D workspace">
       <div className="viewport__canvas" ref={containerRef} data-testid="viewport-canvas" />
 
-      {/* PART E4. Never let a preview be mistaken for the model. The banner is
-          text with a role, not a colour: a user who cannot see the tint still
-          learns that nothing has been applied. */}
-      {showingPreview ? (
-        <p className="viewport__preview-banner" role="status" data-testid="preview-banner">
-          Preview — not applied
-        </p>
-      ) : null}
+      {/* TOP-CENTRE HUD. Contextual status for whatever the workspace is doing.
+          PART E4 lives here: never let a preview be mistaken for the model. Each
+          banner is text with a role, not a colour, so a user who cannot see the
+          tint still learns that nothing has been applied. */}
+      <div className="viewport__hud">
+        {showingPreview ? (
+          <p className="viewport__preview-banner" role="status" data-testid="preview-banner">
+            Preview — not applied
+          </p>
+        ) : null}
 
-      {showingPatch && !showingPreview ? (
-        <p className="viewport__preview-banner" role="status" data-testid="patch-preview-banner">
-          Fill preview — not applied
-        </p>
-      ) : null}
+        {showingPatch && !showingPreview ? (
+          <p className="viewport__preview-banner" role="status" data-testid="patch-preview-banner">
+            Fill preview — not applied
+          </p>
+        ) : null}
 
-      {showingTexture && !showingPreview ? (
-        <p className="viewport__preview-banner" role="status" data-testid="texture-preview-banner">
-          Texture preview — not applied
-        </p>
-      ) : null}
+        {showingTexture && !showingPreview ? (
+          <p
+            className="viewport__preview-banner"
+            role="status"
+            data-testid="texture-preview-banner"
+          >
+            Texture preview — not applied
+          </p>
+        ) : null}
+      </div>
 
       {viewportFailure !== undefined ? (
         <p className="viewport__error" role="alert" data-testid="viewport-error">
@@ -418,18 +451,127 @@ export function ViewportPanel(): ReactNode {
         <p className="viewport__empty" data-testid="viewport-empty">
           Empty workspace — open an STL, OBJ or 3MF file to view it.
         </p>
-      ) : (
-        <div className="viewport__toolbar">
-          <button
-            type="button"
-            className="viewport__action"
-            data-testid="fit-view"
-            onClick={() => viewportRef.current?.fitView()}
+      ) : null}
+
+      {modelShown ? (
+        <>
+          {/* LEFT: how a drag moves the camera. Every button calls the
+              viewport; none of them changes geometry. */}
+          <div
+            className="viewport__tools"
+            role="toolbar"
+            aria-label="View navigation"
+            aria-orientation="vertical"
           >
-            Fit view
-          </button>
-        </div>
-      )}
+            <IconButton
+              label="Orbit — left-drag rotates the view"
+              icon="orbit"
+              tooltip="right"
+              iconSize={17}
+              className="viewport__tool"
+              pressed={navigationMode === NavigationMode.Orbit}
+              onClick={() => {
+                setNavigationMode(NavigationMode.Orbit);
+              }}
+              testId="nav-orbit"
+            />
+            <IconButton
+              label="Pan — left-drag moves the view"
+              icon="pan"
+              tooltip="right"
+              iconSize={17}
+              className="viewport__tool"
+              pressed={navigationMode === NavigationMode.Pan}
+              onClick={() => {
+                setNavigationMode(NavigationMode.Pan);
+              }}
+              testId="nav-pan"
+            />
+            <span className="viewport__tools-divider" aria-hidden="true" />
+            <IconButton
+              label="Zoom to fit, keeping this angle"
+              icon="fit"
+              tooltip="right"
+              iconSize={17}
+              className="viewport__tool"
+              onClick={() => viewport()?.zoomToFit()}
+              testId="zoom-to-fit"
+            />
+          </div>
+
+          {/* TOP-RIGHT: orientation. The cube turns with the camera and each
+              face frames the model from that side. */}
+          <div className="viewport__orientation">
+            <div className="view-cube" role="group" aria-label="Standard views">
+              <div className="view-cube__body" ref={cubeRef}>
+                {CUBE_FACES.map((face) => (
+                  <button
+                    key={face.direction}
+                    type="button"
+                    className={`view-cube__face view-cube__face--${face.direction}`}
+                    aria-label={`View from ${face.direction}`}
+                    onClick={() => viewport()?.viewFrom(face.direction)}
+                    data-testid={`view-${face.direction}`}
+                  >
+                    {face.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="viewport__orientation-row">
+              <IconButton
+                label="Home view"
+                icon="home"
+                tooltip="left"
+                iconSize={14}
+                className="viewport__home"
+                onClick={() => viewport()?.fitView()}
+                testId="fit-view"
+              />
+              {/* A label, not a switch: the viewport has one camera, and it is a
+                  perspective one. An orthographic toggle here would do nothing. */}
+              <span className="viewport__projection" data-testid="projection-label">
+                Perspective
+              </span>
+            </div>
+          </div>
+
+          {/* BOTTOM-CENTRE: workspace actions on the view. Present only when a
+              workspace has one to offer, so it never shows an empty frame. */}
+          {previewable !== undefined ? (
+            <div className="viewport__actions" role="toolbar" aria-label="Viewport actions">
+              <span className="viewport__actions-label">
+                <Icon name="compare" size={16} />
+                Compare
+              </span>
+              <SegmentedControl
+                label="Compare the model with the proposed repair"
+                options={COMPARE_OPTIONS}
+                value={repair.previewMode}
+                onChange={(mode) => {
+                  // The same store call the repair panel's own toggle makes, so
+                  // the two controls cannot disagree about what is shown.
+                  store.setRepairPreviewMode(mode);
+                }}
+              />
+            </div>
+          ) : null}
+        </>
+      ) : null}
     </section>
   );
 }
+
+const CUBE_FACES: readonly { readonly direction: ViewDirection; readonly label: string }[] = [
+  { direction: ViewDirection.Front, label: 'FRONT' },
+  { direction: ViewDirection.Back, label: 'BACK' },
+  { direction: ViewDirection.Right, label: 'RIGHT' },
+  { direction: ViewDirection.Left, label: 'LEFT' },
+  { direction: ViewDirection.Top, label: 'TOP' },
+  { direction: ViewDirection.Bottom, label: 'BOTTOM' },
+];
+
+const COMPARE_OPTIONS: readonly SegmentedOption<RepairPreviewMode>[] = [
+  { value: RepairPreviewMode.Before, label: 'Before', testId: 'compare-before' },
+  { value: RepairPreviewMode.After, label: 'After', testId: 'compare-after' },
+];

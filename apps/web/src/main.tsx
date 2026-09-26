@@ -6,7 +6,9 @@ import { GeometryClientProvider } from './runtime/client-context';
 import { GeometryClient } from './runtime/geometry-client';
 import { WorkspaceProvider } from './state/store-context';
 import { StatusSeverity, WorkspaceStore } from './state/workspace-store';
+import './styles/tokens.css';
 import './styles/app.css';
+import './styles/shell.css';
 
 const container = document.getElementById('root');
 if (container === null) {

@@ -230,10 +230,59 @@ test('7C-R04: document replacement terminates active texture and remains authori
   await expect(page.getByTestId('texture-preview-banner')).toHaveCount(0);
 });
 
+/**
+ * THE BENCHMARK RENDERS AT A FIXED SIZE, whatever the shell around it looks
+ * like. Headless Chromium draws WebGL on the CPU (SwiftShader), so the time
+ * the main thread waits on the compositor scales with the canvas's pixel area:
+ * the unchanged 8c94d10 build passed at its old 1008x149 canvas and failed
+ * the same way the UI-01 shell did once given the shell's 750x642. The limit
+ * below is a statement about main-thread work, so the pixel area is held
+ * constant: 640x240 at DPR 1 is ~154k px, the area the limit was qualified at.
+ * See docs/design/UI_SHELL.md. The full-size editor is covered separately by
+ * the UI shell smoke test in e2e/ui-shell.spec.ts.
+ */
+const BENCHMARK_CANVAS = { width: 640, height: 240 } as const;
+
+async function pinBenchmarkCanvas(page: Page): Promise<void> {
+  await page.setViewportSize({ width: 1280, height: 720 });
+  // Test-only CSS on the renderer's container; the viewport's ResizeObserver
+  // then sizes the drawing buffer exactly as it would for a real layout.
+  await page.addStyleTag({
+    content: `[data-testid="viewport-canvas"] {
+      inset: 0 auto auto 0 !important;
+      width: ${String(BENCHMARK_CANVAS.width)}px !important;
+      height: ${String(BENCHMARK_CANVAS.height)}px !important;
+    }`,
+  });
+  await expect
+    .poll(() =>
+      page.evaluate(() => {
+        const canvas = document.querySelector<HTMLCanvasElement>(
+          '[data-testid="viewport-canvas"] canvas',
+        );
+        return canvas === null
+          ? null
+          : {
+              cssWidth: canvas.clientWidth,
+              cssHeight: canvas.clientHeight,
+              width: canvas.width,
+              height: canvas.height,
+            };
+      }),
+    )
+    .toEqual({
+      cssWidth: BENCHMARK_CANVAS.width,
+      cssHeight: BENCHMARK_CANVAS.height,
+      width: BENCHMARK_CANVAS.width,
+      height: BENCHMARK_CANVAS.height,
+    });
+}
+
 test('7C main-thread responsiveness: dense preview and Apply keep frame gaps bounded', async ({
   page,
 }) => {
   await openHarness(page);
+  await pinBenchmarkCanvas(page);
   await loadFixture(page, Fixture.SplitCubeMillimetre);
   const before = await readState(page);
   await openTexture(page);

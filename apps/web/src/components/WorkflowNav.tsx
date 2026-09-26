@@ -2,71 +2,67 @@ import type { ReactNode } from 'react';
 import { WORKFLOWS, WorkflowId } from '../state/workflows';
 import { useWorkspaceState, useWorkspaceStore } from '../state/store-context';
 import { useDocumentConversion } from '../state/use-document-conversion';
+import { Icon } from './shell/Icon';
+import {
+  DEFAULT_WORKSPACE,
+  WORKSPACE_PRESENTATION,
+  workflowUnavailableReason,
+} from './shell/workspaces';
 
 /**
- * Workflow navigation.
+ * Workflow navigation, drawn as the top bar's workspace tabs.
  *
  * Every item renders from `WORKFLOWS[].implemented`. Items are real `<button>`
- * elements with `disabled` and an explicit status label, so assistive technology
- * reports the same thing the visual design does: the unimplemented ones do not
- * work yet.
+ * elements with `disabled`, so assistive technology reports the same thing the
+ * visual design does: the unavailable ones do not work yet.
  *
- * Selecting Repair moves attention to the repair panel, which is always on
- * screen. The button therefore does something real — it focuses the panel's
- * heading — rather than only highlighting itself, which would be a control that
- * appears to work and does not.
+ * EVERY DISABLED TAB SAYS WHY, in its own text. A disabled button with no
+ * reason is indistinguishable from a broken one. The reason is part of the
+ * button's accessible name and its tooltip, and is set visually hidden so the
+ * tab strip keeps the reference's density; the workspace menu beside it shows
+ * the same reasons as visible badges.
  *
- * Selecting Convert opens the Export / Convert dialog, for the same reason.
- * It is disabled with an explicit reason when no model is loaded: a workflow
- * that exists but has nothing to act on must say so, rather than opening onto
- * an empty panel — which is the same failure as a control that does nothing.
+ * Selecting a workspace shows its panels in the tool panel. Selecting Convert
+ * also opens the Export / Convert dialog, because conversion is a dialog and
+ * a tab that only highlighted itself would be a control that appears to work
+ * and does not. Convert is disabled with an explicit reason when no model is
+ * loaded: a workflow that exists but has nothing to act on must say so.
  */
 export function WorkflowNav(): ReactNode {
   const { selectedWorkflow, model } = useWorkspaceState();
   const store = useWorkspaceStore();
   const { open: openConversion } = useDocumentConversion();
+  const current = selectedWorkflow ?? DEFAULT_WORKSPACE;
 
   return (
-    <nav className="workflow-nav" aria-label="Workflows">
-      <h2 className="workflow-nav__heading" id="workflow-nav-heading">
-        Workflows
-      </h2>
-      <ul className="workflow-nav__list" aria-labelledby="workflow-nav-heading">
-        {WORKFLOWS.map((workflow) => {
-          const needsModel =
-            (workflow.id === WorkflowId.Convert ||
-              workflow.id === WorkflowId.Split ||
-              workflow.id === WorkflowId.Texture) &&
-            model === undefined;
-          return (
-            <li key={workflow.id}>
-              <button
-                type="button"
-                className="workflow-nav__item"
-                data-testid={`workflow-${workflow.id}`}
-                disabled={!workflow.implemented || needsModel}
-                aria-current={selectedWorkflow === workflow.id ? 'page' : undefined}
-                aria-describedby={`workflow-${workflow.id}-summary`}
-                onClick={() => {
-                  store.selectWorkflow(workflow.id);
-                  if (workflow.id === WorkflowId.Convert) openConversion();
-                }}
-              >
-                <span className="workflow-nav__label">{workflow.label}</span>
-                {workflow.implemented ? null : (
-                  <span className="workflow-nav__badge">Not implemented</span>
-                )}
-                {needsModel ? (
-                  <span className="workflow-nav__badge">Open a model first</span>
-                ) : null}
-              </button>
-              <p className="workflow-nav__summary" id={`workflow-${workflow.id}-summary`}>
-                {workflow.summary}
-              </p>
-            </li>
-          );
-        })}
-      </ul>
+    <nav className="workspace-tabs" aria-label="Workflows">
+      {WORKFLOWS.map((workflow) => {
+        const presentation = WORKSPACE_PRESENTATION[workflow.id];
+        const reason = workflowUnavailableReason(workflow, model !== undefined);
+        const active = workflow.implemented && current === workflow.id;
+        return (
+          <button
+            key={workflow.id}
+            type="button"
+            className="workspace-tabs__tab"
+            data-testid={`workflow-${workflow.id}`}
+            data-tooltip={
+              reason === undefined ? workflow.summary : `${presentation.name} — ${reason}`
+            }
+            data-tooltip-side="below"
+            disabled={reason !== undefined}
+            aria-current={active ? 'page' : undefined}
+            onClick={() => {
+              store.selectWorkflow(workflow.id);
+              if (workflow.id === WorkflowId.Convert) openConversion();
+            }}
+          >
+            <Icon name={presentation.icon} size={15} className="workspace-tabs__icon" />
+            {presentation.name}
+            {reason === undefined ? null : <span className="visually-hidden"> — {reason}</span>}
+          </button>
+        );
+      })}
     </nav>
   );
 }

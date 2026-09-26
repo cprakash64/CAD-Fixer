@@ -15,7 +15,10 @@ import { HoleFillService } from '../src/runtime/hole-fill-service';
 import { HarnessBar } from './harness-bar';
 import type { GeometryEditCandidateHandle } from '@cadfixer/geometry-runtime';
 import { SharedCancellationSource } from '@cadfixer/shared';
+import '../src/styles/tokens.css';
 import '../src/styles/app.css';
+import '../src/styles/shell.css';
+import './harness-canvas.css';
 
 /**
  * THE END-TO-END HARNESS ENTRY POINT. Never shipped.

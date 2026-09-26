@@ -11,11 +11,13 @@ import {
   Mesh,
   Matrix4,
   MeshStandardMaterial,
+  MOUSE,
   PerspectiveCamera,
   PlaneGeometry,
   MeshBasicMaterial,
   Quaternion,
   Scene,
+  TOUCH,
   Vector3,
   WebGLRenderer,
 } from 'three';
@@ -225,6 +227,26 @@ export interface ViewportHandle {
   setHoleFillOverlays(data: ViewportHoleFillData | undefined): void;
   /** Frames the current model. No-op when the workspace is empty. */
   fitView(): void;
+  /**
+   * Frames the current model from one of the six axis directions.
+   *
+   * The same framing as `fitView` — same distance, same clip planes, orbit
+   * target back at the model's centre — with only the direction changed, so a
+   * standard view is never a different zoom from the home view.
+   */
+  viewFrom(direction: ViewDirection): void;
+  /**
+   * Frames the current model WITHOUT changing the viewing direction — the
+   * distance, clip planes and orbit target are reset, the angle is kept. Where
+   * `fitView` is "home", this is "show all of it from where I am looking".
+   */
+  zoomToFit(): void;
+  /**
+   * Chooses what a LEFT drag does. The right button always pans and the wheel
+   * always zooms, so neither mode takes a gesture away; it only decides which
+   * one the primary button — and a single finger — performs.
+   */
+  setNavigationMode(mode: NavigationMode): void;
   /** Number of GPU-backed model objects in the scene. For leak tests. */
   readonly renderedObjectCount: number;
   /** Diagnostic overlay objects currently in the scene. For leak tests. */
@@ -244,19 +266,76 @@ export interface ViewportHandle {
   dispose(): void;
 }
 
+export const NavigationMode = {
+  Orbit: 'orbit',
+  Pan: 'pan',
+} as const;
+
+export type NavigationMode = (typeof NavigationMode)[keyof typeof NavigationMode];
+
+export const ViewDirection = {
+  Front: 'front',
+  Back: 'back',
+  Left: 'left',
+  Right: 'right',
+  Top: 'top',
+  Bottom: 'bottom',
+} as const;
+
+export type ViewDirection = (typeof ViewDirection)[keyof typeof ViewDirection];
+
+/**
+ * The camera's rotation, as the sixteen column-major elements of a CSS
+ * `matrix3d` that turns a DOM element the way the scene appears on screen.
+ *
+ * DERIVED FROM THE VIEW MATRIX with the Y axis conjugated, because the DOM's Y
+ * points down and the scene's points up. Translation is dropped: an orientation
+ * indicator shows which way the model faces, not where it is.
+ */
+export type ViewOrientation = readonly number[];
+
 export interface ViewportOptions {
   readonly onContextLost?: () => void;
   readonly onPick?: (hit: PartPick) => void;
+  /**
+   * Called after every rendered frame with the camera's orientation.
+   *
+   * FOR DIRECT DOM WRITES ONLY. It fires on every orbit step, so a caller that
+   * turned it into React state would re-render the application once per pointer
+   * move — exactly the churn the viewport is kept apart from.
+   */
+  readonly onOrientationChange?: (orientation: ViewOrientation) => void;
 }
 
 const MAX_PIXEL_RATIO = 2;
-const BACKGROUND = new Color('#12161c');
-const GRID_MAJOR = new Color('#2c3542');
-const GRID_MINOR = new Color('#1d232c');
+/*
+ * NO SCENE BACKGROUND. The canvas clears to transparent and the viewport's own
+ * CSS paints the backdrop behind it — a radial gradient the WebGL clear cannot
+ * express, and one that has to match the panels around it, which are styled in
+ * CSS too. Keeping the colour in one layer means a theme change is one edit.
+ */
+const GRID_MAJOR = new Color('#3d4c5a');
+const GRID_MINOR = new Color('#2c3a47');
 const MODEL_COLOR = new Color('#b9c4d0');
 
 /** Camera direction used when framing, in the model's own axes. */
 const VIEW_DIRECTION = new Vector3(1, 0.75, 1).normalize();
+
+/**
+ * The six standard view directions, in scene axes (Y up).
+ *
+ * TOP AND BOTTOM ARE TILTED BY A HAIR, because a camera looking exactly along
+ * its own up vector has no defined roll and `lookAt` produces a degenerate
+ * matrix. The tilt is far below a pixel at any framing distance.
+ */
+const STANDARD_VIEWS: Readonly<Record<ViewDirection, Vector3>> = {
+  front: new Vector3(0, 0, 1),
+  back: new Vector3(0, 0, -1),
+  right: new Vector3(1, 0, 0),
+  left: new Vector3(-1, 0, 0),
+  top: new Vector3(0, 1, 1e-4).normalize(),
+  bottom: new Vector3(0, -1, 1e-4).normalize(),
+};
 
 /** Padding factor so the model does not touch the viewport edges. */
 const FIT_PADDING = 1.35;
@@ -274,11 +353,11 @@ export function createViewport(
   container: HTMLElement,
   options: ViewportOptions = {},
 ): ViewportHandle {
-  const renderer = new WebGLRenderer({ antialias: true, alpha: false });
+  const renderer = new WebGLRenderer({ antialias: true, alpha: true });
   renderer.setPixelRatio(Math.min(globalThis.devicePixelRatio, MAX_PIXEL_RATIO));
+  renderer.setClearColor(0x000000, 0);
 
   const scene = new Scene();
-  scene.background = BACKGROUND;
 
   const grid = new GridHelper(200, 20, GRID_MAJOR, GRID_MINOR);
   const axes = new AxesHelper(40);
@@ -525,10 +604,38 @@ export function createViewport(
     return entries.join('|');
   };
 
+  /** Reused so reporting the orientation allocates nothing per frame. */
+  const orientation: number[] = new Array<number>(16).fill(0);
+
+  const publishOrientation = (): void => {
+    const listener = options.onOrientationChange;
+    if (listener === undefined) return;
+    camera.updateMatrixWorld();
+    const elements = camera.matrixWorldInverse.elements;
+    for (let index = 0; index < 16; index += 1) {
+      const row = index % 4;
+      const column = Math.floor(index / 4);
+      // Rotation only: the translation column and the projective row are the
+      // identity's, so the indicator turns in place instead of drifting.
+      if (row === 3 || column === 3) {
+        orientation[index] = row === column ? 1 : 0;
+        continue;
+      }
+      // Conjugating by diag(1, -1, 1) moves the rotation from the scene's
+      // Y-up frame into the DOM's Y-down one.
+      const element = elements[index] ?? 0;
+      const flipped = (row === 1) !== (column === 1);
+      const value = flipped ? -element : element;
+      orientation[index] = Math.abs(value) < 1e-10 ? 0 : value;
+    }
+    listener(orientation);
+  };
+
   const render = (): void => {
     if (disposed) return;
     renderer.render(scene, camera);
     publishRenderStats();
+    publishOrientation();
   };
 
   controls.addEventListener('change', render);
@@ -580,7 +687,7 @@ export function createViewport(
     currentPreview = undefined;
   };
 
-  const fitView = (): void => {
+  const frameFrom = (direction: Vector3): void => {
     if (currentModel === undefined) {
       camera.position.set(180, 140, 180);
       controls.target.set(0, 0, 0);
@@ -596,7 +703,7 @@ export function createViewport(
     const halfFov = (camera.fov * Math.PI) / 180 / 2;
     const distance = (radius / Math.sin(halfFov)) * FIT_PADDING;
 
-    camera.position.copy(VIEW_DIRECTION).multiplyScalar(distance);
+    camera.position.copy(direction).multiplyScalar(distance);
     // Clip planes are derived from the model's own scale, so a 0.1 mm part and
     // a 3 m part are both drawn without z-fighting or clipping.
     camera.near = Math.max(distance / 10_000, radius / 10_000);
@@ -606,6 +713,34 @@ export function createViewport(
     controls.target.set(0, 0, 0);
     controls.update();
     render();
+  };
+
+  const fitView = (): void => {
+    frameFrom(VIEW_DIRECTION);
+  };
+
+  const viewFrom = (direction: ViewDirection): void => {
+    frameFrom(STANDARD_VIEWS[direction]);
+  };
+
+  const zoomToFit = (): void => {
+    const direction = camera.position.clone().sub(controls.target);
+    // A camera sitting exactly on its target has no direction to keep.
+    frameFrom(direction.lengthSq() > 0 ? direction.normalize() : VIEW_DIRECTION);
+  };
+
+  const setNavigationMode = (mode: NavigationMode): void => {
+    // The right button stays on PAN in both modes; in pan mode the primary
+    // button pans too. Zoom is the wheel's and the middle button's either way.
+    controls.mouseButtons = {
+      LEFT: mode === NavigationMode.Pan ? MOUSE.PAN : MOUSE.ROTATE,
+      MIDDLE: MOUSE.DOLLY,
+      RIGHT: MOUSE.PAN,
+    };
+    controls.touches = {
+      ONE: mode === NavigationMode.Pan ? TOUCH.PAN : TOUCH.ROTATE,
+      TWO: TOUCH.DOLLY_PAN,
+    };
   };
 
   const setModel = (model: ViewportModel | undefined): void => {
@@ -957,6 +1092,9 @@ export function createViewport(
     setChangeOverlays,
     setHoleFillOverlays,
     fitView,
+    viewFrom,
+    zoomToFit,
+    setNavigationMode,
     get renderedObjectCount(): number {
       return partMeshes.size;
     },

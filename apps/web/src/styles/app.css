@@ -1,32 +1,39 @@
 /*
- * CAD Fixer application shell styling.
+ * CAD Fixer workflow panel styling.
+ *
+ * The rules for the panels themselves — Repair, Mesh Health, openings, parts,
+ * conversion, model facts. The application shell (top bar, tool panel,
+ * viewport overlays, inspector, status bar) lives in `shell.css`, and every
+ * colour, font and dimension is a token in `tokens.css`.
+ *
+ * THE NAMES BELOW ARE ALIASES, kept so that the several hundred panel rules
+ * written against them did not all have to change at once. Each points at a
+ * semantic token; none holds a literal. New rules should use the `--cad-*`
+ * tokens directly.
  *
  * Restrained on purpose: this is an engineering tool, so the interface should
- * stay out of the way of the model. Only system fonts are used — no webfont is
- * fetched, which keeps the page free of network requests and compatible with
- * cross-origin isolation.
+ * stay out of the way of the model. Fonts are self-hosted (see tokens.css), so
+ * the page makes no request to anyone but itself.
  */
 
 :root {
-  --surface-base: #0d1117;
-  --surface-panel: #151a21;
-  --surface-raised: #1c222b;
-  --surface-viewport: #12161c;
+  --surface-base: var(--cad-bg);
+  --surface-panel: var(--cad-panel);
+  --surface-raised: var(--cad-control-raised);
 
-  --border-subtle: #232a35;
-  --border-strong: #313a47;
+  --border-subtle: var(--cad-border-subtle);
+  --border-strong: var(--cad-border-control);
 
-  --text-primary: #e6edf3;
-  --text-secondary: #a3b1c2;
-  --text-disabled: #6b7784;
+  --text-primary: var(--cad-text-strong);
+  --text-secondary: var(--cad-text-muted);
+  --text-disabled: var(--cad-text-subtle);
 
-  --accent: #4c9aff;
-  --severity-success: #3fb950;
-  --severity-warning: #d29922;
-  --severity-error: #f85149;
+  --accent: var(--cad-accent);
+  --severity-success: var(--cad-success);
+  --severity-warning: var(--cad-warning);
+  --severity-error: var(--cad-error);
 
-  --font-ui: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-  --font-mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+  --font-ui: var(--font-body);
 
   --space-1: 0.25rem;
   --space-2: 0.5rem;
@@ -34,7 +41,7 @@
   --space-4: 1rem;
   --space-5: 1.5rem;
 
-  --radius: 4px;
+  --radius: 7px;
 }
 
 *,
@@ -50,12 +57,13 @@ body {
 }
 
 body {
-  background: var(--surface-base);
-  color: var(--text-primary);
-  font-family: var(--font-ui);
-  font-size: 14px;
-  line-height: 1.5;
+  background: var(--cad-bg);
+  color: var(--cad-text);
+  font-family: var(--font-body);
+  font-size: var(--fs-ui);
+  line-height: 1.4;
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 #root {
@@ -63,238 +71,66 @@ body {
 }
 
 :focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--cad-accent);
   outline-offset: 2px;
 }
 
-button {
+/*
+ * THE BASE BUTTON HAS ZERO SPECIFICITY. Every rule is wrapped in `:where`, so
+ * any class — a panel's `.action`, the shell's `.icon-btn` — overrides it
+ * without an arms race. Without that, `button:hover:not(:disabled)` (one
+ * element and two pseudo-classes) out-ranked a single class and repainted the
+ * shell's quiet icon buttons with a border on hover.
+ */
+:where(button) {
   font: inherit;
-  color: inherit;
-  background: var(--surface-raised);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius);
-  padding: var(--space-2) var(--space-3);
-  cursor: pointer;
-}
-
-button:hover:not(:disabled) {
-  border-color: var(--accent);
-}
-
-button:disabled {
-  color: var(--text-disabled);
-  cursor: not-allowed;
-  opacity: 0.75;
-}
-
-/* ---------------------------------------------------------------- layout -- */
-
-.app {
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto;
-  height: 100dvh;
-}
-
-.app__body {
-  display: grid;
-  /* Viewport keeps the flexible middle column. The right-hand column is wide
-     enough for the component table and the repair decision list without
-     stealing the working area — the model stays the largest thing on screen. */
-  grid-template-columns: 17rem minmax(0, 1fr) 26rem;
-  min-height: 0;
-}
-
-.app__sidebar {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-5);
-  padding: var(--space-4);
-  background: var(--surface-panel);
-  border-right: 1px solid var(--border-subtle);
-  overflow-y: auto;
-}
-
-.app__main {
-  display: grid;
-  grid-template-rows: minmax(0, 1fr) auto;
-  min-width: 0;
-}
-
-.app__diagnostics {
-  display: flex;
-  flex-direction: column;
-  padding: var(--space-4);
-  background: var(--surface-panel);
-  border-left: 1px solid var(--border-subtle);
-  /* The report is long by nature. It scrolls in its own column so the viewport
-     never has to shrink to accommodate a model with many components. */
-  overflow-y: auto;
-  min-width: 0;
-}
-
-/* ---------------------------------------------------------------- header -- */
-
-.app-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-4);
-  flex-wrap: wrap;
-  padding: var(--space-3) var(--space-4);
-  background: var(--surface-panel);
-  border-bottom: 1px solid var(--border-subtle);
-}
-
-.app-header__identity {
-  display: flex;
-  align-items: baseline;
-  gap: var(--space-3);
-}
-
-.app-header__mark {
-  align-self: center;
-  width: 0.75rem;
-  height: 0.75rem;
-  border: 2px solid var(--accent);
-  border-radius: 2px;
-  transform: rotate(45deg);
-}
-
-.app-header__title {
-  margin: 0;
-  font-size: 1rem;
-  font-weight: 600;
-  letter-spacing: 0.01em;
-}
-
-.app-header__stage {
-  color: var(--text-secondary);
-  font-family: var(--font-mono);
-  font-size: 0.75rem;
-}
-
-.app-header__privacy {
-  margin: 0;
-  color: var(--text-secondary);
-  font-size: 0.8125rem;
-}
-
-/* ------------------------------------------------------------ workflows -- */
-
-.workflow-nav__heading,
-.runtime__heading,
-.status__heading {
-  margin: 0 0 var(--space-3);
-  font-size: 0.6875rem;
-  font-weight: 600;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--text-secondary);
-}
-
-.workflow-nav__list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-}
-
-.workflow-nav__item {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-2);
-  width: 100%;
-  text-align: left;
-}
-
-.workflow-nav__label {
   font-weight: 500;
-}
-
-.workflow-nav__badge {
-  font-family: var(--font-mono);
-  font-size: 0.625rem;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--text-disabled);
-  border: 1px solid var(--border-strong);
-  border-radius: 2px;
-  padding: 0 var(--space-1);
-}
-
-.workflow-nav__summary {
-  margin: var(--space-1) 0 0;
-  font-size: 0.75rem;
-  color: var(--text-secondary);
-}
-
-/* ------------------------------------------------------------- viewport -- */
-
-.viewport {
-  position: relative;
-  min-height: 0;
-  background: var(--surface-viewport);
-}
-
-.viewport__canvas {
-  position: absolute;
-  inset: 0;
-}
-
-.viewport__canvas canvas {
-  display: block;
-}
-
-.viewport__empty,
-.viewport__error {
-  position: absolute;
-  left: 50%;
-  bottom: var(--space-5);
-  transform: translateX(-50%);
-  margin: 0;
-  padding: var(--space-2) var(--space-3);
+  color: var(--cad-text);
+  background: var(--cad-control-raised);
+  border: 1px solid var(--cad-border-control);
   border-radius: var(--radius);
-  background: rgba(13, 17, 23, 0.85);
-  border: 1px solid var(--border-subtle);
-  font-size: 0.8125rem;
-  color: var(--text-secondary);
-  pointer-events: none;
-}
-
-.viewport__error {
-  color: var(--severity-error);
-  border-color: var(--severity-error);
-}
-
-.viewport__toolbar {
-  position: absolute;
-  top: var(--space-3);
-  right: var(--space-3);
-  display: flex;
-  gap: var(--space-2);
-}
-
-.viewport__action {
-  padding: var(--space-2) var(--space-3);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius);
-  background: rgba(13, 17, 23, 0.85);
-  color: var(--text-primary);
-  font: inherit;
-  font-size: 0.8125rem;
+  padding: 5px 10px;
   cursor: pointer;
+  transition:
+    background-color var(--motion-fast) var(--ease-out),
+    border-color var(--motion-fast) var(--ease-out),
+    color var(--motion-fast) var(--ease-out);
 }
 
-.viewport__action:hover {
-  border-color: var(--accent);
+:where(button:hover:not(:disabled)) {
+  border-color: var(--cad-border-strong);
+  background: var(--cad-hover);
+  color: var(--cad-text-strong);
 }
 
-.viewport__action:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
+:where(button:active:not(:disabled)) {
+  background: var(--cad-control);
+}
+
+:where(button:disabled) {
+  color: var(--cad-text-subtle);
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+:where(input, select, textarea) {
+  font: inherit;
+  color: var(--cad-text-strong);
+}
+
+:where(select, input[type='number'], input[type='text']) {
+  background: var(--cad-field);
+  border: 1px solid var(--cad-border-control);
+  border-radius: var(--radius);
+  padding: 4px 8px;
+}
+
+:where(input[type='checkbox'], input[type='radio']) {
+  accent-color: var(--cad-accent);
+}
+
+:where(progress) {
+  accent-color: var(--cad-accent);
 }
 
 /* ---------------------------------------------------------- model facts -- */
@@ -394,87 +230,6 @@ button:disabled {
 
 /* ------------------------------------------------------ import progress -- */
 
-.import__progress {
-  margin-top: var(--space-3);
-}
-
-.import__progress-row {
-  display: flex;
-  justify-content: space-between;
-  font-size: 0.75rem;
-  color: var(--text-secondary);
-  margin-bottom: var(--space-1);
-}
-
-/* The codec's own note, quieter than the phase it qualifies. */
-.import__detail {
-  opacity: 0.75;
-}
-
-.import__bar {
-  width: 100%;
-  height: 6px;
-  display: block;
-}
-
-.import__cancel {
-  margin-top: var(--space-2);
-  padding: var(--space-1) var(--space-3);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius);
-  background: transparent;
-  color: var(--text-secondary);
-  font: inherit;
-  font-size: 0.75rem;
-  cursor: pointer;
-}
-
-.import__cancel:hover {
-  color: var(--text-primary);
-  border-color: var(--accent);
-}
-
-/* --------------------------------------------------------------- import -- */
-
-.import {
-  border-top: 1px solid var(--border-subtle);
-  background: var(--surface-panel);
-  padding: var(--space-4);
-}
-
-.import__zone {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-5);
-  border: 1px dashed var(--border-strong);
-  border-radius: var(--radius);
-  text-align: center;
-}
-
-.import__zone--active {
-  border-color: var(--accent);
-  border-style: solid;
-  background: rgba(76, 154, 255, 0.08);
-}
-
-.import__headline {
-  margin: 0;
-  font-weight: 600;
-}
-
-.import__detail {
-  margin: 0;
-  max-width: 46rem;
-  font-size: 0.8125rem;
-  color: var(--text-secondary);
-}
-
-.import__input {
-  display: none;
-}
-
 /* --------------------------------------------------------------- runtime -- */
 
 .runtime__facts {
@@ -522,123 +277,6 @@ button:disabled {
   color: var(--text-secondary);
 }
 
-/* ---------------------------------------------------------------- status -- */
-
-.status {
-  border-top: 1px solid var(--border-subtle);
-  background: var(--surface-panel);
-  padding: var(--space-3) var(--space-4);
-  max-height: 14rem;
-  overflow-y: auto;
-}
-
-.status__bar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-3);
-}
-
-.status__heading {
-  margin: 0;
-}
-
-.status__clear {
-  padding: var(--space-1) var(--space-2);
-  font-size: 0.75rem;
-}
-
-.status__list {
-  list-style: none;
-  margin: var(--space-2) 0 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-}
-
-.status__empty {
-  color: var(--text-secondary);
-  font-size: 0.8125rem;
-}
-
-.status__entry {
-  display: flex;
-  gap: var(--space-3);
-  align-items: baseline;
-  font-size: 0.8125rem;
-  padding: var(--space-1) 0;
-  border-bottom: 1px solid var(--border-subtle);
-}
-
-.status__severity {
-  flex: 0 0 4.5rem;
-  font-family: var(--font-mono);
-  font-size: 0.6875rem;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-
-.status__entry--success .status__severity {
-  color: var(--severity-success);
-}
-
-.status__entry--warning .status__severity {
-  color: var(--severity-warning);
-}
-
-.status__entry--error .status__severity {
-  color: var(--severity-error);
-}
-
-.status__entry--info .status__severity {
-  color: var(--text-secondary);
-}
-
-/* ----------------------------------------------------------- responsive -- */
-
-/* Diagnostics drop below the viewport before the sidebar does: at this width
-   the table needs the full page width more than it needs its own column. */
-@media (max-width: 84rem) {
-  .app__body {
-    grid-template-columns: 17rem minmax(0, 1fr);
-  }
-
-  .app__diagnostics {
-    grid-column: 1 / -1;
-    border-left: none;
-    border-top: 1px solid var(--border-subtle);
-    /* Taller than the diagnostics alone needed: the repair workflow lives here
-       too, and a user must be able to reach Preview, Apply and Discard by
-       scrolling this column rather than by widening their window. */
-    max-height: 44rem;
-  }
-}
-
-@media (max-width: 60rem) {
-  .app {
-    height: auto;
-    min-height: 100dvh;
-  }
-
-  .app__body {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .app__sidebar {
-    border-right: none;
-    border-bottom: 1px solid var(--border-subtle);
-  }
-
-  .app__diagnostics {
-    max-height: none;
-  }
-
-  .viewport {
-    min-height: 24rem;
-  }
-}
-
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
@@ -646,15 +284,6 @@ button:disabled {
     animation-duration: 0.01ms !important;
     transition-duration: 0.01ms !important;
   }
-}
-
-.import__lost {
-  margin-top: var(--space-3);
-  padding: var(--space-2) var(--space-3);
-  border: 1px solid var(--severity-error);
-  border-radius: var(--radius);
-  font-size: 0.75rem;
-  color: var(--severity-error);
 }
 
 /* -------------------------------------------------- mesh health diagnostics -- */
@@ -802,14 +431,9 @@ button:disabled {
 
 /* ------------------------------------------------- conservative repair -- */
 
-/* The repair panel and the Mesh Health report share the right-hand column, so
-   they need a visible separation: without it the two headings read as one very
-   long panel. */
-.app__diagnostics > .panel + .panel {
-  margin-top: var(--space-5);
-  padding-top: var(--space-5);
-  border-top: 1px solid var(--border-subtle);
-}
+/* The repair panels, the openings list and the Mesh Health report share the
+   tool panel, so each is its own section with a divider (see `.panel` in
+   shell.css): without it the headings read as one very long panel. */
 
 /* The heading is focusable so the Repair navigation item can move attention
    here. It is not interactive, so it must not look interactive. */
@@ -996,23 +620,22 @@ button:disabled {
 }
 
 /* PART E4. The banner must be readable over any model, at any zoom, and must
-   not depend on colour to say what it says. */
+   not depend on colour to say what it says. It is laid out by the viewport's
+   top-centre HUD (shell.css), which stacks it with any other contextual
+   status. */
 .viewport__preview-banner {
-  position: absolute;
-  top: var(--space-3);
-  left: 50%;
-  transform: translateX(-50%);
   margin: 0;
-  padding: var(--space-2) var(--space-4);
-  border: 1px solid var(--severity-warning);
-  border-radius: var(--radius);
-  background: var(--surface-panel);
-  color: var(--severity-warning);
-  font-size: 0.8125rem;
+  padding: 5px 14px;
+  border: 1px solid var(--cad-warning);
+  border-radius: 999px;
+  background: var(--cad-overlay-strong);
+  box-shadow: var(--shadow-floating);
+  color: var(--cad-warning);
+  font-size: var(--fs-secondary);
   font-weight: 600;
   letter-spacing: 0.02em;
+  white-space: nowrap;
   pointer-events: none;
-  z-index: 2;
 }
 
 /* ------------------------------------------------------------- parts -- */

@@ -27,6 +27,26 @@ class ResizeObserverStub implements ResizeObserver {
 
 globalThis.ResizeObserver = ResizeObserverStub;
 
+/*
+ * jsdom has no `matchMedia` either. The stub answers "does not match" for
+ * every query, which is the desktop layout: no panel is a drawer, so nothing
+ * is modal and nothing is inert — the layout every component test assumes.
+ * Drawer behaviour is layout, and is proven in a real browser in
+ * e2e/ui-shell.spec.ts.
+ */
+if (typeof globalThis.matchMedia !== 'function') {
+  globalThis.matchMedia = (query: string): MediaQueryList => ({
+    matches: false,
+    media: query,
+    onchange: null,
+    addEventListener: (): void => undefined,
+    removeEventListener: (): void => undefined,
+    addListener: (): void => undefined,
+    removeListener: (): void => undefined,
+    dispatchEvent: (): boolean => false,
+  });
+}
+
 /**
  * Inert worker. It never replies, so a component test that depended on a worker
  * result would hang rather than pass against a fake — which is intended: worker

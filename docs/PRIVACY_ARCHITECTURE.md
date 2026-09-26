@@ -122,7 +122,10 @@ carries a body or uses a method other than GET/HEAD — because "no external
 requests" alone would not catch a POST back to our own origin.
 
 **No third-party runtime dependencies that fetch.** The runtime tree is React,
-React DOM, and Three.js. Only system fonts are used, so no font is fetched.
+React DOM, and Three.js. The interface fonts (Figtree, Space Grotesk, JetBrains
+Mono) are SELF-HOSTED: they ship inside the build as fingerprinted same-origin
+assets, so loading them is a request to CAD Fixer's own origin and never to a
+font service. See `apps/web/src/styles/tokens.css`.
 
 ## 6. Data at rest
 

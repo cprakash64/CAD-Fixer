@@ -1,0 +1,1930 @@
+/*
+ * CAD Fixer application shell.
+ *
+ * Layout and chrome only: top bar, tool panel, viewport overlays, inspector and
+ * status bar, plus the shell's primitives. Every literal lives in tokens.css.
+ *
+ * RESPONSIVE TIERS (see UI-01 in docs/design/UI_SHELL.md):
+ *
+ *   ≥ 1440  tool panel 300 · viewport · inspector 280, all docked
+ *   1200+   tool panel 280 · viewport · inspector 250; file-action labels drop
+ *   900+    tool panel docked; the inspector becomes an overlay drawer
+ *   600+    both panels become drawers, one at a time, over the viewport
+ *   < 600   compact top bar, touch-sized controls, drawers at 88 % width
+ *
+ * CSS alone decides which presentation applies. React records only whether a
+ * drawer is open, so resizing the window never costs a render.
+ */
+
+/* ------------------------------------------------------------ utilities -- */
+
+.visually-hidden {
+  position: absolute !important;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+.file-intake__input {
+  display: none;
+}
+
+.icon {
+  flex: none;
+  display: block;
+}
+
+/* Dark scrollbars everywhere in the shell. */
+.app {
+  scrollbar-color: #2f3d4a transparent;
+  scrollbar-width: thin;
+}
+
+.app ::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.app ::-webkit-scrollbar-thumb {
+  background: #2f3d4a;
+  border-radius: 8px;
+}
+
+.app ::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* --------------------------------------------------------------- layout -- */
+
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+  overflow: hidden;
+  background: var(--cad-bg);
+  color: var(--cad-text);
+  font: var(--fs-ui) / 1.4 var(--font-body);
+}
+
+.app__body {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+/* Carries `inert` for the top bar and status bar without adding a box that
+   would disturb the column layout. */
+.app__contents {
+  display: contents;
+}
+
+.app__main {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* Present in the DOM only while a drawer is open; the tiers below decide
+   whether that drawer is actually an overlay at this width.
+
+   Keyed on attributes of `.app` rather than on a `:has()` rooted at the
+   application element, which the browser would have to re-check on DOM
+   changes anywhere inside it. */
+.app__scrim {
+  display: none;
+  position: absolute;
+  inset: 0;
+  z-index: 35;
+  background: var(--cad-scrim);
+}
+
+/* -------------------------------------------------------- icon buttons -- */
+
+.icon-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: var(--shell-control-h);
+  height: var(--shell-control-h);
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--cad-text);
+  font: 500 var(--fs-ui) var(--font-body);
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background-color var(--motion-fast) var(--ease-out),
+    color var(--motion-fast) var(--ease-out);
+}
+
+.icon-btn:hover:not(:disabled) {
+  background: var(--cad-hover);
+  color: var(--cad-text-strong);
+}
+
+.icon-btn:active:not(:disabled) {
+  background: var(--cad-control);
+}
+
+.icon-btn[aria-pressed='true'] {
+  background: var(--cad-accent-soft);
+  color: var(--cad-accent);
+}
+
+.icon-btn:disabled {
+  color: var(--cad-text-subtle);
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+/* ------------------------------------------------------------- tooltips -- */
+
+/*
+ * CSS TOOLTIPS, from the same `data-tooltip` text as the accessible name, so a
+ * sighted pointer user and a screen reader get the same words. They appear on
+ * hover after a short delay and immediately on keyboard focus, and never on a
+ * touch device, where a hover state would stick after a tap.
+ */
+[data-tooltip] {
+  position: relative;
+}
+
+@media (hover: hover) {
+  [data-tooltip]::after {
+    content: attr(data-tooltip);
+    position: absolute;
+    z-index: 200;
+    width: max-content;
+    max-width: 260px;
+    padding: 5px 8px;
+    border: 1px solid var(--cad-border-control);
+    border-radius: var(--radius-sm);
+    background: var(--cad-control);
+    box-shadow: var(--shadow-floating);
+    color: var(--cad-text-strong);
+    font: 500 var(--fs-secondary) / 1.35 var(--font-body);
+    letter-spacing: normal;
+    text-align: left;
+    text-transform: none;
+    white-space: normal;
+    pointer-events: none;
+    opacity: 0;
+    visibility: hidden;
+    transition:
+      opacity var(--motion-fast) var(--ease-out),
+      visibility var(--motion-fast);
+  }
+
+  [data-tooltip]:hover::after {
+    opacity: 1;
+    visibility: visible;
+    transition-delay: 450ms;
+  }
+
+  [data-tooltip]:focus-visible::after {
+    opacity: 1;
+    visibility: visible;
+  }
+
+  [data-tooltip-side='below']::after {
+    top: calc(100% + 6px);
+    left: 50%;
+    translate: -50% 0;
+  }
+
+  [data-tooltip-side='above']::after {
+    bottom: calc(100% + 6px);
+    left: 50%;
+    translate: -50% 0;
+  }
+
+  [data-tooltip-side='right']::after {
+    left: calc(100% + 8px);
+    top: 50%;
+    translate: 0 -50%;
+  }
+
+  [data-tooltip-side='left']::after {
+    right: calc(100% + 8px);
+    top: 50%;
+    translate: 0 -50%;
+  }
+
+  /* Anchored to the edge they sit against, so they never leave the window. */
+  .topbar__end [data-tooltip-side='below']::after,
+  .statusbar__health[data-tooltip-side='above']::after {
+    left: auto;
+    right: 0;
+    translate: 0 0;
+  }
+
+  .topbar__brand + * [data-tooltip-side='below']::after,
+  .topbar__file [data-tooltip-side='below']::after {
+    left: 0;
+    translate: 0 0;
+  }
+}
+
+/* -------------------------------------------------------------- top bar -- */
+
+.topbar {
+  position: relative;
+  z-index: 60;
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: var(--shell-topbar-h);
+  padding: 0 max(10px, env(safe-area-inset-right)) 0 max(12px, env(safe-area-inset-left));
+  background: var(--cad-topbar);
+  border-bottom: 1px solid var(--cad-border-subtle);
+}
+
+.topbar__brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-right: 6px;
+  flex: none;
+}
+
+.topbar__mark {
+  display: block;
+  flex: none;
+}
+
+.topbar__title {
+  margin: 0;
+  color: var(--cad-text-strong);
+  font: 600 var(--fs-brand) / 1 var(--font-display);
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+}
+
+.topbar__divider {
+  flex: none;
+  width: 1px;
+  height: 22px;
+  background: #26343f;
+}
+
+.topbar__switcher {
+  flex: none;
+}
+
+.topbar__file {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: none;
+}
+
+.topbar__center {
+  display: flex;
+  justify-content: center;
+  flex: 1;
+  min-width: 8px;
+}
+
+.topbar__end {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: none;
+}
+
+.topbar__menu {
+  position: relative;
+}
+
+.topbar__settings {
+  margin-left: 2px;
+}
+
+.topbar__drawer-toggle {
+  display: none;
+}
+
+/* ----------------------------------------------------- workspace tabs -- */
+
+.workspace-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 3px;
+  background: var(--cad-well-deep);
+  border: 1px solid var(--cad-border-subtle);
+  border-radius: 10px;
+}
+
+.workspace-tabs__tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 30px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--cad-text-muted);
+  font: 600 var(--fs-ui) var(--font-body);
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background-color var(--motion-fast) var(--ease-out),
+    color var(--motion-fast) var(--ease-out),
+    box-shadow var(--motion-fast) var(--ease-out);
+}
+
+.workspace-tabs__tab:hover:not(:disabled) {
+  color: var(--cad-text-strong);
+  background: transparent;
+}
+
+.workspace-tabs__tab[aria-current='page'] {
+  background: var(--cad-hover);
+  box-shadow: inset 0 0 0 1px #34434f;
+  color: var(--cad-text-strong);
+}
+
+.workspace-tabs__tab[aria-current='page'] .workspace-tabs__icon {
+  color: var(--cad-accent);
+}
+
+.workspace-tabs__tab:disabled {
+  color: var(--cad-text-subtle);
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
+/* ------------------------------------------------- workspace switcher -- */
+
+.workspace-switcher {
+  position: relative;
+}
+
+.workspace-switcher__trigger {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 196px;
+  height: var(--shell-control-h);
+  padding: 0 8px 0 10px;
+  border: 1px solid var(--cad-border-control);
+  border-radius: var(--radius-control);
+  background: var(--cad-control);
+  color: var(--cad-text-strong);
+  font: 600 var(--fs-ui) var(--font-body);
+  cursor: pointer;
+}
+
+.workspace-switcher__trigger:hover {
+  border-color: var(--cad-border-strong);
+}
+
+.workspace-switcher__icon {
+  color: var(--cad-accent);
+}
+
+.workspace-switcher__name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-switcher__chevron {
+  color: var(--cad-text-muted);
+}
+
+/* ---------------------------------------------------------------- menus -- */
+
+.menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 300px;
+  max-width: calc(100vw - 24px);
+  padding: 6px;
+  background: var(--cad-control);
+  border: 1px solid var(--cad-border-control);
+  border-radius: var(--radius-floating);
+  box-shadow: var(--shadow-menu);
+  animation: menu-in var(--motion-base) var(--ease-out);
+}
+
+.menu--end {
+  left: auto;
+  right: 0;
+  width: 280px;
+  padding: 12px;
+}
+
+@keyframes menu-in {
+  from {
+    opacity: 0;
+    translate: 0 -4px;
+  }
+}
+
+.menu__eyebrow {
+  margin: 0;
+  padding: 2px 2px 0;
+  color: var(--cad-text-subtle);
+  font: 500 10px var(--font-mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.workspace-switcher__menu .menu__eyebrow {
+  padding: 6px 8px 2px;
+}
+
+.menu__list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.menu__item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  width: 100%;
+  padding: 8px;
+  border: 0;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--cad-text-strong);
+  text-align: left;
+  cursor: pointer;
+}
+
+.menu__item:hover:not(:disabled),
+.menu__item[aria-current='page'] {
+  background: var(--cad-hover);
+}
+
+.menu__item:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.menu__item-icon {
+  margin-top: 1px;
+  color: var(--cad-text-muted);
+}
+
+.menu__item[aria-current='page'] .menu__item-icon {
+  color: var(--cad-accent);
+}
+
+.menu__item-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.menu__item-title {
+  font: 600 var(--fs-ui) var(--font-body);
+}
+
+.menu__item-detail {
+  color: var(--cad-text-muted);
+  font: var(--fs-secondary) / 1.35 var(--font-body);
+}
+
+.menu__badge {
+  flex: none;
+  padding: 1px 6px;
+  border: 1px solid var(--cad-border-control);
+  border-radius: 5px;
+  color: var(--cad-text-muted);
+  font: 500 10px / 1.5 var(--font-mono);
+  white-space: nowrap;
+}
+
+.menu__shortcuts {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+}
+
+.menu__shortcuts > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: var(--fs-secondary);
+}
+
+.menu__shortcuts dt {
+  color: var(--cad-text);
+}
+
+.menu__shortcuts dd {
+  margin: 0;
+  color: var(--cad-text-muted);
+  font: 500 var(--fs-meta) var(--font-mono);
+  text-align: right;
+}
+
+.menu__note {
+  margin: 0;
+  padding-top: 8px;
+  border-top: 1px solid var(--cad-border-subtle);
+  color: var(--cad-text-muted);
+  font-size: var(--fs-secondary);
+}
+
+/* ------------------------------------------------------ compact switch -- */
+
+.switch {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  cursor: pointer;
+}
+
+.switch__label {
+  color: var(--cad-text);
+}
+
+.switch__input {
+  position: absolute;
+  opacity: 0;
+  width: 1px;
+  height: 1px;
+}
+
+.switch__track {
+  position: relative;
+  flex: none;
+  width: 36px;
+  height: 20px;
+  border-radius: 999px;
+  background: #3d4c5a;
+  transition: background-color var(--motion-fast) var(--ease-out);
+}
+
+.switch__thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--cad-text-strong);
+  transition: translate var(--motion-fast) var(--ease-out);
+}
+
+.switch__input:checked + .switch__track {
+  background: var(--cad-accent);
+}
+
+.switch__input:checked + .switch__track .switch__thumb {
+  translate: 16px 0;
+}
+
+.switch__input:focus-visible + .switch__track {
+  box-shadow: var(--focus-ring);
+}
+
+/* ----------------------------------------------------- primary action -- */
+
+.primary-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  height: 36px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: var(--radius-control);
+  background: var(--cad-accent);
+  color: var(--cad-on-accent);
+  font: 600 var(--fs-ui) var(--font-body);
+  cursor: pointer;
+  transition: background-color var(--motion-fast) var(--ease-out);
+}
+
+.primary-action:hover:not(:disabled) {
+  background: var(--cad-accent-hover);
+  color: var(--cad-on-accent);
+}
+
+.primary-action:active:not(:disabled) {
+  background: #f15a36;
+}
+
+.primary-action:disabled {
+  background: #3d4c5a;
+  color: var(--cad-text-muted);
+  cursor: not-allowed;
+  opacity: 1;
+}
+
+/* The existing panels' primary action adopts the same register. */
+.action.action--primary {
+  border-color: transparent;
+  background: var(--cad-accent);
+  color: var(--cad-on-accent);
+  font-weight: 600;
+}
+
+.action.action--primary:hover:not(:disabled) {
+  border-color: transparent;
+  background: var(--cad-accent-hover);
+}
+
+/* --------------------------------------------------- segmented control -- */
+
+.segmented {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  background: var(--cad-well);
+  border: 1px solid #26343f;
+  border-radius: var(--radius-control);
+}
+
+.segmented__option {
+  flex: 1;
+  min-width: 0;
+  height: 24px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--cad-text-muted);
+  font: 500 var(--fs-secondary) var(--font-body);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.segmented__option:hover:not(:disabled) {
+  background: transparent;
+  color: var(--cad-text-strong);
+}
+
+.segmented__option[aria-pressed='true'] {
+  background: #2e3d4c;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+  color: var(--cad-text-strong);
+}
+
+/* ----------------------------------------------------------- tool panel -- */
+
+.tool-panel {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  width: var(--shell-left-w);
+  min-height: 0;
+  background: var(--cad-panel);
+  border-right: 1px solid var(--cad-border-subtle);
+}
+
+.tool-panel__header {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+  padding-right: 8px;
+  border-bottom: 1px solid var(--cad-border-subtle);
+}
+
+.tool-panel__close {
+  display: none;
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+  padding: 0;
+  color: var(--cad-text-muted);
+}
+
+.workspace-header {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  min-height: 60px;
+  padding: 12px 14px;
+}
+
+.workspace-header__icon {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: var(--radius-control);
+  background: var(--cad-accent-soft);
+  color: var(--cad-accent);
+}
+
+.workspace-header__text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.workspace-header__name {
+  margin: 0;
+  color: var(--cad-text-strong);
+  font: 600 var(--fs-title) / 1.1 var(--font-display);
+}
+
+.workspace-header__description {
+  display: -webkit-box;
+  margin: 0;
+  overflow: hidden;
+  color: var(--cad-text-muted);
+  font: var(--fs-secondary) / 1.3 var(--font-body);
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+}
+
+.tool-panel__body {
+  flex: 1;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.tool-panel__footer {
+  flex: none;
+  max-height: 148px;
+  padding: 10px 14px 12px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  background: var(--cad-panel-footer);
+  border-top: 1px solid var(--cad-border-subtle);
+}
+
+/*
+ * The workflow panels as reference sections: each is a block with a header and
+ * a divider beneath it. Their markup is unchanged — the look comes from here.
+ */
+.panel,
+.tool-panel__group > .panel {
+  padding: 12px 14px 14px;
+  border-bottom: 1px solid var(--cad-border-subtle);
+  overflow-wrap: anywhere;
+}
+
+.panel__title {
+  margin: 0 0 8px;
+  color: var(--cad-text-strong);
+  font: 600 var(--fs-ui) var(--font-display);
+}
+
+.panel__note {
+  margin: 0 0 8px;
+  color: var(--cad-text-muted);
+  font-size: var(--fs-secondary);
+  line-height: 1.45;
+}
+
+.panel__empty {
+  margin: 0;
+  color: var(--cad-text-muted);
+  font-size: var(--fs-secondary);
+}
+
+.panel .panel__actions + .panel__note,
+.panel__actions {
+  margin-bottom: 8px;
+}
+
+.action {
+  font-size: var(--fs-ui);
+  font-weight: 500;
+}
+
+/* ------------------------------------------------------ panel section -- */
+
+.panel-section {
+  border-bottom: 1px solid var(--cad-border-subtle);
+}
+
+.panel-section__heading {
+  margin: 0;
+  font: inherit;
+}
+
+.panel-section__toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 10px 14px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--cad-text-strong);
+  text-align: left;
+  cursor: pointer;
+}
+
+.panel-section__toggle:hover:not(:disabled) {
+  background: transparent;
+  color: var(--cad-text-strong);
+}
+
+.panel-section__chevron {
+  color: var(--cad-text-muted);
+}
+
+.panel-section__title {
+  flex: 1;
+  font: 600 var(--fs-ui) var(--font-display);
+}
+
+.panel-section__meta {
+  color: var(--cad-text-muted);
+  font: 500 var(--fs-meta) var(--font-mono);
+}
+
+.panel-section__body {
+  padding: 0 14px 14px;
+}
+
+/* A workflow panel inside a section is already inside the section's padding. */
+.panel-section__body > .panel,
+.panel-section__body > .runtime {
+  padding: 0;
+  border-bottom: 0;
+}
+
+/* ------------------------------------------------------- property grid -- */
+
+.property-grid,
+.facts {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  column-gap: 12px;
+  row-gap: 6px;
+  margin: 0 0 10px;
+}
+
+.property-row,
+.facts__row {
+  display: contents;
+}
+
+.property-row__label,
+.facts__label {
+  margin: 0;
+  color: var(--cad-text-muted);
+  font-size: var(--fs-secondary);
+}
+
+.property-row__value,
+.facts__value {
+  margin: 0;
+  padding-right: 4px;
+  color: var(--cad-text-strong);
+  font: 500 var(--fs-secondary) var(--font-body);
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+.property-row__value--mono,
+.facts__value {
+  font-family: var(--font-mono);
+}
+
+.file-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 10px;
+  padding: 8px 10px;
+  background: var(--cad-control-raised);
+  border: 1px solid var(--cad-border);
+  border-radius: var(--radius-card);
+}
+
+.file-card__icon {
+  color: var(--cad-accent);
+}
+
+.file-card__name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--cad-text-strong);
+  font: 600 var(--fs-secondary) var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* -------------------------------------------------------- activity log -- */
+
+.status__bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.status__heading {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  color: var(--cad-text-subtle);
+  font: 500 10px var(--font-mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.status__clear {
+  height: 20px;
+  padding: 0 8px;
+  border-color: var(--cad-border-control);
+  background: transparent;
+  color: var(--cad-text-muted);
+  font-size: var(--fs-meta);
+}
+
+.status__list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.status__empty {
+  color: var(--cad-text-subtle);
+  font-size: var(--fs-secondary);
+}
+
+.status__entry {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: var(--fs-secondary);
+  line-height: 1.35;
+}
+
+.status__severity {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  overflow: hidden;
+  border-radius: 50%;
+  background: var(--cad-text-subtle);
+  color: transparent;
+  font-size: 0;
+  translate: 0 -1px;
+}
+
+.status__entry--success .status__severity {
+  background: var(--cad-success);
+}
+
+.status__entry--warning .status__severity {
+  background: var(--cad-warning);
+}
+
+.status__entry--error .status__severity {
+  background: var(--cad-error);
+}
+
+.status__entry--info .status__severity {
+  background: var(--cad-info);
+}
+
+/* Two lines at most, as a compact log. The whole message stays in the DOM
+   and in the tooltip, so a clamped line hides nothing from assistive
+   technology or from a pointer. */
+.status__message {
+  display: -webkit-box;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--cad-text);
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+}
+
+/* --------------------------------------------------------- import / drop -- */
+
+.import {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.import__empty {
+  position: absolute;
+  inset: 0;
+  z-index: 8;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32px;
+  overflow-y: auto;
+  pointer-events: none;
+}
+
+.import__card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  width: min(560px, 100%);
+  padding: 36px 32px 28px;
+  border: 2px dashed #3d4c5a;
+  border-radius: 20px;
+  background: rgba(18, 27, 36, 0.72);
+  text-align: center;
+  pointer-events: auto;
+}
+
+.import[data-dragging='true'] .import__card {
+  border-color: var(--cad-accent);
+}
+
+.import__card-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 56px;
+  height: 56px;
+  border-radius: 16px;
+  background: var(--cad-accent-soft);
+  color: var(--cad-accent);
+}
+
+.import__headline {
+  margin: 0;
+  color: var(--cad-text-strong);
+  font: 600 22px / 1.2 var(--font-display);
+  letter-spacing: -0.01em;
+}
+
+.import__formats {
+  margin: 0;
+  color: var(--cad-text-muted);
+  font: 500 var(--fs-secondary) var(--font-mono);
+  letter-spacing: 0.02em;
+}
+
+.import__browse {
+  width: auto;
+  height: 40px;
+  padding: 0 18px;
+}
+
+.import__detail {
+  max-width: 46ch;
+  margin: 2px 0 0;
+  color: var(--cad-text-muted);
+  font-size: var(--fs-secondary);
+  line-height: 1.5;
+}
+
+.import__drag {
+  position: absolute;
+  inset: 10px;
+  z-index: 9;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px dashed var(--cad-accent);
+  border-radius: 16px;
+  background: rgba(255, 116, 87, 0.08);
+  color: #ffa48c;
+  font: 600 18px var(--font-display);
+  pointer-events: none;
+}
+
+.import__progress {
+  position: absolute;
+  top: 62px;
+  left: 50%;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: min(340px, calc(100% - 32px));
+  padding: 12px 14px;
+  translate: -50% 0;
+  background: var(--cad-control);
+  border: 1px solid #34434f;
+  border-radius: 14px;
+  box-shadow: var(--shadow-menu);
+}
+
+.import__progress-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.import__spinner {
+  display: flex;
+  color: var(--cad-accent);
+  animation: shell-spin 0.9s linear infinite;
+}
+
+.import__progress-text {
+  flex: 1;
+  min-width: 0;
+  color: var(--cad-text-strong);
+  font: 600 var(--fs-ui) var(--font-body);
+}
+
+.import__progress-detail {
+  color: var(--cad-text-muted);
+  font-weight: 400;
+}
+
+.import__percent {
+  color: var(--cad-text-strong);
+  font: 600 var(--fs-secondary) var(--font-mono);
+}
+
+.import__bar {
+  display: block;
+  width: 100%;
+  height: 6px;
+}
+
+.import__cancel {
+  align-self: flex-end;
+  height: 28px;
+  padding: 0 12px;
+}
+
+.import__lost {
+  position: absolute;
+  bottom: 16px;
+  left: 50%;
+  z-index: 11;
+  width: min(520px, calc(100% - 32px));
+  margin: 0;
+  padding: 10px 14px;
+  translate: -50% 0;
+  border: 1px solid var(--cad-error);
+  border-radius: var(--radius-card);
+  background: var(--cad-control);
+  box-shadow: var(--shadow-menu);
+  color: var(--cad-error);
+  font-size: var(--fs-secondary);
+}
+
+@keyframes shell-spin {
+  to {
+    rotate: 360deg;
+  }
+}
+
+/* ------------------------------------------------------------- viewport -- */
+
+.viewport {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  background: var(--cad-viewport-backdrop);
+}
+
+.viewport__canvas {
+  position: absolute;
+  inset: 0;
+}
+
+.viewport__canvas canvas {
+  display: block;
+  touch-action: none;
+}
+
+.viewport__hud {
+  position: absolute;
+  top: 14px;
+  left: 50%;
+  z-index: 6;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  max-width: calc(100% - 280px);
+  translate: -50% 0;
+  pointer-events: none;
+}
+
+.viewport__empty,
+.viewport__error {
+  position: absolute;
+  bottom: 16px;
+  left: 50%;
+  z-index: 7;
+  max-width: calc(100% - 32px);
+  margin: 0;
+  padding: 6px 12px;
+  translate: -50% 0;
+  border: 1px solid var(--cad-border);
+  border-radius: 999px;
+  background: var(--cad-overlay);
+  color: var(--cad-text-muted);
+  font-size: var(--fs-secondary);
+  text-align: center;
+  pointer-events: none;
+}
+
+.viewport__error {
+  border-color: var(--cad-error);
+  border-radius: var(--radius-card);
+  color: var(--cad-error);
+}
+
+/* Floating containers share one look. */
+.viewport__tools,
+.viewport__actions {
+  position: absolute;
+  z-index: 6;
+  display: flex;
+  gap: 2px;
+  padding: 4px;
+  background: var(--cad-overlay);
+  border: 1px solid var(--cad-border);
+  border-radius: var(--radius-floating);
+  box-shadow: var(--shadow-floating);
+}
+
+.viewport__tools {
+  top: 50%;
+  left: 10px;
+  flex-direction: column;
+  translate: 0 -50%;
+}
+
+.viewport__tool {
+  width: var(--shell-tool-size);
+  min-width: var(--shell-tool-size);
+  height: var(--shell-tool-size);
+  padding: 0;
+  border-radius: 7px;
+}
+
+.viewport__tool:hover:not(:disabled) {
+  background: #2a3846;
+}
+
+.viewport__tools-divider {
+  height: 1px;
+  margin: 3px 4px;
+  background: var(--cad-border);
+}
+
+.viewport__actions {
+  bottom: 16px;
+  left: 50%;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 4px 4px 10px;
+  translate: -50% 0;
+}
+
+.viewport__actions-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--cad-text);
+  font: 600 var(--fs-secondary) var(--font-body);
+  white-space: nowrap;
+}
+
+.viewport__actions .segmented {
+  min-width: 150px;
+}
+
+.viewport__orientation {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  z-index: 6;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  transform-origin: top right;
+}
+
+.viewport__orientation-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.viewport__home {
+  width: 26px;
+  min-width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid var(--cad-border);
+  border-radius: 7px;
+  background: var(--cad-overlay);
+}
+
+.viewport__home:hover:not(:disabled) {
+  background: var(--cad-overlay);
+  color: var(--cad-accent);
+}
+
+.viewport__projection {
+  padding: 0 4px;
+  color: var(--cad-text-muted);
+  font: 500 10px var(--font-mono);
+}
+
+/*
+ * THE VIEW CUBE. Six buttons arranged in CSS 3D. The body's transform is
+ * written straight from the camera by the viewport on every frame, so the
+ * cube turns with the model without a React render.
+ */
+.view-cube {
+  position: relative;
+  width: 96px;
+  height: 96px;
+}
+
+.view-cube__body {
+  position: absolute;
+  top: 48px;
+  left: 48px;
+  width: 0;
+  height: 0;
+  transform-style: preserve-3d;
+}
+
+.view-cube__face {
+  position: absolute;
+  top: -26px;
+  left: -26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 52px;
+  height: 52px;
+  padding: 0;
+  border: 1px solid #52616f;
+  border-radius: 0;
+  background: rgba(40, 54, 67, 0.94);
+  color: var(--cad-text);
+  font: 600 9px var(--font-mono);
+  letter-spacing: 0.06em;
+  backface-visibility: hidden;
+  cursor: pointer;
+}
+
+.view-cube__face:hover:not(:disabled) {
+  border-color: #52616f;
+  background: var(--cad-accent);
+  color: var(--cad-on-accent);
+}
+
+.view-cube__face--top {
+  background: rgba(48, 63, 77, 0.96);
+  color: var(--cad-text-strong);
+}
+
+.view-cube__face--front {
+  transform: translateZ(26px);
+}
+
+.view-cube__face--back {
+  transform: rotateY(180deg) translateZ(26px);
+}
+
+.view-cube__face--right {
+  transform: rotateY(90deg) translateZ(26px);
+}
+
+.view-cube__face--left {
+  transform: rotateY(-90deg) translateZ(26px);
+}
+
+.view-cube__face--top {
+  transform: rotateX(90deg) translateZ(26px);
+}
+
+.view-cube__face--bottom {
+  transform: rotateX(-90deg) translateZ(26px);
+}
+
+/* ------------------------------------------------------------ inspector -- */
+
+.inspector {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  width: var(--shell-right-w);
+  min-height: 0;
+  background: var(--cad-panel);
+  border-left: 1px solid var(--cad-border-subtle);
+}
+
+.inspector[data-collapsed='true'] {
+  display: none;
+}
+
+.inspector__header {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  height: var(--shell-inspector-header-h);
+  padding: 0 8px 0 14px;
+  border-bottom: 1px solid var(--cad-border-subtle);
+}
+
+.inspector__title {
+  flex: 1;
+  margin: 0;
+  color: var(--cad-text-strong);
+  font: 600 var(--fs-ui) var(--font-display);
+}
+
+.inspector__collapse,
+.inspector__close {
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+  padding: 0;
+  border-radius: 7px;
+  color: var(--cad-text-muted);
+}
+
+.inspector__close {
+  display: none;
+}
+
+.inspector__body {
+  flex: 1;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.inspector-rail {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  width: var(--shell-rail-w);
+  padding-top: 8px;
+  background: var(--cad-panel);
+  border-left: 1px solid var(--cad-border-subtle);
+}
+
+.inspector-rail__expand {
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+  padding: 0;
+  color: var(--cad-text-muted);
+}
+
+.inspector-rail__label {
+  color: var(--cad-text-subtle);
+  font: 600 var(--fs-meta) var(--font-mono);
+  letter-spacing: 0.08em;
+  writing-mode: vertical-rl;
+}
+
+/* Runtime diagnostics, restyled as inspector content. */
+.runtime__facts {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 6px 12px;
+  margin: 0 0 10px;
+}
+
+.runtime__fact {
+  display: contents;
+}
+
+.runtime__fact dt {
+  color: var(--cad-text-muted);
+  font-size: var(--fs-secondary);
+}
+
+.runtime__fact dd {
+  margin: 0;
+  color: var(--cad-text-strong);
+  font: 500 var(--fs-secondary) var(--font-mono);
+  text-align: right;
+}
+
+.runtime__actions {
+  display: flex;
+  gap: 8px;
+}
+
+.runtime__run {
+  flex: 1;
+}
+
+.runtime__progress {
+  width: 100%;
+  margin-top: 8px;
+}
+
+.runtime__detail {
+  margin: 4px 0 0;
+  color: var(--cad-text-muted);
+  font: var(--fs-meta) var(--font-mono);
+}
+
+.runtime__note {
+  margin: 8px 0 0;
+  color: var(--cad-text-muted);
+  font-size: var(--fs-secondary);
+}
+
+/* ----------------------------------------------------------- status bar -- */
+
+.statusbar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  height: calc(var(--shell-statusbar-h) + env(safe-area-inset-bottom));
+  min-width: 0;
+  padding: 0 max(10px, env(safe-area-inset-right)) env(safe-area-inset-bottom)
+    max(12px, env(safe-area-inset-left));
+  background: var(--cad-topbar);
+  border-top: 1px solid var(--cad-border-subtle);
+  color: var(--cad-text-muted);
+  font: var(--fs-secondary) var(--font-body);
+  white-space: nowrap;
+}
+
+.statusbar__job {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.statusbar__job-label {
+  color: var(--cad-text-strong);
+}
+
+.statusbar__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--cad-success);
+}
+
+.statusbar__spinner {
+  display: flex;
+  color: var(--cad-accent);
+  animation: shell-spin 0.9s linear infinite;
+}
+
+.statusbar__privacy {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  color: var(--cad-text-subtle);
+  text-overflow: ellipsis;
+}
+
+.statusbar__spacer {
+  flex: 1;
+}
+
+.statusbar__mono {
+  color: var(--cad-text-strong);
+  font: 500 var(--fs-meta) var(--font-mono);
+}
+
+.statusbar__unit {
+  padding: 1px 8px;
+  border: 1px solid var(--cad-border-subtle);
+  border-radius: 7px;
+  background: var(--cad-well-deep);
+  color: var(--cad-text);
+  font: 500 var(--fs-meta) var(--font-mono);
+}
+
+.statusbar__health {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 20px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 999px;
+  font: 600 var(--fs-meta) var(--font-mono);
+  cursor: pointer;
+}
+
+.statusbar__health--neutral {
+  background: rgba(141, 155, 171, 0.14);
+  color: var(--cad-text-muted);
+}
+
+.statusbar__health--warning {
+  background: var(--cad-warning-soft);
+  color: var(--cad-warning);
+}
+
+.statusbar__health--success {
+  background: var(--cad-success-soft);
+  color: var(--cad-success);
+}
+
+.statusbar__health:hover:not(:disabled) {
+  filter: brightness(1.15);
+}
+
+.statusbar__release {
+  color: var(--cad-text-subtle);
+  font: 500 var(--fs-meta) var(--font-mono);
+}
+
+/* --------------------------------------------------------- focus rings -- */
+
+/*
+ * LAST, SO IT WINS. Several controls use `box-shadow` for a state of their own
+ * — the current workspace tab, the pressed segment — and a focus rule declared
+ * before them at equal specificity was silently replaced: keyboard focus on the
+ * current tab showed no ring at all.
+ */
+.icon-btn:focus-visible,
+.workspace-tabs__tab:focus-visible,
+.workspace-switcher__trigger:focus-visible,
+.panel-section__toggle:focus-visible,
+.segmented__option:focus-visible,
+.primary-action:focus-visible,
+.menu__item:focus-visible,
+.view-cube__face:focus-visible,
+.statusbar__health:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+/* ======================================================== responsive tiers == */
+
+/* 1200 – 1439: narrower panels and icon-only file actions. The dropdown
+   stays, as in the reference: it and the tabs together still fit at 1200. */
+@media (width < 1440px) {
+  .topbar__file .icon-btn__text {
+    display: none;
+  }
+
+  .statusbar__release {
+    display: none;
+  }
+}
+
+/* Below 1200: the tabs no longer fit, the dropdown returns, and the inspector
+   becomes a drawer over the viewport. */
+@media (width < 1200px) {
+  .topbar__center {
+    display: none;
+  }
+
+  .topbar__end {
+    margin-left: auto;
+  }
+
+  .topbar__drawer-toggle--inspector {
+    display: inline-flex;
+  }
+
+  .inspector,
+  .inspector[data-collapsed='true'] {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 40;
+    display: flex;
+    box-shadow: -16px 0 40px rgba(0, 0, 0, 0.4);
+    translate: 100% 0;
+    visibility: hidden;
+    /* Hidden only once the slide-out has finished... */
+    transition:
+      translate var(--motion-base) var(--ease-out),
+      visibility 0s linear var(--motion-base);
+  }
+
+  .inspector[data-drawer-open='true'] {
+    translate: 0 0;
+    visibility: visible;
+    /* ...but visible at once on opening, so focus can move into the drawer
+       in the same frame: a transitioning `visibility` still reads as hidden
+       at its start, and the browser refuses to focus a hidden control. */
+    transition:
+      translate var(--motion-base) var(--ease-out),
+      visibility 0s;
+  }
+
+  .inspector__collapse,
+  .inspector-rail {
+    display: none;
+  }
+
+  .inspector__close {
+    display: inline-flex;
+  }
+
+  .app[data-inspector-drawer='open'] .app__scrim {
+    display: block;
+  }
+
+  .statusbar__privacy {
+    display: none;
+  }
+}
+
+/* Below 900: the tool panel becomes a drawer too. Only one drawer is ever
+   open (the layout state closes the other), so the viewport is never buried
+   under two sheets. */
+@media (width < 900px) {
+  .topbar__drawer-toggle--tools,
+  .tool-panel__close {
+    display: inline-flex;
+  }
+
+  .tool-panel {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 40;
+    box-shadow: 16px 0 40px rgba(0, 0, 0, 0.4);
+    translate: -100% 0;
+    visibility: hidden;
+    /* Hidden only once the slide-out has finished... */
+    transition:
+      translate var(--motion-base) var(--ease-out),
+      visibility 0s linear var(--motion-base);
+  }
+
+  .tool-panel[data-drawer-open='true'] {
+    translate: 0 0;
+    visibility: visible;
+    /* ...but visible at once on opening, so focus can move into the drawer
+       in the same frame: a transitioning `visibility` still reads as hidden
+       at its start, and the browser refuses to focus a hidden control. */
+    transition:
+      translate var(--motion-base) var(--ease-out),
+      visibility 0s;
+  }
+
+  .app[data-tool-drawer='open'] .app__scrim {
+    display: block;
+  }
+
+  .viewport__hud {
+    max-width: calc(100% - 200px);
+  }
+}
+
+/* Below 600: phone. Compact chrome, touch-sized targets, nothing that
+   depends on hover. */
+@media (width < 600px) {
+  .topbar {
+    gap: 4px;
+  }
+
+  .topbar__title {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .topbar__brand {
+    padding-right: 0;
+  }
+
+  .topbar__divider,
+  .topbar__settings {
+    display: none;
+  }
+
+  .topbar__switcher {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .workspace-switcher__trigger {
+    width: 100%;
+    max-width: 220px;
+  }
+
+  .icon-btn {
+    min-width: 40px;
+  }
+
+  .statusbar {
+    gap: 10px;
+  }
+
+  .statusbar__stat--vertices,
+  .statusbar__unit {
+    display: none;
+  }
+
+  .viewport__orientation {
+    top: 10px;
+    right: 10px;
+    scale: 0.72;
+  }
+
+  .viewport__tools {
+    left: 8px;
+  }
+
+  .viewport__hud {
+    top: 10px;
+    max-width: calc(100% - 140px);
+  }
+
+  .viewport__actions {
+    bottom: 12px;
+  }
+
+  .import__empty {
+    padding: 16px;
+  }
+
+  .import__card {
+    gap: 10px;
+    padding: 24px 18px 20px;
+  }
+
+  .import__headline {
+    font-size: 18px;
+  }
+
+  .import__browse {
+    height: 44px;
+  }
+}
+
+/* ---------------------------------------------------------------- motion -- */
+
+@media (prefers-reduced-motion: reduce) {
+  .import__spinner,
+  .statusbar__spinner {
+    animation: none;
+  }
+
+  .menu {
+    animation: none;
+  }
+}

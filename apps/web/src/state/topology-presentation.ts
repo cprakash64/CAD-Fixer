@@ -110,10 +110,17 @@ export function summariseTopology(report: TopologyReport): TopologySummary {
   const hasDefects = totalDefectCount(report) > 0;
   return {
     headline: hasDefects ? 'Topological issues detected' : 'No topological defects detected',
-    qualifier: 'Self-intersections and wall thickness have not yet been checked.',
+    qualifier: TOPOLOGY_QUALIFIER,
     hasDefects,
   };
 }
+
+/**
+ * What topology analysis does not examine. Exported so every surface that
+ * summarises an analysis — the status bar included — carries the same words.
+ */
+export const TOPOLOGY_QUALIFIER =
+  'Self-intersections and wall thickness have not yet been checked.';
 
 /** Every Stage 2 defect category summed. Used only for the headline branch. */
 export function totalDefectCount(report: TopologyReport): number {

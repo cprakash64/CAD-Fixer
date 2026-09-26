@@ -1,84 +1,30 @@
-import { useCallback, useRef, useState, type DragEvent, type ReactNode } from 'react';
-import {
-  describeFormat,
-  FILE_INPUT_ACCEPT,
-  IMPLEMENTED_FORMATS,
-  isFormatImplemented,
-  screenFile,
-  SUPPORTED_EXTENSIONS,
-} from '@cadfixer/file-formats';
-import { ImportState, StatusSeverity } from '../state/workspace-store';
-import { useWorkspaceState, useWorkspaceStore } from '../state/store-context';
-import { useModelImport } from '../state/use-model-import';
+import { useCallback, useState, type DragEvent, type ReactNode } from 'react';
+import { SUPPORTED_EXTENSIONS } from '@cadfixer/file-formats';
+import { ImportState } from '../state/workspace-store';
+import { useWorkspaceState } from '../state/store-context';
+import { describeImplementedFormats, useFileIntake } from './FileIntake';
+import { Icon } from './shell/Icon';
 
 /**
- * File intake surface.
+ * The viewport as a file drop target, and everything it says about intake.
  *
- * WHAT THIS COMPONENT DOES NOT DO: it does not read file contents, parse
- * anything, or touch a buffer. It hands a `File` to the import service, which
- * is the single place in the application that calls `arrayBuffer()`. Keeping
- * that out of components is what makes the memory behaviour of a 500 MB import
- * something you can reason about by reading one file.
+ * THE WHOLE VIEWPORT ACCEPTS A DROP, and it does so without covering the
+ * canvas: the handlers sit on an ancestor, so drag events bubble up to them
+ * while orbit, pan, zoom and picking reach the canvas exactly as before. The
+ * cards drawn over the viewport take pointer events only where they are.
  *
- * Screening by name and size still happens first, but only as a usability
- * filter — it establishes no trust. The parser in the worker is the real
- * boundary. See `@cadfixer/file-formats/screening`.
+ * WHAT THIS COMPONENT DOES NOT DO: it does not read file contents or screen
+ * them. Both routes in — this drop and the top bar's Open button — go through
+ * `useFileIntake`, the one handler that screens a file and hands it to the
+ * import service.
  */
-export function ImportDropZone(): ReactNode {
-  const store = useWorkspaceStore();
-  const { importProgress, geometrySessionLost } = useWorkspaceState();
-  const { importFile, cancelImport, isImporting } = useModelImport();
-  const inputRef = useRef<HTMLInputElement>(null);
+export function ImportDropZone({ children }: { readonly children: ReactNode }): ReactNode {
+  const { importProgress, geometrySessionLost, model } = useWorkspaceState();
+  const { handleFiles, openPicker, isImporting, cancelImport } = useFileIntake();
   const [isDragging, setDragging] = useState(false);
 
-  const handleFiles = useCallback(
-    (files: readonly File[]): void => {
-      const file = files[0];
-      if (file === undefined) {
-        store.pushStatus(StatusSeverity.Error, 'No file was received from that drop.');
-        return;
-      }
-      if (files.length > 1) {
-        store.pushStatus(
-          StatusSeverity.Info,
-          `Only one model can be open at a time. Using ${file.name}.`,
-        );
-      }
-
-      const screening = screenFile({ name: file.name, size: file.size });
-      if (!screening.accepted) {
-        store.pushStatus(StatusSeverity.Error, `${file.name}: ${screening.message}`);
-        return;
-      }
-
-      /*
-       * A DESCRIPTOR IS NOT A CODEC.
-       *
-       * STL, OBJ and 3MF all have readers as of Stage 4A-2B1, so this gate does
-       * not fire today — and it stays, because the next format to get a
-       * descriptor will reach here before its codec does. Saying so plainly
-       * beats starting an import that can only fail deeper in.
-       *
-       * Capability is read from the declaration rather than from the registry,
-       * because codecs register inside the worker and the registry is
-       * legitimately empty on this thread.
-       */
-      if (!isFormatImplemented(screening.claimedFormat)) {
-        store.pushStatus(
-          StatusSeverity.Warning,
-          `${describeFormat(screening.claimedFormat).label} import is not implemented yet. ` +
-            `CAD Fixer can open ${describeImplementedFormats()}.`,
-        );
-        return;
-      }
-
-      importFile(file);
-    },
-    [importFile, store],
-  );
-
   const handleDrop = useCallback(
-    (event: DragEvent<HTMLDivElement>): void => {
+    (event: DragEvent<HTMLElement>): void => {
       event.preventDefault();
       setDragging(false);
       handleFiles([...event.dataTransfer.files]);
@@ -86,13 +32,13 @@ export function ImportDropZone(): ReactNode {
     [handleFiles],
   );
 
-  const handleDragOver = useCallback((event: DragEvent<HTMLDivElement>): void => {
+  const handleDragOver = useCallback((event: DragEvent<HTMLElement>): void => {
     // Required for the element to be a valid drop target at all.
     event.preventDefault();
     setDragging(true);
   }, []);
 
-  const handleDragLeave = useCallback((event: DragEvent<HTMLDivElement>): void => {
+  const handleDragLeave = useCallback((event: DragEvent<HTMLElement>): void => {
     // `dragleave` also fires when the pointer crosses onto a child element, so
     // dropping the highlight unconditionally makes it flicker. Only clear it
     // when the pointer has genuinely left the zone.
@@ -105,48 +51,58 @@ export function ImportDropZone(): ReactNode {
   const detail = describeImportDetail(importProgress.note);
 
   return (
-    <section className="import" aria-label="Import a model">
-      <div
-        className={isDragging ? 'import__zone import__zone--active' : 'import__zone'}
-        onDrop={handleDrop}
-        onDragOver={handleDragOver}
-        onDragLeave={handleDragLeave}
-        data-testid="drop-zone"
-      >
-        <p className="import__headline">Drop a model file here</p>
-        <p className="import__detail">
-          Opens {describeImplementedFormats()} ({SUPPORTED_EXTENSIONS.join(', ')}), geometry only.
-          OBJ faces must be triangles, and OBJ material libraries and 3MF colours, materials and
-          textures are not loaded. 3MF files that spread a model across several model parts are
-          read; a 3MF that requires any other extension is refused with the reason. Files are read
-          on this device and never uploaded.
-        </p>
+    <section
+      className="import"
+      aria-label="Import a model"
+      onDrop={handleDrop}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      data-testid="drop-zone"
+      data-dragging={isDragging ? 'true' : undefined}
+    >
+      {children}
 
-        {/* Drag and drop is never the only route in: a file picker keeps the
-            surface reachable by keyboard and by assistive technology. */}
-        <button
-          type="button"
-          className="import__browse"
-          onClick={() => inputRef.current?.click()}
-          disabled={isImporting}
-          data-testid="browse-button"
-        >
-          Choose a file
-        </button>
+      {model === undefined && !isImporting ? (
+        <div className="import__empty">
+          <div className="import__card">
+            <span className="import__card-icon">
+              <Icon name="upload" size={26} />
+            </span>
+            <p className="import__headline">Drop a 3D model to get started</p>
+            <p className="import__formats">
+              {SUPPORTED_EXTENSIONS.map((extension) =>
+                extension.replace('.', '').toUpperCase(),
+              ).join(' · ')}
+            </p>
+            {/* Drag and drop is never the only route in: this button and the top
+                bar's Open button keep intake reachable by keyboard and by
+                assistive technology. */}
+            <button
+              type="button"
+              className="primary-action import__browse"
+              onClick={openPicker}
+              disabled={isImporting}
+              data-testid="empty-browse-button"
+            >
+              <Icon name="open" size={16} />
+              <span>Browse files</span>
+            </button>
+            <p className="import__detail">
+              Opens {describeImplementedFormats()} ({SUPPORTED_EXTENSIONS.join(', ')}), geometry
+              only. OBJ faces must be triangles, and OBJ material libraries and 3MF colours,
+              materials and textures are not loaded. 3MF files that spread a model across several
+              model parts are read; a 3MF that requires any other extension is refused with the
+              reason. Files are read on this device and never uploaded.
+            </p>
+          </div>
+        </div>
+      ) : null}
 
-        <input
-          ref={inputRef}
-          type="file"
-          className="import__input"
-          accept={FILE_INPUT_ACCEPT}
-          data-testid="file-input"
-          onChange={(event) => {
-            handleFiles([...(event.target.files ?? [])]);
-            // Reset so selecting the same file twice fires a change event again.
-            event.target.value = '';
-          }}
-        />
-      </div>
+      {isDragging ? (
+        <div className="import__drag" aria-hidden="true">
+          Release to import
+        </div>
+      ) : null}
 
       {geometrySessionLost !== undefined ? (
         <p className="import__lost" role="alert" data-testid="session-lost">
@@ -176,16 +132,19 @@ export function ImportDropZone(): ReactNode {
           {...(importProgress.note === undefined ? {} : { 'data-phase': importProgress.note })}
         >
           <div className="import__progress-row">
-            <span data-testid="import-phase">
+            <span className="import__spinner" aria-hidden="true">
+              <Icon name="loader" size={16} />
+            </span>
+            <span className="import__progress-text" data-testid="import-phase">
               {describePhase(importProgress.state)}
               {detail === undefined ? null : (
-                <span className="import__detail" data-testid="import-detail">
+                <span className="import__progress-detail" data-testid="import-detail">
                   {' — '}
                   {detail}
                 </span>
               )}
             </span>
-            <span>{percent}%</span>
+            <span className="import__percent">{percent}%</span>
           </div>
           <progress
             className="import__bar"
@@ -237,7 +196,7 @@ function describeImportDetail(note: string | undefined): string | undefined {
   }
 }
 
-function describePhase(state: ImportState): string {
+export function describePhase(state: ImportState): string {
   switch (state) {
     case ImportState.Screening:
       return 'Checking file';
@@ -255,11 +214,4 @@ function describePhase(state: ImportState): string {
     default:
       return 'Idle';
   }
-}
-
-/** The formats this build can actually open, for a message that stays true. */
-function describeImplementedFormats(): string {
-  const labels = IMPLEMENTED_FORMATS.map((formatId) => describeFormat(formatId).label);
-  if (labels.length <= 1) return labels[0] ?? 'no formats';
-  return `${labels.slice(0, -1).join(', ')} and ${labels[labels.length - 1] ?? ''}`;
 }

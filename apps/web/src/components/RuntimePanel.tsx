@@ -17,6 +17,8 @@ import { useWorkspaceState, useWorkspaceStore } from '../state/store-context';
  *
  * It also reports `crossOriginIsolated`, which determines whether multithreaded
  * WebAssembly will be available later.
+ *
+ * It sits in the inspector's "Runtime" section, which supplies the heading.
  */
 
 const SELF_TEST_BYTES = 256 * 1024;
@@ -96,8 +98,6 @@ export function RuntimePanel(): ReactNode {
 
   return (
     <section className="runtime" aria-label="Runtime diagnostics">
-      <h2 className="runtime__heading">Runtime</h2>
-
       <dl className="runtime__facts">
         <div className="runtime__fact">
           <dt>Cross-origin isolated</dt>
