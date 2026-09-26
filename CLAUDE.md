@@ -917,7 +917,7 @@ materialise -> RELEASE -> next`. The entry buffer and the decoded XML are
   recomputes any part of it independently. Policy correctness is established in
   `compatibility.test.ts`, not end to end.
 - **THE REPORT IS DERIVED ON EVERY RENDER, NEVER STORED.** That is the whole
-  stale-dialog answer: there is no saved report, so none can authorise an export
+  staleness answer: there is no saved report, so none can authorise an export
   at a revision it was not built from. Never add a `report` field to the store.
 - **VERDICT PRECEDENCE IS FROZEN**: `BLOCKED > UNSUPPORTED_INPUT_FEATURE >
 LOSSY_STRUCTURE > LOSSY_METADATA > LOSSLESS_FOR_SUPPORTED_FEATURES`. A
@@ -931,9 +931,10 @@ LOSSY_STRUCTURE > LOSSY_METADATA > LOSSLESS_FOR_SUPPORTED_FEATURES`. A
   wholesale. Shown in their own section, and they do not move when the target
   changes.
 - **NO UNIT DEFAULT, ANYWHERE.** `document.unit === undefined` + 3MF is
-  `BLOCKED`. Six choices, nothing preselected, an empty `<select>` value and a
-  disabled placeholder option — a select with no explicit value reports its
-  first option, which would be CAD Fixer asserting microns for the user.
+  `BLOCKED`. Six radio choices and NONE starts checked; nothing is remembered
+  from a previous model. (The Stage 4A-2B3 `<select>` needed an empty value and
+  a disabled placeholder, because a select with no explicit value reports its
+  first option — CAD Fixer asserting microns for the user.)
 - **A UNIT ASSERTION IS EXPORT-LOCAL AND NEVER RESCALES.** It rides on the
   disposable snapshot; the authoritative document keeps `unit: undefined` and
   its revision does not move. `exportSnapshotOf` applies it ONLY when the
@@ -969,13 +970,38 @@ lost`, `printable`, `watertight`, and the rest. **"The numbers are unchanged"
   This was got wrong once: the policy imported `84 + n * 50` from the STL writer
   and arrived carrying `stl/detect.ts`'s module-scope keyword tables. Two
   boundary tests hold the line.
-- **THE EXPORT WORKER IS BUILT ONLY WHEN AN EXPORT STARTS.** Opening the dialog,
-  choosing a target and picking a unit must construct nothing.
+- **THE EXPORT WORKER IS BUILT ONLY WHEN AN EXPORT STARTS.** Entering the
+  Convert workspace, choosing a target and picking a unit must construct
+  nothing.
 - **`ExportRefusal.UnsupportedTarget` LIVES AT `resolveExportTarget`**, which is
   where an untrusted target STRING arrives. It was removed from `exportDocument`
   because every `MeshFormatId` is now writable and the guard had become
   type-dead. The lookup uses `hasOwnProperty`, so `constructor` and `__proto__`
   are not formats.
+
+## Convert workspace invariants (UI-03)
+
+- **THE CONVERT WORKSPACE IS THE ONE CONVERSION SURFACE.** The Stage 4A-2B3
+  dialog is gone. The top bar's Export, the inspector's Export / Convert, the
+  tabs and the dropdown all call `useOpenConvertWorkspace`; never add a second
+  surface that can run a document export.
+- **ONE FORMAT PER EXPORT.** `DocumentExportService` runs one export at a time,
+  so the output grid is a single-choice radio group and the selected card IS
+  the focused one. No multi-select, no queue, no batch, no "Convert N files" —
+  CAD Fixer holds one document.
+- **A CARD IS A WRITER.** Only `EXPORT_FORMATS` are selectable. ASCII STL is
+  shown disabled with where it does exist (the active-part export); PLY, AMF,
+  GLB and FBX have no card at all.
+- **NO CONTROL THAT DOES NOT CHANGE THE FILE.** The only option is the 3MF unit
+  assertion, which labels and never rescales. There is no axis conversion, unit
+  conversion, merge switch, colour/material/texture toggle, thumbnail or 3MF
+  metadata, because no writer does any of it.
+- **SIZES ARE EXACT, MEASURED OR UNKNOWN.** Binary STL is exact from
+  `stlContainerByteLength`. OBJ and 3MF show a number only after a real export
+  of THAT revision, target and effective unit (`MeasuredExport`, cleared with
+  the model). Never a ratio, never a lower bound presented as an estimate.
+- **THE WORKSPACE STAYS MOUNTED WHILE HIDDEN**, like the Repair panels: its hook
+  cancels the export it started on unmount.
 
 ## Hole-fill invariants (Stage 4B-1B1 engine, 4B-1B2 workflow)
 

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { IDENTITY_PART_TRANSFORM, type PartTransform } from '@cadfixer/mesh-core';
 import type {
   DocumentHandle,
@@ -8,7 +8,11 @@ import type {
 } from '@cadfixer/geometry-runtime';
 import { ConversionVerdict } from '@cadfixer/file-formats';
 import { LengthUnit } from '@cadfixer/shared';
-import { ConvertDialog } from './ConvertDialog';
+import { ConvertWorkspace } from './ConvertWorkspace';
+import { ExportSummary } from './ExportSummary';
+import { OutputSizeCard } from './OutputSizeCard';
+import { FileIntakeProvider } from './FileIntake';
+import { ShellLayoutProvider } from './shell/shell-layout';
 import { GeometryClientProvider } from '../runtime/client-context';
 import { GeometryClient } from '../runtime/geometry-client';
 import { WorkspaceProvider } from '../state/store-context';
@@ -17,10 +21,12 @@ import { CONVERSION_FORBIDDEN_TERMS, UNIT_CHOICES } from '../state/conversion-pr
 import type { LoadedModel } from '../state/model';
 
 /**
- * THE EXPORT / CONVERT DIALOG, at component level.
+ * THE CONVERT WORKSPACE, at component level. (Ported from the Stage 4A-2B3
+ * dialog's suite when UI-03 made the workspace the one conversion surface; the
+ * dialog-only cases — modal focus, Escape to close — went with the dialog.)
  *
  * The happy path is proven end to end against real workers, where a download is
- * a download. What is worth testing here is what the dialog SAYS and what it
+ * a download. What is worth testing here is what the workspace SAYS and what it
  * lets a user do — the states an end-to-end test reaches only by breaking
  * something, and the ones a browser test cannot assert cheaply:
  *
@@ -109,55 +115,82 @@ function loadModel(store: WorkspaceStore, options: ModelOptions = {}): DocumentH
   return handle;
 }
 
-function renderDialog(configure: (store: WorkspaceStore) => void): WorkspaceStore {
-  const store = new WorkspaceStore();
-  configure(store);
+function mount(store: WorkspaceStore, active = true): void {
   const client = new GeometryClient({ onDiagnostic: (): void => undefined });
   render(
     <WorkspaceProvider store={store}>
       <GeometryClientProvider client={client}>
-        <ConvertDialog />
+        <ShellLayoutProvider>
+          <FileIntakeProvider>
+            <ConvertWorkspace active={active} />
+          </FileIntakeProvider>
+        </ShellLayoutProvider>
       </GeometryClientProvider>
     </WorkspaceProvider>,
   );
+}
+
+function renderWorkspace(configure: (store: WorkspaceStore) => void): WorkspaceStore {
+  const store = new WorkspaceStore();
+  configure(store);
+  mount(store);
   return store;
 }
 
 /* ------------------------------------------------------------- CF18/CF22 -- */
 
 describe('opening and choosing a target', () => {
-  it('renders nothing at all until it is opened', () => {
-    renderDialog((store) => {
-      loadModel(store);
-    });
-    expect(screen.queryByTestId('convert-dialog')).toBeNull();
+  it('starts no session while the workspace is hidden', () => {
+    const store = new WorkspaceStore();
+    loadModel(store);
+    mount(store, false);
+    expect(store.getSnapshot().conversion.state).toBe('closed');
+    expect(screen.queryByTestId('convert-progress')).toBeNull();
   });
 
-  it('renders nothing when there is no model to convert', () => {
-    renderDialog((store) => {
-      store.openConversion('stl');
-    });
-    expect(screen.queryByTestId('convert-dialog')).toBeNull();
+  it('starts a session with the source format preselected once it is shown', () => {
+    const store = new WorkspaceStore();
+    loadModel(store, { formatId: 'obj' });
+    mount(store, true);
+    expect(store.getSnapshot().conversion.state).toBe('reviewing');
+    expect(screen.getByTestId('convert-target-obj')).toBeChecked();
   });
-
+  it('shows an empty source and no usable controls when there is no model', () => {
+    renderWorkspace(() => undefined);
+    expect(screen.getByTestId('convert-source-empty')).toHaveTextContent('Open an STL, OBJ or 3MF');
+    expect(screen.getByTestId('convert-export')).toBeDisabled();
+    expect(screen.getByTestId('convert-unavailable')).toHaveTextContent('Open an STL, OBJ or 3MF');
+    for (const radio of screen.getAllByRole('radio')) expect(radio).toBeDisabled();
+  });
   it('offers exactly the three formats CAD Fixer can write', () => {
-    renderDialog((store) => {
+    renderWorkspace((store) => {
       loadModel(store);
       store.openConversion('stl');
     });
 
-    expect(screen.getByTestId('convert-target-stl')).toBeInTheDocument();
-    expect(screen.getByTestId('convert-target-obj')).toBeInTheDocument();
-    expect(screen.getByTestId('convert-target-3mf')).toBeInTheDocument();
+    expect(screen.getByTestId('convert-target-stl')).toBeEnabled();
+    expect(screen.getByTestId('convert-target-obj')).toBeEnabled();
+    expect(screen.getByTestId('convert-target-3mf')).toBeEnabled();
 
-    // NO PLACEHOLDERS FOR FORMATS THAT DO NOT EXIST. A disabled "STEP" entry
-    // would be advertising a capability the product does not have.
-    const targets = within(screen.getByTestId('convert-dialog')).getAllByRole('radio');
-    expect(targets).toHaveLength(3);
+    /*
+     * ONE MORE CARD, AND IT IS NOT A CHOICE. ASCII STL is a real CAD Fixer
+     * capability that THIS operation does not perform, so it is shown disabled
+     * with the place it does exist. No card for a format with no writer: a
+     * disabled "PLY" or "GLB" would advertise a capability the product lacks.
+     */
+    const outputs = screen.getByRole('radiogroup', { name: 'Output format' });
+    const radios = [...outputs.querySelectorAll('input[type="radio"]')];
+    expect(radios).toHaveLength(4);
+    expect(radios.filter((radio) => !(radio as HTMLInputElement).disabled)).toHaveLength(3);
+    expect(screen.getByTestId('convert-target-stl-ascii')).toBeDisabled();
+    expect(screen.getByTestId('convert-target-stl-ascii')).toHaveAccessibleDescription(
+      /Inspector › Model/,
+    );
+    const text = outputs.textContent;
+    for (const absent of ['PLY', 'AMF', 'GLB', 'FBX']) expect(text).not.toContain(absent);
   });
-
   it('preselects the source format, which bypasses no review', () => {
-    renderDialog((store) => {
+    renderWorkspace((store) => {
       loadModel(store, { formatId: 'obj' });
       store.openConversion('obj');
     });
@@ -171,7 +204,7 @@ describe('opening and choosing a target', () => {
      * A PRESELECTED TARGET IS NOT A STARTED EXPORT. Opening the dialog must
      * leave the workspace idle; the only thing that writes a file is a press.
      */
-    const store = renderDialog((s) => {
+    const store = renderWorkspace((s) => {
       loadModel(s);
       s.openConversion('stl');
     });
@@ -180,7 +213,7 @@ describe('opening and choosing a target', () => {
   });
 
   it('recomputes the summary when the target changes', () => {
-    renderDialog((store) => {
+    renderWorkspace((store) => {
       loadModel(store, {
         parts: [
           partDescriptor({ partId: 'a' }),
@@ -210,7 +243,7 @@ describe('opening and choosing a target', () => {
 
 describe('how losses are presented', () => {
   it('shows a clear, unalarmed state when nothing supported is lost', () => {
-    renderDialog((store) => {
+    renderWorkspace((store) => {
       loadModel(store);
       store.openConversion('stl');
     });
@@ -222,7 +255,7 @@ describe('how losses are presented', () => {
   });
 
   it('separates metadata loss from structural loss', () => {
-    renderDialog((store) => {
+    renderWorkspace((store) => {
       loadModel(store, {
         formatId: '3mf',
         unit: LengthUnit.Millimeter,
@@ -248,7 +281,7 @@ describe('how losses are presented', () => {
      * "the unit is not stored" invites the fear that something was rescaled, and
      * "the coordinates are unchanged" invites the belief that the size survived.
      */
-    renderDialog((store) => {
+    renderWorkspace((store) => {
       loadModel(store, { formatId: '3mf', unit: LengthUnit.Inch });
       store.openConversion('obj');
     });
@@ -259,7 +292,7 @@ describe('how losses are presented', () => {
   });
 
   it('shows a blocker as a requirement rather than as a failure', () => {
-    renderDialog((store) => {
+    renderWorkspace((store) => {
       loadModel(store);
       store.openConversion('3mf');
     });
@@ -278,19 +311,19 @@ describe('how losses are presented', () => {
      * one-part identity-placed unnamed document loses nothing an STL could have
      * carried, and the panel says so by showing no loss sections at all.
      */
-    renderDialog((store) => {
+    renderWorkspace((store) => {
       loadModel(store);
       store.openConversion('stl');
     });
 
-    const dialog = screen.getByTestId('convert-dialog');
-    expect(dialog).not.toHaveTextContent('merged into one mesh');
-    expect(dialog).not.toHaveTextContent('texture coordinates');
-    expect(dialog).not.toHaveTextContent('face group');
+    const workspace = screen.getByTestId('convert-workspace');
+    expect(workspace).not.toHaveTextContent('merged into one mesh');
+    expect(workspace).not.toHaveTextContent('texture coordinates');
+    expect(workspace).not.toHaveTextContent('face group');
   });
 
   it('never emits a forbidden claim, whatever the document', () => {
-    renderDialog((store) => {
+    renderWorkspace((store) => {
       loadModel(store, {
         formatId: '3mf',
         unit: LengthUnit.Inch,
@@ -303,7 +336,7 @@ describe('how losses are presented', () => {
       store.openConversion('obj');
     });
 
-    const text = screen.getByTestId('convert-dialog').textContent.toLowerCase();
+    const text = screen.getByTestId('convert-workspace').textContent.toLowerCase();
     for (const term of CONVERSION_FORBIDDEN_TERMS) {
       expect(text.includes(term), `"${term}" reached the screen`).toBe(false);
     }
@@ -314,7 +347,7 @@ describe('how losses are presented', () => {
 
 describe('source import warnings', () => {
   it('shows them in their own section, apart from the target losses', () => {
-    renderDialog((store) => {
+    renderWorkspace((store) => {
       loadModel(store, {
         formatId: '3mf',
         unit: LengthUnit.Millimeter,
@@ -335,7 +368,7 @@ describe('source import warnings', () => {
      * target's losses would blame this conversion for a loss that happened on
      * import.
      */
-    renderDialog((store) => {
+    renderWorkspace((store) => {
       loadModel(store, {
         formatId: '3mf',
         unit: LengthUnit.Millimeter,
@@ -351,7 +384,7 @@ describe('source import warnings', () => {
   });
 
   it('shows no such section for a file that lost nothing on import', () => {
-    renderDialog((store) => {
+    renderWorkspace((store) => {
       loadModel(store);
       store.openConversion('stl');
     });
@@ -363,14 +396,14 @@ describe('source import warnings', () => {
 
 describe('the unit selection', () => {
   function openUnitCase(): WorkspaceStore {
-    return renderDialog((store) => {
+    return renderWorkspace((store) => {
       loadModel(store);
       store.openConversion('3mf');
     });
   }
 
   it('asks for a unit only when the target needs one and the document has none', () => {
-    renderDialog((store) => {
+    renderWorkspace((store) => {
       loadModel(store);
       store.openConversion('stl');
     });
@@ -378,7 +411,7 @@ describe('the unit selection', () => {
 
     cleanup();
 
-    renderDialog((store) => {
+    renderWorkspace((store) => {
       loadModel(store, { formatId: '3mf', unit: LengthUnit.Millimeter });
       store.openConversion('3mf');
     });
@@ -387,56 +420,44 @@ describe('the unit selection', () => {
 
   it('SELECTS NOTHING by default', () => {
     /*
-     * THE TEST THIS FLOW MOST NEEDS. An HTML `<select>` with no explicit value
-     * reports its FIRST option, so a naive control would silently assert
-     * microns — CAD Fixer choosing a physical unit on the user's behalf, which
-     * is precisely what this stage exists to prevent. The placeholder is a real,
-     * disabled option and the store holds `undefined`.
+     * THE TEST THIS FLOW MOST NEEDS. A unit control that started with an answer
+     * would be CAD Fixer choosing a physical unit on the user's behalf, which is
+     * precisely what this stage exists to prevent. No radio starts checked and
+     * the store holds `undefined`.
      */
     const store = openUnitCase();
-    const select = screen.getByTestId('convert-unit-select');
-
-    expect(select).toHaveValue('');
+    const group = screen.getByRole('radiogroup', { name: 'Units' });
+    const radios = [...group.querySelectorAll<HTMLInputElement>('input[type="radio"]')];
+    expect(radios).toHaveLength(6);
+    expect(radios.some((radio) => radio.checked)).toBe(false);
     expect(store.getSnapshot().conversion.unitAssertion).toBeUndefined();
-    // And the placeholder cannot be chosen as if it were an answer.
-    const placeholder = within(select).getByRole('option', { name: /choose a unit/i });
-    expect(placeholder).toBeDisabled();
   });
-
   it('keeps the export action unavailable until a unit is deliberately chosen', () => {
     openUnitCase();
     expect(screen.getByTestId('convert-export')).toBeDisabled();
 
-    fireEvent.change(screen.getByTestId('convert-unit-select'), {
-      target: { value: LengthUnit.Inch },
-    });
+    fireEvent.click(screen.getByTestId(`convert-unit-${LengthUnit.Inch}`));
 
     expect(screen.getByTestId('convert-export')).toBeEnabled();
   });
-
   it('offers exactly the six units, in the shared order', () => {
     openUnitCase();
-    const select = screen.getByTestId('convert-unit-select');
-    const values = within(select)
-      .getAllByRole('option')
-      .map((option) => option.getAttribute('value') ?? '')
-      .filter((value) => value !== '');
+    const group = screen.getByRole('radiogroup', { name: 'Units' });
+    const values = [...group.querySelectorAll<HTMLInputElement>('input[type="radio"]')].map(
+      (radio) => radio.value,
+    );
 
     expect(values).toEqual(UNIT_CHOICES.map((choice) => choice.value));
     expect(values).toHaveLength(6);
   });
-
   it('accepts each of the six and records exactly what was chosen', () => {
     for (const choice of UNIT_CHOICES) {
       const store = openUnitCase();
-      fireEvent.change(screen.getByTestId('convert-unit-select'), {
-        target: { value: choice.value },
-      });
+      fireEvent.click(screen.getByTestId(`convert-unit-${choice.value}`));
       expect(store.getSnapshot().conversion.unitAssertion).toBe(choice.value);
       cleanup();
     }
   });
-
   it('explains that choosing a unit labels rather than resizes', () => {
     openUnitCase();
     const panel = screen.getByTestId('convert-unit');
@@ -452,15 +473,13 @@ describe('the unit selection', () => {
      * OBJ would do.
      */
     const store = openUnitCase();
-    fireEvent.change(screen.getByTestId('convert-unit-select'), {
-      target: { value: LengthUnit.Foot },
-    });
+    fireEvent.click(screen.getByTestId(`convert-unit-${LengthUnit.Foot}`));
 
     fireEvent.click(screen.getByTestId('convert-target-obj'));
     fireEvent.click(screen.getByTestId('convert-target-3mf'));
 
     expect(store.getSnapshot().conversion.unitAssertion).toBe(LengthUnit.Foot);
-    expect(screen.getByTestId('convert-unit-select')).toHaveValue(LengthUnit.Foot);
+    expect(screen.getByTestId(`convert-unit-${LengthUnit.Foot}`)).toBeChecked();
   });
 });
 
@@ -470,7 +489,7 @@ describe('hostile display strings', () => {
   const HOSTILE = '<script>alert(1)</script>&"‮gnp.lts‬../../etc/passwd';
 
   it('renders a hostile filename as text and nothing else', () => {
-    renderDialog((store) => {
+    renderWorkspace((store) => {
       loadModel(store, { fileName: HOSTILE });
       store.openConversion('stl');
     });
@@ -480,11 +499,11 @@ describe('hostile display strings', () => {
     expect(source.textContent).toContain('<script>');
     // And no element was created from them.
     expect(source.querySelector('script')).toBeNull();
-    expect(screen.getByTestId('convert-dialog').querySelector('script')).toBeNull();
+    expect(screen.getByTestId('convert-workspace').querySelector('script')).toBeNull();
   });
 
   it('renders a hostile part name as text', () => {
-    renderDialog((store) => {
+    renderWorkspace((store) => {
       loadModel(store, {
         parts: [
           partDescriptor({ name: HOSTILE }),
@@ -494,132 +513,71 @@ describe('hostile display strings', () => {
       store.openConversion('obj');
     });
 
-    const dialog = screen.getByTestId('convert-dialog');
-    expect(dialog.querySelector('script')).toBeNull();
+    const workspace = screen.getByTestId('convert-workspace');
+    expect(workspace.querySelector('script')).toBeNull();
     /*
      * AND THE NAME IS NOT SHOWN AT ALL, because the report carries COUNTS rather
      * than names. A fact that held a part name would be a fact that could carry
      * hostile text into markup, and it would be a second place display copy
      * lived.
      */
-    expect(dialog.textContent).not.toContain('alert(1)');
+    expect(workspace.textContent).not.toContain('alert(1)');
   });
 
-  it('lets a very long filename wrap rather than widening the dialog', () => {
-    renderDialog((store) => {
-      loadModel(store, { fileName: `${'a'.repeat(400)}.stl` });
+  it('keeps a very long filename whole in the accessible name and the tooltip', () => {
+    const long = `${'a'.repeat(400)}.stl`;
+    renderWorkspace((store) => {
+      loadModel(store, { fileName: long });
       store.openConversion('stl');
     });
-    // The name is inside the source line, which the stylesheet wraps.
-    expect(screen.getByTestId('convert-source').textContent).toContain('a'.repeat(100));
+    // The card truncates visually; the full name stays readable.
+    const source = screen.getByTestId('convert-source');
+    expect(source).toHaveAttribute('title', long);
+    expect(source.textContent).toBe(long);
   });
 });
 
 /* ------------------------------------------------------------------ CF26 -- */
 
 describe('keyboard and assistive technology', () => {
-  it('is a modal dialog with an accessible name', () => {
-    renderDialog((store) => {
+  it('presents the outputs as a labelled single-choice group with full names', () => {
+    renderWorkspace((store) => {
       loadModel(store);
       store.openConversion('stl');
     });
 
-    const dialog = screen.getByRole('dialog', { name: 'Export / Convert' });
-    expect(dialog).toHaveAttribute('aria-modal', 'true');
+    const outputs = screen.getByRole('radiogroup', { name: 'Output format' });
+    expect(outputs).toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: 'STL, binary' })).toBeChecked();
+    expect(screen.getByRole('radio', { name: '3MF, core model package' })).not.toBeChecked();
+    // Not a modal: the workspace is a panel beside the model, never over it.
+    expect(screen.queryByRole('dialog')).toBeNull();
   });
-
-  it('labels the target choices and the unit selector', () => {
-    renderDialog((store) => {
+  it('labels the unit choices by their full names', () => {
+    renderWorkspace((store) => {
       loadModel(store);
       store.openConversion('3mf');
     });
 
-    expect(screen.getByRole('group', { name: 'Save as' })).toBeInTheDocument();
-    expect(screen.getByLabelText('These measurements are in')).toBeInTheDocument();
+    expect(screen.getByRole('radiogroup', { name: 'Units' })).toBeInTheDocument();
+    for (const choice of UNIT_CHOICES) {
+      expect(screen.getByRole('radio', { name: choice.label })).toBeInTheDocument();
+    }
   });
 
-  it('moves focus into the dialog when it opens', () => {
-    renderDialog((store) => {
+  it('says why the action is unavailable, beside it and in its description', () => {
+    renderWorkspace((store) => {
       loadModel(store);
-      store.openConversion('stl');
+      store.openConversion('3mf');
     });
-    expect(document.activeElement).toBe(screen.getByTestId('convert-close'));
+
+    const action = screen.getByTestId('convert-export');
+    expect(action).toBeDisabled();
+    expect(action).toHaveAccessibleDescription(/Format options/);
+    expect(screen.getByTestId('convert-unavailable')).toBeVisible();
   });
-
-  it('keeps Tab inside the dialog', () => {
-    /*
-     * `aria-modal` does not stop the Tab key, and the backdrop only hides the
-     * workspace visually. Without a trap a keyboard user tabs off the end of the
-     * panel onto controls they cannot see, behind an overlay they cannot dismiss
-     * from there.
-     */
-    renderDialog((store) => {
-      loadModel(store);
-      store.openConversion('stl');
-    });
-
-    const dialog = screen.getByRole('dialog');
-    const focusable = [...dialog.querySelectorAll<HTMLElement>('button, input, select')].filter(
-      (element) => !element.hasAttribute('disabled'),
-    );
-    const first = focusable[0];
-    const last = focusable[focusable.length - 1];
-    expect(first).toBeDefined();
-    expect(last).toBeDefined();
-    if (first === undefined || last === undefined) return;
-
-    // Forwards off the end wraps to the beginning.
-    last.focus();
-    fireEvent.keyDown(dialog, { key: 'Tab' });
-    expect(document.activeElement).toBe(first);
-
-    // And backwards off the beginning wraps to the end.
-    first.focus();
-    fireEvent.keyDown(dialog, { key: 'Tab', shiftKey: true });
-    expect(document.activeElement).toBe(last);
-  });
-
-  it('returns focus to whatever opened it', () => {
-    const store = new WorkspaceStore();
-    loadModel(store);
-    const client = new GeometryClient({ onDiagnostic: (): void => undefined });
-
-    const opener = document.createElement('button');
-    document.body.appendChild(opener);
-    opener.focus();
-
-    render(
-      <WorkspaceProvider store={store}>
-        <GeometryClientProvider client={client}>
-          <ConvertDialog />
-        </GeometryClientProvider>
-      </WorkspaceProvider>,
-    );
-
-    act(() => {
-      store.openConversion('stl');
-    });
-    expect(document.activeElement).toBe(screen.getByTestId('convert-close'));
-
-    act(() => {
-      store.closeConversion();
-    });
-    expect(document.activeElement).toBe(opener);
-    opener.remove();
-  });
-
-  it('closes on Escape while nothing irreversible is happening', () => {
-    const store = renderDialog((s) => {
-      loadModel(s);
-      s.openConversion('stl');
-    });
-
-    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
-    expect(store.getSnapshot().conversion.state).toBe('closed');
-  });
-
   it('announces the outcome in a live region', () => {
-    renderDialog((store) => {
+    renderWorkspace((store) => {
       loadModel(store);
       store.openConversion('stl');
       const token = store.beginConversion();
@@ -629,6 +587,8 @@ describe('keyboard and assistive technology', () => {
         target: 'stl',
         triangleCount: 4,
         partCount: 1,
+        source: { documentId: 'model-1', revision: 1 } as DocumentHandle,
+        unitAssertion: undefined,
       });
     });
 
@@ -638,7 +598,7 @@ describe('keyboard and assistive technology', () => {
   });
 
   it('does not rely on colour alone: every section states its meaning in words', () => {
-    renderDialog((store) => {
+    renderWorkspace((store) => {
       loadModel(store, {
         formatId: '3mf',
         unit: LengthUnit.Millimeter,
@@ -663,7 +623,7 @@ describe('keyboard and assistive technology', () => {
 
 describe('progress, cancellation and retry', () => {
   it('shows the writer own phase rather than a fabricated bar', () => {
-    renderDialog((store) => {
+    renderWorkspace((store) => {
       loadModel(store);
       store.openConversion('stl');
       const token = store.beginConversion();
@@ -677,7 +637,7 @@ describe('progress, cancellation and retry', () => {
   });
 
   it('offers Cancel only while an export is running', () => {
-    const store = renderDialog((s) => {
+    const store = renderWorkspace((s) => {
       loadModel(s);
       s.openConversion('stl');
     });
@@ -689,25 +649,27 @@ describe('progress, cancellation and retry', () => {
     expect(screen.getByTestId('convert-cancel')).toBeInTheDocument();
   });
 
-  it('refuses to close mid-write, so a cancel cannot be mistaken for a finish', () => {
+  it('locks the choices mid-write, so a running file cannot change underneath', () => {
     /*
-     * ESCAPE IS INERT DURING A WRITE, ON PURPOSE. An accidental Escape that
-     * silently killed the worker would look exactly like a finished export that
-     * produced no file. Cancel is a labelled button, pressed deliberately.
+     * NOTHING ABOUT A RUNNING EXPORT CHANGES EXCEPT BY CANCEL. The format cards
+     * are disabled while a file is written, and Escape does not stop it: an
+     * accidental key that silently killed the worker would look exactly like a
+     * finished export that produced no file.
      */
-    const store = renderDialog((s) => {
+    const store = renderWorkspace((s) => {
       loadModel(s);
       s.openConversion('stl');
       s.beginConversion();
     });
 
-    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
+    fireEvent.keyDown(screen.getByTestId('convert-workspace'), { key: 'Escape' });
     expect(store.getSnapshot().conversion.state).toBe('working');
-    expect(screen.getByTestId('convert-close')).toBeDisabled();
+    expect(screen.getByTestId('convert-target-obj')).toBeDisabled();
+    expect(screen.getByTestId('convert-export')).toBeDisabled();
+    expect(screen.getByTestId('convert-export')).toHaveAttribute('aria-busy', 'true');
   });
-
-  it('stays open and usable after a failure, so the user can act on it', () => {
-    const store = renderDialog((s) => {
+  it('stays usable after a failure, so the user can act on it', () => {
+    const store = renderWorkspace((s) => {
       loadModel(s);
       s.openConversion('3mf');
       s.setConversionUnit(LengthUnit.Millimeter);
@@ -723,7 +685,7 @@ describe('progress, cancellation and retry', () => {
   });
 
   it('never claims a file was saved before validation succeeded', () => {
-    renderDialog((store) => {
+    renderWorkspace((store) => {
       loadModel(store);
       store.openConversion('stl');
       const token = store.beginConversion();
@@ -737,7 +699,7 @@ describe('progress, cancellation and retry', () => {
 
 describe('the workflow is document-level', () => {
   it('says every part is written, whichever one is selected', () => {
-    renderDialog((store) => {
+    renderWorkspace((store) => {
       loadModel(store, {
         parts: [
           partDescriptor({ partId: 'a' }),
@@ -764,14 +726,7 @@ describe('the workflow is document-level', () => {
       loadModel(store, { parts });
       store.selectPart(active);
       store.openConversion('stl');
-      const client = new GeometryClient({ onDiagnostic: (): void => undefined });
-      render(
-        <WorkspaceProvider store={store}>
-          <GeometryClientProvider client={client}>
-            <ConvertDialog />
-          </GeometryClientProvider>
-        </WorkspaceProvider>,
-      );
+      mount(store);
       const text = screen.getByTestId('convert-report').textContent;
       cleanup();
       return text;
@@ -781,10 +736,281 @@ describe('the workflow is document-level', () => {
   });
 
   it('shows no whole-document note for a one-part document', () => {
-    renderDialog((store) => {
+    renderWorkspace((store) => {
       loadModel(store);
       store.openConversion('stl');
     });
     expect(screen.queryByTestId('convert-whole-document')).toBeNull();
+  });
+});
+
+/* --------------------------------------------------------------- UI-03 -- */
+
+function saveAs(
+  store: WorkspaceStore,
+  target: string,
+  byteLength: number,
+  unitAssertion?: string,
+): void {
+  const token = store.beginConversion();
+  const model = store.getSnapshot().model;
+  if (model === undefined) throw new Error('fixture');
+  store.completeConversion(token, {
+    fileName: `part.${target}`,
+    byteLength,
+    target,
+    triangleCount: model.triangleCount,
+    partCount: model.parts.length,
+    source: model.handle,
+    unitAssertion,
+  });
+}
+
+describe('output sizes are exact, measured or unknown — never invented', () => {
+  it('states the binary STL size exactly, from the triangle count', () => {
+    renderWorkspace((store) => {
+      loadModel(store); // 4 triangles
+      store.openConversion('stl');
+    });
+    // 84 + 50 × 4 = 284 bytes, before anything is written.
+    expect(screen.getByTestId('convert-size-stl')).toHaveTextContent('284 B');
+  });
+
+  it('shows no number for OBJ or 3MF until one has been written', () => {
+    renderWorkspace((store) => {
+      loadModel(store);
+      store.openConversion('stl');
+    });
+    for (const target of ['obj', '3mf']) {
+      expect(screen.getByTestId(`convert-size-${target}`)).toHaveTextContent('—');
+      // The dash is never the whole explanation.
+      expect(screen.getByTestId(`convert-target-${target}`)).toHaveAccessibleDescription(
+        /Known once the file is written/,
+      );
+    }
+  });
+
+  it('shows the measured size of a file written from this revision', () => {
+    const store = renderWorkspace((s) => {
+      loadModel(s);
+      s.openConversion('obj');
+    });
+    act(() => {
+      saveAs(store, 'obj', 5_000);
+    });
+    expect(screen.getByTestId('convert-size-obj')).toHaveTextContent('4.9 KiB');
+  });
+
+  it('files a 3MF measurement under the unit it was written with', () => {
+    const store = renderWorkspace((s) => {
+      loadModel(s);
+      s.openConversion('3mf');
+      s.setConversionUnit(LengthUnit.Inch);
+    });
+    act(() => {
+      saveAs(store, '3mf', 2_000, LengthUnit.Inch);
+    });
+    expect(screen.getByTestId('convert-size-3mf')).toHaveTextContent('2.0 KiB');
+
+    // Another unit writes another file, so the measurement no longer applies.
+    fireEvent.click(screen.getByTestId(`convert-unit-${LengthUnit.Meter}`));
+    expect(screen.getByTestId('convert-size-3mf')).toHaveTextContent('—');
+  });
+
+  it('forgets every measurement when a different model is opened', () => {
+    const store = renderWorkspace((s) => {
+      loadModel(s);
+      s.openConversion('obj');
+    });
+    act(() => {
+      saveAs(store, 'obj', 5_000);
+    });
+    act(() => {
+      loadModel(store);
+    });
+    expect(store.getSnapshot().conversion.measured).toEqual([]);
+  });
+});
+
+describe('the primary action says what it does', () => {
+  it('reads "Export STL" when the format does not change', () => {
+    renderWorkspace((store) => {
+      loadModel(store);
+      store.openConversion('stl');
+    });
+    expect(screen.getByTestId('convert-export')).toHaveTextContent('Export STL');
+  });
+
+  it('reads "Convert to OBJ" when it does, and never counts files', () => {
+    renderWorkspace((store) => {
+      loadModel(store);
+      store.openConversion('obj');
+    });
+    const action = screen.getByTestId('convert-export');
+    expect(action).toHaveTextContent('Convert to OBJ');
+    expect(action.textContent).not.toMatch(/files|formats/i);
+  });
+
+  it('reads "Writing…" while an export runs', () => {
+    renderWorkspace((store) => {
+      loadModel(store);
+      store.openConversion('stl');
+      store.beginConversion();
+    });
+    expect(screen.getByTestId('convert-export')).toHaveTextContent('Writing…');
+  });
+});
+
+describe('the source card shows only what the document records', () => {
+  it('shows the format, encoding, size, triangles, parts and unit', () => {
+    renderWorkspace((store) => {
+      loadModel(store, {
+        parts: [partDescriptor({ partId: 'a' }), partDescriptor({ partId: 'b' })],
+      });
+      store.openConversion('stl');
+    });
+    expect(screen.getByTestId('convert-source-meta')).toHaveTextContent('STL');
+    expect(screen.getByTestId('convert-source-meta')).toHaveTextContent('8 triangles');
+    expect(screen.getByTestId('convert-source-meta')).toHaveTextContent('100 B');
+    expect(screen.getByTestId('convert-source-parts')).toHaveTextContent('2 parts');
+    expect(screen.getByTestId('convert-source-unit')).toHaveTextContent('No unit stated');
+  });
+
+  it('never claims an absence it cannot know', () => {
+    renderWorkspace((store) => {
+      loadModel(store);
+      store.openConversion('stl');
+    });
+    const card = screen.getByTestId('convert-source-section');
+    expect(card).not.toHaveTextContent(/no colou?rs|no materials/i);
+    expect(screen.queryByTestId('convert-source-materials')).toBeNull();
+  });
+
+  it('names material references only when the document carries them', () => {
+    renderWorkspace((store) => {
+      loadModel(store, { parts: [partDescriptor({ materialRef: 'steel' })] });
+      store.openConversion('stl');
+    });
+    expect(screen.getByTestId('convert-source-materials')).toBeInTheDocument();
+  });
+});
+
+describe('format options show facts, and a control only where it changes the file', () => {
+  it('offers no axis, merge, colour, texture or metadata control for any target', () => {
+    renderWorkspace((store) => {
+      loadModel(store);
+      store.openConversion('3mf');
+    });
+    for (const target of ['stl', 'obj', '3mf']) {
+      fireEvent.click(screen.getByTestId(`convert-target-${target}`));
+      const options = screen.getByTestId('convert-options');
+      expect(options.querySelectorAll('input[type="checkbox"]')).toHaveLength(0);
+      expect(options).not.toHaveTextContent(/Y-up|Z-up|Merge objects|Designer|thumbnail/i);
+    }
+  });
+
+  it('states that STL records no unit and writes the coordinates unchanged', () => {
+    renderWorkspace((store) => {
+      loadModel(store);
+      store.openConversion('stl');
+    });
+    const fact = screen.getByTestId('convert-unit-fact');
+    expect(fact).toHaveTextContent('STL has no unit field');
+    expect(fact).toHaveTextContent('written unchanged');
+  });
+
+  it('states a unit the model already has instead of asking for one', () => {
+    renderWorkspace((store) => {
+      loadModel(store, { formatId: '3mf', unit: LengthUnit.Millimeter });
+      store.openConversion('3mf');
+    });
+    expect(screen.queryByTestId('convert-unit')).toBeNull();
+    expect(screen.getByTestId('convert-unit-fact')).toHaveTextContent('Millimetres (mm)');
+  });
+
+  it('says how the parts end up, per target', () => {
+    renderWorkspace((store) => {
+      loadModel(store, {
+        parts: [partDescriptor({ partId: 'a' }), partDescriptor({ partId: 'b' })],
+      });
+      store.openConversion('stl');
+    });
+    expect(screen.getByTestId('convert-objects-fact')).toHaveTextContent('merged into one mesh');
+    fireEvent.click(screen.getByTestId('convert-target-3mf'));
+    expect(screen.getByTestId('convert-objects-fact')).toHaveTextContent('placements kept');
+  });
+
+  it('warns when an unapplied preview is on screen', () => {
+    renderWorkspace((store) => {
+      loadModel(store);
+      store.openConversion('stl');
+    });
+    expect(screen.queryByTestId('convert-pending-preview')).toBeNull();
+  });
+});
+
+function mountSurface(store: WorkspaceStore, surface: 'size' | 'summary'): void {
+  render(
+    <WorkspaceProvider store={store}>
+      {surface === 'size' ? <OutputSizeCard /> : <ExportSummary />}
+    </WorkspaceProvider>,
+  );
+}
+
+describe('the viewport size card', () => {
+  it('compares an exact output with the source and labels it exact', () => {
+    const store = new WorkspaceStore();
+    loadModel(store); // 100-byte source, 4 triangles
+    store.openConversion('stl');
+    mountSurface(store, 'size');
+
+    expect(screen.getByTestId('output-size-source')).toHaveTextContent('100 B');
+    const row = screen.getByTestId('output-size-target');
+    expect(row).toHaveAttribute('data-kind', 'exact');
+    expect(row).toHaveTextContent('284 B');
+    expect(screen.getByTestId('output-size-delta')).toHaveTextContent('+184%');
+    expect(screen.getByTestId('output-size-kind')).toHaveTextContent('Exact');
+  });
+
+  it('shows no number and no difference for a size it cannot know', () => {
+    const store = new WorkspaceStore();
+    loadModel(store);
+    store.openConversion('3mf');
+    mountSurface(store, 'size');
+
+    expect(screen.getByTestId('output-size-target')).toHaveAttribute('data-kind', 'unknown');
+    expect(screen.queryByTestId('output-size-delta')).toBeNull();
+  });
+
+  it('does not present a larger file as an error', () => {
+    const store = new WorkspaceStore();
+    loadModel(store);
+    store.openConversion('stl');
+    mountSurface(store, 'size');
+    expect(screen.getByTestId('output-size-delta').className).not.toMatch(/error|danger/);
+  });
+});
+
+describe('the inspector export summary', () => {
+  it('names the source, output, parts, units and a destination it does not invent', () => {
+    const store = new WorkspaceStore();
+    loadModel(store);
+    store.openConversion('obj');
+    mountSurface(store, 'summary');
+
+    expect(screen.getByTestId('export-summary-source')).toHaveTextContent('STL · Binary');
+    expect(screen.getByTestId('export-summary-output')).toHaveTextContent('OBJ · No MTL');
+    expect(screen.getByTestId('export-summary-units')).toHaveTextContent('OBJ has no unit field');
+    expect(screen.getByTestId('export-summary-destination')).toHaveTextContent('Browser downloads');
+    expect(screen.getByTestId('export-summary')).not.toHaveTextContent('~/');
+  });
+
+  it('shows the last file only for the revision on screen', () => {
+    const store = new WorkspaceStore();
+    loadModel(store);
+    store.openConversion('stl');
+    saveAs(store, 'stl', 284);
+    mountSurface(store, 'summary');
+    expect(screen.getByTestId('export-summary-last')).toHaveTextContent('part.stl');
   });
 });

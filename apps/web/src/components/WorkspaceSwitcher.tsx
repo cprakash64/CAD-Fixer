@@ -1,8 +1,8 @@
 import { useId, type ReactNode } from 'react';
 import { WORKFLOWS, WorkflowId } from '../state/workflows';
 import { useWorkspaceState, useWorkspaceStore } from '../state/store-context';
-import { useDocumentConversion } from '../state/use-document-conversion';
 import { Icon } from './shell/Icon';
+import { useOpenConvertWorkspace } from './shell/open-convert';
 import { useDismissableMenu } from './shell/shell-layout';
 import {
   DEFAULT_WORKSPACE,
@@ -18,13 +18,13 @@ import {
  * unavailable, a visible badge naming why. On narrow screens it is the only
  * switcher, because the tabs do not fit.
  *
- * It calls exactly what the tabs call — `selectWorkflow`, and `open` for
- * Convert — so the two switchers cannot drift into different behaviour.
+ * It calls exactly what the tabs call — `selectWorkflow`, and the shared
+ * Convert route — so the two switchers cannot drift into different behaviour.
  */
 export function WorkspaceSwitcher(): ReactNode {
   const { selectedWorkflow, model } = useWorkspaceState();
   const store = useWorkspaceStore();
-  const { open: openConversion } = useDocumentConversion();
+  const openConvert = useOpenConvertWorkspace();
   const { open, toggle, close, containerRef } = useDismissableMenu();
   const menuId = useId();
   const current = selectedWorkflow ?? DEFAULT_WORKSPACE;
@@ -65,8 +65,8 @@ export function WorkspaceSwitcher(): ReactNode {
                     data-testid={`workspace-option-${workflow.id}`}
                     onClick={() => {
                       close();
-                      store.selectWorkflow(workflow.id);
-                      if (workflow.id === WorkflowId.Convert) openConversion();
+                      if (workflow.id === WorkflowId.Convert) openConvert();
+                      else store.selectWorkflow(workflow.id);
                     }}
                   >
                     <Icon name={option.icon} size={16} className="menu__item-icon" />

@@ -410,3 +410,107 @@ describe('geometry session loss', () => {
     expect(store.getSnapshot().model).toBeUndefined();
   });
 });
+
+/* ------------------------------------------------ UI-03 measured sizes -- */
+
+describe('WorkspaceStore conversion measurements', () => {
+  function loaded(): WorkspaceStore {
+    const store = new WorkspaceStore();
+    const token = store.beginImport('a.stl');
+    store.commitImport(token, sampleModel('a.stl'));
+    store.openConversion('obj');
+    return store;
+  }
+
+  function save(store: WorkspaceStore, target: string, bytes: number, unit?: string): void {
+    const handle = store.getSnapshot().model?.handle;
+    if (handle === undefined) throw new Error('fixture');
+    const token = store.beginConversion();
+    store.completeConversion(token, {
+      fileName: `a.${target}`,
+      byteLength: bytes,
+      target,
+      triangleCount: 1,
+      partCount: 1,
+      source: handle,
+      unitAssertion: unit,
+    });
+  }
+
+  it('records the size of a file it actually wrote, keyed by revision, target and unit', () => {
+    const store = loaded();
+    save(store, 'obj', 900);
+    save(store, '3mf', 700, 'inch');
+    expect(store.getSnapshot().conversion.measured).toEqual([
+      {
+        documentId: 'model-a.stl',
+        revision: 1,
+        target: 'obj',
+        unitAssertion: undefined,
+        byteLength: 900,
+      },
+      {
+        documentId: 'model-a.stl',
+        revision: 1,
+        target: '3mf',
+        unitAssertion: 'inch',
+        byteLength: 700,
+      },
+    ]);
+  });
+
+  it('replaces rather than duplicates a measurement of the same file', () => {
+    const store = loaded();
+    save(store, 'obj', 900);
+    save(store, 'obj', 901);
+    expect(store.getSnapshot().conversion.measured.map((entry) => entry.byteLength)).toEqual([901]);
+  });
+
+  it('keeps measurements across a target or unit change, and through a failure', () => {
+    const store = loaded();
+    save(store, 'obj', 900);
+    store.setConversionTarget('3mf');
+    store.setConversionUnit('meter');
+    const token = store.beginConversion();
+    store.failConversion(token, { status: 'CANCELLED', reason: undefined });
+    expect(store.getSnapshot().conversion.measured).toHaveLength(1);
+  });
+
+  it('records nothing for a superseded attempt', () => {
+    const store = loaded();
+    const handle = store.getSnapshot().model?.handle;
+    if (handle === undefined) throw new Error('fixture');
+    const stale = store.beginConversion();
+    store.beginConversion();
+    const accepted = store.completeConversion(stale, {
+      fileName: 'a.obj',
+      byteLength: 900,
+      target: 'obj',
+      triangleCount: 1,
+      partCount: 1,
+      source: handle,
+      unitAssertion: undefined,
+    });
+    expect(accepted).toBe(false);
+    expect(store.getSnapshot().conversion.measured).toEqual([]);
+  });
+
+  it('is bounded, dropping the oldest first', () => {
+    const store = loaded();
+    for (let index = 0; index < 20; index += 1)
+      save(store, 'obj', 1000 + index, `u${String(index)}`);
+    const measured = store.getSnapshot().conversion.measured;
+    expect(measured).toHaveLength(12);
+    expect(measured[0]?.byteLength).toBe(1008);
+    expect(measured[11]?.byteLength).toBe(1019);
+  });
+
+  it('forgets every measurement when another file is opened', () => {
+    const store = loaded();
+    save(store, 'obj', 900);
+    const token = store.beginImport('b.stl');
+    store.commitImport(token, sampleModel('b.stl'));
+    expect(store.getSnapshot().conversion.measured).toEqual([]);
+    expect(store.getSnapshot().conversion.state).toBe('closed');
+  });
+});

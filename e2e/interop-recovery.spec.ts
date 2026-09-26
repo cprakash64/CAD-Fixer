@@ -191,20 +191,18 @@ test.describe('A4-P: import and export in every format stay on this origin', () 
 
       // Export the whole document to all three formats and take the downloads.
       await page.getByTestId('open-convert').click();
-      await expect(page.getByTestId('convert-dialog')).toBeVisible();
+      await expect(page.getByTestId('convert-workspace')).toBeVisible();
       for (const target of ['stl', 'obj', '3mf'] as const) {
         await page.getByTestId(`convert-target-${target}`).check();
-        const unit = page.getByTestId('convert-unit-select');
-        if ((await unit.count()) > 0 && (await unit.inputValue()) === '') {
-          await unit.selectOption('millimeter');
+        const unit = page.getByTestId('convert-unit');
+        if ((await unit.count()) > 0 && (await unit.locator('input:checked').count()) === 0) {
+          await page.getByTestId('convert-unit-millimeter').check();
         }
         const download = page.waitForEvent('download', { timeout: 60_000 });
         await page.getByTestId('convert-export').click();
         await download;
         await expect(page.getByTestId('convert-saved')).toBeVisible({ timeout: 60_000 });
       }
-      await page.getByTestId('convert-close').click();
-      await expect(page.getByTestId('convert-dialog')).toHaveCount(0);
     }
 
     expect(offOrigin).toEqual([]);

@@ -52,7 +52,16 @@ async function importFile(page: Page, fixture: Fixture): Promise<void> {
 
 async function openConvert(page: Page): Promise<void> {
   await page.getByTestId('open-convert').click();
-  await expect(page.getByTestId('convert-dialog')).toBeVisible();
+  await expect(page.getByTestId('convert-workspace')).toBeVisible();
+}
+
+async function chooseUnit(page: Page, unit: string): Promise<void> {
+  await page.getByTestId(`convert-unit-${unit}`).check();
+}
+
+/** No unit is chosen: none of the six is checked, and nothing is preselected. */
+async function expectNoUnitChosen(page: Page): Promise<void> {
+  await expect(page.getByTestId('convert-unit').locator('input:checked')).toHaveCount(0);
 }
 
 async function chooseTarget(page: Page, target: 'stl' | 'obj' | '3mf'): Promise<void> {
@@ -78,8 +87,6 @@ async function exportAndCapture(page: Page): Promise<{ download: Download; bytes
 
 /** Re-imports a downloaded artifact through the REAL production import path. */
 async function reimport(page: Page, name: string, bytes: Buffer): Promise<void> {
-  await page.getByTestId('convert-close').click();
-  await expect(page.getByTestId('convert-dialog')).toHaveCount(0);
   await importFile(page, { name, mimeType: 'application/octet-stream', buffer: bytes });
 }
 
@@ -148,9 +155,9 @@ test('Convert is a real workflow with one primary entry point', async ({ page })
   await importFile(page, FIXTURES.stl());
   await expect(page.getByTestId('workflow-convert')).toBeEnabled();
 
-  // And it opens the same dialog the Model panel's primary action opens.
+  // And it opens the same workspace the Model panel's primary action opens.
   await page.getByTestId('workflow-convert').click();
-  await expect(page.getByTestId('convert-dialog')).toBeVisible();
+  await expect(page.getByTestId('convert-workspace')).toBeVisible();
 });
 
 test('the two export actions are named apart', async ({ page }) => {
@@ -188,12 +195,12 @@ test('STL → 3MF: blocked until the user states a unit, then written and re-ope
   );
 
   // 5. With no unit chosen, nothing can be exported.
-  await expect(page.getByTestId('convert-unit-select')).toHaveValue('');
+  await expectNoUnitChosen(page);
   await expect(page.getByTestId('convert-export')).toBeDisabled();
 
   // 6/7. Choosing millimetres explains that nothing is resized.
   await expect(page.getByTestId('convert-unit')).toContainText('does not resize anything');
-  await page.getByTestId('convert-unit-select').selectOption('millimeter');
+  await chooseUnit(page, 'millimeter');
   await expect(page.getByTestId('convert-export')).toBeEnabled();
 
   // 8/9/10. Validated export, then a real browser download.
@@ -290,7 +297,7 @@ test('OBJ → 3MF: multiple objects become multiple parts, with an asserted unit
   await expect(page.getByTestId('convert-export')).toBeDisabled();
 
   // CF08: an explicit inch assertion unblocks it.
-  await page.getByTestId('convert-unit-select').selectOption('inch');
+  await chooseUnit(page, 'inch');
   await expect(page.getByTestId('convert-export')).toBeEnabled();
 
   const { download, bytes } = await exportAndCapture(page);
@@ -400,7 +407,7 @@ test('3MF → 3MF is lossless, and is not decorated with warnings for being 3MF'
   await importFile(page, FIXTURES.threeMfSimple());
 
   await openConvert(page);
-  // The source format is preselected, so this is the state the dialog opens in.
+  // The source format is preselected, so this is the state the workspace opens in.
   await expect(page.getByTestId('convert-target-3mf')).toBeChecked();
 
   await expect(page.getByTestId('convert-verdict')).toHaveAttribute(
@@ -526,10 +533,8 @@ test('a unit assertion changes the file and never the model', async ({ page }) =
 
   await openConvert(page);
   await chooseTarget(page, '3mf');
-  await page.getByTestId('convert-unit-select').selectOption('foot');
+  await chooseUnit(page, 'foot');
   const { bytes } = await exportAndCapture(page);
-
-  await page.getByTestId('convert-close').click();
 
   /*
    * THE AUTHORITATIVE DOCUMENT IS UNTOUCHED. Its unit is still unknown, its
@@ -554,16 +559,19 @@ test('every one of the six units is written exactly as chosen, with no rescaling
   const written: string[] = [];
   let firstCoordinates: readonly (readonly [number, number, number])[] | undefined;
 
+  /*
+   * NOTHING IS PRESELECTED. The session starts with no unit — a preselected one
+   * would be CAD Fixer asserting a physical fact about the model. Within one
+   * session the choice is the user's standing statement about THIS model, so
+   * each cycle deliberately replaces it; a new file starts empty again, which
+   * `convert-workspace.spec.ts` proves.
+   */
+  await openConvert(page);
+  await chooseTarget(page, '3mf');
+  await expectNoUnitChosen(page);
+
   for (const unit of units) {
-    await openConvert(page);
-    await chooseTarget(page, '3mf');
-    /*
-     * NOTHING IS REMEMBERED BETWEEN OPENINGS. Each cycle re-opens the dialog and
-     * must find the selector empty again — a remembered unit would be CAD Fixer
-     * asserting the previous answer about this export.
-     */
-    await expect(page.getByTestId('convert-unit-select')).toHaveValue('');
-    await page.getByTestId('convert-unit-select').selectOption(unit);
+    await chooseUnit(page, unit);
 
     const { bytes } = await exportAndCapture(page);
     const artifact = readThreeMfArtifact(bytes);
@@ -574,8 +582,6 @@ test('every one of the six units is written exactly as chosen, with no rescaling
     const coordinates = artifact.objects[0]?.vertices ?? [];
     firstCoordinates ??= coordinates;
     expect(coordinates).toEqual(firstCoordinates);
-
-    await page.getByTestId('convert-close').click();
   }
 
   expect(written).toEqual([...units]);
@@ -583,7 +589,9 @@ test('every one of the six units is written exactly as chosen, with no rescaling
 
 /* ------------------------------------------------------------------ CF23 -- */
 
-test('cancelling a large export saves nothing and leaves the dialog usable', async ({ page }) => {
+test('cancelling a large export saves nothing and leaves the workspace usable', async ({
+  page,
+}) => {
   test.setTimeout(240_000);
   await page.goto('/');
   await importFile(page, {
@@ -627,13 +635,12 @@ test('cancelling a large export saves nothing and leaves the dialog usable', asy
     await expect(page.getByTestId('convert-failure')).toContainText('model is unchanged');
     expect(downloaded, `${target} produced a download despite being cancelled`).toBe(0);
 
-    // THE DIALOG STAYS USABLE, and the chosen target survives.
-    await expect(page.getByTestId('convert-dialog')).toBeVisible();
+    // THE WORKSPACE STAYS USABLE, and the chosen target survives.
+    await expect(page.getByTestId('convert-workspace')).toBeVisible();
     await expect(page.getByTestId('convert-export')).toBeEnabled();
   }
 
   // AND THE DOCUMENT IS UNTOUCHED by a cancelled export.
-  await page.getByTestId('convert-close').click();
   await expect(page.getByTestId('fact-triangles')).toHaveText(LARGE_TRIANGLES.toLocaleString());
 
   // A RETRY SUCCEEDS. Cancelling left nothing behind that blocks the next run.
@@ -646,7 +653,7 @@ test('cancelling a large export saves nothing and leaves the dialog usable', asy
 
 /* ------------------------------------------------------------------ CF24 -- */
 
-test('a model that changes while the dialog is open cannot be exported from the old one', async ({
+test('a model that changes while Convert is open cannot be exported from the old one', async ({
   page,
 }) => {
   await page.goto('/');
@@ -657,10 +664,10 @@ test('a model that changes while the dialog is open cannot be exported from the 
   await expect(page.getByTestId('convert-structure')).toContainText('merged into one mesh');
 
   /*
-   * REPLACING THE MODEL RESETS THE DIALOG, rather than leaving a report from
-   * revision N able to authorise an export at revision N+1.
+   * REPLACING THE MODEL RESETS THE SESSION, rather than leaving a report from
+   * revision N able to authorise an export at revision N+1. The import happens
+   * with the Convert workspace on screen.
    */
-  await page.getByTestId('convert-close').click();
   await importFile(page, FIXTURES.stl());
 
   await openConvert(page);
@@ -689,9 +696,9 @@ test('hostile names render as text and never reach the download name', async ({ 
   await openConvert(page);
   await chooseTarget(page, 'stl');
 
-  // The dialog contains the characters as TEXT and no element made from them.
+  // The workspace contains the characters as TEXT and no element made from them.
   await expect(page.getByTestId('convert-source')).toContainText('<script>');
-  expect(await page.locator('[data-testid="convert-dialog"] script').count()).toBe(0);
+  expect(await page.locator('[data-testid="convert-workspace"] script').count()).toBe(0);
   expect(await page.title()).not.toBe('XSS');
 
   const { download } = await exportAndCapture(page);
@@ -719,9 +726,7 @@ test('changing the active part does not change what the document export writes',
   const facts = async (): Promise<string | null> => {
     await openConvert(page);
     await chooseTarget(page, 'stl');
-    const text = await page.getByTestId('convert-report').textContent();
-    await page.getByTestId('convert-close').click();
-    return text;
+    return page.getByTestId('convert-report').textContent();
   };
 
   const withFirst = await facts();
@@ -756,7 +761,6 @@ test('exporting never modifies the document, whatever the target', async ({ page
     await chooseTarget(page, target);
     await exportAndCapture(page);
   }
-  await page.getByTestId('convert-close').click();
 
   expect(await page.getByTestId('fact-triangles').textContent()).toBe(before.triangles);
   expect(await page.getByTestId('fact-units').textContent()).toBe(before.units);
@@ -826,7 +830,7 @@ test('CXR: every artifact re-opens through the production import path', async ({
     await openConvert(page);
     await chooseTarget(page, testCase.target);
     if (testCase.unit !== undefined) {
-      await page.getByTestId('convert-unit-select').selectOption(testCase.unit);
+      await chooseUnit(page, testCase.unit);
     }
     const { bytes } = await exportAndCapture(page);
     await reimport(page, `${testCase.id}.${testCase.target}`, bytes);
@@ -881,7 +885,7 @@ test('repair then export writes the repaired revision, and undo then export writ
   await chooseTarget(page, 'stl');
   const repaired = await exportAndCapture(page);
   expect(readStlArtifact(repaired.bytes).declaredTriangles).toBe(4);
-  await page.getByTestId('convert-close').click();
+  await page.getByTestId('workflow-repair').click();
 
   // CF33: undo produces a NEW higher revision, and the export follows it.
   await page.getByTestId('undo-repair').click();
@@ -981,7 +985,7 @@ test('the export worker is not constructed until an export starts', async ({ pag
   await openConvert(page);
   await chooseTarget(page, 'obj');
   await chooseTarget(page, '3mf');
-  await page.getByTestId('convert-unit-select').selectOption('millimeter');
+  await chooseUnit(page, 'millimeter');
   expect(await exportWorkers()).toBe(0);
 
   await exportAndCapture(page);
@@ -1171,7 +1175,6 @@ test('a 3MF the reader accepts is one whose property references resolve', async 
   await expect(page.getByTestId('convert-source-warnings')).toContainText(
     'colour or material definitions',
   );
-  await page.getByTestId('convert-close').click();
 
   // Malformed: `pid` names nothing, and the import is refused outright.
   const dangling = threeMf(
@@ -1255,7 +1258,6 @@ test('NS08-NS10: a name that cannot be written exactly is disclosed before expor
   expect(panel).not.toContain('Bracket');
 
   // NS10: the source document still holds the name exactly as it was read.
-  await page.getByTestId('convert-close').click();
   await expect(page.getByTestId('fact-triangles')).toHaveText('8');
   await expect(page.getByTestId('part-option-part-1')).toContainText('Left  Bracket');
 });

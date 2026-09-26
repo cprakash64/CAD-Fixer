@@ -1,6 +1,7 @@
 import { useRef, type ReactNode } from 'react';
 import { useWorkspaceState } from '../state/store-context';
 import { WorkflowId } from '../state/workflows';
+import { ExportSummary } from './ExportSummary';
 import { ModelPanel } from './ModelPanel';
 import { IssueInspector } from './IssueInspector';
 import { PartSelector } from './PartSelector';
@@ -24,6 +25,7 @@ import { useShellLayout } from './shell/shell-layout';
 export function Inspector({ inert = false }: { readonly inert?: boolean }): ReactNode {
   const { model, selectedWorkflow } = useWorkspaceState();
   const repairWorkspace = selectedWorkflow === undefined || selectedWorkflow === WorkflowId.Repair;
+  const convertWorkspace = selectedWorkflow === WorkflowId.Convert;
   const layout = useShellLayout();
   const collapsed = layout.inspectorCollapsed;
   const panelRef = useRef<HTMLElement>(null);
@@ -77,10 +79,13 @@ export function Inspector({ inert = false }: { readonly inert?: boolean }): Reac
 
           <PanelSection title="Selection">
             {model !== undefined && model.parts.length > 1 ? <PartSelector /> : null}
-            {/* The selected finding is Repair's; other workspaces keep their
-                own selection surfaces for now. */}
+            {/* The selected finding is Repair's; Convert's selection is the
+                output it will write. Other workspaces keep their own selection
+                surfaces for now. */}
             {repairWorkspace ? (
               <IssueInspector />
+            ) : convertWorkspace ? (
+              <ExportSummary />
             ) : model === undefined ? (
               <p className="panel__empty">Nothing is selected. Open a model to begin.</p>
             ) : model.parts.length <= 1 ? (

@@ -919,10 +919,13 @@ async function readFact(page: Page, testId: string): Promise<number> {
   return Number(text.replace(/[^0-9]/g, ''));
 }
 
-/** Saves the WHOLE document through the conversion dialog and returns the file. */
+/**
+ * Saves the WHOLE document through the Convert workspace and returns the file,
+ * then goes back to Repair so the next step acts on the panels it expects.
+ */
 async function exportAs(page: Page, target: 'stl' | 'obj' | '3mf'): Promise<Buffer> {
   await page.getByTestId('open-convert').click();
-  await expect(page.getByTestId('convert-dialog')).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId('convert-workspace')).toBeVisible({ timeout: 30_000 });
   await page.getByTestId(`convert-target-${target}`).check();
   await expect(page.getByTestId('convert-report')).toBeVisible();
 
@@ -934,8 +937,7 @@ async function exportAs(page: Page, target: 'stl' | 'obj' | '3mf'): Promise<Buff
   const stream = await download.createReadStream();
   const chunks: Buffer[] = [];
   for await (const chunk of stream) chunks.push(chunk as Buffer);
-  await page.getByTestId('convert-close').click();
-  await expect(page.getByTestId('convert-dialog')).toHaveCount(0);
+  await page.getByTestId('workflow-repair').click();
   return Buffer.concat(chunks);
 }
 

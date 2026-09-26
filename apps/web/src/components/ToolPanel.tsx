@@ -1,7 +1,7 @@
 import { useRef, type ReactNode } from 'react';
 import { WORKFLOWS, WorkflowId } from '../state/workflows';
 import { useWorkspaceState } from '../state/store-context';
-import { useDocumentConversion } from '../state/use-document-conversion';
+import { ConvertWorkspace } from './ConvertWorkspace';
 import { MeshAnalysisSection } from './MeshAnalysisSection';
 import { MeshHealthPanel } from './MeshHealthPanel';
 import { OpenBoundaryPanel } from './OpenBoundaryPanel';
@@ -10,7 +10,7 @@ import { SplitPanel } from './SplitPanel';
 import { StatusPanel } from './StatusPanel';
 import { TexturePanel } from './TexturePanel';
 import { keepTabWithin } from './shell/focus-trap';
-import { IconButton, PanelSection, PrimaryActionButton, WorkspaceHeader } from './shell/primitives';
+import { IconButton, PanelSection, WorkspaceHeader } from './shell/primitives';
 import { useShellLayout } from './shell/shell-layout';
 import { DEFAULT_WORKSPACE, WORKSPACE_PRESENTATION } from './shell/workspaces';
 
@@ -24,6 +24,7 @@ import { DEFAULT_WORKSPACE, WORKSPACE_PRESENTATION } from './shell/workspaces';
  * effect of looking at a different workspace. `hidden` takes them out of
  * layout and out of the accessibility tree and ends nothing.
  *
+ * The Convert workspace is hidden rather than unmounted for the same reason.
  * Split and Texture decide their own visibility, as they always have, and
  * render nothing outside their workspace.
  *
@@ -91,7 +92,12 @@ export function ToolPanel({ inert = false }: { readonly inert?: boolean }): Reac
               derived from: what CAD Fixer proposes to change comes first. */}
           <MeshHealthPanel />
         </div>
-        {current === WorkflowId.Convert ? <ConvertSection /> : null}
+        {/* Hidden, never unmounted, for the Repair panels' reason: its hook
+            cancels the export it started when it unmounts, and looking at
+            another workspace is not a reason to throw a file away. */}
+        <div className="tool-panel__group" hidden={current !== WorkflowId.Convert}>
+          <ConvertWorkspace active={current === WorkflowId.Convert} />
+        </div>
         <SplitPanel />
         <TexturePanel />
       </div>
@@ -100,37 +106,5 @@ export function ToolPanel({ inert = false }: { readonly inert?: boolean }): Reac
         <StatusPanel />
       </div>
     </aside>
-  );
-}
-
-/**
- * The Convert workspace's home.
- *
- * Conversion itself is the Export / Convert dialog, which reports what the
- * chosen format keeps before anything is written. This section is the way back
- * into it once the dialog has been closed.
- */
-function ConvertSection(): ReactNode {
-  const { model } = useWorkspaceState();
-  const { open: openConversion } = useDocumentConversion();
-  return (
-    <section className="panel" aria-labelledby="convert-workspace-title">
-      <h2 className="panel__title" id="convert-workspace-title">
-        Export / Convert
-      </h2>
-      <p className="panel__note">
-        Writes the whole document — every part — as STL, OBJ or 3MF, after showing what the format
-        you choose will keep and what it cannot. Files are written on this device; nothing is
-        uploaded.
-      </p>
-      <PrimaryActionButton
-        icon="convert"
-        onClick={openConversion}
-        disabled={model === undefined}
-        testId="convert-workspace-open"
-      >
-        Choose a format…
-      </PrimaryActionButton>
-    </section>
   );
 }

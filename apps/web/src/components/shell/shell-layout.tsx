@@ -66,6 +66,13 @@ export interface ShellLayout {
   readonly toolDrawerOpen: boolean;
   readonly toggleInspectorDrawer: () => void;
   readonly toggleToolDrawer: () => void;
+  /**
+   * Makes sure the tool panel can be seen: opens it as a drawer where it is
+   * one, and otherwise only closes an inspector drawer that would cover it.
+   * Used when a command elsewhere switches workspace, so the workspace it
+   * switched to is not left behind a closed drawer.
+   */
+  readonly showToolPanel: () => void;
   readonly closeDrawers: () => void;
   /**
    * The drawer that is open AND is a drawer at this width. A docked panel is
@@ -114,6 +121,18 @@ export function ShellLayoutProvider({ children }: { readonly children: ReactNode
     setToolDrawerOpen((open) => !open);
   }, [rememberOpener]);
 
+  const showToolPanel = useCallback((): void => {
+    if (!toolIsDrawer) {
+      setInspectorDrawerOpen(false);
+      return;
+    }
+    // Only the FIRST drawer to open records the opener; moving from the
+    // inspector drawer to this one keeps the control that opened the first.
+    if (!toolDrawerOpen && !inspectorDrawerOpen) rememberOpener();
+    setInspectorDrawerOpen(false);
+    setToolDrawerOpen(true);
+  }, [inspectorDrawerOpen, rememberOpener, toolDrawerOpen, toolIsDrawer]);
+
   const closeDrawers = useCallback((): void => {
     setInspectorDrawerOpen(false);
     setToolDrawerOpen(false);
@@ -159,12 +178,14 @@ export function ShellLayoutProvider({ children }: { readonly children: ReactNode
       toolDrawerOpen,
       toggleInspectorDrawer,
       toggleToolDrawer,
+      showToolPanel,
       closeDrawers,
       modalDrawer,
     }),
     [
       modalDrawer,
       closeDrawers,
+      showToolPanel,
       inspectorCollapsed,
       inspectorDrawerOpen,
       toggleInspectorDrawer,

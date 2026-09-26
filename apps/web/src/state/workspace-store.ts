@@ -126,13 +126,16 @@ export interface ExportProgressState {
 /* ------------------------------------------------- format conversion -- */
 
 export const ConversionState = {
-  /** The dialog is closed. */
+  /**
+   * No conversion session: nothing loaded, or the Convert workspace has not
+   * been entered for this model yet.
+   */
   Closed: 'closed',
-  /** Open, a target chosen or not, nothing running. */
+  /** A session exists, a target chosen or not, nothing running. */
   Reviewing: 'reviewing',
   /** A file is being written and checked. */
   Working: 'working',
-  /** The last attempt did not produce a file. The dialog stays usable. */
+  /** The last attempt did not produce a file. The workspace stays usable. */
   Failed: 'failed',
   /** A file was written, validated and handed to the browser. */
   Saved: 'saved',
@@ -163,6 +166,48 @@ export interface ConversionResult {
   readonly target: string;
   readonly triangleCount: number;
   readonly partCount: number;
+  /** The document revision the file was written from. */
+  readonly source: DocumentHandle;
+  /** The unit stated for this export, when one was. It changes the bytes. */
+  readonly unitAssertion: string | undefined;
+}
+
+/**
+ * THE SIZE OF A FILE CAD FIXER ACTUALLY WROTE, VALIDATED AND SAVED.
+ *
+ * A MEASUREMENT, NEVER AN ESTIMATE. OBJ's length depends on how each
+ * coordinate is spelled and 3MF's on how well its XML compresses, so neither
+ * can be predicted honestly; the only defensible number for them is the one a
+ * real export produced. Keyed by everything that changes the bytes — the
+ * document revision, the target and the stated unit — so a repair, an undo or
+ * a different unit makes the entry describe a file the user can no longer
+ * produce, and it stops being shown.
+ */
+export interface MeasuredExport {
+  readonly documentId: string;
+  readonly revision: number;
+  readonly target: string;
+  readonly unitAssertion: string | undefined;
+  readonly byteLength: number;
+}
+
+/** Enough for every target at a few revisions; old entries are dropped first. */
+export const MAX_MEASURED_EXPORTS = 12;
+
+/** Finds the measurement for exactly this revision, target and unit, if one exists. */
+export function measuredExportFor(
+  measured: readonly MeasuredExport[],
+  handle: DocumentHandle,
+  target: string,
+  unitAssertion: string | undefined,
+): MeasuredExport | undefined {
+  return measured.find(
+    (entry) =>
+      entry.documentId === handle.documentId &&
+      entry.revision === handle.revision &&
+      entry.target === target &&
+      entry.unitAssertion === unitAssertion,
+  );
 }
 
 export interface ConversionSnapshot {
@@ -193,6 +238,11 @@ export interface ConversionSnapshot {
   readonly phase: string | undefined;
   readonly failure: ConversionFailure | undefined;
   readonly result: ConversionResult | undefined;
+  /**
+   * Sizes of files written from THIS model, newest last. Survives a target or
+   * unit change — it is keyed by both — and is cleared with the model.
+   */
+  readonly measured: readonly MeasuredExport[];
 }
 
 const CONVERSION_CLOSED: ConversionSnapshot = Object.freeze({
@@ -203,6 +253,7 @@ const CONVERSION_CLOSED: ConversionSnapshot = Object.freeze({
   phase: undefined,
   failure: undefined,
   result: undefined,
+  measured: Object.freeze([]),
 });
 
 export const AnalysisState = {
@@ -1297,8 +1348,9 @@ export class WorkspaceStore {
      * AND ANY CONVERSION. A new FILE is a new set of source facts and, more
      * importantly, a new answer to "what do these numbers mean" — carrying an
      * inch assertion made about the previous model onto this one would be CAD
-     * Fixer asserting a physical fact nobody stated about this file. The dialog
-     * closes rather than being left open over a document it was not opened for.
+     * Fixer asserting a physical fact nobody stated about this file. The session
+     * ends rather than outliving the document it was started for, and so do the
+     * measured sizes, which describe files written from that document.
      *
      * A REPAIR OR AN UNDO DOES NOT DO THIS, and the difference is the point:
      * those produce a new revision of the SAME model, the unit still means what
@@ -2975,7 +3027,7 @@ export class WorkspaceStore {
       // applied record names an undo nothing can perform. Policy A applies to
       // all of it.
       holeFill: EMPTY_HOLE_FILL,
-      // The document the dialog described is gone with the worker that held it.
+      // The document the session described is gone with the worker that held it.
       conversion: CONVERSION_CLOSED,
       overlays: OVERLAYS_HIDDEN,
     });
@@ -3009,7 +3061,7 @@ export class WorkspaceStore {
   /* ------------------------------------------------ format conversion -- */
 
   /**
-   * Opens the conversion dialog.
+   * Starts a conversion session for the loaded model.
    *
    * `preferredTarget` is the source format when that format can be written.
    * Every other field starts empty — in particular the unit, which is never
@@ -3111,6 +3163,21 @@ export class WorkspaceStore {
   public completeConversion(token: ConversionToken, result: ConversionResult): boolean {
     if (!this.isCurrentConversion(token)) return false;
     this.currentConversionToken = undefined;
+    const entry: MeasuredExport = {
+      documentId: result.source.documentId,
+      revision: result.source.revision,
+      target: result.target,
+      unitAssertion: result.unitAssertion,
+      byteLength: result.byteLength,
+    };
+    const measured = [
+      ...this.state.conversion.measured.filter(
+        (existing) =>
+          measuredExportFor([existing], result.source, entry.target, entry.unitAssertion) ===
+          undefined,
+      ),
+      entry,
+    ].slice(-MAX_MEASURED_EXPORTS);
     this.update({
       conversion: {
         ...this.state.conversion,
@@ -3119,6 +3186,7 @@ export class WorkspaceStore {
         phase: undefined,
         failure: undefined,
         result,
+        measured,
       },
     });
     return true;
@@ -3127,10 +3195,10 @@ export class WorkspaceStore {
   /**
    * Records that a conversion did not produce a file.
    *
-   * THE DIALOG STAYS OPEN AND USABLE. A refusal is a decision the user can act
-   * on — choose a unit, choose another format, try again — and closing the
-   * dialog would take the explanation away with it. The chosen target and unit
-   * are kept for exactly that reason.
+   * THE WORKSPACE STAYS USABLE. A refusal is a decision the user can act on —
+   * choose a unit, choose another format, try again — and resetting the
+   * session would take the explanation away with it. The chosen target and
+   * unit are kept for exactly that reason.
    */
   public failConversion(token: ConversionToken, failure: ConversionFailure): boolean {
     if (!this.isCurrentConversion(token)) return false;

@@ -14,6 +14,7 @@ import type { GeometryClient } from '../runtime/geometry-client';
 import { deriveDocumentExportName, downloadBytes } from '../runtime/download';
 import { useGeometryClient } from '../runtime/client-context';
 import { documentFeatureProfile } from './document-profile';
+import { measurementUnitKey } from './output-size';
 import { useWorkspaceState, useWorkspaceStore } from './store-context';
 import {
   ConversionState,
@@ -33,7 +34,7 @@ import {
  *      with it. There is no code path in which a report built at revision N can
  *      authorise an export at revision N+1 — because there is no stored report.
  *   2. THE EXPORT WORKER IS CREATED LATE. `DocumentExportService` constructs a
- *      `Worker` only inside `run`, so opening the dialog, choosing a target,
+ *      `Worker` only inside `run`, so entering the workspace, choosing a target,
  *      reading the compatibility summary and picking a unit all happen with no
  *      export worker in existence. Only pressing Export makes one.
  *
@@ -53,11 +54,13 @@ const MIME_TYPES: Readonly<Record<string, string>> = {
  * ONE EXPORT SERVICE PER GEOMETRY CLIENT, shared by every component using this
  * hook.
  *
- * THREE COMPONENTS CALL IT — the Model panel and the workflow nav to OPEN the
- * dialog, the dialog itself to run one — and a service held in each component's
- * own ref would be three services. Nothing breaks today, because only the
- * dialog ever starts an export; but "ONE EXPORT AT A TIME" is a guarantee about
- * a service, and three of them are three guarantees that do not add up to one.
+ * ANY COMPONENT MAY CALL IT — today the Convert workspace is the only one, and
+ * the viewport's size card and the inspector's summary read the store directly
+ * — and a service held in each component's own ref would be several services.
+ * Nothing breaks
+ * today, because only the workspace ever starts an export; but "ONE EXPORT AT A
+ * TIME" is a guarantee about a service, and several services are several
+ * guarantees that do not add up to one.
  * The next caller to run an export would be the bug, and it would arrive as two
  * fifty-megabyte serialisations competing for the memory the ceilings were
  * sized against.
@@ -84,8 +87,12 @@ export interface DocumentConversionControls {
    * `undefined` when there is no model or no target — never a stale one.
    */
   readonly report: ConversionCompatibilityReport | undefined;
-  readonly open: () => void;
-  readonly close: () => void;
+  /**
+   * Starts a session for the loaded model if none exists, preselecting the
+   * source format when it can be written. A running or reviewed session is
+   * left exactly as it is.
+   */
+  readonly start: () => void;
   readonly chooseTarget: (target: ExportFormat) => void;
   readonly chooseUnit: (unit: string | undefined) => void;
   readonly convert: () => void;
@@ -138,22 +145,18 @@ export function useDocumentConversion(): DocumentConversionControls {
     });
   }, [model, conversion.target, conversion.unitAssertion]);
 
-  const open = useCallback((): void => {
+  const start = useCallback((): void => {
+    if (model === undefined) return;
+    if (store.getSnapshot().conversion.state !== ConversionState.Closed) return;
     /*
      * PRESELECTS THE SOURCE FORMAT when CAD Fixer can write it. Saving the same
-     * kind of file is the commonest reason to open this, and it bypasses no
+     * kind of file is the commonest reason to be here, and it bypasses no
      * review: the compatibility summary for that target is already on screen,
      * and nothing exports without an explicit press.
      */
-    const source = model?.source.formatId;
-    store.openConversion(source !== undefined && isExportFormat(source) ? source : undefined);
+    const source = model.source.formatId;
+    store.openConversion(isExportFormat(source) ? source : undefined);
   }, [model, store]);
-
-  const close = useCallback((): void => {
-    sessionRef.current?.cancel();
-    sessionRef.current = undefined;
-    store.closeConversion();
-  }, [store]);
 
   const chooseTarget = useCallback(
     (target: ExportFormat): void => {
@@ -203,6 +206,7 @@ export function useDocumentConversion(): DocumentConversionControls {
      */
     const handle = model.handle;
     const fileName = deriveDocumentExportName(model.source.fileName, target);
+    const measuredUnit = measurementUnitKey(model, target, conversion.unitAssertion);
 
     const session = service.run({
       handle,
@@ -241,6 +245,8 @@ export function useDocumentConversion(): DocumentConversionControls {
             target,
             triangleCount: outcome.metadata.triangleCount,
             partCount: outcome.metadata.partCount,
+            source: handle,
+            unitAssertion: measuredUnit,
           })
         ) {
           return;
@@ -251,7 +257,7 @@ export function useDocumentConversion(): DocumentConversionControls {
         /*
          * The controller resolves rather than rejects for every outcome it
          * knows about, so reaching here means something threw outside it. Still
-         * handled rather than swallowed: a dialog stuck on "Writing…" with
+         * handled rather than swallowed: a panel stuck on "Writing…" with
          * nothing running is worse than a plain failure.
          */
         if (
@@ -264,8 +270,8 @@ export function useDocumentConversion(): DocumentConversionControls {
   }, [conversion.target, conversion.unitAssertion, model, report, service, store]);
 
   /*
-   * A DIALOG LEFT OPEN OVER NO MODEL CLOSES ITSELF. Reachable when the geometry
-   * worker dies mid-review: the store clears the model, and a conversion panel
+   * A SESSION OVER NO MODEL ENDS ITSELF. Reachable when the geometry worker
+   * dies mid-review: the store clears the model, and a conversion panel
    * describing nothing would offer an Export button that could only fail.
    */
   useEffect(() => {
@@ -274,5 +280,5 @@ export function useDocumentConversion(): DocumentConversionControls {
     }
   }, [conversion.state, model, store]);
 
-  return { conversion, report, open, close, chooseTarget, chooseUnit, convert, cancel };
+  return { conversion, report, start, chooseTarget, chooseUnit, convert, cancel };
 }

@@ -343,7 +343,7 @@ test.describe('6E-A2: a streamed import is the same import, through the whole pi
       await setIngestion(page, mode);
       await importSettled(page, file);
       await page.getByTestId('open-convert').click();
-      await expect(page.getByTestId('convert-dialog')).toBeVisible();
+      await expect(page.getByTestId('convert-workspace')).toBeVisible();
       for (const target of ['stl', 'obj', '3mf'] as const) {
         await page.getByTestId(`convert-target-${target}`).check();
         const download = page.waitForEvent('download', { timeout: 60_000 });
@@ -354,7 +354,6 @@ test.describe('6E-A2: a streamed import is the same import, through the whole pi
           `${target}:${createHash('sha256').update(readFileSync(saved)).digest('hex')}`,
         );
       }
-      await page.getByTestId('convert-close').click();
     }
     expect(hashes.buffered).toHaveLength(3);
     expect(hashes.streaming).toEqual(hashes.buffered);

@@ -92,11 +92,332 @@ export function describeTarget(target: ExportFormat): TargetDescription {
   return { id: target, label: target, summary: '' };
 }
 
+/* ------------------------------------------------------- output cards -- */
+
+/**
+ * One card in the Convert workspace's output grid.
+ *
+ * A CARD IS A WRITER, NOT A WISH. Every card with a `format` is exactly one
+ * `ExportFormat` the document export engine writes. The one card without a
+ * format — ASCII STL — is a real CAD Fixer capability that this operation does
+ * not perform (the whole-document writer is binary only), so it is shown as
+ * unavailable WITH the place it does exist, rather than hidden from someone
+ * looking for it. PLY, AMF, GLB and FBX have no writer at all and have no card:
+ * a disabled tile for a format the product cannot write would be an
+ * advertisement for a capability that does not exist.
+ */
+export interface OutputVariant {
+  /** Stable identifier. For a writable card it is the `ExportFormat` itself. */
+  readonly id: string;
+  readonly format: ExportFormat | undefined;
+  readonly name: string;
+  /** The encoding or flavour, as the card's second line. */
+  readonly variant: string;
+  /** The whole card as one phrase, for assistive technology. */
+  readonly accessibleName: string;
+  /** Why this card cannot be chosen here. Present exactly when `format` is not. */
+  readonly unavailableReason?: string;
+}
+
+export const OUTPUT_VARIANTS: readonly OutputVariant[] = Object.freeze([
+  {
+    id: ExportFormat.Stl,
+    format: ExportFormat.Stl,
+    name: 'STL',
+    variant: 'Binary',
+    accessibleName: 'STL, binary',
+  },
+  {
+    id: 'stl-ascii',
+    format: undefined,
+    name: 'STL',
+    variant: 'ASCII',
+    accessibleName: 'STL, ASCII',
+    unavailableReason:
+      'Whole-model export writes binary STL. An ASCII STL of one part is available from Inspector › Model.',
+  },
+  {
+    id: ExportFormat.Obj,
+    format: ExportFormat.Obj,
+    name: 'OBJ',
+    variant: 'No MTL',
+    accessibleName: 'OBJ, text, without a material file',
+  },
+  {
+    id: ExportFormat.ThreeMf,
+    format: ExportFormat.ThreeMf,
+    name: '3MF',
+    variant: 'Package',
+    accessibleName: '3MF, core model package',
+  },
+]);
+
+/** The card for a writable format. */
+export function outputVariantFor(format: ExportFormat): OutputVariant {
+  for (const variant of OUTPUT_VARIANTS) {
+    if (variant.format === format) return variant;
+  }
+  // Unreachable while the table covers `EXPORT_FORMATS`, and a test pins that.
+  return { id: format, format, name: format, variant: '', accessibleName: format };
+}
+
+/** "3MF · Core model" — how a chosen output is named in summaries. */
+export function describeOutput(format: ExportFormat): string {
+  const variant = outputVariantFor(format);
+  return `${variant.name} · ${variant.variant}`;
+}
+
+/** One line under the output grid, so the missing formats are not a mystery. */
+export const OUTPUT_FORMATS_NOTE =
+  'CAD Fixer writes STL, OBJ and 3MF, one format per export. ASCII STL is written one part at a time, from Inspector › Model.';
+
+/* ------------------------------------------------------- output size -- */
+
+/**
+ * WHAT CAD FIXER KNOWS ABOUT AN OUTPUT'S SIZE, and how it knows it.
+ *
+ * THREE KINDS, NEVER BLURRED. Binary STL is fixed-width, so its size is EXACT
+ * before anything is written. OBJ's length depends on how every coordinate is
+ * spelled and 3MF's on how well its XML compresses, so the only honest number
+ * for either is one a real export MEASURED. Anything else is `unknown` and says
+ * so — an invented ratio would be a number with nothing behind it.
+ */
+export const OutputSizeKind = {
+  Exact: 'exact',
+  Measured: 'measured',
+  Unknown: 'unknown',
+} as const;
+
+export type OutputSizeKind = (typeof OutputSizeKind)[keyof typeof OutputSizeKind];
+
+export function describeOutputSizeKind(kind: OutputSizeKind): string {
+  switch (kind) {
+    case OutputSizeKind.Exact:
+      return 'Exact — binary STL is 84 bytes plus 50 per triangle.';
+    case OutputSizeKind.Measured:
+      return 'Measured from the file CAD Fixer wrote for this version of the model.';
+    case OutputSizeKind.Unknown:
+      return 'Known once the file is written: this format’s size depends on its content.';
+  }
+}
+
+/** The short form shown where a size would go. */
+export function describeUnknownSize(): string {
+  return 'On export';
+}
+
+/**
+ * The same, for a card too narrow for words. It is never shown alone: the
+ * card's accessible description and tooltip carry the full sentence.
+ */
+export const UNKNOWN_SIZE_MARK = '—';
+
+export const OUTPUT_SIZE_HEADING = 'Output size';
+
+/** The short badge beside an output size, naming how it is known. */
+export function describeOutputSizeBadge(kind: OutputSizeKind): string {
+  switch (kind) {
+    case OutputSizeKind.Exact:
+      return 'Exact';
+    case OutputSizeKind.Measured:
+      return 'Measured';
+    case OutputSizeKind.Unknown:
+      return 'Not known before writing';
+  }
+}
+
+/**
+ * The opened file in the same "FORMAT · Variant" shape the output cards use.
+ *
+ * The encoding is named for STL only, as everywhere else: binary and ASCII are
+ * two genuinely different files, and the other formats have one each.
+ */
+export function describeSourceKind(
+  formatLabel: string,
+  formatId: string,
+  encoding: string,
+): string {
+  if (formatId !== ExportFormat.Stl) return formatLabel;
+  if (encoding === 'binary') return `${formatLabel} · Binary`;
+  if (encoding === 'ascii') return `${formatLabel} · ASCII`;
+  return formatLabel;
+}
+
+export const SOURCE_SUFFIX = '(source)';
+
+/** The inspector's export summary, labelled once. */
+export const EXPORT_SUMMARY_COPY = Object.freeze({
+  heading: 'Export summary',
+  source: 'Source',
+  output: 'Output',
+  outputNone: 'Not chosen',
+  parts: 'Parts',
+  units: 'Units',
+  destination: 'Destination',
+  lastFile: 'Last file',
+});
+
+/**
+ * A size difference as a signed whole percentage, against the source file.
+ *
+ * `undefined` when the source size is zero, where a ratio means nothing. The
+ * minus is U+2212, so a screen reader and a reader agree it is a sign.
+ */
+export function describeSizeDifference(bytes: number, sourceBytes: number): string | undefined {
+  if (sourceBytes <= 0) return undefined;
+  const percent = Math.round(((bytes - sourceBytes) / sourceBytes) * 100);
+  if (percent === 0) return '±0%';
+  return percent > 0 ? `+${String(percent)}%` : `\u2212${String(-percent)}%`;
+}
+
+/* ------------------------------------------------- workspace structure -- */
+
+/** How the model's parts end up in the file, per target. */
+export function describeStructure(format: ExportFormat, partCount: number): string {
+  if (partCount <= 1) {
+    switch (format) {
+      case ExportFormat.Stl:
+        return 'One mesh';
+      case ExportFormat.Obj:
+        return 'One object';
+      case ExportFormat.ThreeMf:
+        return 'One part';
+    }
+  }
+  const count = partCount.toLocaleString();
+  switch (format) {
+    case ExportFormat.Stl:
+      return `All ${count} parts, merged into one mesh`;
+    case ExportFormat.Obj:
+      return `${count} objects, placements applied to the coordinates`;
+    case ExportFormat.ThreeMf:
+      return `${count} parts, placements kept`;
+  }
+}
+
+/**
+ * What the file will say about units, per target.
+ *
+ * `documentUnit` is the model's own statement; `assertion` is what the user
+ * stated for this export. The document's wins, as it does in the worker.
+ */
+export function describeOutputUnit(
+  format: ExportFormat,
+  documentUnit: string | undefined,
+  assertion: string | undefined,
+): string {
+  if (format !== ExportFormat.ThreeMf) {
+    return `Not recorded — ${outputVariantFor(format).name} has no unit field`;
+  }
+  if (documentUnit !== undefined) return `${describeUnitToken(documentUnit)}, from the model`;
+  if (assertion !== undefined) return `${describeUnitToken(assertion)}, stated for this file`;
+  return 'Not chosen yet';
+}
+
+/** The sentence under a unit a format cannot record. */
+export function describeUnrecordedUnit(format: ExportFormat): string {
+  return `${outputVariantFor(format).name} has no unit field. The coordinates are written unchanged.`;
+}
+
+/** The sentence under a unit the model already states. */
+export function describeStatedUnit(unit: string): string {
+  return `This model states ${describeUnitToken(unit)}, and the file will say the same. The coordinates are written unchanged.`;
+}
+
+export const OBJECTS_LABEL = 'Objects';
+export const UNITS_LABEL = 'Units';
+
+/**
+ * Where the file goes. The browser decides the folder, and CAD Fixer cannot
+ * see it — so no path is named.
+ */
+export const DOWNLOAD_DESTINATION = 'Browser downloads';
+
+export const BEFORE_CONVERTING_NOTE =
+  'The file is written from the model as it is now, including any repair or fill you have applied. Nothing is repaired, simplified or resized while converting.';
+
+export const PENDING_PREVIEW_NOTE =
+  'A preview on screen has not been applied, so it will not be in the file.';
+
+export const NO_MODEL_NOTE = 'Open an STL, OBJ or 3MF file to choose what to convert it to.';
+
+/**
+ * The primary action's label, from what pressing it would actually do.
+ *
+ * "Convert to 3MF" when the format changes, "Export STL" when it does not —
+ * writing an STL from an STL is not a conversion. One file, always: CAD Fixer
+ * has one document open and writes one format per export, so nothing here may
+ * say "files" or count formats.
+ */
+export function describeConvertAction(
+  sourceFormat: string | undefined,
+  target: ExportFormat | undefined,
+  working: boolean,
+): string {
+  if (working) return 'Writing…';
+  if (target === undefined) return 'Choose a format';
+  const name = outputVariantFor(target).name;
+  return sourceFormat === target ? `Export ${name}` : `Convert to ${name}`;
+}
+
+/**
+ * Why the primary action is unavailable, or `undefined` when it is available.
+ *
+ * Stated beside the disabled button, so a disabled control is never the only
+ * explanation of itself.
+ */
+export function describeConvertUnavailable(
+  hasModel: boolean,
+  hasTarget: boolean,
+  exportable: boolean,
+): string | undefined {
+  if (!hasModel) return NO_MODEL_NOTE;
+  if (!hasTarget) return 'Choose an output format.';
+  if (!exportable) return 'Resolve what is needed under Format options first.';
+  return undefined;
+}
+
+/** What a finished export says. Only ever shown after validation succeeded. */
+export function describeSaved(fileName: string, byteLength: number, triangleCount: number): string {
+  return `Saved ${fileName} — ${formatBytes(byteLength)}, ${triangleCount.toLocaleString()} triangles. The file was read back and checked before it was handed to your browser.`;
+}
+
+export const REVIEW_IN_REPAIR = 'Review in Repair';
+
+/** Every remaining label the Convert workspace shows, decided here. */
+export const CONVERT_WORKSPACE_COPY = Object.freeze({
+  sourceSection: 'Source file',
+  outputsSection: 'Output format',
+  outputsMeta: 'One per export',
+  outputsGroup: 'Output format',
+  optionsSection: 'Format options',
+  optionsEmpty: 'Choose an output format to see what it will keep.',
+  beforeSection: 'Before converting',
+  openModel: 'Open a model',
+  chipsLabel: 'What the model records',
+  materialReferences: 'Material references',
+  noUnitStated: 'No unit stated',
+  wholeDocument: 'Every part is written, whichever part is selected in the viewport.',
+  cancel: 'Cancel',
+});
+
+/** "1 part" / "3 parts". */
+export function describePartCount(count: number): string {
+  return count === 1 ? '1 part' : `${count.toLocaleString()} parts`;
+}
+
+/** The source card's unit chip: the document's own statement, or its absence. */
+export function describeSourceUnit(unit: string | undefined): string {
+  return unit === undefined ? CONVERT_WORKSPACE_COPY.noUnitStated : `Unit: ${unit}`;
+}
+
 /* ------------------------------------------------------------------ units -- */
 
 export interface UnitChoice {
   readonly value: LengthUnit;
   readonly label: string;
+  /** The symbol alone, for a compact control. `label` stays its accessible name. */
+  readonly symbol: string;
 }
 
 /**
@@ -108,12 +429,12 @@ export interface UnitChoice {
  * choose a unit on anyone's behalf.
  */
 export const UNIT_CHOICES: readonly UnitChoice[] = Object.freeze([
-  { value: LengthUnit.Micron, label: 'Microns (µm)' },
-  { value: LengthUnit.Millimeter, label: 'Millimetres (mm)' },
-  { value: LengthUnit.Centimeter, label: 'Centimetres (cm)' },
-  { value: LengthUnit.Inch, label: 'Inches (in)' },
-  { value: LengthUnit.Foot, label: 'Feet (ft)' },
-  { value: LengthUnit.Meter, label: 'Metres (m)' },
+  { value: LengthUnit.Micron, label: 'Microns (µm)', symbol: 'µm' },
+  { value: LengthUnit.Millimeter, label: 'Millimetres (mm)', symbol: 'mm' },
+  { value: LengthUnit.Centimeter, label: 'Centimetres (cm)', symbol: 'cm' },
+  { value: LengthUnit.Inch, label: 'Inches (in)', symbol: 'in' },
+  { value: LengthUnit.Foot, label: 'Feet (ft)', symbol: 'ft' },
+  { value: LengthUnit.Meter, label: 'Metres (m)', symbol: 'm' },
 ]);
 
 /** A unit token as a reader should see it. Falls back to the token itself. */
@@ -347,6 +668,7 @@ export const BLOCKED_HEADLINE = 'Something is needed before this can be written'
 export const ASSUMPTIONS_HEADLINE = 'What the file will state that the model does not';
 export const SOURCE_WARNINGS_HEADLINE = 'Already missing when this file was opened';
 export const PRESERVED_HEADLINE = 'Written into the file';
+export const TRANSFORMATIONS_HEADLINE = 'What changes shape to fit this format';
 
 /**
  * The qualifier that follows every conversion result.

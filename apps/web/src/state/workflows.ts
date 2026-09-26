@@ -44,15 +44,15 @@ export const WORKFLOWS: readonly WorkflowDescriptor[] = Object.freeze([
      * same reason Repair's was: the old line promised translation between three
      * formats while the product could write exactly one of them.
      *
-     * It says WHOLE DOCUMENT because that is the distinguishing fact — the
-     * active-part STL export in the Model panel is a different, smaller thing —
-     * and it promises a report rather than fidelity, because what survives
-     * depends on the model and on the target and is answered per conversion.
+     * UI-03 shortened it to the reference's shape and kept it true: the
+     * reference says "one file or a whole batch", and CAD Fixer holds one
+     * document and writes one format per export, so it says "one file at a
+     * time". What survives is answered per conversion by the workspace's
+     * report, not promised here.
      */
     id: WorkflowId.Convert,
     label: 'Convert',
-    summary:
-      'Save the whole document as STL, OBJ or 3MF, after reading what the chosen format keeps and what it cannot.',
+    summary: 'Export to other formats, one file at a time.',
     implemented: true,
   },
   {

@@ -1,19 +1,19 @@
 import { useId, type ReactNode } from 'react';
 import { useWorkspaceState } from '../state/store-context';
-import { useDocumentConversion } from '../state/use-document-conversion';
 import { useFileIntake } from './FileIntake';
 import { WorkflowNav } from './WorkflowNav';
 import { WorkspaceSwitcher } from './WorkspaceSwitcher';
 import { Icon } from './shell/Icon';
 import { CompactSwitch, IconButton } from './shell/primitives';
+import { useOpenConvertWorkspace } from './shell/open-convert';
 import { useDismissableMenu, useShellLayout } from './shell/shell-layout';
 
 /**
  * The application's top bar.
  *
  * EVERY CONTROL HERE IS A COMMAND THAT ALREADY EXISTS. Open is the file intake
- * every import goes through; Export opens the whole-document Export / Convert
- * dialog, which is what "Export" means everywhere in the product; the tabs and
+ * every import goes through; Export goes to the Convert workspace, which is
+ * what "Export" means everywhere in the product; the tabs and
  * the dropdown select workflows. Controls the reference design shows that CAD
  * Fixer has no command behind — Save project, Recent files, Redo, an account
  * menu — are deliberately absent rather than drawn disabled forever. Undo is
@@ -23,7 +23,7 @@ import { useDismissableMenu, useShellLayout } from './shell/shell-layout';
 export function TopBar(): ReactNode {
   const { model } = useWorkspaceState();
   const { openPicker, isImporting } = useFileIntake();
-  const { open: openConversion } = useDocumentConversion();
+  const openConvert = useOpenConvertWorkspace();
   const layout = useShellLayout();
 
   return (
@@ -58,7 +58,7 @@ export function TopBar(): ReactNode {
           icon="download"
           text="Export"
           className="topbar__action"
-          onClick={openConversion}
+          onClick={openConvert}
           disabled={model === undefined}
           testId="topbar-export"
         />

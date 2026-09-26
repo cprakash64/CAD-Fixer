@@ -1,8 +1,8 @@
 import type { ReactNode } from 'react';
 import { WORKFLOWS, WorkflowId } from '../state/workflows';
 import { useWorkspaceState, useWorkspaceStore } from '../state/store-context';
-import { useDocumentConversion } from '../state/use-document-conversion';
 import { Icon } from './shell/Icon';
+import { useOpenConvertWorkspace } from './shell/open-convert';
 import {
   DEFAULT_WORKSPACE,
   WORKSPACE_PRESENTATION,
@@ -22,16 +22,16 @@ import {
  * tab strip keeps the reference's density; the workspace menu beside it shows
  * the same reasons as visible badges.
  *
- * Selecting a workspace shows its panels in the tool panel. Selecting Convert
- * also opens the Export / Convert dialog, because conversion is a dialog and
- * a tab that only highlighted itself would be a control that appears to work
- * and does not. Convert is disabled with an explicit reason when no model is
- * loaded: a workflow that exists but has nothing to act on must say so.
+ * Selecting a workspace shows its panels in the tool panel; Convert goes
+ * through the same route as every Export button, so it also reveals the tool
+ * drawer on a narrow screen. Convert is disabled with an explicit reason when
+ * no model is loaded: a workflow that exists but has nothing to act on must
+ * say so.
  */
 export function WorkflowNav(): ReactNode {
   const { selectedWorkflow, model } = useWorkspaceState();
   const store = useWorkspaceStore();
-  const { open: openConversion } = useDocumentConversion();
+  const openConvert = useOpenConvertWorkspace();
   const current = selectedWorkflow ?? DEFAULT_WORKSPACE;
 
   return (
@@ -53,8 +53,8 @@ export function WorkflowNav(): ReactNode {
             disabled={reason !== undefined}
             aria-current={active ? 'page' : undefined}
             onClick={() => {
-              store.selectWorkflow(workflow.id);
-              if (workflow.id === WorkflowId.Convert) openConversion();
+              if (workflow.id === WorkflowId.Convert) openConvert();
+              else store.selectWorkflow(workflow.id);
             }}
           >
             <Icon name={presentation.icon} size={15} className="workspace-tabs__icon" />

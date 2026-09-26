@@ -2098,6 +2098,484 @@
   box-shadow: var(--focus-ring);
 }
 
+/* -------------------------------------------------- convert workspace -- */
+
+/*
+ * UI-03. The workspace fills the tool panel's scroll area so its footer can
+ * stick to the bottom of it: the primary action stays in reach however long
+ * the report above it runs, exactly where the reference keeps it.
+ */
+.convert-workspace {
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+}
+
+.convert-workspace__sections {
+  flex: 1;
+}
+
+.convert-workspace__note {
+  margin: 0 0 8px;
+  color: var(--cad-text-muted);
+  font-size: var(--fs-secondary);
+  line-height: 1.45;
+}
+
+.convert-workspace__caution {
+  margin: 0 0 8px;
+  padding: 6px 8px;
+  border-left: 3px solid var(--cad-warning);
+  border-radius: var(--radius-sm);
+  background: var(--cad-warning-soft);
+  color: var(--cad-text-strong);
+  font-size: var(--fs-secondary);
+  line-height: 1.4;
+}
+
+/* Source card — a thumbnail well beside the file's own facts. */
+.source-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 10px;
+  background: var(--cad-control-raised);
+  border: 1px solid var(--cad-border);
+  border-radius: var(--radius-card);
+}
+
+.source-card--empty {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+}
+
+.source-card__thumb {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 60px;
+  height: 60px;
+  border: 1px solid var(--cad-border-subtle);
+  border-radius: var(--radius-control);
+  background: var(--cad-well);
+  color: var(--cad-text-muted);
+}
+
+.source-card__text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.source-card__name {
+  margin: 0;
+  overflow: hidden;
+  color: var(--cad-text-strong);
+  font: 600 var(--fs-secondary) var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.source-card__meta {
+  margin: 0;
+  color: var(--cad-text-muted);
+  font: 500 var(--fs-meta) / 1.4 var(--font-mono);
+  overflow-wrap: anywhere;
+}
+
+.source-card__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 2px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.chip {
+  padding: 1px 7px;
+  border-radius: var(--radius-sm);
+  background: var(--cad-well);
+  color: var(--cad-text);
+  font-size: var(--fs-meta);
+  line-height: 18px;
+}
+
+/* Output cards. The radio sits under the card; the card is its label. */
+.format-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.format-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  padding: 7px 8px 6px;
+  border: 1px solid var(--cad-border-control);
+  border-radius: var(--radius-control);
+  background: var(--cad-control);
+  cursor: pointer;
+  transition:
+    border-color var(--motion-fast) var(--ease-out),
+    background-color var(--motion-fast) var(--ease-out);
+}
+
+.format-card:hover {
+  border-color: var(--cad-border-strong);
+  background: var(--cad-hover);
+}
+
+/* The radio COVERS its card, invisibly: a press anywhere on the card is a
+   press on the control itself, and focus, checked state and the accessible
+   name all belong to one real input. */
+.format-card__input {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.format-card__input:disabled {
+  cursor: not-allowed;
+}
+
+.format-card[data-selected='true'] {
+  border-color: var(--cad-accent);
+  background: var(--cad-accent-soft);
+}
+
+.format-card:has(.format-card__input:focus-visible) {
+  box-shadow: var(--focus-ring);
+}
+
+.format-card:has(.format-card__input:disabled) {
+  cursor: not-allowed;
+}
+
+.format-card[data-unavailable='true'],
+.format-card[data-unavailable='true']:hover {
+  border-style: dashed;
+  border-color: var(--cad-border);
+  background: transparent;
+}
+
+.format-card[data-unavailable='true'] .format-card__name,
+.format-card[data-unavailable='true'] .format-card__variant {
+  color: var(--cad-text-subtle);
+}
+
+.format-card__name {
+  color: var(--cad-text-strong);
+  font: 700 var(--fs-ui) / 1.2 var(--font-display);
+}
+
+.format-card__variant {
+  overflow: hidden;
+  color: var(--cad-text-muted);
+  font-size: var(--fs-meta);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.format-card__size {
+  margin-top: 2px;
+  overflow: hidden;
+  color: var(--cad-text-muted);
+  font: 500 10px / 1.3 var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.format-card__size--exact,
+.format-card__size--measured {
+  color: var(--cad-text);
+}
+
+.format-card__size--unavailable {
+  color: var(--cad-text-subtle);
+}
+
+.format-card__check {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  color: var(--cad-accent);
+}
+
+/* Format options: facts, and the one control that changes a file. */
+.format-options {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.format-options__field {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.format-options__label {
+  margin: 0 0 4px;
+  padding: 0;
+  color: var(--cad-text);
+  font: 600 var(--fs-secondary) var(--font-body);
+}
+
+.format-options__value {
+  margin: 0 0 4px;
+  color: var(--cad-text-strong);
+  font-size: var(--fs-secondary);
+  line-height: 1.4;
+}
+
+.unit-chooser__options {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 2px;
+  margin: 6px 0 8px;
+  padding: 2px;
+  border: 1px solid #26343f;
+  border-radius: var(--radius-control);
+  background: var(--cad-well);
+}
+
+.unit-chooser__option {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 26px;
+  border-radius: var(--radius-sm);
+  color: var(--cad-text-muted);
+  font: 500 var(--fs-secondary) var(--font-body);
+  cursor: pointer;
+}
+
+.unit-chooser__option:hover {
+  color: var(--cad-text-strong);
+}
+
+.unit-chooser__option[data-selected='true'] {
+  background: #2e3d4c;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+  color: var(--cad-text-strong);
+}
+
+.unit-chooser__option:has(.unit-chooser__input:focus-visible) {
+  box-shadow: var(--focus-ring);
+}
+
+/* The radio COVERS its card, invisibly: a press anywhere on the card is a
+   press on the control itself, and focus, checked state and the accessible
+   name all belong to one real input. */
+.unit-chooser__input {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.unit-chooser__input:disabled {
+  cursor: not-allowed;
+}
+
+/* Footer: sticky primary action, with its progress and outcome above it. */
+.convert-footer {
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 14px 12px;
+  border-top: 1px solid var(--cad-border-subtle);
+  background: var(--cad-panel);
+}
+
+.convert-footer__status:empty {
+  display: none;
+}
+
+.convert-footer__progress-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+  color: var(--cad-text);
+  font-size: var(--fs-secondary);
+}
+
+.convert-footer__progress-row > :last-child {
+  font-family: var(--font-mono);
+}
+
+.convert-footer__saved,
+.convert-footer__failure {
+  display: flex;
+  gap: 6px;
+  margin: 0;
+  font-size: var(--fs-secondary);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.convert-footer__saved {
+  color: var(--cad-text);
+}
+
+.convert-footer__saved svg {
+  flex: none;
+  margin-top: 1px;
+  color: var(--cad-success);
+}
+
+.convert-footer__failure {
+  padding: 6px 8px;
+  border-left: 3px solid var(--cad-error);
+  border-radius: var(--radius-sm);
+  background: var(--cad-error-soft);
+  color: var(--cad-text-strong);
+}
+
+.convert-footer__actions {
+  display: flex;
+  gap: 8px;
+}
+
+.convert-footer__cancel {
+  flex: none;
+  width: auto;
+  height: 36px;
+}
+
+.convert-footer__primary {
+  flex: 1;
+}
+
+.convert-footer__primary[aria-busy='true'] {
+  background: var(--cad-accent);
+  color: var(--cad-on-accent);
+  opacity: 0.75;
+}
+
+.convert-footer__hint {
+  margin: 0;
+  color: var(--cad-text-muted);
+  font-size: var(--fs-meta);
+  line-height: 1.4;
+}
+
+/* Viewport output-size card: top-left, compact, and only as wide as it is. */
+.size-card {
+  position: absolute;
+  top: 14px;
+  left: 14px;
+  z-index: 6;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 250px;
+  max-width: calc(100% - 160px);
+  padding: 10px 12px 12px;
+  border: 1px solid var(--cad-border);
+  border-radius: var(--radius-floating);
+  background: var(--cad-overlay-strong);
+  box-shadow: var(--shadow-floating);
+}
+
+.size-card__heading {
+  margin: 0;
+  color: var(--cad-text-subtle);
+  font: 500 10px var(--font-mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.size-card__row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+  column-gap: 8px;
+  row-gap: 4px;
+}
+
+.size-card__label {
+  overflow: hidden;
+  color: var(--cad-text);
+  font-size: var(--fs-secondary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.size-card__value {
+  color: var(--cad-text-strong);
+  font: 600 var(--fs-meta) var(--font-mono);
+  white-space: nowrap;
+}
+
+.size-card__delta {
+  margin-left: 6px;
+  color: var(--cad-text-muted);
+  font-weight: 500;
+}
+
+.size-card__delta--smaller {
+  color: var(--cad-success);
+}
+
+.size-card__bar {
+  grid-column: 1 / -1;
+  height: 3px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--cad-border-subtle);
+}
+
+.size-card__fill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--cad-accent);
+}
+
+.size-card__fill--source {
+  background: var(--cad-text-subtle);
+}
+
+.size-card__kind {
+  grid-column: 1 / -1;
+  color: var(--cad-text-subtle);
+  font: 500 10px var(--font-mono);
+}
+
+/* Inspector export summary. */
+.export-summary__eyebrow {
+  margin: 0 0 8px;
+  color: var(--cad-text-subtle);
+  font: 500 10px var(--font-mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
 /* ======================================================== responsive tiers == */
 
 /* 1200 – 1439: narrower panels and icon-only file actions. The dropdown
@@ -2303,6 +2781,31 @@
 
   .import__browse {
     height: 44px;
+  }
+}
+
+/* UI-03: on a phone the size card keeps the chosen output's row only, beside
+   the left edge, so it never covers most of the model or the view cube. */
+@media (width < 600px) {
+  .size-card {
+    top: 10px;
+    left: 8px;
+    gap: 4px;
+    width: auto;
+    max-width: calc(100% - 110px);
+    padding: 6px 8px;
+  }
+
+  .size-card__heading,
+  .size-card__bar,
+  .size-card__kind,
+  .size-card__row--source {
+    display: none;
+  }
+
+  .unit-chooser__option,
+  .format-card {
+    min-height: 40px;
   }
 }
 

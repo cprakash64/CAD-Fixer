@@ -88,13 +88,13 @@ async function openingCount(page: Page): Promise<number> {
 /**
  * Downloads the whole document in `target` and returns the bytes.
  *
- * Through the SAME conversion dialog a user drives, so what is measured is what
- * they would get. The dialog is closed again afterwards so the next step of a
- * test is not acting behind it.
+ * Through the SAME Convert workspace a user drives, so what is measured is what
+ * they would get. It goes back to Repair afterwards so the next step of a test
+ * acts on the openings panel it expects.
  */
 async function convert(page: Page, target: 'stl' | 'obj' | '3mf'): Promise<Buffer> {
   await page.getByTestId('open-convert').click();
-  await expect(page.getByTestId('convert-dialog')).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId('convert-workspace')).toBeVisible({ timeout: 30_000 });
   await page.getByTestId(`convert-target-${target}`).check();
   await expect(page.getByTestId('convert-report')).toBeVisible();
 
@@ -106,8 +106,7 @@ async function convert(page: Page, target: 'stl' | 'obj' | '3mf'): Promise<Buffe
   const stream = await download.createReadStream();
   const chunks: Buffer[] = [];
   for await (const chunk of stream) chunks.push(chunk as Buffer);
-  await page.getByTestId('convert-close').click();
-  await expect(page.getByTestId('convert-dialog')).toHaveCount(0);
+  await page.getByTestId('workflow-repair').click();
   return Buffer.concat(chunks);
 }
 
@@ -506,15 +505,14 @@ test('HFUX25: OBJ and 3MF exports carry the filled geometry too', async ({ page 
   const faceLines = obj.split('\n').filter((line) => line.startsWith('f ')).length;
   expect(faceLines).toBe(after);
 
-  // 3MF needs a unit, and an STL states none. The dialog blocks it and says so —
+  // 3MF needs a unit, and an STL states none. The workspace blocks it and says so —
   // which is the Stage 4A-2B3 behaviour, unchanged by this stage. Asserting the
   // block is what proves the fill did not quietly invent one.
   await page.getByTestId('open-convert').click();
-  await expect(page.getByTestId('convert-dialog')).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId('convert-workspace')).toBeVisible({ timeout: 30_000 });
   await page.getByTestId('convert-target-3mf').check();
   await expect(page.getByTestId('convert-report')).toBeVisible();
   await expect(page.getByTestId('convert-export')).toBeDisabled();
-  await page.getByTestId('convert-close').click();
 });
 
 /* --------------------------------------------------------- many openings -- */

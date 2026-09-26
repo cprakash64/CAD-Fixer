@@ -1,5 +1,4 @@
 import type { ReactNode } from 'react';
-import { ConvertDialog } from './components/ConvertDialog';
 import { FileIntakeProvider } from './components/FileIntake';
 import { ImportDropZone } from './components/ImportDropZone';
 import { Inspector } from './components/Inspector';
@@ -80,10 +79,6 @@ function Shell(): ReactNode {
       <div className="app__contents" inert={modal !== undefined}>
         <StatusBar />
       </div>
-      {/* Rendered at the shell so it overlays the workspace rather than being
-          trapped inside a panel's scroll region. It renders nothing at all
-          until the user opens it. */}
-      <ConvertDialog />
     </div>
   );
 }

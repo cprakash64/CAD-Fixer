@@ -21,7 +21,7 @@ async function preview(page: Page): Promise<void> {
 }
 async function exportWhole(page: Page, target: 'stl' | 'obj' | '3mf'): Promise<number> {
   await page.getByTestId('open-convert').click();
-  await expect(page.getByTestId('convert-dialog')).toBeVisible();
+  await expect(page.getByTestId('convert-workspace')).toBeVisible();
   await page.getByTestId(`convert-target-${target}`).check();
   const pending = page.waitForEvent('download');
   await page.getByTestId('convert-export').click();
@@ -30,7 +30,8 @@ async function exportWhole(page: Page, target: 'stl' | 'obj' | '3mf'): Promise<n
   let bytes = 0;
   for await (const chunk of stream) bytes += (chunk as Buffer).byteLength;
   await expect(page.getByTestId('convert-saved')).toBeVisible();
-  await page.getByTestId('convert-close').click();
+  // Back to the workspace the flow was in, whose Undo the test presses next.
+  await page.getByTestId('workflow-texture').click();
   return bytes;
 }
 async function resetBooleanEvents(page: Page): Promise<void> {

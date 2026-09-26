@@ -2,7 +2,7 @@ import type { ReactNode } from 'react';
 import { describeEncoding, describeSourceFormat, describeUnit } from '../state/model';
 import { useWorkspaceState } from '../state/store-context';
 import { useModelExport } from '../state/use-model-export';
-import { useDocumentConversion } from '../state/use-document-conversion';
+import { useOpenConvertWorkspace } from './shell/open-convert';
 import { Icon } from './shell/Icon';
 
 /**
@@ -31,7 +31,7 @@ import { Icon } from './shell/Icon';
 export function ModelPanel(): ReactNode {
   const { model, activePartId } = useWorkspaceState();
   const { exportModel, cancelExport, isExporting, fraction, encoding } = useModelExport();
-  const { open: openConversion } = useDocumentConversion();
+  const openConvert = useOpenConvertWorkspace();
 
   if (model === undefined) {
     return (
@@ -119,7 +119,7 @@ export function ModelPanel(): ReactNode {
         <button
           type="button"
           className="action action--primary"
-          onClick={openConversion}
+          onClick={openConvert}
           data-testid="open-convert"
         >
           Export / Convert…

@@ -17,6 +17,7 @@ import { useIssueNavigation } from '../state/use-issue-navigation';
 import { WorkflowId } from '../state/workflows';
 import { analysisKey } from '../state/workspace-store';
 import { IssueHud } from './IssueHud';
+import { OutputSizeCard } from './OutputSizeCard';
 import { Icon } from './shell/Icon';
 import { IconButton, SegmentedControl, type SegmentedOption } from './shell/primitives';
 
@@ -560,6 +561,11 @@ export function ViewportPanel(): ReactNode {
               testId="zoom-to-fit"
             />
           </div>
+
+          {/* TOP-LEFT, Convert only: how big the chosen output is, as far as
+              CAD Fixer knows. An overlay that reads scalars; choosing a format
+              touches nothing in the renderer. */}
+          {selectedWorkflow === WorkflowId.Convert ? <OutputSizeCard /> : null}
 
           {/* TOP-RIGHT: orientation. The cube turns with the camera and each
               face frames the model from that side. */}
