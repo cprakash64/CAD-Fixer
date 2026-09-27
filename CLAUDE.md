@@ -988,7 +988,8 @@ lost`, `printable`, `watertight`, and the rest. **"The numbers are unchanged"
 
 - **THE CONVERT WORKSPACE IS THE ONE CONVERSION SURFACE.** The Stage 4A-2B3
   dialog is gone. The top bar's Export, the inspector's Export / Convert, the
-  tabs and the dropdown all call `useOpenConvertWorkspace`; never add a second
+  workspace nav and its compact switcher all call `useOpenConvertWorkspace`
+  (the switchers through `useEnterWorkspace`); never add a second
   surface that can run a document export.
 - **ONE FORMAT PER EXPORT.** `DocumentExportService` runs one export at a time,
   so the output grid is a single-choice radio group and the selected card IS

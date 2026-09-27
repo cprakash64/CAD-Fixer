@@ -144,16 +144,22 @@ test('Convert is a real workflow with one primary entry point', async ({ page })
   await page.goto('/');
 
   /*
-   * DISABLED WITH A REASON BEFORE A MODEL IS OPEN. Stage 4A-2B2 had Convert
-   * disabled because it did not exist; it now exists and has nothing to act on,
-   * and the interface says which.
+   * ENTERABLE BEFORE A MODEL IS OPEN, AND GUARDED INSIDE (UI-07A). Stage 4A-2B3
+   * drew Convert disabled with "Open a model first"; navigation now says only
+   * which workspaces exist, and the workspace says what it needs while its
+   * Export stays disabled until there is something to write.
    */
-  await expect(page.getByTestId('workflow-convert')).toBeDisabled();
-  await expect(page.getByTestId('workflow-convert')).toContainText('Open a model first');
-  await expect(page.getByTestId('workflow-convert')).not.toContainText('Not implemented');
+  await expect(page.getByTestId('workflow-convert')).toBeEnabled();
+  await expect(page.getByTestId('workflow-convert')).not.toContainText('Open a model first');
+  await page.getByTestId('workflow-convert').click();
+  await expect(page.getByTestId('workspace-empty')).toContainText(
+    'Open a 3D model to convert or export it.',
+  );
+  await expect(page.getByTestId('convert-export')).toBeDisabled();
 
   await importFile(page, FIXTURES.stl());
-  await expect(page.getByTestId('workflow-convert')).toBeEnabled();
+  await expect(page.getByTestId('workspace-empty')).toHaveCount(0);
+  await page.getByTestId('workflow-repair').click();
 
   // And it opens the same workspace the Model panel's primary action opens.
   await page.getByTestId('workflow-convert').click();

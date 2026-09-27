@@ -6,14 +6,15 @@ on the PrintPrep reference design, without changing what any workflow does.
 ## Structure
 
 ```
-TopBar (48)      brand · workspace dropdown · Open · Export · workspace tabs · Help · Settings
+TopBar (48)      [brand · Open · Export] · centred workspace nav · [Help · Settings]
 ToolPanel (300)  WorkspaceHeader · the current workspace's panels · Activity log
 Viewport (flex)  canvas · left navigation toolbar · view cube + home · top HUD · bottom actions
 Inspector (280)  Selection (context) · Model · Export · Runtime; collapses to a 36 px rail
 StatusBar (30)   job / Ready · privacy statement · triangles · vertices · unit · topology · release
 ```
 
-Components: `TopBar`, `WorkflowNav` (tabs), `WorkspaceSwitcher` (dropdown),
+Components: `TopBar`, `WorkflowNav` (the workspace nav), `WorkspaceSwitcher`
+(its compact replacement below 1024 px), `WorkspaceEmptyState`,
 `ToolPanel`, `Inspector`, `StatusBar`, `FileIntake`, `ImportDropZone`, and the
 primitives in `components/shell/`. Tokens are in `styles/tokens.css`; shell
 rules in `styles/shell.css`; the pre-existing panel rules stay in `app.css`,
@@ -48,13 +49,15 @@ whose legacy variable names now alias the tokens.
 
 ## Responsive tiers
 
-| Width     | Tool panel  | Inspector            | Top bar                      |
-| --------- | ----------- | -------------------- | ---------------------------- |
-| ≥ 1440    | docked 300  | docked 280, rail     | dropdown + tabs + labels     |
-| 1200–1439 | docked 280  | docked 250, rail     | tabs, icon-only file actions |
-| 900–1199  | docked 280  | overlay drawer 300   | dropdown, inspector toggle   |
-| 600–899   | drawer      | drawer (one at once) | dropdown, both toggles       |
-| < 600     | drawer 88 % | drawer 88 %          | compact; 40 px touch targets |
+| Width     | Tool panel  | Inspector            | Top bar                               |
+| --------- | ----------- | -------------------- | ------------------------------------- |
+| ≥ 1440    | docked 300  | docked 280, rail     | centred nav, file actions with labels |
+| 1280–1439 | docked 280  | docked 250, rail     | centred nav, icon-only file actions   |
+| 1200–1279 | docked 280  | docked 250, rail     | centred nav, tighter tab spacing      |
+| 1024–1199 | docked 280  | overlay drawer 300   | centred nav, inspector toggle         |
+| 900–1023  | docked 280  | overlay drawer 300   | compact switcher, inspector toggle    |
+| 600–899   | drawer      | drawer (one at once) | compact switcher, both toggles        |
+| < 600     | drawer 88 % | drawer 88 %          | compact; 40 px touch targets          |
 
 The shell container is `overflow: clip`, never `hidden`: below 1200 px the
 inspector drawer waits off-canvas, and a `hidden` container is still a scroll
@@ -180,3 +183,34 @@ operations; triangles, never tris; Units (the document's statement).
 
 Capabilities the reference shows and CAD Fixer does not have are listed in
 `UI_CAPABILITY_GAPS.md`.
+
+## UI-07A — one workspace selector
+
+- **ONE SELECTOR ON SCREEN AT ANY WIDTH.** The top-left dropdown listed the same
+  five workspaces as the tabs beside it at every desktop width. From 1024 px up
+  the centred `WorkflowNav` is the only selector; below it `WorkspaceSwitcher`
+  replaces it, because the nav no longer fits beside the file and drawer
+  controls. CSS shows exactly one of the two.
+- **THE NAV IS CENTRED ON THE BAR, NOT ON THE LEFTOVER SPACE.** The top bar is a
+  `1fr auto 1fr` grid: the outer tracks are equal, so the nav sits on the bar's
+  centre whatever the two side groups weigh. `1fr` keeps its `auto` minimum, so
+  a side that outgrows its half pushes the nav sideways rather than overlapping
+  it. The end-to-end suite asserts centring within 2 px at 1280–1920 and no
+  zone collisions at every tier.
+- **NAVIGATION AVAILABILITY IS NOT OPERATION AVAILABILITY.** Every implemented
+  workspace can be entered with no model open. `isWorkspaceAvailable` reads
+  `WORKFLOWS[].implemented` and nothing else; the old "Open a model first" state
+  is gone from navigation. Inside, `WorkspaceEmptyState` — one component, one
+  sentence per workspace from `WORKSPACE_PRESENTATION` — says what the workspace
+  does and offers Open through the one file intake. Every command that needs a
+  model keeps its own guard; entering a workspace creates no document, part or
+  revision.
+- **A WORKSPACE THAT DOES NOT EXIST IS VISIBLE, FOCUSABLE AND INERT.** Hollow is
+  `aria-disabled`, not `disabled`, so keyboard focus reaches it and shows the
+  same "Hollow — coming soon" tooltip a pointer gets on hover. A visible "Soon"
+  badge says it in text, so the state is not carried by colour. Both switchers
+  enter a workspace through `useEnterWorkspace`, which refuses an unimplemented
+  one before the store is touched.
+- **The nav is a `<nav>` of buttons with `aria-current="page"`**, not a tablist:
+  the workspaces are not panels of one widget, and a tablist would promise
+  arrow-key roving plain navigation does not need.

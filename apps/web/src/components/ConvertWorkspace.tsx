@@ -52,7 +52,6 @@ import {
   type MeasuredExport,
 } from '../state/workspace-store';
 import { ConversionReport } from './ConversionReport';
-import { useFileIntake } from './FileIntake';
 import { Icon } from './shell/Icon';
 import { PanelSection } from './shell/primitives';
 
@@ -184,19 +183,11 @@ export function ConvertWorkspace({ active }: { readonly active: boolean }): Reac
 /* ---------------------------------------------------------- source card -- */
 
 function EmptySource(): ReactNode {
-  const { openPicker, isImporting } = useFileIntake();
+  // The Open action is the workspace's empty state above this section
+  // (UI-07A); a second one here would be the same command twice.
   return (
     <div className="source-card source-card--empty" data-testid="convert-source-empty">
       <p className="convert-workspace__note">{NO_MODEL_NOTE}</p>
-      <button
-        type="button"
-        className="secondary-action"
-        onClick={openPicker}
-        disabled={isImporting}
-      >
-        <Icon name="open" size={14} />
-        {CONVERT_WORKSPACE_COPY.openModel}
-      </button>
     </div>
   );
 }

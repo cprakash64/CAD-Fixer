@@ -96,34 +96,28 @@ test('the geometry worker round-trips a transferred buffer', async ({ page }) =>
 });
 
 /**
- * Repair shipped first and Convert second, so this assertion has moved twice —
- * each time to describe the new truth rather than to accommodate it.
+ * This assertion has moved three times — each time to describe the new truth
+ * rather than to accommodate it.
  *
- * IT NOW DISTINGUISHES THREE STATES, because there are three. A workflow that
- * does not exist says so. A workflow that exists but has nothing to act on says
- * THAT instead: on an empty workspace Convert has no document to convert, and a
- * disabled button with no reason beside it is indistinguishable from a broken
- * one. Anything else is the first place a tool starts lying to its user.
+ * UI-07A: NAVIGATION SAYS WHICH WORKSPACES EXIST, and nothing else. Every
+ * implemented workspace can be entered on an empty workspace, and says inside
+ * itself what it needs; a workspace that does not exist is shown, announced
+ * unavailable and badged "coming soon". A feature drawn disabled because no
+ * model is open reads as a feature that is not there.
  */
-test('every workflow says which of the three states it is in', async ({ page }) => {
+test('every implemented workspace can be entered; Hollow is coming soon', async ({ page }) => {
   await page.goto('/');
 
-  await expect(page.getByTestId('workflow-repair')).toBeEnabled();
-
-  // Implemented, and waiting for a model.
-  for (const workflow of ['convert', 'split', 'texture']) {
+  for (const workflow of ['repair', 'convert', 'split', 'texture']) {
     const item = page.getByTestId(`workflow-${workflow}`);
-    await expect(item).toBeDisabled();
-    await expect(item).toContainText('Open a model first');
-    await expect(item).not.toContainText('Not implemented');
+    await expect(item).toBeEnabled();
+    await expect(item).not.toHaveAttribute('aria-disabled');
+    await expect(item).not.toContainText(/Open a model first|Not implemented/);
   }
 
-  // Not implemented at all.
-  for (const workflow of ['hollow']) {
-    const item = page.getByTestId(`workflow-${workflow}`);
-    await expect(item).toBeDisabled();
-    await expect(item).toContainText('Not implemented');
-  }
+  const hollow = page.getByTestId('workflow-hollow');
+  await expect(hollow).toHaveAttribute('aria-disabled', 'true');
+  await expect(hollow).toHaveAccessibleName('Hollow — coming soon');
 });
 
 test('the page issues no network requests beyond its own assets', async ({ page }) => {

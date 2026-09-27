@@ -1,30 +1,35 @@
 import { useId, type ReactNode } from 'react';
-import { WORKFLOWS, WorkflowId } from '../state/workflows';
-import { useWorkspaceState, useWorkspaceStore } from '../state/store-context';
+import { WORKFLOWS } from '../state/workflows';
+import { useWorkspaceState } from '../state/store-context';
 import { Icon } from './shell/Icon';
-import { useOpenConvertWorkspace } from './shell/open-convert';
+import { useEnterWorkspace } from './shell/open-convert';
 import { useDismissableMenu } from './shell/shell-layout';
 import {
+  COMING_SOON,
   DEFAULT_WORKSPACE,
   WORKSPACE_PRESENTATION,
-  workflowUnavailableReason,
+  isWorkspaceAvailable,
 } from './shell/workspaces';
 
 /**
- * The workspace dropdown.
+ * The COMPACT workspace switcher, for widths where the centred workspace
+ * navigation does not fit.
  *
- * The same five workflows as the tab strip, with the same rules, in a menu that
- * has room to say more: each entry carries its one-line summary and, when it is
- * unavailable, a visible badge naming why. On narrow screens it is the only
- * switcher, because the tabs do not fit.
+ * NEVER A SECOND DESKTOP NAVIGATION. Until UI-07A this dropdown sat beside the
+ * tabs at every desktop width and listed the same five choices; now CSS shows
+ * it only below the desktop tier, where it REPLACES `WorkflowNav`, so exactly
+ * one workspace selector is on screen at any width.
  *
- * It calls exactly what the tabs call — `selectWorkflow`, and the shared
- * Convert route — so the two switchers cannot drift into different behaviour.
+ * Same rules as the tabs, through the same `useEnterWorkspace`: every
+ * implemented workspace is selectable with or without a model, and a
+ * workspace that does not exist yet is shown, announced unavailable, badged
+ * "Coming soon" in text and does nothing when chosen. Its menu has room for
+ * the one-line summary the tabs carry only as a tooltip — which matters here,
+ * because a touch screen has no hover.
  */
 export function WorkspaceSwitcher(): ReactNode {
-  const { selectedWorkflow, model } = useWorkspaceState();
-  const store = useWorkspaceStore();
-  const openConvert = useOpenConvertWorkspace();
+  const { selectedWorkflow } = useWorkspaceState();
+  const enter = useEnterWorkspace();
   const { open, toggle, close, containerRef } = useDismissableMenu();
   const menuId = useId();
   const current = selectedWorkflow ?? DEFAULT_WORKSPACE;
@@ -52,20 +57,22 @@ export function WorkspaceSwitcher(): ReactNode {
           <ul className="menu__list">
             {WORKFLOWS.map((workflow) => {
               const option = WORKSPACE_PRESENTATION[workflow.id];
-              const reason = workflowUnavailableReason(workflow, model !== undefined);
-              const active = workflow.implemented && current === workflow.id;
+              const available = isWorkspaceAvailable(workflow);
+              const active = available && current === workflow.id;
               return (
                 <li key={workflow.id}>
                   <button
                     type="button"
                     className="menu__item workspace-switcher__option"
                     aria-current={active ? 'page' : undefined}
-                    disabled={reason !== undefined}
+                    aria-disabled={available ? undefined : true}
                     data-testid={`workspace-option-${workflow.id}`}
                     onClick={() => {
+                      // Choosing what does not exist leaves the menu open on
+                      // its "Coming soon" badge rather than closing on nothing.
+                      if (!available) return;
                       close();
-                      if (workflow.id === WorkflowId.Convert) openConvert();
-                      else store.selectWorkflow(workflow.id);
+                      enter(workflow.id);
                     }}
                   >
                     <Icon name={option.icon} size={16} className="menu__item-icon" />
@@ -73,7 +80,7 @@ export function WorkspaceSwitcher(): ReactNode {
                       <span className="menu__item-title">{option.name}</span>
                       <span className="menu__item-detail">{workflow.summary}</span>
                     </span>
-                    {reason === undefined ? null : <span className="menu__badge">{reason}</span>}
+                    {available ? null : <span className="menu__badge">{COMING_SOON}</span>}
                   </button>
                 </li>
               );

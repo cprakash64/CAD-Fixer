@@ -9,6 +9,7 @@ import { RepairPanel } from './RepairPanel';
 import { SplitWorkspace } from './SplitWorkspace';
 import { StatusPanel } from './StatusPanel';
 import { TextureWorkspace } from './TextureWorkspace';
+import { WorkspaceEmptyState } from './WorkspaceEmptyState';
 import { keepTabWithin } from './shell/focus-trap';
 import { IconButton, PanelSection, WorkspaceHeader } from './shell/primitives';
 import { useShellLayout } from './shell/shell-layout';
@@ -27,11 +28,15 @@ import { DEFAULT_WORKSPACE, WORKSPACE_PRESENTATION } from './shell/workspaces';
  * The Convert, Split & Connect and Surface Texture workspaces are hidden rather
  * than unmounted for the same reason.
  *
+ * WITH NO MODEL OPEN every workspace still opens, and a compact empty state at
+ * the top of the body says what it does and offers Open; the commands inside
+ * keep their own guards.
+ *
  * The footer is the activity log. It stays visible in every workspace because
  * it is where every workflow reports what it did.
  */
 export function ToolPanel({ inert = false }: { readonly inert?: boolean }): ReactNode {
-  const { selectedWorkflow, repair } = useWorkspaceState();
+  const { selectedWorkflow, repair, model } = useWorkspaceState();
   const layout = useShellLayout();
   const panelRef = useRef<HTMLElement>(null);
   const modal = layout.modalDrawer === 'tool';
@@ -70,6 +75,10 @@ export function ToolPanel({ inert = false }: { readonly inert?: boolean }): Reac
       </div>
 
       <div className="tool-panel__body">
+        {/* Every implemented workspace can be entered without a model
+            (UI-07A); this says what it will do once one is open. Keyed by
+            workspace so a switch is a fresh node, not a text swap. */}
+        {model === undefined ? <WorkspaceEmptyState key={current} workflow={current} /> : null}
         <div className="tool-panel__group" hidden={current !== WorkflowId.Repair}>
           {/* What the checks found comes first, then what CAD Fixer can do
               about it, then the per-boundary workflow, then the full report

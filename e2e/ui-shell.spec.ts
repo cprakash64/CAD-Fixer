@@ -160,10 +160,12 @@ test('below 900 px only one drawer is open at a time', async ({ page }) => {
 });
 
 test('the workspace menu closes on Esc and returns focus to its trigger', async ({ page }) => {
+  // The compact switcher is the navigation below the desktop tier only.
+  await page.setViewportSize({ width: 768, height: 1024 });
   await page.goto('/');
   const trigger = page.getByTestId('workspace-switcher');
   await trigger.click();
-  await expect(page.getByTestId('workspace-option-hollow')).toContainText('Not implemented');
+  await expect(page.getByTestId('workspace-option-hollow')).toContainText('Coming soon');
   await page.keyboard.press('Escape');
   await expect(page.getByTestId('workspace-option-hollow')).toHaveCount(0);
   await expect(trigger).toBeFocused();

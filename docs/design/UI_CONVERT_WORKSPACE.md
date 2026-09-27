@@ -49,7 +49,7 @@ runs one export at a time.
 
 - **One surface.** The modal dialog is removed. `useOpenConvertWorkspace`
   (`components/shell/open-convert.ts`) is the route for the top bar's Export,
-  the inspector's Export / Convert, the tabs and the dropdown; it selects the
+  the inspector's Export / Convert, the workspace nav and its compact switcher; it selects the
   workspace and, below 900 px, opens the tool drawer (`showToolPanel`).
 - **One session, started by being shown.** `ConvertWorkspace` calls
   `useDocumentConversion().start()` when it becomes the visible workspace for a

@@ -67,9 +67,15 @@ test('I-02: the inspector leads with the workspace’s context, in view without 
 });
 
 test('I-03: the top-bar pop-ups are disclosures, not ARIA menus', async ({ page }) => {
-  await page.setViewportSize({ width: 1440, height: 900 });
-  await page.goto('/');
-  for (const id of ['workspace-switcher', 'help-menu', 'settings-menu']) {
+  // The compact workspace switcher exists only below the desktop tier
+  // (UI-07A), so each trigger is exercised at a width that shows it.
+  for (const [id, width] of [
+    ['workspace-switcher', 768],
+    ['help-menu', 1440],
+    ['settings-menu', 1440],
+  ] as const) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto('/');
     const trigger = page.getByTestId(id);
     // No `aria-haspopup`: it promises role="menu" and arrow-key navigation,
     // and what opens is a list of buttons, a switch or text.

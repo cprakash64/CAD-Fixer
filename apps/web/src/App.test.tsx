@@ -70,7 +70,7 @@ describe('application shell', () => {
     expect(screen.getByRole('region', { name: '3D workspace' })).toBeInTheDocument();
     expect(screen.getByRole('region', { name: 'Import a model' })).toBeInTheDocument();
     expect(screen.getByRole('region', { name: 'Status' })).toBeInTheDocument();
-    expect(screen.getByRole('navigation', { name: 'Workflows' })).toBeInTheDocument();
+    expect(screen.getByRole('navigation', { name: 'Workspaces' })).toBeInTheDocument();
   });
 
   it('logs the viewport failure jsdom causes, and nothing else, on first render', () => {
@@ -97,66 +97,168 @@ describe('workflow navigation', () => {
   });
 
   /**
-   * Repair became the FIRST enabled workflow in Stage 3B-1B and Convert became
-   * the second in Stage 4A-2B3; Split became the third in Stage 7B. The assertion is keyed off
-   * `WORKFLOWS[].implemented` rather than a hard-coded name, and the explicit
-   * list below is stated so that flipping a workflow's flag without shipping it
-   * fails here rather than passing quietly.
+   * NAVIGATION AVAILABILITY IS NOT OPERATION AVAILABILITY (UI-07A).
    *
-   * CONVERT AND SPLIT ARE IMPLEMENTED AND STILL DISABLED IN THIS RENDER, because no model
-   * is loaded. That is not the same state as "not implemented", and the two are
-   * asserted apart in the test below: one says the feature does not exist, the
-   * other says it has nothing to act on.
+   * Every implemented workspace can be entered on an empty workspace; what it
+   * needs, it says inside itself. Until UI-07A Convert, Split and Texture were
+   * drawn disabled with "Open a model first", which read as features CAD Fixer
+   * does not have. The assertion is keyed off `WORKFLOWS[].implemented`, and
+   * the explicit list is stated so that flipping a flag without shipping the
+   * workspace fails here rather than passing quietly.
    */
-  it('enables exactly the workflows that are implemented and have something to act on', () => {
+  it('enables every implemented workspace with no model open, and only those', () => {
     renderApp();
-    const nav = screen.getByRole('navigation', { name: 'Workflows' });
+    const nav = screen.getByRole('navigation', { name: 'Workspaces' });
 
     const enabled = within(nav)
       .getAllByRole('button')
-      .filter((button) => !(button as HTMLButtonElement).disabled)
-      .map((button) => button.textContent);
+      .filter(
+        (button) =>
+          !(button as HTMLButtonElement).disabled &&
+          button.getAttribute('aria-disabled') !== 'true',
+      )
+      .map((button) => button.dataset.testid);
 
     const implemented = WORKFLOWS.filter((workflow) => workflow.implemented).map(
       (workflow) => workflow.label,
     );
 
     expect(implemented).toEqual(['Repair', 'Convert', 'Split', 'Texture']);
-    // With an empty workspace, model-targeted workflows have nothing to act on.
-    expect(enabled).toEqual(['Repair']);
+    expect(enabled).toEqual([
+      'workflow-repair',
+      'workflow-convert',
+      'workflow-split',
+      'workflow-texture',
+    ]);
   });
 
-  it('tells an implemented workflow with nothing to act on apart from a missing one', () => {
+  it('never puts a model requirement or an internal state name in the navigation', () => {
+    renderApp();
+    const nav = screen.getByRole('navigation', { name: 'Workspaces' });
+
+    expect(nav).not.toHaveTextContent(/Open a model first/i);
+    expect(nav).not.toHaveTextContent(/Not implemented/i);
+    for (const button of within(nav).getAllByRole('button')) {
+      expect(button.getAttribute('data-tooltip') ?? '').not.toMatch(/open a model/i);
+    }
+  });
+
+  it('shows Hollow as coming soon: visible, focusable, announced unavailable', () => {
+    renderApp();
+    const hollow = screen.getByTestId('workflow-hollow');
+
+    // `aria-disabled`, not `disabled`: keyboard focus must reach it so the
+    // tooltip a pointer gets on hover is available from the keyboard too.
+    expect(hollow).toBeEnabled();
+    expect(hollow).toHaveAttribute('aria-disabled', 'true');
+    expect(hollow).toHaveAccessibleName('Hollow — coming soon');
+    expect(hollow).toHaveAttribute('data-tooltip', 'Hollow — coming soon');
+    // Not by colour alone: a visible badge says it in text.
+    expect(within(hollow).getByText('Soon')).toBeInTheDocument();
+    expect(hollow).not.toHaveAttribute('aria-current');
+  });
+
+  it('does nothing when Hollow is activated', () => {
+    const store = renderApp();
+    const before = store.getSnapshot();
+
+    fireEvent.click(screen.getByTestId('workflow-hollow'));
+
+    expect(store.getSnapshot()).toBe(before);
+    expect(screen.getByTestId('workflow-hollow')).not.toHaveAttribute('aria-current');
+    expect(screen.getByTestId('workflow-repair')).toHaveAttribute('aria-current', 'page');
+    expect(screen.getByTestId('workspace-header')).toHaveTextContent('Repair');
+  });
+
+  it('enters each implemented workspace without a model and says what it needs', () => {
+    const store = renderApp();
+    const cases = [
+      [WorkflowId.Convert, 'Open a 3D model to convert or export it.'],
+      [WorkflowId.Split, 'Open a 3D model to split it into parts.'],
+      [WorkflowId.Texture, 'Open a 3D model to add surface texture.'],
+      [WorkflowId.Repair, 'Open a 3D model to analyze and repair mesh issues.'],
+    ] as const;
+
+    for (const [id, message] of cases) {
+      fireEvent.click(screen.getByTestId(`workflow-${id}`));
+
+      expect(store.getSnapshot().selectedWorkflow).toBe(id);
+      expect(screen.getByTestId(`workflow-${id}`)).toHaveAttribute('aria-current', 'page');
+      const current = screen
+        .getAllByRole('button')
+        .filter((button) => button.getAttribute('aria-current') === 'page');
+      expect(current).toHaveLength(1);
+
+      // ONE empty state, the current workspace's own, with the one Open action.
+      const empty = screen.getByTestId('workspace-empty');
+      expect(empty).toHaveAttribute('data-workflow', id);
+      expect(empty).toHaveTextContent('No model loaded');
+      expect(empty).toHaveTextContent(message);
+      expect(within(empty).getByRole('button', { name: 'Open model' })).toBeEnabled();
+
+      // Entering a workspace creates no document and no part.
+      expect(store.getSnapshot().model).toBeUndefined();
+      expect(store.getSnapshot().activePartId).toBeUndefined();
+    }
+  });
+
+  it('keeps every model-requiring command guarded in an empty workspace', () => {
     renderApp();
 
-    for (const workflow of WORKFLOWS) {
-      const button = screen.getByTestId(`workflow-${workflow.id}`);
-      if (!workflow.implemented) {
-        expect(button).toBeDisabled();
-        expect(button).toHaveTextContent('Not implemented');
-        continue;
-      }
+    fireEvent.click(screen.getByTestId('workflow-convert'));
+    expect(screen.getByTestId('convert-export')).toBeDisabled();
+    for (const radio of within(screen.getByTestId('convert-workspace')).getAllByRole('radio'))
+      expect(radio).toBeDisabled();
 
-      // No "Not implemented" badge on a workflow that genuinely exists — the
-      // badge is a claim about absence, and printing it beside a working screen
-      // would be the mirror image of claiming a capability that is missing.
-      expect(button).not.toHaveTextContent('Not implemented');
+    fireEvent.click(screen.getByTestId('workflow-split'));
+    expect(screen.getByTestId('split-preview')).toBeDisabled();
 
-      if (
-        workflow.id === WorkflowId.Convert ||
-        workflow.id === WorkflowId.Split ||
-        workflow.id === WorkflowId.Texture
-      ) {
-        // IMPLEMENTED, UNAVAILABLE, AND EXPLICIT ABOUT WHICH. A disabled button
-        // with no reason beside it is indistinguishable from a broken one.
-        expect(button).toBeDisabled();
-        expect(button).toHaveTextContent('Open a model first');
-        continue;
-      }
+    fireEvent.click(screen.getByTestId('workflow-texture'));
+    expect(screen.getByTestId('texture-generate')).toBeDisabled();
 
-      expect(button).toBeEnabled();
-      expect(button).not.toHaveTextContent('Open a model first');
-    }
+    fireEvent.click(screen.getByTestId('workflow-repair'));
+    expect(screen.getByTestId('mesh-analysis-empty')).toBeInTheDocument();
+    expect(screen.queryByTestId('repair-run-analysis')).toBeNull();
+    expect(screen.queryByTestId('preview-repair')).toBeNull();
+    expect(screen.getByTestId('topbar-export')).toBeDisabled();
+  });
+
+  it('claims no texture preview on an empty Surface Texture workspace', () => {
+    // UI-07A regression: with neither a preview nor a model, the banner's two
+    // identity comparisons were `undefined === undefined` and it announced
+    // "Texture preview — not applied" over the empty drop target.
+    renderApp();
+    fireEvent.click(screen.getByTestId('workflow-texture'));
+
+    expect(screen.queryByTestId('texture-preview-banner')).toBeNull();
+  });
+
+  it('offers the same rules in the compact switcher, which lists every workspace', () => {
+    const store = renderApp();
+
+    fireEvent.click(screen.getByTestId('workspace-switcher'));
+    expect(screen.getByTestId('workspace-switcher')).toHaveAttribute('aria-expanded', 'true');
+    expect(document.body).not.toHaveTextContent(/Open a model first|Not implemented/i);
+
+    for (const id of [WorkflowId.Repair, WorkflowId.Convert, WorkflowId.Split, WorkflowId.Texture])
+      expect(screen.getByTestId(`workspace-option-${id}`)).not.toHaveAttribute('aria-disabled');
+
+    const hollow = screen.getByTestId('workspace-option-hollow');
+    expect(hollow).toHaveAttribute('aria-disabled', 'true');
+    expect(hollow).toHaveTextContent('Coming soon');
+
+    // Choosing Hollow changes nothing and leaves the menu open on its badge.
+    const before = store.getSnapshot();
+    fireEvent.click(hollow);
+    expect(store.getSnapshot()).toBe(before);
+    expect(screen.getByTestId('workspace-option-hollow')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('workspace-option-split'));
+    expect(store.getSnapshot().selectedWorkflow).toBe(WorkflowId.Split);
+    expect(screen.queryByTestId('workspace-option-hollow')).toBeNull();
+    expect(screen.getByTestId('workspace-switcher')).toHaveAccessibleName(
+      'Workspace: Split & Connect. Change workspace',
+    );
   });
 
   it('describes Repair as conservative rather than as general repair', () => {

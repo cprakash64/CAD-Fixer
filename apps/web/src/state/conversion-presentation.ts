@@ -393,7 +393,6 @@ export const CONVERT_WORKSPACE_COPY = Object.freeze({
   optionsSection: 'Format options',
   optionsEmpty: 'Choose an output format to see what it will keep.',
   beforeSection: 'Before converting',
-  openModel: 'Open a model',
   chipsLabel: 'What the model records',
   materialReferences: 'Material references',
   noUnitStated: 'No unit stated',

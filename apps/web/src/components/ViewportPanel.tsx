@@ -561,10 +561,17 @@ export function ViewportPanel(): ReactNode {
     holeFill.candidate?.patchPositions !== undefined;
   const currentTexture = texturePreview;
   const currentModel = model;
+  /*
+   * THE MODEL MUST EXIST. With neither a preview nor a model the identity
+   * comparisons were `undefined === undefined`, and the banner claimed a
+   * texture preview on an empty workspace — unreachable until UI-07A let the
+   * workspace be entered without a model.
+   */
   const showingTexture =
     selectedWorkflow === 'texture' &&
-    currentTexture?.source.documentId === currentModel?.handle.documentId &&
-    currentTexture?.source.revision === currentModel?.handle.revision;
+    currentModel !== undefined &&
+    currentTexture?.source.documentId === currentModel.handle.documentId &&
+    currentTexture.source.revision === currentModel.handle.revision;
 
   /** A split preview on screen: the pieces are candidates, not the model. */
   const showingSplit = splitWorkspace && split.preview !== undefined;

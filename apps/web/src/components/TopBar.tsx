@@ -13,8 +13,9 @@ import { useDismissableMenu, useShellLayout } from './shell/shell-layout';
  *
  * EVERY CONTROL HERE IS A COMMAND THAT ALREADY EXISTS. Open is the file intake
  * every import goes through; Export goes to the Convert workspace, which is
- * what "Export" means everywhere in the product; the tabs and
- * the dropdown select workflows. Controls the reference design shows that CAD
+ * what "Export" means everywhere in the product; the centred workspace
+ * navigation selects workflows, and below the desktop tier the compact
+ * switcher replaces it (never both at once). Controls the reference design shows that CAD
  * Fixer has no command behind — Save project, Recent files, Redo, an account
  * menu — are deliberately absent rather than drawn disabled forever. Undo is
  * absent too: each workflow owns its own undo in its panel, and a global Undo
@@ -28,40 +29,46 @@ export function TopBar(): ReactNode {
 
   return (
     <header className="topbar">
-      <div className="topbar__brand">
-        <BrandMark />
-        <h1 className="topbar__title">CAD Fixer</h1>
-      </div>
-      <span className="topbar__divider topbar__divider--brand" aria-hidden="true" />
+      {/* THREE ZONES, so the workspace navigation is centred on the bar itself
+          rather than on whatever space the left-hand controls leave over. */}
+      <div className="topbar__start">
+        <div className="topbar__brand">
+          <BrandMark />
+          <h1 className="topbar__title">CAD Fixer</h1>
+        </div>
+        <span className="topbar__divider topbar__divider--brand" aria-hidden="true" />
 
-      <div className="topbar__switcher">
-        <WorkspaceSwitcher />
-      </div>
-      <span className="topbar__divider topbar__divider--switcher" aria-hidden="true" />
+        {/* Compact tier only: CSS hides it wherever the centred navigation is
+            shown, so no width ever has two workspace selectors. */}
+        <div className="topbar__switcher">
+          <WorkspaceSwitcher />
+        </div>
+        <span className="topbar__divider topbar__divider--switcher" aria-hidden="true" />
 
-      <div className="topbar__file" role="group" aria-label="File">
-        <IconButton
-          label="Open a model file (STL, OBJ or 3MF)"
-          icon="open"
-          text="Open"
-          className="topbar__action"
-          onClick={openPicker}
-          disabled={isImporting}
-          testId="browse-button"
-        />
-        <IconButton
-          label={
-            model === undefined
-              ? 'Export — open a model first'
-              : 'Export the whole document as STL, OBJ or 3MF'
-          }
-          icon="download"
-          text="Export"
-          className="topbar__action"
-          onClick={openConvert}
-          disabled={model === undefined}
-          testId="topbar-export"
-        />
+        <div className="topbar__file" role="group" aria-label="File">
+          <IconButton
+            label="Open a model file (STL, OBJ or 3MF)"
+            icon="open"
+            text="Open"
+            className="topbar__action"
+            onClick={openPicker}
+            disabled={isImporting}
+            testId="browse-button"
+          />
+          <IconButton
+            label={
+              model === undefined
+                ? 'Export — open a model first'
+                : 'Export the whole document as STL, OBJ or 3MF'
+            }
+            icon="download"
+            text="Export"
+            className="topbar__action"
+            onClick={openConvert}
+            disabled={model === undefined}
+            testId="topbar-export"
+          />
+        </div>
       </div>
 
       <div className="topbar__center">
