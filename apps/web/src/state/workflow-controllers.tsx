@@ -10,6 +10,7 @@ import {
 import type { RepairOperation } from '@cadfixer/geometry-runtime';
 import { useConservativeRepair, type ConservativeRepairControls } from './use-conservative-repair';
 import { useHoleFillWorkflow, type HoleFillControls } from './use-hole-fill-workflow';
+import { useSplitWorkflow, type SplitControls } from './use-split-workflow';
 import { useTopologyAnalysis, type TopologyAnalysisControls } from './use-topology-analysis';
 import { useWorkspaceState, useWorkspaceStore } from './store-context';
 import { RepairPlanState } from './workspace-store';
@@ -33,6 +34,7 @@ import { RepairPlanState } from './workspace-store';
 const AnalysisContext = createContext<TopologyAnalysisControls | undefined>(undefined);
 const RepairContext = createContext<RepairControls | undefined>(undefined);
 const HoleFillContext = createContext<HoleFillControls | undefined>(undefined);
+const SplitContext = createContext<SplitControls | undefined>(undefined);
 
 export function AnalysisControlsProvider({
   children,
@@ -93,7 +95,16 @@ export function HoleFillControlsProvider({
   return <HoleFillContext.Provider value={controls}>{children}</HoleFillContext.Provider>;
 }
 
-/** All three, in the order their automatic work depends on. */
+/**
+ * The Split & Connect controller. It starts no automatic work; it is here so
+ * the panel, the viewport's arrow, the HUD and the inspector share ONE cut.
+ */
+export function SplitControlsProvider({ children }: { readonly children: ReactNode }): ReactNode {
+  const controls = useSplitWorkflow();
+  return <SplitContext.Provider value={controls}>{children}</SplitContext.Provider>;
+}
+
+/** All of them, in the order their automatic work depends on. */
 export function WorkflowControllersProvider({
   children,
 }: {
@@ -102,7 +113,9 @@ export function WorkflowControllersProvider({
   return (
     <AnalysisControlsProvider>
       <RepairControlsProvider>
-        <HoleFillControlsProvider>{children}</HoleFillControlsProvider>
+        <HoleFillControlsProvider>
+          <SplitControlsProvider>{children}</SplitControlsProvider>
+        </HoleFillControlsProvider>
       </RepairControlsProvider>
     </AnalysisControlsProvider>
   );
@@ -123,4 +136,8 @@ export function useRepairControls(): RepairControls {
 
 export function useHoleFillControls(): HoleFillControls {
   return required(useContext(HoleFillContext), 'useHoleFillControls');
+}
+
+export function useSplitControls(): SplitControls {
+  return required(useContext(SplitContext), 'useSplitControls');
 }

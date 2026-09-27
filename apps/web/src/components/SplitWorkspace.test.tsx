@@ -1,0 +1,288 @@
+import { afterEach, describe, expect, it } from 'vitest';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { IDENTITY_PART_TRANSFORM } from '@cadfixer/mesh-core';
+import type {
+  DocumentHandle,
+  DocumentRenderSnapshot,
+  PartDescriptor,
+} from '@cadfixer/geometry-runtime';
+import { SplitWorkspace } from './SplitWorkspace';
+import { SplitHud } from './SplitHud';
+import { ShellLayoutProvider } from './shell/shell-layout';
+import { GeometryClientProvider } from '../runtime/client-context';
+import { GeometryClient } from '../runtime/geometry-client';
+import { WorkspaceProvider } from '../state/store-context';
+import { SplitControlsProvider } from '../state/workflow-controllers';
+import { WorkspaceStore } from '../state/workspace-store';
+import { WorkflowId } from '../state/workflows';
+import type { LoadedModel } from '../state/model';
+
+/**
+ * UI-04: the Split & Connect workspace at component level.
+ *
+ * The Boolean split itself is proven in the Node suite and in Chromium; the
+ * worker is stubbed here and never replies. What this proves is the workspace:
+ * one plane state behind every control, only real connectors, clearance stated
+ * precisely, and nothing carried to a part it was not set for.
+ */
+
+afterEach(cleanup);
+
+function part(partId: string, zMax = 104): PartDescriptor {
+  return {
+    partId,
+    name: `Part ${partId}`,
+    transform: IDENTITY_PART_TRANSFORM,
+    triangleCount: 12,
+    vertexCount: 8,
+    bounds: {
+      min: [0, 0, 0],
+      max: [40, 20, zMax],
+      size: [40, 20, zMax],
+      center: [20, 10, zMax / 2],
+      radius: 50,
+    },
+    meshResourceIndex: 0,
+    groupCount: 0,
+    groupMaterialRefCount: 0,
+    hasNormals: false,
+    hasUvs: false,
+  };
+}
+
+function load(store: WorkspaceStore, unit: string | undefined, parts = [part('p1')]): void {
+  const handle = { documentId: 'doc-1', revision: 1 } as DocumentHandle;
+  const renderSnapshot: DocumentRenderSnapshot = {
+    parts: parts.map((p) => ({
+      partId: p.partId,
+      transform: p.transform,
+      positions: new Float32Array(9),
+      normals: new Float32Array(9),
+      vertexCount: 3,
+    })),
+  };
+  const model: Omit<LoadedModel, 'revision'> = {
+    handle,
+    parts,
+    render: renderSnapshot,
+    source: {
+      fileName: 'bracket.3mf',
+      fileBytes: 100,
+      formatId: '3mf',
+      encoding: '3mf',
+      unit,
+      unsupportedFeatures: [],
+      externalReferences: [],
+      importedAt: 0,
+    },
+    bounds: undefined,
+    triangleCount: 12,
+    vertexCount: 8,
+    validation: { valid: true, issueCount: 0, warningCount: 0, truncated: false, codes: [] },
+    warnings: [],
+    residentBytes: 1,
+  };
+  const token = store.beginImport(model.source.fileName);
+  store.commitImport(token, model);
+  store.selectWorkflow(WorkflowId.Split);
+}
+
+function mount(configure: (store: WorkspaceStore) => void): WorkspaceStore {
+  const store = new WorkspaceStore();
+  configure(store);
+  const client = new GeometryClient({ onDiagnostic: (): void => undefined });
+  render(
+    <WorkspaceProvider store={store}>
+      <GeometryClientProvider client={client}>
+        <ShellLayoutProvider>
+          <SplitControlsProvider>
+            <SplitWorkspace />
+            <SplitHud />
+          </SplitControlsProvider>
+        </ShellLayoutProvider>
+      </GeometryClientProvider>
+    </WorkspaceProvider>,
+  );
+  return store;
+}
+
+describe('the cut plane', () => {
+  it('offers only the real planes, with no cut list and no custom plane modes', () => {
+    mount((store) => {
+      load(store, 'millimeter');
+    });
+    const group = screen.getByRole('group', { name: 'Cut plane orientation' });
+    expect(group).toHaveTextContent('XY');
+    expect(group).toHaveTextContent('XZ');
+    expect(group).toHaveTextContent('YZ');
+    const workspace = screen.getByTestId('split-workspace');
+    expect(workspace).not.toHaveTextContent(/Add cut|Align to face|3 points|Custom/i);
+  });
+
+  it('derives the range from the part and starts at its centre', () => {
+    mount((store) => {
+      load(store, 'millimeter');
+    });
+    const slider = screen.getByTestId('split-position-slider');
+    expect(slider).toHaveAttribute('min', '0');
+    expect(slider).toHaveAttribute('max', '104');
+    expect(slider).toHaveValue('52');
+    expect(screen.getByTestId('split-position-range')).toHaveTextContent('0.0 mm – 104.0 mm');
+  });
+
+  it('keeps the slider, the number field, the HUD and the published plane on one value', () => {
+    const store = mount((s) => {
+      load(s, 'millimeter');
+    });
+    fireEvent.change(screen.getByTestId('split-position-value'), { target: { value: '54' } });
+    expect(screen.getByTestId('split-position-slider')).toHaveValue('54');
+    expect(screen.getByTestId('split-hud-cut')).toHaveTextContent('Z = 54.0 mm');
+    expect(store.getSnapshot().splitPlane?.origin[2]).toBe(54);
+
+    fireEvent.change(screen.getByTestId('split-position-slider'), { target: { value: '60' } });
+    fireEvent.blur(screen.getByTestId('split-position-value'));
+    expect(screen.getByTestId('split-position-value')).toHaveValue(60);
+    expect(store.getSnapshot().splitPlane?.origin[2]).toBe(60);
+  });
+
+  it('clamps a typed position to the part', () => {
+    const store = mount((s) => {
+      load(s, 'millimeter');
+    });
+    fireEvent.change(screen.getByTestId('split-position-value'), { target: { value: '500' } });
+    expect(store.getSnapshot().splitPlane?.origin[2]).toBe(104);
+  });
+
+  it('labels the slider and field with the axis and states the unit', () => {
+    mount((store) => {
+      load(store, 'millimeter');
+    });
+    expect(screen.getByLabelText('Position along Z')).toBe(
+      screen.getByTestId('split-position-slider'),
+    );
+    expect(screen.getByLabelText('Position along Z value')).toBeInTheDocument();
+    expect(screen.getByTestId('split-position-slider')).toHaveAttribute(
+      'aria-valuetext',
+      '52.0 mm',
+    );
+  });
+
+  it('does not carry a cut to another part', () => {
+    const store = mount((s) => {
+      load(s, 'millimeter', [part('p1'), part('p2', 50)]);
+    });
+    fireEvent.change(screen.getByTestId('split-position-value'), { target: { value: '90' } });
+    expect(store.getSnapshot().splitPlane?.origin[2]).toBe(90);
+    act(() => {
+      store.selectPart('p2');
+    });
+    // The second part's own centre, not the first part's number.
+    expect(store.getSnapshot().splitPlane?.origin[2]).toBe(25);
+    expect(screen.getByTestId('split-position-slider')).toHaveAttribute('max', '50');
+  });
+});
+
+describe('connectors', () => {
+  it('shows only None, round pin and dovetail, as a labelled radio group', () => {
+    mount((store) => {
+      load(store, 'millimeter');
+    });
+    const group = screen.getByRole('radiogroup', { name: 'Connector type' });
+    const radios = [...group.querySelectorAll('input[type="radio"]')];
+    expect(radios).toHaveLength(3);
+    expect(screen.getByTestId('split-connector-none')).toBeChecked();
+    expect(group).not.toHaveTextContent(/snap|thread|magnet|puzzle|screw|keyed/i);
+  });
+
+  it('disables connectors for a model that states no millimetres, and says why', () => {
+    mount((store) => {
+      load(store, undefined);
+    });
+    expect(screen.getByTestId('split-connector-pin')).toBeDisabled();
+    expect(screen.getByTestId('split-connector-dovetail')).toBeDisabled();
+    expect(screen.getByTestId('split-connector-none')).toBeEnabled();
+    expect(screen.getByTestId('split-connectors-unit')).toHaveTextContent('millimetres');
+  });
+
+  it('states pin clearance precisely and shows the socket it produces', () => {
+    mount((store) => {
+      load(store, 'millimeter');
+    });
+    fireEvent.click(screen.getByTestId('split-connector-pin'));
+    expect(screen.getByLabelText('Clearance, per side, millimetres')).toHaveValue(0.2);
+    expect(screen.getByTestId('split-socket-size')).toHaveTextContent(
+      'Pin Ø 4 mm → socket Ø 4.4 mm',
+    );
+    fireEvent.change(screen.getByTestId('split-clearance'), { target: { value: '0.3' } });
+    expect(screen.getByTestId('split-socket-size')).toHaveTextContent('socket Ø 4.6 mm');
+  });
+
+  it('shows the dovetail slot the clearance produces, and its orientation choice', () => {
+    mount((store) => {
+      load(store, 'millimeter');
+    });
+    fireEvent.click(screen.getByTestId('split-connector-dovetail'));
+    expect(screen.getByTestId('split-slot-size')).toHaveTextContent('Slot 8.4 × 12.4 mm');
+    expect(screen.getByRole('group', { name: 'Dovetail orientation' })).toBeInTheDocument();
+  });
+
+  it('refuses to preview a dimension the engine would refuse, and names it', () => {
+    mount((store) => {
+      load(store, 'millimeter');
+    });
+    fireEvent.click(screen.getByTestId('split-connector-pin'));
+    fireEvent.change(screen.getByTestId('split-pin-diameter'), { target: { value: '0' } });
+    expect(screen.getByTestId('split-connector-problem')).toHaveTextContent('Pin diameter');
+    expect(screen.getByTestId('split-preview')).toBeDisabled();
+  });
+
+  it('offers placement as automatic only, with no pattern or margin control', () => {
+    mount((store) => {
+      load(store, 'millimeter');
+    });
+    const connectors = screen.getByTestId('split-connectors');
+    expect(connectors).toHaveTextContent('Placed automatically');
+    expect(connectors).not.toHaveTextContent(/Manual|Grid|Circular|Along edge|Margin/);
+  });
+});
+
+describe('the footer', () => {
+  it('previews before anything can be applied or exported', () => {
+    mount((store) => {
+      load(store, 'millimeter');
+    });
+    expect(screen.getByTestId('split-preview')).toBeEnabled();
+    expect(screen.queryByTestId('split-apply')).toBeNull();
+    expect(screen.queryByTestId('split-export')).toBeNull();
+  });
+
+  it('shows an empty state with no usable action when no model is open', () => {
+    mount(() => undefined);
+    expect(screen.getByTestId('split-empty')).toBeInTheDocument();
+    expect(screen.getByTestId('split-preview')).toBeDisabled();
+  });
+
+  it('keeps settings across a workspace switch, and Cancel resets them', () => {
+    const store = mount((s) => {
+      load(s, 'millimeter');
+    });
+    fireEvent.click(screen.getByTestId('split-connector-pin'));
+    fireEvent.change(screen.getByTestId('split-position-value'), { target: { value: '30' } });
+    act(() => {
+      store.selectWorkflow(WorkflowId.Repair);
+    });
+    act(() => {
+      store.selectWorkflow(WorkflowId.Split);
+    });
+    expect(screen.getByTestId('split-connector-pin')).toBeChecked();
+    expect(store.getSnapshot().splitPlane?.origin[2]).toBe(30);
+
+    fireEvent.click(screen.getByTestId('split-cancel'));
+    expect(store.getSnapshot().selectedWorkflow).toBeUndefined();
+    act(() => {
+      store.selectWorkflow(WorkflowId.Split);
+    });
+    expect(screen.getByTestId('split-connector-none')).toBeChecked();
+    expect(store.getSnapshot().splitPlane?.origin[2]).toBe(52);
+  });
+});

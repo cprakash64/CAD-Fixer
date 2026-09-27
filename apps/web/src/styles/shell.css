@@ -2576,6 +2576,273 @@
   text-transform: uppercase;
 }
 
+/* --------------------------------------------------- split workspace -- */
+
+/* UI-04. Reuses the Convert workspace's sections, cards and sticky footer. */
+.split-workspace .segmented {
+  margin: 8px 0 12px;
+}
+
+.split-workspace__part {
+  color: var(--cad-text-strong);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.split-workspace__reset {
+  width: auto;
+  height: 28px;
+  margin: 2px 0 8px;
+  padding: 0 10px;
+  font-size: var(--fs-secondary);
+}
+
+.split-field {
+  margin-bottom: 12px;
+}
+
+.split-field--inline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.split-field--inline .format-options__label {
+  margin: 0;
+}
+
+.split-field__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.split-field__slider {
+  flex: 1;
+  min-width: 0;
+  accent-color: var(--cad-accent);
+}
+
+.split-field__label-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.split-field__range {
+  margin: 0;
+  color: var(--cad-text-subtle);
+  font: 500 10px var(--font-mono);
+}
+
+.split-number {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--cad-border-control);
+  border-radius: var(--radius-control);
+  background: var(--cad-well);
+}
+
+.split-number:focus-within {
+  border-color: var(--cad-accent);
+}
+
+.split-number__input {
+  align-self: stretch;
+  width: 64px;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--cad-text-strong);
+  font: 500 var(--fs-secondary) var(--font-mono);
+  text-align: right;
+  outline: none;
+}
+
+.split-number__suffix {
+  color: var(--cad-text-muted);
+  font: 500 var(--fs-meta) var(--font-mono);
+}
+
+.connector-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.connector-card {
+  align-items: flex-start;
+}
+
+.connector-card__schematic {
+  width: 100%;
+  height: 22px;
+  margin-bottom: 4px;
+}
+
+.connector-card__cut {
+  stroke: var(--cad-text-subtle);
+  stroke-dasharray: 3 2;
+  stroke-width: 1.2;
+}
+
+.connector-card__male {
+  fill: var(--cad-accent-soft);
+  stroke: var(--cad-accent);
+  stroke-width: 1.2;
+}
+
+.connector-card[data-unavailable='true'] .connector-card__male {
+  fill: transparent;
+  stroke: var(--cad-text-subtle);
+}
+
+.split-params {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 4px 0 8px;
+}
+
+.split-params .segmented {
+  margin: 0 0 6px;
+}
+
+.split-params__grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.split-params__field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.split-params__field .split-number__input {
+  flex: 1;
+  width: 100%;
+}
+
+.split-params__field .split-number {
+  width: 100%;
+}
+
+.split-params__label {
+  color: var(--cad-text);
+  font-size: var(--fs-meta);
+}
+
+.split-params__derived {
+  margin: 0;
+  color: var(--cad-text);
+  font: 500 var(--fs-meta) / 1.4 var(--font-mono);
+}
+
+.split-result__badge {
+  display: inline-block;
+  margin: 0 0 8px;
+  padding: 2px 8px;
+  border: 1px dashed var(--cad-accent);
+  border-radius: 999px;
+  color: var(--cad-accent);
+  font: 600 var(--fs-meta) var(--font-body);
+}
+
+.piece-swatch {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  margin-right: 6px;
+  border-radius: 2px;
+  vertical-align: baseline;
+}
+
+.piece-swatch--a {
+  background: #7fb2e8;
+}
+
+.piece-swatch--b {
+  background: #f29a84;
+}
+
+.split-footer__progress,
+.split-footer__note {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  color: var(--cad-text);
+  font-size: var(--fs-secondary);
+  line-height: 1.4;
+}
+
+.split-footer__note {
+  color: var(--cad-text-muted);
+  font-size: var(--fs-meta);
+}
+
+.split-footer .segmented {
+  margin: 0;
+}
+
+.split-hud {
+  align-items: center;
+  gap: 12px;
+  padding: 6px 14px;
+  border-radius: var(--radius-floating);
+  white-space: normal;
+}
+
+.split-hud__lines {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.split-hud__cut {
+  margin: 0;
+  color: var(--cad-text-strong);
+  font: 600 var(--fs-secondary) var(--font-mono);
+}
+
+.split-hud__name {
+  color: var(--cad-accent);
+  font-family: var(--font-body);
+}
+
+.split-hud__detail {
+  margin: 0;
+  color: var(--cad-text-muted);
+  font-size: var(--fs-meta);
+}
+
+.split-hud__legend {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 2px;
+  margin: 0;
+  color: var(--cad-text);
+  font-size: var(--fs-meta);
+}
+
+.split-hud__legend .piece-swatch + .piece-swatch,
+.split-hud__legend .piece-swatch:nth-of-type(2) {
+  margin-left: 8px;
+}
+
 /* ======================================================== responsive tiers == */
 
 /* 1200 – 1439: narrower panels and icon-only file actions. The dropdown
@@ -2806,6 +3073,27 @@
   .unit-chooser__option,
   .format-card {
     min-height: 40px;
+  }
+}
+
+/* UI-04: on a phone the cut HUD drops its legend and the connector cards and
+   numeric fields get touch-sized targets; the numbers are the primary way to
+   place the plane there. */
+@media (width < 600px) {
+  .split-hud__legend {
+    display: none;
+  }
+
+  .split-number {
+    height: 40px;
+  }
+
+  .split-field__slider {
+    height: 40px;
+  }
+
+  .split-workspace__reset {
+    height: 40px;
   }
 }
 

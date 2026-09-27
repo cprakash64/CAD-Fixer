@@ -50,11 +50,40 @@ export interface CutSurfaceSummary {
     readonly point: SplitVector;
     readonly edgeDistance: number;
   }[];
+  /**
+   * WHAT THE CUT ACTUALLY LOOKS LIKE, reported and never decided on.
+   *
+   * `area` is the summed area of the cap triangles — the real cross-section
+   * of the source at this plane. `loopCount` is the number of closed boundary
+   * loops of that cap (an annulus has two, two separate discs have two), so it
+   * is a count of OUTLINES, not of solid regions. `outline` is every boundary
+   * edge as a pair of part-local points, capped at `MAX_SECTION_OUTLINE_EDGES`
+   * so a dense cap cannot put an unbounded buffer on the wire; `outlineTruncated`
+   * says when it was. None of these feeds placement or acceptance.
+   */
+  readonly area: number;
+  readonly loopCount: number;
+  readonly outline: Float32Array;
+  readonly outlineTruncated: boolean;
 }
+
+/** Upper bound on the cap boundary edges carried back for display. */
+export const MAX_SECTION_OUTLINE_EDGES = 65_536;
 export interface SplitMetrics {
   readonly sourceVolume: number;
+  /**
+   * The two pieces straight after the cut, BEFORE any connector — the volumes
+   * the conservation check compares with the source.
+   */
   readonly pieceAVolume: number;
   readonly pieceBVolume: number;
+  /**
+   * The finished pieces, AFTER connectors: a pin adds material to its male
+   * piece and its socket removes material from the other. Equal to the cut
+   * volumes when there is no connector.
+   */
+  readonly pieceAFinalVolume: number;
+  readonly pieceBFinalVolume: number;
   readonly volumeRelativeError: number;
   readonly tolerance: number;
 }
@@ -246,7 +275,17 @@ export function identifyCutSurface(
 ): CutSurfaceSummary {
   const { n, u, v } = frame(plane),
     ids: number[] = [];
-  const edgeUse = new Map<string, { count: number; a: [number, number]; b: [number, number] }>();
+  const edgeUse = new Map<
+    string,
+    {
+      count: number;
+      a: [number, number];
+      b: [number, number];
+      ai: number;
+      bi: number;
+    }
+  >();
+  let area = 0;
   let count = 0,
     minU = Infinity,
     maxU = -Infinity,
@@ -260,6 +299,8 @@ export function identifyCutSurface(
     ];
     if (!ps.every((p) => Math.abs(dot(sub(p, plane.origin), n)) <= tolerance * 4)) continue;
     ids.push(t);
+    const [p0, p1, p2] = ps as [SplitVector, SplitVector, SplitVector];
+    area += Math.hypot(...cross(sub(p1, p0), sub(p2, p0))) / 2;
     const triangle = ps.map((p) => [dot(p, u), dot(p, v)] as [number, number]);
     const vertexIds = [
       mesh.indices[t * 3] ?? 0,
@@ -277,6 +318,8 @@ export function identifyCutSurface(
           count: 1,
           a: triangle[edge] ?? [0, 0],
           b: triangle[(edge + 1) % 3] ?? [0, 0],
+          ai,
+          bi,
         });
     }
     for (const p of ps) {
@@ -340,7 +383,10 @@ export function identifyCutSurface(
       add(scale(u, point[0] - dot(plane.origin, u)), scale(v, point[1] - dot(plane.origin, v))),
     );
   const center = toWorld(pole);
+  const section = describeSection(mesh, boundary);
   return {
+    area,
+    ...section,
     triangleIds: ids,
     center,
     spanU: maxU - minU,
@@ -352,6 +398,43 @@ export function identifyCutSurface(
     })),
   };
 }
+/** Loop count by union-find over boundary vertex ids, and a bounded outline. */
+function describeSection(
+  mesh: CanonicalMesh,
+  boundary: readonly { readonly ai: number; readonly bi: number }[],
+): { loopCount: number; outline: Float32Array; outlineTruncated: boolean } {
+  const parent = new Map<number, number>();
+  const find = (x: number): number => {
+    let root = x;
+    while (parent.get(root) !== undefined && parent.get(root) !== root)
+      root = parent.get(root) ?? root;
+    let at = x;
+    while (at !== root) {
+      const next = parent.get(at) ?? root;
+      parent.set(at, root);
+      at = next;
+    }
+    return root;
+  };
+  for (const edge of boundary) {
+    if (!parent.has(edge.ai)) parent.set(edge.ai, edge.ai);
+    if (!parent.has(edge.bi)) parent.set(edge.bi, edge.bi);
+    const ra = find(edge.ai),
+      rb = find(edge.bi);
+    if (ra !== rb) parent.set(ra, rb);
+  }
+  const roots = new Set<number>();
+  for (const id of parent.keys()) roots.add(find(id));
+  const kept = Math.min(boundary.length, MAX_SECTION_OUTLINE_EDGES);
+  const outline = new Float32Array(kept * 6);
+  for (let index = 0; index < kept; index++) {
+    const edge = boundary[index];
+    if (edge === undefined) break;
+    outline.set([...vertex(mesh, edge.ai), ...vertex(mesh, edge.bi)], index * 6);
+  }
+  return { loopCount: roots.size, outline, outlineTruncated: kept < boundary.length };
+}
+
 function pointInTriangle(
   p: readonly [number, number],
   triangle: readonly (readonly [number, number])[],
@@ -588,6 +671,8 @@ export async function splitWithConnectors(
   }
   requireSolid(pieceA, 'final piece A', cancellation);
   requireSolid(pieceB, 'final piece B', cancellation);
+  const pieceAFinalVolume = c.kind === 'none' ? pieceAVolume : meshVolume(pieceA),
+    pieceBFinalVolume = c.kind === 'none' ? pieceBVolume : meshVolume(pieceB);
   return {
     pieceA,
     pieceB,
@@ -595,6 +680,14 @@ export async function splitWithConnectors(
     cutB,
     connector: c,
     placements,
-    metrics: { sourceVolume, pieceAVolume, pieceBVolume, volumeRelativeError, tolerance },
+    metrics: {
+      sourceVolume,
+      pieceAVolume,
+      pieceBVolume,
+      pieceAFinalVolume,
+      pieceBFinalVolume,
+      volumeRelativeError,
+      tolerance,
+    },
   };
 }

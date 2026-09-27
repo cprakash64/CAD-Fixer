@@ -14,9 +14,11 @@ import {
 } from '../state/workspace-store';
 import { overlayForIssue } from '../state/repair-issues';
 import { useIssueNavigation } from '../state/use-issue-navigation';
+import { useSplitControls } from '../state/workflow-controllers';
 import { WorkflowId } from '../state/workflows';
 import { analysisKey } from '../state/workspace-store';
 import { IssueHud } from './IssueHud';
+import { SplitHud } from './SplitHud';
 import { OutputSizeCard } from './OutputSizeCard';
 import { Icon } from './shell/Icon';
 import { IconButton, SegmentedControl, type SegmentedOption } from './shell/primitives';
@@ -56,6 +58,21 @@ export function ViewportPanel(): ReactNode {
     frameRequest,
   } = useWorkspaceState();
   const navigation = useIssueNavigation();
+  const split = useSplitControls();
+  const splitWorkspace = selectedWorkflow === WorkflowId.Split;
+  /*
+   * Read through refs by callbacks the viewport was created with once: the
+   * arrow's drag reaches the CURRENT controller, and a model swap knows which
+   * workspace it happened in without rebuilding the model on a tab change.
+   */
+  const splitRef = useRef(split);
+  const splitWorkspaceRef = useRef(splitWorkspace);
+  // Declared before the model effect, so a model swap already sees the
+  // workspace it happened in.
+  useEffect(() => {
+    splitRef.current = split;
+    splitWorkspaceRef.current = splitWorkspace;
+  });
   const issueSelection = navigation.selection;
   const repairWorkspace = selectedWorkflow === undefined || selectedWorkflow === WorkflowId.Repair;
   /**
@@ -103,6 +120,12 @@ export function ViewportPanel(): ReactNode {
         onOrientationChange: (orientation) => {
           const cube = cubeRef.current;
           if (cube !== null) cube.style.transform = `matrix3d(${orientation.join(',')})`;
+        },
+        onEditPlaneDrag: (phase, distance) => {
+          // The arrow reports; the controller's one `offset` moves; the plane
+          // comes back through `setEditPlane` like any other change.
+          if (phase === 'start') splitRef.current.beginPlaneDrag();
+          else splitRef.current.dragPlane(distance);
         },
         onContextLost: () => {
           store.setViewportFailure(
@@ -155,22 +178,29 @@ export function ViewportPanel(): ReactNode {
     const shownParts = previewIsCurrent ? splitPreview.parts : model.parts;
     const descriptorsById = new Map(shownParts.map((part) => [part.partId, part]));
 
-    viewport.setModel({
-      parts: shownRender.parts.map((part) => {
-        const descriptor = descriptorsById.get(part.partId);
-        return {
-          partId: part.partId,
-          transform: part.transform,
-          positions: part.positions,
-          normals: part.normals,
-          center: descriptor?.bounds?.center ?? [0, 0, 0],
-          radius: descriptor?.bounds?.radius ?? 1,
-        };
-      }),
-      center: model.bounds?.center ?? [0, 0, 0],
-      radius: model.bounds?.radius ?? 1,
-      revision: model.revision,
-    });
+    viewport.setModel(
+      {
+        parts: shownRender.parts.map((part) => {
+          const descriptor = descriptorsById.get(part.partId);
+          return {
+            partId: part.partId,
+            transform: part.transform,
+            positions: part.positions,
+            normals: part.normals,
+            center: descriptor?.bounds?.center ?? [0, 0, 0],
+            radius: descriptor?.bounds?.radius ?? 1,
+          };
+        }),
+        center: model.bounds?.center ?? [0, 0, 0],
+        radius: model.bounds?.radius ?? 1,
+        revision: model.revision,
+      },
+      {
+        // In Split & Connect, a preview or an applied split is the same document
+        // seen differently: the camera the cut was chosen from stays put.
+        preserveView: splitWorkspaceRef.current,
+      },
+    );
   }, [model, splitPreview]);
 
   /**
@@ -187,11 +217,43 @@ export function ViewportPanel(): ReactNode {
    */
   useEffect(() => {
     viewportRef.current?.setActivePart(activePartId);
-  }, [activePartId, model]);
+    // A split preview is installed with `setModel` too, which resets the
+    // viewport's selection; it has to be pointed back at the part being cut.
+  }, [activePartId, model, splitPreview]);
 
   useEffect(() => {
     viewportRef.current?.setEditPlane(splitPlane);
-  }, [splitPlane]);
+    // Re-pushed after a preview is installed or removed: `setModel` hides it.
+  }, [splitPlane, model, splitPreview]);
+
+  /*
+   * The engine's cross-section outline and the Piece A / Piece B colours, in
+   * Split & Connect only. Both are presentation: neither changes geometry,
+   * and outside the workspace the model is one colour again.
+   */
+  const splitOutline = splitWorkspace ? split.preview?.section.outline : undefined;
+  useEffect(() => {
+    const viewport = viewportRef.current;
+    if (viewport === undefined) return;
+    viewport.setSectionOutline(
+      splitOutline === undefined || model === undefined
+        ? undefined
+        : { segments: splitOutline, revision: model.revision },
+    );
+  }, [model, splitOutline, splitPreview]);
+
+  const tintA = splitWorkspace ? (split.preview?.pieceAId ?? split.applied?.pieceA) : undefined;
+  const tintB = splitWorkspace ? (split.preview?.pieceBId ?? split.applied?.pieceB) : undefined;
+  useEffect(() => {
+    viewportRef.current?.setPartTints(
+      tintA === undefined || tintB === undefined
+        ? undefined
+        : new Map([
+            [tintA, 'a'],
+            [tintB, 'b'],
+          ]),
+    );
+  }, [model, splitPreview, tintA, tintB]);
 
   useEffect(() => {
     viewportRef.current?.setNavigationMode(navigationMode);
@@ -483,6 +545,7 @@ export function ViewportPanel(): ReactNode {
         {repairWorkspace && issueSelection !== undefined && modelShown ? (
           <IssueHud navigation={navigation} />
         ) : null}
+        {splitWorkspace && modelShown ? <SplitHud /> : null}
         {showingPreview ? (
           <p className="viewport__preview-banner" role="status" data-testid="preview-banner">
             Preview — not applied

@@ -420,4 +420,55 @@ describe('Stage 7B split and connectors', () => {
       splitAt(combine(translatedCube(0, -12, 0), translatedCube(0, 12, 0)), [0, 0, 0], [1, 0, 0]),
     ).resolves.toBeDefined();
   });
+
+  it('UI-04 reports the real cross-section: area, outline loops and a bounded outline', async () => {
+    // A 20 mm cube cut through its middle: one square outline of exactly 400.
+    const cubeResult = await run({ kind: 'none' });
+    expect(cubeResult.cutA.area).toBeCloseTo(400, 6);
+    expect(cubeResult.cutA.loopCount).toBe(1);
+    expect(cubeResult.cutA.outlineTruncated).toBe(false);
+    // Every outline point lies on the cut plane x = 0.
+    const outline = cubeResult.cutA.outline;
+    expect(outline.length % 6).toBe(0);
+    expect(outline.length).toBeGreaterThanOrEqual(4 * 6);
+    for (let at = 0; at < outline.length; at += 3)
+      expect(Math.abs(outline[at] ?? 1)).toBeLessThan(1e-4);
+
+    // Two separate 10 mm squares: two outlines, 200 in total.
+    const two = await runOn(combine(translatedCube(0, -12, 0), translatedCube(0, 12, 0)), {
+      kind: 'none',
+    });
+    expect(two.cutA.loopCount).toBe(2);
+    expect(two.cutA.area).toBeCloseTo(200, 6);
+
+    // An annulus is ONE region with TWO outlines, which is why the count names
+    // outlines rather than pieces. Its area lies between the inner and outer
+    // circles' and below the ideal annulus, because the torus is polygonal.
+    const annulus = await runOn(torus(), { kind: 'none' });
+    expect(annulus.cutA.loopCount).toBe(2);
+    expect(annulus.cutA.area).toBeGreaterThan(250);
+    expect(annulus.cutA.area).toBeLessThan(Math.PI * (11 * 11 - 5 * 5));
+  });
+
+  it('UI-04 reports the finished piece volumes after connectors, beside the cut volumes', async () => {
+    const plain = await run({ kind: 'none' });
+    expect(plain.metrics.pieceAFinalVolume).toBe(plain.metrics.pieceAVolume);
+    expect(plain.metrics.pieceBFinalVolume).toBe(plain.metrics.pieceBVolume);
+
+    const pinned = await run({
+      kind: 'pin',
+      count: 1,
+      diameter: 4,
+      depth: 6,
+      clearance: 0.2,
+      maleSide: 'A',
+    });
+    // The male piece gains the pin; the other loses the larger socket.
+    expect(pinned.metrics.pieceAFinalVolume).toBeCloseTo(meshVolume(pinned.pieceA), 9);
+    expect(pinned.metrics.pieceAFinalVolume).toBeGreaterThan(pinned.metrics.pieceAVolume);
+    expect(pinned.metrics.pieceBFinalVolume).toBeLessThan(pinned.metrics.pieceBVolume);
+    const pinVolume = pinned.metrics.pieceAFinalVolume - pinned.metrics.pieceAVolume;
+    const socketVolume = pinned.metrics.pieceBVolume - pinned.metrics.pieceBFinalVolume;
+    expect(socketVolume).toBeGreaterThan(pinVolume);
+  });
 });

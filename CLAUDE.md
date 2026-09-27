@@ -1003,6 +1003,35 @@ lost`, `printable`, `watertight`, and the rest. **"The numbers are unchanged"
 - **THE WORKSPACE STAYS MOUNTED WHILE HIDDEN**, like the Repair panels: its hook
   cancels the export it started on unmount.
 
+## Split & Connect workspace invariants (UI-04)
+
+- **ONE CUT STATE.** `useSplitWorkflow` (one instance, `SplitControlsProvider`)
+  owns the plane settings; `splitPlaneFor` is the only settings → plane
+  function. The slider, the number field, the HUD, the inspector, the worker
+  request and the drawn plane all read it. The viewport arrow REPORTS a
+  distance along the normal (`onEditPlaneDrag`) and moves nothing itself; the
+  viewport's former `moveEditPlaneAlongNormal` / `rotateEditPlane` were deleted
+  because they held a second copy of the plane.
+- **ONLY WHAT STAGE 7B BUILDS.** One flat plane per split (XY / XZ / YZ plus one
+  bounded tilt), automatic placement only, None / round pins (1–4) / one
+  dovetail, connectors only for a millimetre document. No cut list, custom
+  plane, align-to-face, three-point plane, extra connector types, manual
+  placement, pattern or margin control, bed fit or orientation.
+- **CLEARANCE IS STATED EXACTLY.** Pin: radial, socket Ø = pin Ø + 2 × clearance.
+  Dovetail: per side, slot width and length each + 2 × clearance.
+  `socketDiameter` / `dovetailSlot` mirror the engine and a test holds them
+  together.
+- **CROSS-SECTION FACTS COME FROM THE ENGINE AFTER A PREVIEW.** Area, outline
+  (loop) count and a bounded outline are measured from Piece A's cap in
+  `identifyCutSurface`; nothing is estimated during a drag. `loopCount` counts
+  OUTLINES, not pieces. Piece volumes shown are `pieceAFinalVolume` /
+  `pieceBFinalVolume` (after connectors); `pieceAVolume` / `pieceBVolume` are the
+  pre-connector volumes the conservation check uses.
+- **WORK IS SESSION-SCOPED.** Phase, preview and errors are tagged with the part
+  (while the workspace is shown); the effect cleanup releases the worker
+  candidate. No effect resets React state. Cancel resets the settings;
+  switching workspace keeps them.
+
 ## Hole-fill invariants (Stage 4B-1B1 engine, 4B-1B2 workflow)
 
 - **THE ENGINE IS UNCHANGED BY THE WORKFLOW.** Stage 4B-1B2 added selection,

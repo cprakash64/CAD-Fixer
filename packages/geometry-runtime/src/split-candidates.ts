@@ -41,6 +41,17 @@ export interface SplitCandidateSummary {
   readonly resources: GeometryEditResourceAccounting;
   readonly metrics: SplitResult['metrics'];
   readonly connector: SplitResult['connector'];
+  /**
+   * The cut's cross-section, from Piece A's cap before any connector: area,
+   * boundary-loop count and a bounded part-local outline. Reported for display;
+   * it decides nothing.
+   */
+  readonly section: {
+    readonly area: number;
+    readonly loopCount: number;
+    readonly outline: Float32Array;
+    readonly outlineTruncated: boolean;
+  };
 }
 interface Entry {
   readonly handle: SplitCandidateHandle;
@@ -145,6 +156,12 @@ export class SplitCandidateStore {
       resources,
       metrics: result.metrics,
       connector: result.connector,
+      section: {
+        area: result.cutA.area,
+        loopCount: result.cutA.loopCount,
+        outline: result.cutA.outline,
+        outlineTruncated: result.cutA.outlineTruncated,
+      },
     };
     this.candidates.set(handle.candidateId, { handle, document, summary });
     this.active.set(ticket.documentId, handle.candidateId);

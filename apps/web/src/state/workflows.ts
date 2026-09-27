@@ -56,9 +56,13 @@ export const WORKFLOWS: readonly WorkflowDescriptor[] = Object.freeze([
     implemented: true,
   },
   {
+    /*
+     * UI-04 took the reference's shape without its word "printable": nothing in
+     * CAD Fixer checks that a piece will print, and no interface text may say it.
+     */
     id: WorkflowId.Split,
     label: 'Split',
-    summary: 'Cut oversized models into parts and add alignment connectors.',
+    summary: 'Cut the model into parts, with optional connectors.',
     implemented: true,
   },
   {

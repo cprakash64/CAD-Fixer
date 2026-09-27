@@ -4,11 +4,25 @@ import type { Page } from '@playwright/test';
 
 async function openSplit(page: Parameters<typeof openHarness>[0]): Promise<void> {
   await page.getByTestId('workflow-split').click();
-  await expect(page.getByRole('heading', { name: 'Split', exact: true })).toBeVisible();
+  await expect(page.getByTestId('split-workspace')).toBeVisible();
 }
 async function preview(page: Parameters<typeof openHarness>[0]): Promise<void> {
-  await page.getByRole('button', { name: 'Update Preview' }).click();
-  await expect(page.getByRole('heading', { name: 'Preview' })).toBeVisible({ timeout: 30000 });
+  await page.getByTestId('split-preview').click();
+  await expect(page.getByTestId('split-preview-label')).toBeVisible({ timeout: 30000 });
+}
+/**
+ * Leaves Split & Connect. UI-04: a preview on screen is discarded first (its own
+ * button), then Cancel leaves the workspace; while work runs, Cancel stops it
+ * and leaves in one press.
+ */
+async function cancelSplit(page: Page): Promise<void> {
+  const discard = page.getByTestId('split-discard');
+  if (await discard.isVisible()) await discard.click();
+  await page.getByTestId('split-cancel').click();
+  await expect(page.getByTestId('split-workspace')).toBeHidden();
+}
+async function chooseConnector(page: Page, kind: 'pin' | 'dovetail'): Promise<void> {
+  await page.getByTestId(`split-connector-${kind}`).check();
 }
 async function resetQualification(page: Page): Promise<void> {
   await page.evaluate(() => window.cadfixerHarness?.resetSplitQualification());
@@ -57,9 +71,9 @@ test('7B browser flow 1: cube split previews, applies as two parts, and undoes e
   expect(before.partCount).toBe(1);
   await openSplit(page);
   await preview(page);
-  await page.getByRole('button', { name: 'Apply' }).click();
+  await page.getByTestId('split-apply').click();
   await expect.poll(async () => (await readState(page)).partCount).toBe(2);
-  await page.getByRole('button', { name: 'Undo Split' }).click();
+  await page.getByTestId('split-undo').click();
   await expect.poll(async () => (await readState(page)).partCount).toBe(1);
 });
 
@@ -67,15 +81,19 @@ test('7B browser flow 2: round pin split applies and exports both pieces', async
   await openHarness(page);
   await loadFixture(page, Fixture.SplitCubeMillimetre);
   await openSplit(page);
-  await page.getByLabel('Connector type').selectOption('pin');
+  await chooseConnector(page, 'pin');
   await preview(page);
-  await page.getByRole('button', { name: 'Apply' }).click();
+  await page.getByTestId('split-apply').click();
   await expect.poll(async () => (await readState(page)).partCount).toBe(2);
-  for (const label of ['Export Piece A', 'Export Piece B']) {
-    const download = page.waitForEvent('download');
-    await page.getByRole('button', { name: label }).click();
-    expect((await download).suggestedFilename()).toMatch(/Piece-[AB]\.stl/);
-  }
+  // UI-04: one action exports both pieces, one binary STL each.
+  const names: string[] = [];
+  page.on('download', (download) => names.push(download.suggestedFilename()));
+  await page.getByTestId('split-export').click();
+  await expect(page.getByTestId('split-export-saved')).toBeVisible({ timeout: 30_000 });
+  const sorted = names.sort();
+  expect(sorted).toHaveLength(2);
+  expect(sorted[0]).toMatch(/_part_A\.stl$/);
+  expect(sorted[1]).toBe(sorted[0]?.replace(/_part_A\.stl$/, '_part_B.stl'));
 });
 
 test('7B browser flow 3: dovetail supports 90 degree orientation and Piece B male', async ({
@@ -84,12 +102,12 @@ test('7B browser flow 3: dovetail supports 90 degree orientation and Piece B mal
   await openHarness(page);
   await loadFixture(page, Fixture.SplitCubeMillimetre);
   await openSplit(page);
-  await page.getByLabel('Connector type').selectOption('dovetail');
-  await page.getByLabel('Dovetail orientation').selectOption('90');
-  await page.getByLabel('Male connector side').selectOption('B');
+  await chooseConnector(page, 'dovetail');
+  await page.getByTestId('split-dovetail-90').click();
+  await page.getByTestId('split-male-b').click();
   await preview(page);
-  await expect(page.getByText(/Connector: dovetail/)).toBeVisible();
-  await page.getByRole('button', { name: 'Apply' }).click();
+  await expect(page.getByTestId('split-result-connector')).toHaveText('Dovetail');
+  await page.getByTestId('split-apply').click();
   await expect.poll(async () => (await readState(page)).partCount).toBe(2);
 });
 
@@ -101,8 +119,7 @@ test('7B browser flow 4: cancelling split mode discards preview without changing
   const before = await readState(page);
   await openSplit(page);
   await preview(page);
-  await page.getByLabel('Split', { exact: true }).getByRole('button', { name: 'Cancel' }).click();
-  await expect(page.getByRole('heading', { name: 'Split', exact: true })).toHaveCount(0);
+  await cancelSplit(page);
   const after = await readState(page);
   expect(after.revision).toBe(before.revision);
   expect(after.partCount).toBe(1);
@@ -118,13 +135,13 @@ test('7B-X09: seven shared parts become eight and Undo restores exact sharing', 
   await page.getByTestId('part-option-p3').click();
   await openSplit(page);
   await preview(page);
-  await page.getByRole('button', { name: 'Apply' }).click();
+  await page.getByTestId('split-apply').click();
   await expect.poll(async () => (await readState(page)).partCount).toBe(8);
   const after = await digest(page, await readState(page));
   expect(after.parts.filter((p) => p.partId !== 'p3-A' && p.partId !== 'p3-B')).toEqual(
     before.parts.filter((p) => p.partId !== 'p3'),
   );
-  await page.getByRole('button', { name: 'Undo Split' }).click();
+  await page.getByTestId('split-undo').click();
   await expect.poll(async () => (await readState(page)).partCount).toBe(7);
   expect((await digest(page, await readState(page))).parts).toEqual(before.parts);
 });
@@ -138,10 +155,10 @@ test('7B-X01: five confirmed in-Manifold heavy Split cancellations terminate and
     await loadFixture(page, Fixture.SplitHeavySphereMillimetre);
     await openSplit(page);
     await resetQualification(page);
-    await page.getByRole('button', { name: 'Update Preview' }).click();
+    await page.getByTestId('split-preview').click();
     await waitForSplitPhase(page, { phase: 'MANIFOLD_ENTER' });
     const started = Date.now();
-    await page.getByLabel('Split', { exact: true }).getByRole('button', { name: 'Cancel' }).click();
+    await cancelSplit(page);
     const terminal = await latestTerminal(page);
     tails.push(Date.now() - started);
     expect(terminal.stats.active).toBe(0);
@@ -152,7 +169,7 @@ test('7B-X01: five confirmed in-Manifold heavy Split cancellations terminate and
     await loadFixture(page, Fixture.SplitCubeMillimetre);
     await openSplit(page);
     await preview(page);
-    await page.getByLabel('Split', { exact: true }).getByRole('button', { name: 'Cancel' }).click();
+    await cancelSplit(page);
   }
   const ordered = [...tails].sort((a, b) => a - b);
   console.warn(
@@ -170,11 +187,11 @@ test('7B-X03 repeated preview invalidation and cancel retains no Boolean worker'
     await openSplit(page);
     await resetQualification(page);
     await preview(page);
-    await page.getByRole('button', { name: 'Y', exact: true }).click();
+    await page.getByTestId('split-plane-xz').click();
     await preview(page);
-    await page.getByLabel('Connector type').selectOption('pin');
+    await chooseConnector(page, 'pin');
     await preview(page);
-    await page.getByLabel('Split', { exact: true }).getByRole('button', { name: 'Cancel' }).click();
+    await cancelSplit(page);
     const terminal = await latestTerminal(page);
     expect(terminal.stats.active).toBe(0);
     expect(terminal.stats.created).toBe(terminal.stats.terminated);
@@ -188,11 +205,11 @@ test('7B-X01 connector cancellation terminates a confirmed pin Boolean without a
   await openHarness(page);
   await loadFixture(page, Fixture.SplitHeavySphereMillimetre);
   await openSplit(page);
-  await page.getByLabel('Connector type').selectOption('pin');
+  await chooseConnector(page, 'pin');
   await resetQualification(page);
-  await page.getByRole('button', { name: 'Update Preview' }).click();
+  await page.getByTestId('split-preview').click();
   await waitForSplitPhase(page, { phase: 'MANIFOLD_ENTER', minimumBooleanIndex: 2 });
-  await page.getByLabel('Split', { exact: true }).getByRole('button', { name: 'Cancel' }).click();
+  await cancelSplit(page);
   const terminal = await latestTerminal(page);
   expect(terminal.stats.active).toBe(0);
   expect(terminal.stats.created).toBe(terminal.stats.terminated);
@@ -204,12 +221,12 @@ test('7B-X02 real Split supersession allows only Preview B to apply', async ({ p
   await loadFixture(page, Fixture.SplitHeavySphereMillimetre);
   await openSplit(page);
   await resetQualification(page);
-  await page.getByRole('button', { name: 'Update Preview' }).click();
+  await page.getByTestId('split-preview').click();
   await waitForSplitPhase(page, { phase: 'MANIFOLD_ENTER' });
-  await page.getByLabel('Split plane offset value').fill('3');
-  await page.getByRole('button', { name: 'Update Preview' }).click();
-  await expect(page.getByRole('heading', { name: 'Preview' })).toBeVisible({ timeout: 60_000 });
-  await page.getByRole('button', { name: 'Apply' }).click();
+  await page.getByTestId('split-position-value').fill('3');
+  await page.getByTestId('split-preview').click();
+  await expect(page.getByTestId('split-preview-label')).toBeVisible({ timeout: 60_000 });
+  await page.getByTestId('split-apply').click();
   await expect.poll(async () => (await readState(page)).partCount).toBe(2);
   const events = await page.evaluate(
     () => window.cadfixerHarness?.splitQualificationEvents() ?? [],
@@ -224,7 +241,7 @@ test('7B-X03 replacement import terminates a heavy Split and remains authoritati
   await loadFixture(page, Fixture.SplitHeavySphereMillimetre);
   await openSplit(page);
   await resetQualification(page);
-  await page.getByRole('button', { name: 'Update Preview' }).click();
+  await page.getByTestId('split-preview').click();
   await waitForSplitPhase(page, { phase: 'MANIFOLD_ENTER' });
   await loadFixture(page, Fixture.SplitCubeMillimetre);
   const terminal = await latestTerminal(page);
@@ -245,17 +262,14 @@ test('7B-X10 Split preview, connectors, apply and piece exports stay on origin',
   await openHarness(page);
   await loadFixture(page, Fixture.SplitCubeMillimetre);
   await openSplit(page);
-  await page.getByLabel('Connector type').selectOption('pin');
+  await chooseConnector(page, 'pin');
   await preview(page);
-  await page.getByLabel('Connector type').selectOption('dovetail');
+  await chooseConnector(page, 'dovetail');
   await preview(page);
-  await page.getByRole('button', { name: 'Apply' }).click();
+  await page.getByTestId('split-apply').click();
   await expect.poll(async () => (await readState(page)).partCount).toBe(2);
-  for (const label of ['Export Piece A', 'Export Piece B']) {
-    const download = page.waitForEvent('download');
-    await page.getByRole('button', { name: label }).click();
-    await download;
-  }
+  await page.getByTestId('split-export').click();
+  await expect(page.getByTestId('split-export-saved')).toBeVisible({ timeout: 30_000 });
   expect(offOrigin).toEqual([]);
 });
 
@@ -294,6 +308,6 @@ test('7B-PERF Split previews at 10k, 100k and 500k keep the main thread responsi
       `[split browser] ${label} total=${String(total)}ms longestGap=${longestGap.toFixed(0)}ms`,
     );
     expect(longestGap).toBeLessThan(1000);
-    await page.getByLabel('Split', { exact: true }).getByRole('button', { name: 'Cancel' }).click();
+    await cancelSplit(page);
   }
 });

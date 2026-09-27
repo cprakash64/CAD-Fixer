@@ -4,6 +4,7 @@ import { WorkflowId } from '../state/workflows';
 import { ExportSummary } from './ExportSummary';
 import { ModelPanel } from './ModelPanel';
 import { IssueInspector } from './IssueInspector';
+import { SplitInspector } from './SplitInspector';
 import { PartSelector } from './PartSelector';
 import { RuntimePanel } from './RuntimePanel';
 import { Icon } from './shell/Icon';
@@ -26,6 +27,7 @@ export function Inspector({ inert = false }: { readonly inert?: boolean }): Reac
   const { model, selectedWorkflow } = useWorkspaceState();
   const repairWorkspace = selectedWorkflow === undefined || selectedWorkflow === WorkflowId.Repair;
   const convertWorkspace = selectedWorkflow === WorkflowId.Convert;
+  const splitWorkspace = selectedWorkflow === WorkflowId.Split;
   const layout = useShellLayout();
   const collapsed = layout.inspectorCollapsed;
   const panelRef = useRef<HTMLElement>(null);
@@ -86,6 +88,8 @@ export function Inspector({ inert = false }: { readonly inert?: boolean }): Reac
               <IssueInspector />
             ) : convertWorkspace ? (
               <ExportSummary />
+            ) : splitWorkspace ? (
+              <SplitInspector />
             ) : model === undefined ? (
               <p className="panel__empty">Nothing is selected. Open a model to begin.</p>
             ) : model.parts.length <= 1 ? (

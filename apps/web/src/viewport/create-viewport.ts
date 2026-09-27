@@ -13,10 +13,8 @@ import {
   MeshStandardMaterial,
   MOUSE,
   PerspectiveCamera,
-  PlaneGeometry,
   MeshBasicMaterial,
   CanvasTexture,
-  Quaternion,
   Sprite,
   SpriteMaterial,
   Scene,
@@ -25,6 +23,7 @@ import {
   WebGLRenderer,
 } from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { createSplitGizmo, type SplitGizmoDragPhase } from './create-split-gizmo';
 import { buildPartGeometry, partMatrix, SharedPartGeometry } from './part-geometry';
 import { pickPartTriangle, type PartPick } from './pick-part';
 import {
@@ -176,14 +175,26 @@ export interface ViewportEditPlane {
   readonly normal: readonly [number, number, number];
   readonly revision: number;
 }
+/**
+ * Which pieces of a split to colour, and as which side. Presentation only: the
+ * part's geometry, material in any file and identity are untouched.
+ */
+export type ViewportPartTint = 'a' | 'b';
+
 export interface ViewportTextureSelection {
   readonly positions: Float32Array;
   readonly revision: number;
 }
 
 export interface ViewportHandle {
-  /** Replaces the displayed model, disposing whatever was there. */
-  setModel(model: ViewportModel | undefined): void;
+  /**
+   * Replaces the displayed model, disposing whatever was there.
+   *
+   * `preserveView` keeps the camera where it is instead of framing the new
+   * model — for a split preview of the SAME document, where reframing on every
+   * preview would throw away the view the user chose the cut from.
+   */
+  setModel(model: ViewportModel | undefined, options?: { readonly preserveView?: boolean }): void;
   /**
    * Points the overlay, preview and change-overlay frame at a different part.
    *
@@ -205,8 +216,15 @@ export interface ViewportHandle {
   setEditPlane(plane: ViewportEditPlane | undefined): void;
   /** Shows the worker-qualified connected surface before a Boolean preview exists. */
   setTextureSelection(selection: ViewportTextureSelection | undefined): void;
-  moveEditPlaneAlongNormal(distance: number): void;
-  rotateEditPlane(axis: readonly [number, number, number], radians: number): void;
+  /**
+   * The split's cross-section outline (pairs of ACTIVE-part-local points), as
+   * the engine reported it. `undefined` clears it.
+   */
+  setSectionOutline(
+    data: { readonly segments: Float32Array; readonly revision: number } | undefined,
+  ): void;
+  /** Colours the pieces of a split as Piece A and Piece B. `undefined` restores one colour. */
+  setPartTints(tints: ReadonlyMap<string, ViewportPartTint> | undefined): void;
   /** Replaces the diagnostic overlays. `undefined` clears them. */
   setOverlays(data: ViewportOverlayData | undefined): void;
   /**
@@ -329,6 +347,12 @@ export interface ViewportOptions {
    * move — exactly the churn the viewport is kept apart from.
    */
   readonly onOrientationChange?: (orientation: ViewOrientation) => void;
+  /**
+   * The split arrow was dragged: a signed distance along the plane's normal,
+   * part-local, from where the drag started. The viewport moves nothing itself;
+   * the application sets its one plane and pushes it back with `setEditPlane`.
+   */
+  readonly onEditPlaneDrag?: (phase: SplitGizmoDragPhase, distanceAlongNormal: number) => void;
 }
 
 const MAX_PIXEL_RATIO = 2;
@@ -471,18 +495,56 @@ export function createViewport(
   const holeFillOverlays: HoleFillOverlayHandle = createHoleFillOverlays();
   activePartGroup.add(holeFillOverlays.group);
 
-  const editPlaneGeometry = new PlaneGeometry(1, 1);
-  const editPlaneMaterial = new MeshBasicMaterial({
-    color: 0x54c7e8,
-    transparent: true,
-    opacity: 0.3,
-    side: DoubleSide,
-    depthWrite: false,
+  /*
+   * THE SPLIT PLANE, ITS ARROW AND THE CUT OUTLINE. Created before the orbit
+   * controls' first press can arrive; its capture-phase listener takes only
+   * presses that hit the arrow. See `create-split-gizmo.ts`.
+   */
+  const splitGizmo = createSplitGizmo({
+    camera,
+    canvas,
+    onDrag: (phase, distance) => options.onEditPlaneDrag?.(phase, distance),
   });
-  const editPlaneMesh = new Mesh(editPlaneGeometry, editPlaneMaterial);
-  editPlaneMesh.visible = false;
-  activePartGroup.add(editPlaneMesh);
+  activePartGroup.add(splitGizmo.root);
   let editPlane: ViewportEditPlane | undefined;
+  let sectionRevision: number | undefined;
+  const hideEditPlane = (): void => {
+    editPlane = undefined;
+    splitGizmo.setPlane(undefined, 1);
+    splitGizmo.setOutline(undefined);
+    sectionRevision = undefined;
+  };
+
+  /* Piece A / Piece B colours, and a lifted variant of each for the selected piece. */
+  const tintMaterials = {
+    a: new MeshStandardMaterial({
+      color: 0x7fb2e8,
+      metalness: 0.05,
+      roughness: 0.7,
+      side: DoubleSide,
+    }),
+    b: new MeshStandardMaterial({
+      color: 0xf29a84,
+      metalness: 0.05,
+      roughness: 0.7,
+      side: DoubleSide,
+    }),
+    aSelected: new MeshStandardMaterial({
+      color: 0x7fb2e8,
+      emissive: 0x1d3550,
+      metalness: 0.05,
+      roughness: 0.7,
+      side: DoubleSide,
+    }),
+    bSelected: new MeshStandardMaterial({
+      color: 0xf29a84,
+      emissive: 0x4a2418,
+      metalness: 0.05,
+      roughness: 0.7,
+      side: DoubleSide,
+    }),
+  };
+  let partTints: ReadonlyMap<string, ViewportPartTint> | undefined;
   const textureSelectionMaterial = new MeshBasicMaterial({
     color: 0xffc857,
     transparent: true,
@@ -546,6 +608,33 @@ export function createViewport(
     flatShading: false,
   });
 
+  const sameTints = (
+    a: ReadonlyMap<string, ViewportPartTint> | undefined,
+    b: ReadonlyMap<string, ViewportPartTint> | undefined,
+  ): boolean => {
+    if (a === undefined || b === undefined) return a === b;
+    if (a.size !== b.size) return false;
+    for (const [id, tint] of a) if (b.get(id) !== tint) return false;
+    return true;
+  };
+
+  /** Chooses each part mesh's material from the current tints and active part. */
+  const applyPartTints = (): void => {
+    for (const [id, mesh] of partMeshes) {
+      const tint = partTints?.get(id);
+      mesh.material =
+        tint === undefined
+          ? surfaceMaterial
+          : tint === 'a'
+            ? id === activePartId
+              ? tintMaterials.aSelected
+              : tintMaterials.a
+            : id === activePartId
+              ? tintMaterials.bSelected
+              : tintMaterials.b;
+    }
+  };
+
   let currentModel: ViewportModel | undefined;
   /**
    * Held beside the model rather than inside it, because it changes far more
@@ -602,6 +691,21 @@ export function createViewport(
      * occasionally measure the wrong scene.
      */
     canvas.dataset.modelRevision = String(currentModel?.revision ?? 0);
+    /*
+     * THE SPLIT PLANE AS DRAWN, so a test can prove the viewport shows the cut
+     * the controls describe — not merely that a number was stored.
+     */
+    canvas.dataset.editPlane =
+      editPlane === undefined
+        ? 'none'
+        : `${editPlane.origin.map((v) => v.toFixed(4)).join(',')}|${editPlane.normal
+            .map((v) => v.toFixed(4))
+            .join(',')}`;
+    canvas.dataset.sectionOutlineEdges = String(splitGizmo.outlineEdges);
+    const arrow = splitGizmo.arrowOnScreen(canvas.clientWidth, canvas.clientHeight);
+    canvas.dataset.editArrow =
+      arrow === undefined ? 'none' : arrow.map((value) => value.toFixed(1)).join(',');
+    canvas.dataset.tintedParts = String(partTints?.size ?? 0);
     canvas.dataset.sharedGeometries = String(sharedGeometry.size);
     canvas.dataset.geometriesCreated = String(sharedGeometry.lifecycle.created);
     canvas.dataset.geometriesDisposed = String(sharedGeometry.lifecycle.disposed);
@@ -680,6 +784,22 @@ export function createViewport(
   };
 
   controls.addEventListener('change', render);
+
+  /*
+   * ONE FRAME FOR THE SPLIT OVERLAYS, not one per call. A split preview lands
+   * as a model swap followed by the plane, the outline and the piece tints in
+   * the same effect flush; drawing a 500k-triangle scene once per call stacked
+   * several software-rendered frames into one main-thread gap. These three
+   * schedule instead, and the next animation frame draws them together.
+   */
+  let scheduledFrame = 0;
+  const scheduleRender = (): void => {
+    if (scheduledFrame !== 0 || disposed) return;
+    scheduledFrame = requestAnimationFrame(() => {
+      scheduledFrame = 0;
+      render();
+    });
+  };
 
   const resize = (): void => {
     const width = Math.max(1, container.clientWidth);
@@ -824,7 +944,11 @@ export function createViewport(
     };
   };
 
-  const setModel = (model: ViewportModel | undefined): void => {
+  const setModel = (
+    model: ViewportModel | undefined,
+    setOptions?: { readonly preserveView?: boolean },
+  ): void => {
+    const keepView = setOptions?.preserveView === true && currentModel !== undefined;
     disposePartMeshes();
     // A preview describes a repair of the model being replaced. It goes with it:
     // there is no frame in which one model's geometry is drawn beside another
@@ -840,8 +964,7 @@ export function createViewport(
     // previous selection's opening on geometry that does not have it.
     holeFillOverlays.setData(undefined);
     marker.visible = false;
-    editPlane = undefined;
-    editPlaneMesh.visible = false;
+    hideEditPlane();
     currentModel = model;
 
     if (model === undefined) {
@@ -890,7 +1013,9 @@ export function createViewport(
     grid.visible = false;
     canvas.setAttribute('aria-label', 'Loaded 3D model. Drag to orbit, scroll to zoom.');
 
-    fitView();
+    applyPartTints();
+    if (keepView) render();
+    else fitView();
   };
 
   /** Moves the overlay/preview frame onto the active part. Touches no geometry. */
@@ -919,8 +1044,8 @@ export function createViewport(
     // previous selection's opening on geometry that does not have it.
     holeFillOverlays.setData(undefined);
     marker.visible = false;
-    editPlane = undefined;
-    editPlaneMesh.visible = false;
+    hideEditPlane();
+    applyPartTints();
 
     // A preview may have hidden the previously active part. Every part is drawn
     // once no candidate is on screen.
@@ -936,44 +1061,40 @@ export function createViewport(
       plane.revision !== currentModel?.revision ||
       activePartId === undefined
     ) {
+      // Nothing to hide: no redraw. A full frame of a large model is seconds
+      // under software WebGL, and this is called on every model change.
+      if (editPlane === undefined && !splitGizmo.planeVisible) return;
       editPlane = undefined;
-      editPlaneMesh.visible = false;
-      render();
-      return;
-    }
-    const normal = new Vector3(...plane.normal);
-    if (
-      !plane.origin.every(Number.isFinite) ||
-      !normal.toArray().every(Number.isFinite) ||
-      normal.lengthSq() < 1e-30
-    ) {
-      editPlane = undefined;
-      editPlaneMesh.visible = false;
-      render();
+      splitGizmo.setPlane(undefined, 1);
+      scheduleRender();
       return;
     }
     editPlane = plane;
-    editPlaneMesh.position.set(...plane.origin);
-    editPlaneMesh.quaternion.setFromUnitVectors(new Vector3(0, 0, 1), normal.normalize());
-    const size = Math.max(currentModel.radius, 1) * 1.4;
-    editPlaneMesh.scale.set(size, size, 1);
-    editPlaneMesh.visible = true;
-    render();
+    splitGizmo.setPlane(plane, Math.max(currentModel.radius, 1) * 1.4);
+    scheduleRender();
   };
-  const moveEditPlaneAlongNormal = (distance: number): void => {
-    if (!editPlane || !Number.isFinite(distance)) return;
-    const n = new Vector3(...editPlane.normal).normalize();
-    const moved = new Vector3(...editPlane.origin).addScaledVector(n, distance);
-    setEditPlane({ ...editPlane, origin: [moved.x, moved.y, moved.z] });
+
+  const setSectionOutline = (
+    data: { readonly segments: Float32Array; readonly revision: number } | undefined,
+  ): void => {
+    if (data === undefined || data.revision !== currentModel?.revision) {
+      if (sectionRevision === undefined) return;
+      splitGizmo.setOutline(undefined);
+      sectionRevision = undefined;
+      scheduleRender();
+      return;
+    }
+    splitGizmo.setOutline(data.segments);
+    sectionRevision = data.revision;
+    scheduleRender();
   };
-  const rotateEditPlane = (axis: readonly [number, number, number], radians: number): void => {
-    if (!editPlane || !Number.isFinite(radians)) return;
-    const a = new Vector3(...axis);
-    if (!a.toArray().every(Number.isFinite) || a.lengthSq() < 1e-30) return;
-    const n = new Vector3(...editPlane.normal)
-      .applyQuaternion(new Quaternion().setFromAxisAngle(a.normalize(), radians))
-      .normalize();
-    setEditPlane({ ...editPlane, normal: [n.x, n.y, n.z] });
+
+  const setPartTints = (tints: ReadonlyMap<string, ViewportPartTint> | undefined): void => {
+    // Unchanged tints draw nothing new; skip the frame (see `setEditPlane`).
+    if (sameTints(partTints, tints)) return;
+    partTints = tints;
+    applyPartTints();
+    scheduleRender();
   };
 
   const handleContextLost = (event: Event): void => {
@@ -1168,8 +1289,8 @@ export function createViewport(
     pick,
     setEditPlane,
     setTextureSelection,
-    moveEditPlaneAlongNormal,
-    rotateEditPlane,
+    setSectionOutline,
+    setPartTints,
     setOverlays,
     setPreview,
     setChangeOverlays,
@@ -1221,8 +1342,9 @@ export function createViewport(
       overlays.dispose();
       changeOverlays.dispose();
       holeFillOverlays.dispose();
-      editPlaneGeometry.dispose();
-      editPlaneMaterial.dispose();
+      if (scheduledFrame !== 0) cancelAnimationFrame(scheduledFrame);
+      splitGizmo.dispose();
+      for (const material of Object.values(tintMaterials)) material.dispose();
       textureSelectionMaterial.dispose();
       markerMaterial.map?.dispose();
       markerMaterial.dispose();

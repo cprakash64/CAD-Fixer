@@ -122,3 +122,14 @@ export function deriveDocumentExportName(sourceName: string, target: string): st
   const extension = EXPORT_EXTENSIONS[target] ?? '.bin';
   return `${sanitiseBase(sourceName)}${extension}`;
 }
+
+/**
+ * A split piece's STL filename: `bracket_part_A.stl`.
+ *
+ * The same sanitised base as every other export, then the piece letter the
+ * split gave it. Deterministic, so the same model and piece always produce the
+ * same name, and the two pieces of one split can never collide.
+ */
+export function deriveSplitPartExportName(sourceName: string, piece: 'A' | 'B'): string {
+  return `${sanitiseBase(sourceName)}_part_${piece}.stl`;
+}
