@@ -153,7 +153,7 @@ test('O1: a same-orientation duplicate is previewed, applied, and its expected s
 
   // Before / After both work, and the preview is labelled while After is shown.
   await expect(page.getByTestId('preview-mode-after')).toBeChecked();
-  await expect(page.getByTestId('preview-banner')).toHaveText('Preview — not applied');
+  await expect(page.getByTestId('preview-banner')).toHaveText('Repair preview — not applied');
   await page.getByTestId('preview-mode-before').check();
   await expect(page.getByTestId('preview-banner')).toHaveCount(0);
   await page.getByTestId('preview-mode-after').check();

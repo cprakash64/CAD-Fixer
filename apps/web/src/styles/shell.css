@@ -65,7 +65,15 @@
   display: flex;
   flex-direction: column;
   height: 100dvh;
-  overflow: hidden;
+  /*
+   * CLIP, NEVER HIDDEN. Below 1200 px the inspector drawer waits off-canvas at
+   * `translate: 100%`, and `overflow: hidden` would still make this a scroll
+   * container with that drawer's width as its range: any scroll-into-view —
+   * an assistive technology's cursor, find-in-page, a test runner's click —
+   * shifted the whole shell sideways with no way back (UI-06, I-01). `clip`
+   * paints identically and has no scroll position to move.
+   */
+  overflow: clip;
   background: var(--cad-bg);
   color: var(--cad-text);
   font: var(--fs-ui) / 1.4 var(--font-body);
@@ -585,7 +593,7 @@
   width: 36px;
   height: 20px;
   border-radius: 999px;
-  background: #3d4c5a;
+  background: var(--cad-disabled-fill);
   transition: background-color var(--motion-fast) var(--ease-out);
 }
 
@@ -641,7 +649,7 @@
 }
 
 .primary-action:disabled {
-  background: #3d4c5a;
+  background: var(--cad-disabled-fill);
   color: var(--cad-text-muted);
   cursor: not-allowed;
   opacity: 1;
@@ -649,6 +657,7 @@
 
 /* The existing panels' primary action adopts the same register. */
 .action.action--primary {
+  min-height: 36px;
   border-color: transparent;
   background: var(--cad-accent);
   color: var(--cad-on-accent);
@@ -781,6 +790,8 @@
   overscroll-behavior: contain;
 }
 
+/* The activity log. It scrolls inside a cap so it can never crowd out the
+   workspace above it; on a short window the cap tightens (UI-06, I-09). */
 .tool-panel__footer {
   flex: none;
   max-height: 148px;
@@ -826,9 +837,42 @@
   margin-bottom: 8px;
 }
 
+/*
+ * ONE SECONDARY BUTTON (UI-06, I-08). The panels that predate the shell use
+ * `.action`; the workspaces built on it use `.secondary-action`. They mean the
+ * same thing, so they now look the same: control height, control radius, the
+ * same weight, the same disabled treatment and the shared focus ring. `min-`
+ * height rather than height, because several `.action` labels wrap in a 280 px
+ * panel. The primary variant is the shell's 36 px primary action.
+ */
 .action {
-  font-size: var(--fs-ui);
-  font-weight: 500;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: var(--shell-control-h);
+  padding: 4px 12px;
+  border: 1px solid var(--cad-border-control);
+  border-radius: var(--radius-control);
+  background: var(--cad-control-raised);
+  color: var(--cad-text-strong);
+  font: 600 var(--fs-ui) / 1.3 var(--font-body);
+}
+
+.action:hover:not(:disabled) {
+  border-color: var(--cad-border-strong);
+  background: var(--cad-hover);
+}
+
+.action:disabled {
+  color: var(--cad-text-muted);
+  opacity: 0.7;
+}
+
+.action.action--primary:disabled {
+  background: var(--cad-disabled-fill);
+  color: var(--cad-text-muted);
+  opacity: 1;
 }
 
 /* ------------------------------------------------------ panel section -- */
@@ -868,11 +912,17 @@
 .panel-section__title {
   flex: 1;
   font: 600 var(--fs-ui) var(--font-display);
+  /* A heading stays on one line; its meta gives way instead (UI-06, I-11). */
+  white-space: nowrap;
 }
 
 .panel-section__meta {
+  min-width: 0;
+  overflow: hidden;
   color: var(--cad-text-muted);
   font: 500 var(--fs-meta) var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .panel-section__body {
@@ -1073,7 +1123,7 @@
   gap: 14px;
   width: min(560px, 100%);
   padding: 36px 32px 28px;
-  border: 2px dashed #3d4c5a;
+  border: 2px dashed var(--cad-disabled-fill);
   border-radius: 20px;
   background: rgba(18, 27, 36, 0.72);
   text-align: center;
@@ -1222,6 +1272,10 @@
 /* ------------------------------------------------------------- viewport -- */
 
 .viewport {
+  /* The HUD band's side reserves; see `.viewport__hud`. */
+  --hud-inset-start: 140px;
+  --hud-inset-end: 140px;
+
   position: absolute;
   inset: 0;
   overflow: hidden;
@@ -1238,18 +1292,33 @@
   touch-action: none;
 }
 
+/*
+ * THE HUD BAND. One column between two reserved side zones: the navigation
+ * toolbar on the left and the view cube on the right. Every contextual HUD —
+ * Repair's issue, the split, the surface selection, the preview banner — sits
+ * centred in it, so they stack rather than collide.
+ *
+ * The column SPANS the band (left and right insets) instead of sitting at
+ * `left: 50%` with a translate: a box placed at 50% resolves its shrink-to-fit
+ * width against the other half of the viewport only, which capped every HUD at
+ * half the canvas and wrapped a 430 px phone's selection summary onto three
+ * lines (UI-06, I-07).
+ */
 .viewport__hud {
   position: absolute;
   top: 14px;
-  left: 50%;
+  right: var(--hud-inset-end);
+  left: var(--hud-inset-start);
   z-index: 6;
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 6px;
-  max-width: calc(100% - 280px);
-  translate: -50% 0;
   pointer-events: none;
+}
+
+.viewport__hud > * {
+  max-width: 100%;
 }
 
 .viewport__empty,
@@ -1846,6 +1915,11 @@
   font-size: var(--fs-secondary);
 }
 
+/* "1 / 3" is one reading; it never breaks across lines. */
+.occurrence-nav__position {
+  white-space: nowrap;
+}
+
 .occurrence-nav__label strong {
   color: var(--cad-text-strong);
   font-weight: 600;
@@ -2091,6 +2165,8 @@
 .panel-section__toggle:focus-visible,
 .segmented__option:focus-visible,
 .primary-action:focus-visible,
+.secondary-action:focus-visible,
+.action:focus-visible,
 .menu__item:focus-visible,
 .view-cube__face:focus-visible,
 .statusbar__health:focus-visible {
@@ -2591,7 +2667,7 @@
 
 .split-workspace__reset {
   width: auto;
-  height: 28px;
+  height: 30px; /* the compact inline secondary, as Texture's Clear (UI-06) */
   margin: 2px 0 8px;
   padding: 0 10px;
   font-size: var(--fs-secondary);
@@ -3024,8 +3100,10 @@
     display: block;
   }
 
-  .viewport__hud {
-    max-width: calc(100% - 200px);
+  /* The view cube is full size here (14 + 96 px from the right edge). */
+  .viewport {
+    --hud-inset-start: 116px;
+    --hud-inset-end: 116px;
   }
 }
 
@@ -3090,10 +3168,36 @@
   /* On a phone the HUD moves to the bottom edge at full width: at the top it
      collided with the view cube and left the issue name a single letter. The
      Compare bar lifts above it so the two never overlap. */
+  .viewport {
+    --hud-inset-start: 12px;
+    --hud-inset-end: 12px;
+  }
+
   .viewport__hud {
     top: auto;
     bottom: 12px;
-    max-width: calc(100% - 24px);
+  }
+
+  /* Touch targets at the tier's own 40 px (UI-06, I-04). */
+  .status__clear {
+    min-width: 40px;
+    min-height: 40px;
+  }
+
+  .repair__operation-label {
+    min-height: 40px;
+  }
+
+  .repair__operation-label input {
+    width: 20px;
+    height: 20px;
+  }
+
+  /* Primary actions follow the tier too; secondary ones already do, through
+     `--shell-control-h`. */
+  .primary-action,
+  .action.action--primary {
+    min-height: 40px;
   }
 
   .viewport__actions {
@@ -3175,6 +3279,17 @@
 
   .texture-card__thumb {
     height: 32px;
+  }
+}
+
+/* Short windows (UI-06, I-09): the activity log keeps two or three lines and
+   scrolls, so the workspace's own controls and its primary action stay in
+   reach. Width tiers above are unaffected. */
+@media (height < 760px) {
+  .tool-panel__footer {
+    max-height: 96px;
+    padding-top: 8px;
+    padding-bottom: 8px;
   }
 }
 

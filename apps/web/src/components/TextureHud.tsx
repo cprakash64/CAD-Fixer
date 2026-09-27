@@ -44,10 +44,12 @@ export function TextureHud(): ReactNode {
         </p>
         <p className="split-hud__detail" data-testid="texture-hud-detail">
           {texture.phase === TexturePhase.Preview
-            ? TEXTURE_COPY.previewLabel
+            ? TEXTURE_COPY.hudGenerated
             : selection === undefined
               ? TEXTURE_COPY.hintSelect
-              : TEXTURE_COPY.hintSelected}
+              : texture.layout.result !== undefined
+                ? TEXTURE_COPY.hudLayout
+                : TEXTURE_COPY.hintSelected}
         </p>
       </div>
     </div>

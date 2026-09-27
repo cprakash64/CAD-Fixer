@@ -35,9 +35,8 @@ export function WorkspaceSwitcher(): ReactNode {
       <button
         type="button"
         className="workspace-switcher__trigger"
-        aria-haspopup="true"
         aria-expanded={open}
-        aria-controls={menuId}
+        aria-controls={open ? menuId : undefined}
         aria-label={`Workspace: ${presentation.name}. Change workspace`}
         onClick={toggle}
         data-testid="workspace-switcher"

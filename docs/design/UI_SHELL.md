@@ -9,7 +9,7 @@ on the PrintPrep reference design, without changing what any workflow does.
 TopBar (48)      brand · workspace dropdown · Open · Export · workspace tabs · Help · Settings
 ToolPanel (300)  WorkspaceHeader · the current workspace's panels · Activity log
 Viewport (flex)  canvas · left navigation toolbar · view cube + home · top HUD · bottom actions
-Inspector (280)  Model · Selection · Runtime; collapses to a 36 px rail
+Inspector (280)  Selection (context) · Model · Export · Runtime; collapses to a 36 px rail
 StatusBar (30)   job / Ready · privacy statement · triangles · vertices · unit · topology · release
 ```
 
@@ -56,6 +56,10 @@ whose legacy variable names now alias the tokens.
 | 600–899   | drawer      | drawer (one at once) | dropdown, both toggles       |
 | < 600     | drawer 88 % | drawer 88 %          | compact; 40 px touch targets |
 
+The shell container is `overflow: clip`, never `hidden`: below 1200 px the
+inspector drawer waits off-canvas, and a `hidden` container is still a scroll
+container that any scroll-into-view could shift sideways (UI-06, I-01).
+
 CSS decides the presentation; React records only whether a drawer is open.
 Docked panels resize the viewport through the renderer's `ResizeObserver`;
 drawers overlay it and do not.
@@ -97,7 +101,82 @@ no longer move it. The full-size editor is covered by a separate freeze guard
 in `e2e/ui-shell.spec.ts`. At the pinned size the two builds are
 indistinguishable; the measurements are in the UI-01-R2 report.
 
-## Known gaps
+## Final rules (UI-06)
 
-- The workspace-specific panels keep their existing markup; only their styling
-  changed. Matching the reference's per-workspace layouts is later UI work.
+The UI-06 audit made these the shared rules for every workspace. Each is held
+by `e2e/ui-consistency.spec.ts` (invariants) or `e2e/ui-polish.spec.ts` (the
+defect that prompted it).
+
+### Inspector order
+
+**Selection → Model → Export → Runtime**, in every workspace. Selection is the
+workspace's context (the selected finding, the export summary, the active cut,
+the surface selection) and leads because it is what changes as the user works.
+Model is the compact file card and facts. Export holds "Export / Convert…" and
+the active-part STL export, and is hidden — never unmounted — while no model is
+loaded. Nothing scrolls the inspector programmatically.
+
+### Controls
+
+- **Primary action**: `.primary-action` (or legacy `.action--primary`), accent
+  fill, 36 px (40 px below 600), 8 px radius, 600 weight. One per workspace
+  step: the thing the step exists to do. A button that NAVIGATES to that step
+  (the inspector's "Export / Convert…") is secondary.
+- **Secondary action**: `.secondary-action` and legacy `.action` are one
+  control — raised fill, 1 px control border, 8 px radius, 600 weight,
+  `--shell-control-h` (32, 40 below 600), 70 % opacity when disabled. A
+  footer secondary matches its primary's 36 px; a compact inline one is 30 px.
+- **Card selector**: `.format-card` is the one card family for Convert formats,
+  Split connectors and Texture patterns — a real radio inside, 8 px radius,
+  1 px border, accent border + soft fill + check mark when selected (never
+  colour alone), the shared ring on keyboard focus. Width follows content.
+- **Number field**: every numeric input is `shell/number-field.tsx`. The field
+  commits any finite value; the owning hook clamps (Split) or reports a
+  settings problem that blocks the action (Texture).
+- **Focus**: one ring, `--focus-ring`, on every interactive element.
+- **Pop-ups** (workspace, Help, Settings) are DISCLOSURES: `aria-expanded`, and
+  `aria-controls` only while open — no `aria-haspopup`, because nothing they
+  reveal is a `role="menu"`. Esc closes and returns focus to the trigger.
+
+### Viewport overlays
+
+- **HUD band**: one centred column between the navigation toolbar and the view
+  cube (`--hud-inset-start/end`: 140 px docked, 116 px below 900, 12 px below
+  600, where it moves to the bottom edge). It spans the band rather than
+  sitting at `left: 50%`, which halved its width.
+- **Preview language**: a generated preview shows ONE status pill naming the
+  operation — `Repair / Fill / Split / Texture preview — not applied`. HUDs
+  describe what is selected or measured and never repeat it. Texture's HUD
+  names the three states: layout outlines only (nothing built), generated
+  texture geometry (a preview), or the model.
+- **No floor, no grid under a model.** The viewport world is Y-up; printable
+  files are conventionally Z-up, and CAD Fixer has not chosen a print
+  orientation, so a floor would assert a resting face. A scaled grid would
+  imply a unit and scale many documents do not state. The empty-state grid
+  stays because there is no model to misstate.
+
+### Density and height
+
+Dense but readable: 13 px UI text, 11–12 px metadata, section titles on one
+line (their meta truncates). Below 760 px of height the activity log caps at
+96 px and scrolls, so each workspace's primary action stays reachable at
+1024 × 600.
+
+### Visual regression
+
+Pixel snapshots are deliberately not used: the viewport is software-rendered
+WebGL whose anti-aliasing is not CAD Fixer's. Invariants are asserted as
+computed style and layout instead — shell geometry per tier, the control
+families above, inspector order, HUD placement, and phone drawer fit and
+target sizes. Content-dependent dimensions are not compared.
+
+### Terminology
+
+Part (a document part) vs Piece (one side of a split preview); face (a
+triangle) vs surface / region (a selection of faces); Preview (nothing
+changed) vs Apply (the transaction); Export writes a file, Convert is the
+workspace that chooses its format; Repair, never Fix, for the conservative
+operations; triangles, never tris; Units (the document's statement).
+
+Capabilities the reference shows and CAD Fixer does not have are listed in
+`UI_CAPABILITY_GAPS.md`.

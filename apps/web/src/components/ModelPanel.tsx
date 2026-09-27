@@ -6,21 +6,22 @@ import { useOpenConvertWorkspace } from './shell/open-convert';
 import { Icon } from './shell/Icon';
 
 /**
- * Model information and the two ways out of it.
+ * Model information (`ModelPanel`) and the two ways out of it
+ * (`ModelExportPanel`).
  *
  * PRESENTATION ONLY. Every number shown here was computed in the worker during
  * import, and both export controls call hooks that own their operations.
  *
- * It sits in the inspector's "Model" section, which supplies the heading, so it
- * draws none of its own.
+ * They sit in the inspector's "Model" and "Export" sections, which supply the
+ * headings, so they draw none of their own.
  *
  * THERE ARE TWO EXPORTS AND THEY ARE NOT THE SAME OPERATION, which is why they
  * are not both called "Export":
  *
  *   - EXPORT / CONVERT writes the WHOLE DOCUMENT, in a format the user chooses,
- *     after showing what that format keeps and what it cannot. It is the
- *     primary action and it is what "Export" means everywhere else in the
- *     product.
+ *     after showing what that format keeps and what it cannot. It is
+ *     what "Export" means everywhere else in the product; here it is the route
+ *     into the Convert workspace, which carries the primary action.
  *   - EXPORT ACTIVE PART AS STL writes ONE part, the selected one, and is the
  *     only way to get a single part out of a multi-part document. It is kept
  *     because nothing else does that, and it is labelled with the word "part"
@@ -29,9 +30,7 @@ import { Icon } from './shell/Icon';
  *     4A-2B3 exists to remove.
  */
 export function ModelPanel(): ReactNode {
-  const { model, activePartId } = useWorkspaceState();
-  const { exportModel, cancelExport, isExporting, fraction, encoding } = useModelExport();
-  const openConvert = useOpenConvertWorkspace();
+  const { model } = useWorkspaceState();
 
   if (model === undefined) {
     return (
@@ -44,7 +43,6 @@ export function ModelPanel(): ReactNode {
   }
 
   const { bounds } = model;
-  const percent = Math.round(fraction * 100);
 
   return (
     <section className="panel" aria-label="Model information">
@@ -109,19 +107,39 @@ export function ModelPanel(): ReactNode {
           ))}
         </ul>
       ) : null}
+    </section>
+  );
+}
 
-      <h3 className="panel__subtitle">Export</h3>
+/**
+ * The inspector's Export section: the way into the Convert workspace, and the
+ * single-part STL export.
+ *
+ * ALWAYS MOUNTED, for the reason the inspector gives: `useModelExport` tracks a
+ * running export, and it must not be orphaned by an empty-state render.
+ *
+ * NOT PAINTED AS A PRIMARY ACTION. "Export / Convert…" navigates to the Convert
+ * workspace, whose own button performs the export; painting both orange put two
+ * primary actions for one operation side by side (UI-06, I-05).
+ */
+export function ModelExportPanel(): ReactNode {
+  const { model, activePartId } = useWorkspaceState();
+  const { exportModel, cancelExport, isExporting, fraction, encoding } = useModelExport();
+  const openConvert = useOpenConvertWorkspace();
+
+  // The inspector hides this section while no model is loaded.
+  if (model === undefined) return null;
+
+  const percent = Math.round(fraction * 100);
+
+  return (
+    <section className="panel" aria-label="Model export">
       <p className="panel__note">
         CAD Fixer reads STL, OBJ and 3MF, and writes all three. Files are written on this device;
         nothing is uploaded.
       </p>
       <div className="panel__actions">
-        <button
-          type="button"
-          className="action action--primary"
-          onClick={openConvert}
-          data-testid="open-convert"
-        >
+        <button type="button" className="action" onClick={openConvert} data-testid="open-convert">
           Export / Convert…
         </button>
       </div>

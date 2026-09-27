@@ -35,7 +35,6 @@ export function SplitHud(): ReactNode {
           {section !== undefined && split.phase !== SplitPhase.Computing
             ? describeSection(section, split.unit, split.preview === undefined)
             : SPLIT_COPY.hintDrag}
-          {split.preview === undefined ? '' : ` · ${SPLIT_COPY.hudPreviewHint}`}
         </p>
       </div>
       {showingPieces ? (

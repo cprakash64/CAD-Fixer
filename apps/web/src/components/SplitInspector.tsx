@@ -98,7 +98,11 @@ export function SplitInspector(): ReactNode {
         {size === undefined ? null : (
           <PropertyRow
             label="Size"
-            value={size.map((value) => formatLength(value, split.unit)).join(' × ')}
+            // A number never parts from its unit; the line may break only at
+            // a "×" (UI-06: "60.0" and "mm" wrapped onto separate lines).
+            value={size
+              .map((value) => formatLength(value, split.unit).replace(' ', '\u00a0'))
+              .join(' × ')}
             testId="split-inspector-size"
           />
         )}

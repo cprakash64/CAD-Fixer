@@ -347,8 +347,10 @@ way rather than by calling `setModel` with the candidate:
   operation that takes a model — and the viewport never made it authoritative in
   the first place.
 
-The preview is labelled **"Preview — not applied"** whenever the proposed result
-is on screen. The label is text with a `role`, not a colour.
+The preview is labelled **"Repair preview — not applied"** in the viewport
+whenever the proposed result is on screen (UI-06 names the operation, as the
+fill, split and texture previews do). The label is text with a `role`, not a
+colour.
 
 ### Change overlays
 

@@ -1055,6 +1055,27 @@ lost`, `printable`, `watertight`, and the rest. **"The numbers are unchanged"
 - **NO REDUNDANT FRAMES.** Texture overlays use the scheduled frame, and a clear
   of something not drawn draws nothing (the UI-04 dense-model lesson).
 
+## Shared UI invariants (UI-06)
+
+- **THE SHELL IS `overflow: clip`, NEVER `hidden`.** Below 1200 px the inspector
+  drawer waits off-canvas; a `hidden` shell is a scroll container that any
+  scroll-into-view shifted 140 px sideways with no way back.
+- **INSPECTOR ORDER IS Selection → Model → Export → Runtime** in every
+  workspace, context first. Export is hidden (never unmounted) with no model.
+  Nothing scrolls the inspector programmatically.
+- **ONE PRIMARY ACTION PER STEP.** A control that navigates to a step is
+  secondary. `.action` and `.secondary-action` are one control; `.format-card`
+  is the one card family (Convert, Split, Texture). `e2e/ui-consistency.spec.ts`
+  holds these as computed-style invariants — no pixel baselines.
+- **POP-UPS ARE DISCLOSURES**: `aria-expanded`, `aria-controls` only while
+  open, no `aria-haspopup`.
+- **ONE "… preview — not applied" PILL PER GENERATED PREVIEW**, naming the
+  operation; HUDs never repeat it. HUDs live in the band between the toolbar
+  and the view cube (`--hud-inset-*`).
+- **NO FLOOR OR GRID UNDER A MODEL**: the viewport is Y-up, print files are
+  conventionally Z-up, and no print orientation or unit is asserted.
+- **Below 600 px every target is at least 40 px**, primary actions included.
+
 ## Hole-fill invariants (Stage 4B-1B1 engine, 4B-1B2 workflow)
 
 - **THE ENGINE IS UNCHANGED BY THE WORKFLOW.** Stage 4B-1B2 added selection,
@@ -1493,7 +1514,9 @@ validated`, and the qualifier naming what was NOT examined travels with it.
 - **A refusal is not an error, and a preview is not an application.** Refused and
   blocked operations are rendered as decisions with reasons in their own visual
   register; a candidate on screen is labelled `Preview — not applied` until it is
-  committed.
+  committed — in the viewport as ONE status pill naming the operation
+  (`Repair / Fill / Split / Texture preview — not applied`), which the HUDs do
+  not repeat.
 - **An expected delta is not a regression.** Once a candidate is ACCEPTED every
   remaining difference was predicted before the rebuild and confirmed after it —
   including a boundary-edge count that rose because a duplicate that was hiding

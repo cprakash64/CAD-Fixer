@@ -267,7 +267,6 @@ export const SPLIT_COPY = Object.freeze({
   exportThreeMf: 'One 3MF',
   exportThreeMfAction: 'Open in Convert as 3MF',
   hintDrag: 'Drag the orange arrow to move the plane',
-  hudPreviewHint: 'Preview — not applied',
 });
 
 /** "Position along Z". */

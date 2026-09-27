@@ -61,5 +61,5 @@ at 1440 × 900 (headless Chromium, software WebGL):
 One tool instead of five, no selection commands beyond Clear, three patterns
 instead of twelve, no search or categories, no image tab, one flat projection,
 no falloff, subdivision or simplify, flat surfaces only (the reference textures
-a curved knot), and the inspector's Model section keeps UI-01's full fact list
-above the texture selection.
+a curved knot). Since UI-06 the surface selection is the inspector's first
+section, above the Model facts (see UI_SHELL.md).

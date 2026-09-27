@@ -144,6 +144,13 @@ export const TEXTURE_COPY = Object.freeze({
   hintSelect: 'Click a flat face of the model to select it',
   hintSelected: 'Click another face to replace the selection',
   previewLabel: 'Preview — not applied',
+  /*
+   * The viewport HUD names WHICH of the three states is on screen (UI-06):
+   * layout outlines (the fast preview, nothing built), generated geometry (a
+   * preview, whose banner says it is not applied), or the model itself.
+   */
+  hudLayout: 'Layout outlines only — no geometry built',
+  hudGenerated: 'Generated texture geometry',
   fastPreviewNote:
     'Outlines show exactly where each element will be placed. No geometry has been built.',
 });

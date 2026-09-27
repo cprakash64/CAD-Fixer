@@ -555,6 +555,9 @@ export function ViewportPanel(): ReactNode {
     currentTexture?.source.documentId === currentModel?.handle.documentId &&
     currentTexture?.source.revision === currentModel?.handle.revision;
 
+  /** A split preview on screen: the pieces are candidates, not the model. */
+  const showingSplit = splitWorkspace && split.preview !== undefined;
+
   const viewport = (): ViewportHandle | undefined => viewportRef.current;
   const modelShown = model !== undefined && viewportFailure === undefined;
 
@@ -565,7 +568,11 @@ export function ViewportPanel(): ReactNode {
       {/* TOP-CENTRE HUD. Contextual status for whatever the workspace is doing.
           PART E4 lives here: never let a preview be mistaken for the model. Each
           banner is text with a role, not a colour, so a user who cannot see the
-          tint still learns that nothing has been applied. */}
+          tint still learns that nothing has been applied.
+
+          ONE RULE FOR EVERY GENERATED PREVIEW (UI-06): this pill, naming the
+          operation, is where "not applied" is said. The workspace HUDs above it
+          describe what is selected or measured and do not repeat it. */}
       <div className="viewport__hud">
         {repairWorkspace && issueSelection !== undefined && modelShown ? (
           <IssueHud navigation={navigation} />
@@ -574,13 +581,19 @@ export function ViewportPanel(): ReactNode {
         {textureWorkspace && modelShown ? <TextureHud /> : null}
         {showingPreview ? (
           <p className="viewport__preview-banner" role="status" data-testid="preview-banner">
-            Preview — not applied
+            Repair preview — not applied
           </p>
         ) : null}
 
         {showingPatch && !showingPreview ? (
           <p className="viewport__preview-banner" role="status" data-testid="patch-preview-banner">
             Fill preview — not applied
+          </p>
+        ) : null}
+
+        {showingSplit && !showingPreview ? (
+          <p className="viewport__preview-banner" role="status" data-testid="split-preview-banner">
+            Split preview — not applied
           </p>
         ) : null}
 

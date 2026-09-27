@@ -2,7 +2,7 @@ import { useRef, type ReactNode } from 'react';
 import { useWorkspaceState } from '../state/store-context';
 import { WorkflowId } from '../state/workflows';
 import { ExportSummary } from './ExportSummary';
-import { ModelPanel } from './ModelPanel';
+import { ModelExportPanel, ModelPanel } from './ModelPanel';
 import { IssueInspector } from './IssueInspector';
 import { SplitInspector } from './SplitInspector';
 import { TextureInspector } from './TextureInspector';
@@ -16,7 +16,7 @@ import { useShellLayout } from './shell/shell-layout';
 /**
  * The right-hand inspector: facts about what is open.
  *
- * COLLAPSING HIDES, IT DOES NOT UNMOUNT. The Model section owns the active-part
+ * COLLAPSING HIDES, IT DOES NOT UNMOUNT. The Export section owns the active-part
  * export, whose hook tracks a running export; dropping it to save a few pixels
  * would orphan that operation. The collapsed rail is a separate element beside
  * the hidden panel.
@@ -76,11 +76,18 @@ export function Inspector({ inert = false }: { readonly inert?: boolean }): Reac
           />
         </div>
 
-        <div className="inspector__body">
-          <PanelSection title="Model">
-            <ModelPanel />
-          </PanelSection>
+        {/*
+          CONTEXT FIRST, THEN FACTS, THEN OPERATIONS ON THE FILE (UI-06).
 
+          What the current workspace is pointing at — the selected finding, the
+          output about to be written, the active cut, the selected surface — is
+          the one thing that changes as the user works, so it leads. The model's
+          facts follow, then the two exports, then runtime diagnostics. With the
+          Model section first, every workspace's context sat below the fold on a
+          900 px screen, and Repair scrolled the inspector to reach it — an
+          offset that then leaked into every other workspace.
+        */}
+        <div className="inspector__body">
           <PanelSection title="Selection">
             {model !== undefined && model.parts.length > 1 ? <PartSelector /> : null}
             {/* The selected finding is Repair's; Convert's selection is the
@@ -102,6 +109,18 @@ export function Inspector({ inert = false }: { readonly inert?: boolean }): Reac
               </p>
             ) : null}
           </PanelSection>
+
+          <PanelSection title="Model">
+            <ModelPanel />
+          </PanelSection>
+
+          {/* Hidden, not unmounted, with no model: there is nothing to
+              export, and the hook inside tracks any export in flight. */}
+          <div hidden={model === undefined} data-testid="inspector-export-section">
+            <PanelSection title="Export">
+              <ModelExportPanel />
+            </PanelSection>
+          </div>
 
           <PanelSection title="Runtime">
             <RuntimePanel />

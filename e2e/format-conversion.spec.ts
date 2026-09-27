@@ -169,7 +169,9 @@ test('the two export actions are named apart', async ({ page }) => {
    * one writing the document and one writing a third of it, is exactly the
    * silent loss the workflow exists to prevent.
    */
-  const panel = page.getByRole('region', { name: 'Model information' });
+  // UI-06 moved the exports out of the Model facts into the inspector's own
+  // Export section, whose region is "Model export".
+  const panel = page.getByRole('region', { name: 'Model export' });
   await expect(panel.getByTestId('open-convert')).toHaveText('Export / Convert…');
   await expect(panel.getByTestId('export-binary')).toHaveText('Export active part as binary STL');
   await expect(panel.getByTestId('export-ascii')).toHaveText('Export active part as ASCII STL');

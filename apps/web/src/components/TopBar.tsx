@@ -121,8 +121,11 @@ function BrandMark(): ReactNode {
  * How to drive the viewport. Static facts about the camera controls, which are
  * OrbitControls' mapping plus the navigation mode in the viewport toolbar.
  *
- * The menu triggers here are plain buttons rather than `IconButton`s because
- * they carry `aria-haspopup`, which the menu hook uses to return focus on Esc.
+ * The triggers here are plain buttons rather than `IconButton`s because they
+ * carry `aria-expanded`, which the menu hook uses to return focus on Esc. They
+ * are DISCLOSURES, not ARIA menus: what they reveal is text, a switch or a list
+ * of ordinary buttons, so `aria-haspopup` — which promises a `role="menu"` with
+ * arrow-key navigation — would announce behaviour that is not there.
  */
 function HelpMenu(): ReactNode {
   const { open, toggle, containerRef } = useDismissableMenu();
@@ -135,9 +138,8 @@ function HelpMenu(): ReactNode {
         aria-label="Help"
         data-tooltip="Help"
         data-tooltip-side="below"
-        aria-haspopup="true"
         aria-expanded={open}
-        aria-controls={menuId}
+        aria-controls={open ? menuId : undefined}
         onClick={toggle}
         data-testid="help-menu"
       >
@@ -185,9 +187,8 @@ function SettingsMenu(): ReactNode {
         aria-label="Settings"
         data-tooltip="Settings"
         data-tooltip-side="below"
-        aria-haspopup="true"
         aria-expanded={open}
-        aria-controls={menuId}
+        aria-controls={open ? menuId : undefined}
         onClick={toggle}
         data-testid="settings-menu"
       >

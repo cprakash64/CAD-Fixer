@@ -1,4 +1,4 @@
-import { useEffect, useRef, type ReactNode } from 'react';
+import type { ReactNode } from 'react';
 import { RepairOperation } from '@cadfixer/geometry-runtime';
 import {
   describeBoundaryRefusal,
@@ -42,27 +42,12 @@ export function IssueInspector(): ReactNode {
   const { model } = useWorkspaceState();
   const navigation = useIssueNavigation();
   const selection = navigation.selection;
-  const rootRef = useRef<HTMLDivElement>(null);
-  const selectedIssue = selection?.issue.id;
-
   /*
-   * A NEWLY SELECTED ISSUE IS BROUGHT INTO VIEW. The Model section above holds
-   * the file's facts and exports and is tall, so without this the inspector
-   * would update below the fold. Only the inspector's OWN body scrolls — never
-   * `scrollIntoView`, which also scrolls clipped ancestors and would shift the
-   * whole shell — and only when the issue changes, not on every step.
+   * NO SCROLLING. The Selection section is the inspector's first section
+   * (UI-06), so a newly selected issue is already in view. The scroll this
+   * replaced moved the inspector's body to reach a section below the Model
+   * facts, and the offset then persisted into every other workspace.
    */
-  useEffect(() => {
-    const section = rootRef.current?.closest<HTMLElement>('.panel-section');
-    const body = section?.closest<HTMLElement>('.inspector__body');
-    if (selectedIssue === undefined || section === undefined || section === null) return;
-    if (body === undefined || body === null) return;
-    const offset =
-      section.getBoundingClientRect().top - body.getBoundingClientRect().top + body.scrollTop;
-    const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    body.scrollTo({ top: offset, behavior: reduced ? 'auto' : 'smooth' });
-  }, [selectedIssue]);
-
   if (model === undefined) {
     return <p className="panel__empty">Nothing is selected. Open a model to begin.</p>;
   }
@@ -76,7 +61,7 @@ export function IssueInspector(): ReactNode {
 
   const { issue, occurrence, location } = selection;
   return (
-    <div className="issue-inspector" ref={rootRef} data-testid="issue-inspector">
+    <div className="issue-inspector" data-testid="issue-inspector">
       <p className="issue-inspector__title">
         <span className={`severity-dot severity-dot--${issue.severity}`} aria-hidden="true" />
         <span className="issue-inspector__name" data-testid="issue-inspector-name">

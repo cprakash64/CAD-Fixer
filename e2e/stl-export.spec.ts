@@ -87,7 +87,9 @@ test('the UI describes what CAD Fixer can now actually write', async ({ page }) 
    * write one, and the panel said exactly that; it can now write all three, and
    * saying otherwise would be the mirror-image dishonesty.
    */
-  const panel = page.getByRole('region', { name: 'Model information' });
+  // UI-06 moved the exports out of the Model facts into the inspector's own
+  // Export section, whose region is "Model export".
+  const panel = page.getByRole('region', { name: 'Model export' });
   await expect(panel).toContainText('reads STL, OBJ and 3MF, and writes all three');
   await expect(panel).not.toContainText('STL is the only format CAD Fixer can write');
   await expect(page.getByTestId('workflow-convert')).toBeEnabled();

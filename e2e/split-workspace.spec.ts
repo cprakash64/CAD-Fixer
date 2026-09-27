@@ -180,8 +180,16 @@ test('C: dragging the arrow moves the same plane, and does not orbit', async ({ 
   const moved = Number(await page.getByTestId('split-position-value').inputValue());
   expect(moved).toBeGreaterThan(40.5);
   await expect(page.getByTestId('split-hud-cut')).toContainText(`Z = ${moved.toFixed(1)} mm`);
-  const drawn = (await canvas(page).getAttribute('data-edit-plane')) ?? '';
-  expect(Number(drawn.split('|')[0]?.split(',')[2])).toBeCloseTo(moved, 3);
+  // The drawn plane is written on the next rendered frame, after the field has
+  // already updated, so it is polled — to the same exact value. A single read
+  // raced that frame about one run in twelve (UI-06: the attribute read 58.39
+  // with the field at 59.451, then 59.451 from the next frame on).
+  await expect
+    .poll(async () => {
+      const drawn = (await canvas(page).getAttribute('data-edit-plane')) ?? '';
+      return Number(drawn.split('|')[0]?.split(',')[2]);
+    })
+    .toBeCloseTo(moved, 3);
   // The camera did not move: the drag was the arrow's, not the orbit's.
   expect(await cube.getAttribute('style')).toBe(orientation);
 });

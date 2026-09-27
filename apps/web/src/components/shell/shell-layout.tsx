@@ -218,7 +218,9 @@ export interface DismissableMenu {
  * outside it, and when focus leaves it.
  *
  * Esc is marked handled so the drawer listener above does not also close the
- * drawer the menu sits in.
+ * drawer the menu sits in, and returns focus to the trigger — the container's
+ * element carrying `aria-expanded`. The triggers are disclosures and carry no
+ * `aria-haspopup`; see `TopBar.tsx`.
  */
 export function useDismissableMenu(): DismissableMenu {
   const [open, setOpen] = useState(false);
@@ -243,7 +245,7 @@ export function useDismissableMenu(): DismissableMenu {
       if (event.key !== 'Escape') return;
       event.preventDefault();
       setOpen(false);
-      const trigger = containerRef.current?.querySelector<HTMLElement>('[aria-haspopup]');
+      const trigger = containerRef.current?.querySelector<HTMLElement>('[aria-expanded]');
       trigger?.focus();
     };
     const onFocusIn = (event: FocusEvent): void => {

@@ -75,5 +75,5 @@ Preview split. The outline is bounded at 65,536 edges.
 No cut modes, custom planes, cut list, three-axis tilt or rotation rings; three
 connector cards instead of eleven; no manual placement, pattern or margin; no
 bed profile; export controls appear only once a split is applied; "One 3MF"
-continues in Convert; the subtitle omits "printable"; the inspector's Model
-section keeps UI-01's full fact list above the split selection.
+continues in Convert; the subtitle omits "printable". Since UI-06 the active
+cut is the inspector's first section, above the Model facts (see UI_SHELL.md).

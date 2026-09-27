@@ -71,6 +71,8 @@
   --cad-border: #2c3a47;
   --cad-border-control: #33424f;
   --cad-border-strong: #4b5b69;
+  /* A primary action that cannot run, an off switch, the drop zone's dash. */
+  --cad-disabled-fill: #3d4c5a;
 
   /* --------------------------------------------------------------- text -- */
   --cad-text-strong: #e9eef2;

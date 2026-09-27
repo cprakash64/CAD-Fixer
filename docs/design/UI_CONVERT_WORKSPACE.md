@@ -110,5 +110,5 @@ phase politely; a failure is `role="alert"`.
 Single format per export instead of multi-select; no batch queue; no PLY, AMF,
 GLB or FBX; no axis, colour, merge, metadata or thumbnail controls; no Repair
 or Simplify before converting; the Activity log stays below the action (the
-shared shell's footer); the inspector's Model section keeps UI-01's full fact
-list, so the export summary sits below it.
+shared shell's footer). Since UI-06 the export summary is the inspector's first
+section, above the Model facts (see UI_SHELL.md, "Inspector order").

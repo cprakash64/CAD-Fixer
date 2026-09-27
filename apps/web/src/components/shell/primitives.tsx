@@ -65,37 +65,6 @@ export function IconButton({
   );
 }
 
-/* ---------------------------------------------------- primary action -- */
-
-export interface PrimaryActionButtonProps {
-  readonly children: ReactNode;
-  readonly onClick: () => void;
-  readonly disabled?: boolean;
-  readonly icon?: IconName;
-  readonly testId?: string;
-}
-
-export function PrimaryActionButton({
-  children,
-  onClick,
-  disabled = false,
-  icon,
-  testId,
-}: PrimaryActionButtonProps): ReactNode {
-  return (
-    <button
-      type="button"
-      className="primary-action"
-      onClick={onClick}
-      disabled={disabled}
-      {...(testId === undefined ? {} : { 'data-testid': testId })}
-    >
-      {icon === undefined ? null : <Icon name={icon} size={16} />}
-      <span>{children}</span>
-    </button>
-  );
-}
-
 /* ------------------------------------------------------ panel section -- */
 
 export interface PanelSectionProps {
