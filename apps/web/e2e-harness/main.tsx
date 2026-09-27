@@ -594,6 +594,12 @@ declare global {
       awaitTestBoolean(): Promise<HarnessBooleanResult>;
       cancelTestBoolean(): void;
       testBooleanPhases(): readonly { phase: string; at: number }[];
+      /**
+       * Selects a Surface Texture region through the real worker and store,
+       * exactly as a viewport pick does — for tests that must name a part the
+       * camera cannot isolate. Resolves to the number of selected faces.
+       */
+      selectTextureSurface(partId: string, triangleIndex: number): Promise<number>;
       resetSplitQualification(): void;
       splitQualificationEvents(): readonly HarnessSplitQualificationEvent[];
       /** Stage 6E-A2: which 3MF reader the harness worker's real import uses. */
@@ -703,6 +709,22 @@ window.cadfixerHarness = {
   awaitTestBoolean,
   cancelTestBoolean: (): void => cancelActiveBoolean?.(),
   testBooleanPhases: (): readonly { phase: string; at: number }[] => activeBooleanPhases,
+  selectTextureSurface: async (partId, triangleIndex): Promise<number> => {
+    const model = store.getSnapshot().model;
+    if (model === undefined) throw new Error('No model is loaded.');
+    const result = await geometryClient.selectTextureSurface(model.handle, partId, triangleIndex)
+      .promise;
+    store.setTextureSelection({
+      source: result.source,
+      partId: result.partId,
+      seedTriangle: triangleIndex,
+      triangleIds: result.triangleIds,
+      area: result.area,
+      partArea: result.partArea,
+      planarity: result.planarity,
+    });
+    return result.triangleIds.length;
+  },
   resetSplitQualification: (): void => {
     splitQualificationEvents = [];
   },

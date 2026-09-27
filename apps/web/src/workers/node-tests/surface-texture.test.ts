@@ -5,7 +5,9 @@ import { CancellationSource } from '@cadfixer/shared';
 import {
   buildSurfaceTextureLayout,
   buildSurfaceTextureOperand,
+  describeTextureLayout,
   MAX_TEXTURE_ELEMENTS,
+  meshSurfaceArea,
   meshVolume,
   textureSurface,
   type SurfaceTextureRequest,
@@ -217,5 +219,50 @@ describe('Stage 7C surface texture', () => {
         ? meshVolume(result.mesh) > meshVolume(source)
         : meshVolume(result.mesh) < meshVolume(source),
     ).toBe(true);
+  });
+
+  it('UI-05 describes exactly the layout Apply builds, without building it', () => {
+    const token = new CancellationSource().token;
+    for (const pattern of ['dots', 'lines', 'diamond'] as const) {
+      const r = request({ pattern, featureSize: 1.5, spacing: 4, rotationDegrees: 30 });
+      const layout = buildSurfaceTextureLayout(cube(), r, token);
+      const summary = describeTextureLayout(cube(), r, token);
+      expect(summary.elementCount).toBe(layout.instances.length);
+      expect(summary.estimatedPrimitiveTriangles).toBe(layout.estimatedPrimitiveTriangles);
+      // One edge per circle segment, or four per bar, each a pair of 3-D points.
+      const perElement = pattern === 'dots' ? 24 : 4;
+      expect(summary.footprint.length).toBe(layout.instances.length * perElement * 6);
+    }
+  });
+
+  it('UI-05 draws each footprint on the selected face, inside it', () => {
+    const summary = describeTextureLayout(cube(), request(), new CancellationSource().token);
+    const planeCoordinates = new Set<number>();
+    for (let at = 0; at < summary.footprint.length; at += 3) {
+      const point = [summary.footprint[at], summary.footprint[at + 1], summary.footprint[at + 2]];
+      // Every point lies on one face of the 20 mm cube and within its extent.
+      for (const value of point) expect(Math.abs(value ?? 99)).toBeLessThanOrEqual(10 + 1e-5);
+      const onFace = point.findIndex((value) => Math.abs(Math.abs(value ?? 0) - 10) < 1e-5);
+      expect(onFace).toBeGreaterThanOrEqual(0);
+      planeCoordinates.add(onFace * 100 + Math.sign(point[onFace] ?? 0));
+    }
+    expect(planeCoordinates.size).toBe(1);
+  });
+
+  it('UI-05 refuses a layout with the same limits Apply enforces', () => {
+    expect(() =>
+      describeTextureLayout(
+        cube(1000),
+        request({ featureSize: 1, spacing: 1 }),
+        new CancellationSource().token,
+      ),
+    ).toThrow(/limit is/);
+  });
+
+  it('UI-05 measures selected and whole-part area from the real faces', () => {
+    const mesh = cube();
+    expect(meshSurfaceArea(mesh)).toBeCloseTo(6 * 400, 9);
+    const face = buildSurfaceTextureLayout(mesh, request(), new CancellationSource().token);
+    expect(meshSurfaceArea(mesh, face.region.triangleIds)).toBeCloseTo(400, 9);
   });
 });

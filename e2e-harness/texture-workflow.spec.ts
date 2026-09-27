@@ -3,7 +3,7 @@ import { Fixture, digest, loadFixture, openHarness, readState } from './harness'
 
 async function openTexture(page: Page): Promise<void> {
   await page.getByTestId('workflow-texture').click();
-  await expect(page.getByRole('heading', { name: 'Surface texture' })).toBeVisible();
+  await expect(page.getByTestId('texture-workspace')).toBeVisible();
 }
 async function selectVisibleSurface(page: Page, xFraction = 0.5): Promise<void> {
   const canvas = page.getByTestId('viewport-canvas').locator('canvas');
@@ -13,10 +13,10 @@ async function selectVisibleSurface(page: Page, xFraction = 0.5): Promise<void> 
     force: true,
     position: { x: box.width * xFraction, y: box.height / 2 },
   });
-  await expect(page.getByText(/Surface selected \(triangle/)).toBeVisible();
+  await expect(page.getByTestId('texture-selection-metrics')).toBeVisible();
 }
 async function preview(page: Page): Promise<void> {
-  await page.getByRole('button', { name: 'Update Preview' }).click();
+  await page.getByTestId('texture-generate').click();
   await expect(page.getByTestId('texture-preview-banner')).toBeVisible({ timeout: 30_000 });
 }
 async function exportWhole(page: Page, target: 'stl' | 'obj' | '3mf'): Promise<number> {
@@ -33,6 +33,15 @@ async function exportWhole(page: Page, target: 'stl' | 'obj' | '3mf'): Promise<n
   // Back to the workspace the flow was in, whose Undo the test presses next.
   await page.getByTestId('workflow-texture').click();
   return bytes;
+}
+/**
+ * Stops texture work. UI-05: a built preview is discarded with its own button;
+ * while work runs, Reset cancels it (and restores the default settings).
+ */
+async function cancelTexture(page: Page): Promise<void> {
+  const discard = page.getByTestId('texture-discard');
+  if (await discard.isVisible()) await discard.click();
+  else await page.getByTestId('texture-reset').click();
 }
 async function resetBooleanEvents(page: Page): Promise<void> {
   await page.evaluate(() => window.cadfixerHarness?.resetSplitQualification());
@@ -60,11 +69,11 @@ test('7C browser flow 1: Dots Raised previews, applies, and undoes', async ({ pa
   await openTexture(page);
   await selectVisibleSurface(page);
   await preview(page);
-  await page.getByRole('button', { name: 'Apply' }).click();
+  await page.getByTestId('texture-apply').click();
   await expect.poll(async () => (await readState(page)).revision).not.toBe(before.revision);
   for (const target of ['stl', 'obj', '3mf'] as const)
     expect(await exportWhole(page, target)).toBeGreaterThan(100);
-  await page.getByRole('button', { name: 'Undo' }).click();
+  await page.getByTestId('texture-undo').click();
   await expect.poll(async () => (await readState(page)).revision).not.toBe(before.revision);
 });
 
@@ -74,13 +83,16 @@ test('7C browser flows 3/4: Lines Engraved and Diamond build actual previews', a
     await loadFixture(page, Fixture.SplitCubeMillimetre);
     await openTexture(page);
     await selectVisibleSurface(page);
-    await page.getByLabel('Texture pattern').selectOption(pattern);
-    await page.getByLabel('Texture mode').selectOption('engrave');
-    await page.getByLabel('Texture rotation').fill('45');
+    await page.getByTestId(`texture-pattern-${pattern}`).check();
+    await page.getByTestId('texture-engraved').click();
+    await page.getByTestId('texture-rotation').fill('45');
     await preview(page);
-    await expect(page.getByText(new RegExp(`${pattern} · engrave`))).toBeVisible();
-    await page.getByRole('button', { name: 'Apply' }).click();
-    await expect(page.getByRole('button', { name: 'Undo' })).toBeVisible();
+    await expect(page.getByTestId('texture-inspector-source')).toHaveText(
+      pattern === 'lines' ? 'Lines' : 'Diamond',
+    );
+    await expect(page.getByTestId('texture-inspector-direction')).toContainText('Engraved');
+    await page.getByTestId('texture-apply').click();
+    await expect(page.getByTestId('texture-undo')).toBeVisible();
   }
 });
 
@@ -93,22 +105,17 @@ test('7C-M01/M02: texturing Part 3 isolates six shared siblings and Undo restore
     before = await digest(page, beforeState);
   await page.getByTestId('part-option-p3').click();
   await openTexture(page);
-  // Flow 1 proves the real viewport ray pick. Here a harness event fixes the
-  // seed on the requested shared placement so this test isolates transaction
-  // semantics rather than camera occlusion among seven tiny instances.
-  await page.evaluate(() => {
-    window.dispatchEvent(
-      new CustomEvent('cadfixer:texture-surface-pick', {
-        detail: { partId: 'p3', triangleIndex: 0, point: [0, 0, 0], normal: [0, 0, -1] },
-      }),
-    );
-  });
-  await expect(page.getByText(/Surface selected \(triangle/)).toBeVisible();
-  await page.getByLabel('Texture feature size').fill('0.1');
-  await page.getByLabel('Texture spacing').fill('0.3');
-  await page.getByLabel('Texture height or depth').fill('0.05');
+  // Flow 1 proves the real viewport ray pick. Here the harness selects the seed
+  // on the requested shared placement through the same worker operation and
+  // store call a pick makes, so this test isolates transaction semantics
+  // rather than camera occlusion among seven tiny instances.
+  await page.evaluate(() => window.cadfixerHarness?.selectTextureSurface('p3', 0));
+  await expect(page.getByTestId('texture-selection-metrics')).toBeVisible();
+  await page.getByTestId('texture-feature-size').fill('0.1');
+  await page.getByTestId('texture-spacing').fill('0.3');
+  await page.getByTestId('texture-depth').fill('0.05');
   await preview(page);
-  await page.getByRole('button', { name: 'Apply' }).click();
+  await page.getByTestId('texture-apply').click();
   await expect.poll(async () => (await readState(page)).revision).not.toBe(beforeState.revision);
   const appliedState = await readState(page),
     applied = await digest(page, appliedState);
@@ -116,7 +123,7 @@ test('7C-M01/M02: texturing Part 3 isolates six shared siblings and Undo restore
     before.parts.filter((part) => part.partId !== 'p3'),
   );
   expect(applied.distinctMeshes).toBe(2);
-  await page.getByRole('button', { name: 'Undo' }).click();
+  await page.getByTestId('texture-undo').click();
   await expect.poll(async () => (await readState(page)).revision).not.toBe(appliedState.revision);
   const undone = await digest(page, await readState(page));
   expect(undone.parts).toEqual(before.parts);
@@ -133,8 +140,8 @@ test('7C-P01: texture selection, preview, Apply, and Undo remain local-only', as
   await openTexture(page);
   await selectVisibleSurface(page);
   await preview(page);
-  await page.getByRole('button', { name: 'Apply' }).click();
-  await page.getByRole('button', { name: 'Undo' }).click();
+  await page.getByTestId('texture-apply').click();
+  await page.getByTestId('texture-undo').click();
   expect(offOrigin).toEqual([]);
 });
 
@@ -147,13 +154,13 @@ test('7C-R02: three confirmed in-Manifold cancellations terminate and recover', 
     await loadFixture(page, Fixture.SplitCubeMillimetre);
     await openTexture(page);
     await selectVisibleSurface(page);
-    await page.getByLabel('Texture feature size').fill('1');
-    await page.getByLabel('Texture spacing').fill('2');
+    await page.getByTestId('texture-feature-size').fill('1');
+    await page.getByTestId('texture-spacing').fill('2');
     await resetBooleanEvents(page);
-    await page.getByRole('button', { name: 'Update Preview' }).click();
+    await page.getByTestId('texture-generate').click();
     await waitForBooleanPhase(page, 'MANIFOLD_ENTER');
     const started = performance.now();
-    await page.getByLabel('Surface texture').getByRole('button', { name: 'Cancel' }).click();
+    await cancelTexture(page);
     await waitForBooleanPhase(page, 'TERMINAL');
     tails.push(performance.now() - started);
     const terminal = await page.evaluate(() =>
@@ -181,12 +188,13 @@ test('7C-R03/R05: superseded previews release workers and latest configuration w
   await selectVisibleSurface(page);
   await resetBooleanEvents(page);
   await preview(page);
-  await page.getByLabel('Texture spacing').fill('6');
+  await page.getByTestId('texture-spacing').fill('6');
   await preview(page);
-  await page.getByLabel('Texture pattern').selectOption('lines');
+  await page.getByTestId('texture-pattern-lines').check();
   await preview(page);
-  await expect(page.getByText(/lines · emboss/)).toBeVisible();
-  await page.getByLabel('Surface texture').getByRole('button', { name: 'Cancel' }).click();
+  await expect(page.getByTestId('texture-inspector-source')).toHaveText('Lines');
+  await expect(page.getByTestId('texture-inspector-direction')).toContainText('Raised');
+  await cancelTexture(page);
   await expect
     .poll(() =>
       page.evaluate(() => {
@@ -211,10 +219,10 @@ test('7C-R04: document replacement terminates active texture and remains authori
   await loadFixture(page, Fixture.SplitCubeMillimetre);
   await openTexture(page);
   await selectVisibleSurface(page);
-  await page.getByLabel('Texture feature size').fill('0.5');
-  await page.getByLabel('Texture spacing').fill('1');
+  await page.getByTestId('texture-feature-size').fill('0.5');
+  await page.getByTestId('texture-spacing').fill('1');
   await resetBooleanEvents(page);
-  await page.getByRole('button', { name: 'Update Preview' }).click();
+  await page.getByTestId('texture-generate').click();
   await waitForBooleanPhase(page, 'MANIFOLD_ENTER');
   await loadFixture(page, Fixture.SevenSharedMillimetre);
   await waitForBooleanPhase(page, 'TERMINAL');
@@ -288,8 +296,8 @@ test('7C main-thread responsiveness: dense preview and Apply keep frame gaps bou
   const before = await readState(page);
   await openTexture(page);
   await selectVisibleSurface(page);
-  await page.getByLabel('Texture feature size').fill('0.5');
-  await page.getByLabel('Texture spacing').fill('1');
+  await page.getByTestId('texture-feature-size').fill('0.5');
+  await page.getByTestId('texture-spacing').fill('1');
   await page.evaluate(() => {
     const gaps: number[] = [];
     let prior = performance.now();
@@ -304,7 +312,7 @@ test('7C main-thread responsiveness: dense preview and Apply keep frame gaps bou
   const started = Date.now();
   await preview(page);
   const previewMs = Date.now() - started;
-  await page.getByRole('button', { name: 'Apply' }).click();
+  await page.getByTestId('texture-apply').click();
   await expect.poll(async () => (await readState(page)).revision).not.toBe(before.revision);
   const result = await page.evaluate(() => {
     const state = window as unknown as { textureGaps: number[]; textureProbe: number };

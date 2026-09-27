@@ -244,6 +244,8 @@ export type {
 export {
   buildSurfaceTextureLayout,
   buildSurfaceTextureOperand,
+  describeTextureLayout,
+  meshSurfaceArea,
   textureSurface,
   MAX_TEXTURE_ELEMENTS,
   MAX_TEXTURE_PRIMITIVE_TRIANGLES,
@@ -252,6 +254,7 @@ export type {
   SurfaceTextureLayout,
   SurfaceTextureRequest,
   SurfaceTextureResult,
+  TextureLayoutSummary,
   TextureMode,
   TexturePattern,
   TexturePatternInstance,
@@ -273,5 +276,6 @@ export type {
   TextureCreatePayload,
   TextureCreateResult,
   TextureSelectPayload,
+  TextureLayoutResult,
   TextureSelectResult,
 } from './protocol';

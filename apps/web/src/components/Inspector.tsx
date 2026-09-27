@@ -5,6 +5,7 @@ import { ExportSummary } from './ExportSummary';
 import { ModelPanel } from './ModelPanel';
 import { IssueInspector } from './IssueInspector';
 import { SplitInspector } from './SplitInspector';
+import { TextureInspector } from './TextureInspector';
 import { PartSelector } from './PartSelector';
 import { RuntimePanel } from './RuntimePanel';
 import { Icon } from './shell/Icon';
@@ -28,6 +29,7 @@ export function Inspector({ inert = false }: { readonly inert?: boolean }): Reac
   const repairWorkspace = selectedWorkflow === undefined || selectedWorkflow === WorkflowId.Repair;
   const convertWorkspace = selectedWorkflow === WorkflowId.Convert;
   const splitWorkspace = selectedWorkflow === WorkflowId.Split;
+  const textureWorkspace = selectedWorkflow === WorkflowId.Texture;
   const layout = useShellLayout();
   const collapsed = layout.inspectorCollapsed;
   const panelRef = useRef<HTMLElement>(null);
@@ -90,6 +92,8 @@ export function Inspector({ inert = false }: { readonly inert?: boolean }): Reac
               <ExportSummary />
             ) : splitWorkspace ? (
               <SplitInspector />
+            ) : textureWorkspace ? (
+              <TextureInspector />
             ) : model === undefined ? (
               <p className="panel__empty">Nothing is selected. Open a model to begin.</p>
             ) : model.parts.length <= 1 ? (

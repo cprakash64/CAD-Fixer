@@ -1032,6 +1032,29 @@ lost`, `printable`, `watertight`, and the rest. **"The numbers are unchanged"
   candidate. No effect resets React state. Cancel resets the settings;
   switching workspace keeps them.
 
+## Surface Texture workspace invariants (UI-05)
+
+- **ONE SELECTION, IN THE STORE.** `WorkspaceState.textureSelection` is the
+  canonical copy: worker-grown triangle ids plus the seed, area, part area and
+  planarity. The viewport draws the ids; panel, HUD and inspector read the
+  summary. It is valid only when its `source` IS the loaded handle and its part
+  is active — an Apply, Undo, repair or new file retires it, so stale face ids
+  never reach a request. Picks reach `useTextureWorkflow().pick` directly; the
+  old `cadfixer:texture-surface-pick` window event is gone (the harness uses
+  `cadfixerHarness.selectTextureSurface`, which calls the same worker op).
+- **ONLY WHAT STAGE 7C DOES.** One flat connected region per click (2° normal
+  bound, 100,000-triangle ceiling); Dots / Lines / Diamond; Raised or Engraved;
+  flat projection in the face's own plane; millimetre documents only. No brush,
+  lasso, angle, grow/shrink/invert/select-all, bottom exclusion, image source,
+  curved or surface-following mapping, falloff or subdivision.
+- **THE FAST PREVIEW IS THE ENGINE'S LAYOUT, NOT A SHADER.** `texture/layout`
+  runs `buildSurfaceTextureLayout` alone (same admission limits as Apply) and
+  returns element count, the primitive-triangle estimate and exact footprint
+  outlines. Debounced; no geometry is built. Generate preview runs the Boolean;
+  only Apply commits.
+- **NO REDUNDANT FRAMES.** Texture overlays use the scheduled frame, and a clear
+  of something not drawn draws nothing (the UI-04 dense-model lesson).
+
 ## Hole-fill invariants (Stage 4B-1B1 engine, 4B-1B2 workflow)
 
 - **THE ENGINE IS UNCHANGED BY THE WORKFLOW.** Stage 4B-1B2 added selection,

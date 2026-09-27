@@ -11,6 +11,7 @@ import type { RepairOperation } from '@cadfixer/geometry-runtime';
 import { useConservativeRepair, type ConservativeRepairControls } from './use-conservative-repair';
 import { useHoleFillWorkflow, type HoleFillControls } from './use-hole-fill-workflow';
 import { useSplitWorkflow, type SplitControls } from './use-split-workflow';
+import { useTextureWorkflow, type TextureControls } from './use-texture-workflow';
 import { useTopologyAnalysis, type TopologyAnalysisControls } from './use-topology-analysis';
 import { useWorkspaceState, useWorkspaceStore } from './store-context';
 import { RepairPlanState } from './workspace-store';
@@ -35,6 +36,7 @@ const AnalysisContext = createContext<TopologyAnalysisControls | undefined>(unde
 const RepairContext = createContext<RepairControls | undefined>(undefined);
 const HoleFillContext = createContext<HoleFillControls | undefined>(undefined);
 const SplitContext = createContext<SplitControls | undefined>(undefined);
+const TextureContext = createContext<TextureControls | undefined>(undefined);
 
 export function AnalysisControlsProvider({
   children,
@@ -104,6 +106,15 @@ export function SplitControlsProvider({ children }: { readonly children: ReactNo
   return <SplitContext.Provider value={controls}>{children}</SplitContext.Provider>;
 }
 
+/**
+ * The Surface Texture controller: one selection, one set of settings, shared by
+ * the panel, the viewport, the HUD and the inspector.
+ */
+export function TextureControlsProvider({ children }: { readonly children: ReactNode }): ReactNode {
+  const controls = useTextureWorkflow();
+  return <TextureContext.Provider value={controls}>{children}</TextureContext.Provider>;
+}
+
 /** All of them, in the order their automatic work depends on. */
 export function WorkflowControllersProvider({
   children,
@@ -114,7 +125,9 @@ export function WorkflowControllersProvider({
     <AnalysisControlsProvider>
       <RepairControlsProvider>
         <HoleFillControlsProvider>
-          <SplitControlsProvider>{children}</SplitControlsProvider>
+          <SplitControlsProvider>
+            <TextureControlsProvider>{children}</TextureControlsProvider>
+          </SplitControlsProvider>
         </HoleFillControlsProvider>
       </RepairControlsProvider>
     </AnalysisControlsProvider>
@@ -140,4 +153,8 @@ export function useHoleFillControls(): HoleFillControls {
 
 export function useSplitControls(): SplitControls {
   return required(useContext(SplitContext), 'useSplitControls');
+}
+
+export function useTextureControls(): TextureControls {
+  return required(useContext(TextureContext), 'useTextureControls');
 }

@@ -1,0 +1,149 @@
+import type { TextureMode, TexturePattern } from '@cadfixer/geometry-runtime';
+import { formatArea } from './split-presentation';
+
+/**
+ * THE SURFACE TEXTURE WORKSPACE, decided once: its catalogue, its validation
+ * and every sentence it shows.
+ *
+ * WHAT THE STAGE 7C ENGINE DOES, and therefore all this may offer: ONE
+ * connected FLAT region of one part, chosen by clicking a face; Dots, Lines or
+ * Diamond laid out on that face's own plane; each Raised (a Boolean union) or
+ * Engraved (a difference); millimetre documents only. There is no brush,
+ * lasso, angle or grow/shrink selection, no image heightmap, no curved,
+ * cylindrical, spherical, triplanar or surface-following mapping, no falloff
+ * and no subdivision — so none of those has a control.
+ */
+
+export interface PatternOption {
+  readonly pattern: TexturePattern;
+  readonly name: string;
+  readonly detail: string;
+  /** Whether the engine reads the rotation for this pattern. Dots ignore it. */
+  readonly rotates: boolean;
+}
+
+export const PATTERN_OPTIONS: readonly PatternOption[] = Object.freeze([
+  { pattern: 'dots', name: 'Dots', detail: 'Round bumps', rotates: false },
+  { pattern: 'lines', name: 'Lines', detail: 'Parallel bars', rotates: true },
+  { pattern: 'diamond', name: 'Diamond', detail: 'Crossed bars', rotates: true },
+]);
+
+export function patternOption(pattern: TexturePattern): PatternOption {
+  for (const option of PATTERN_OPTIONS) if (option.pattern === pattern) return option;
+  return { pattern, name: pattern, detail: '', rotates: false };
+}
+
+/** Mirrors of the engine's admission ceilings; a test holds them equal. */
+export const TEXTURE_ELEMENT_LIMIT = 500;
+export const TEXTURE_PRIMITIVE_LIMIT = 64_000;
+/** The engine's region growth bound, stated where the tool is described. */
+export const TEXTURE_REGION_NORMAL_DEGREES = 2;
+
+export interface TextureSettings {
+  readonly pattern: TexturePattern;
+  readonly mode: TextureMode;
+  /** Dot diameter, or line width, in millimetres. */
+  readonly featureSize: number;
+  /** Centre-to-centre pitch, in millimetres. */
+  readonly spacing: number;
+  /** Height above the face when raised, depth below it when engraved, in millimetres. */
+  readonly heightOrDepth: number;
+  /** Degrees, 0–180, measured in the face's own plane. */
+  readonly rotationDegrees: number;
+}
+
+export const DEFAULT_TEXTURE_SETTINGS: TextureSettings = Object.freeze({
+  pattern: 'dots',
+  mode: 'emboss',
+  featureSize: 2,
+  spacing: 5,
+  heightOrDepth: 0.8,
+  rotationDegrees: 0,
+});
+
+/**
+ * The first setting the engine would refuse, named — the same rules
+ * `buildSurfaceTextureLayout` applies, stated before any work is asked for.
+ */
+export function textureSettingsProblem(settings: TextureSettings): string | undefined {
+  const positive = (value: number): boolean => Number.isFinite(value) && value > 0;
+  if (!positive(settings.featureSize))
+    return `${describeFeatureLabel(settings.pattern)} must be greater than 0 mm.`;
+  if (!positive(settings.spacing)) return 'Spacing must be greater than 0 mm.';
+  if (!positive(settings.heightOrDepth))
+    return `${describeDepthLabel(settings.mode)} must be greater than 0 mm.`;
+  if (
+    !Number.isFinite(settings.rotationDegrees) ||
+    settings.rotationDegrees < 0 ||
+    settings.rotationDegrees > 180
+  )
+    return 'Rotation must be between 0° and 180°.';
+  if (settings.spacing < settings.featureSize)
+    return `Spacing is centre to centre, so it must be at least the ${describeFeatureLabel(settings.pattern).toLowerCase()}.`;
+  return undefined;
+}
+
+/** Dimensions are millimetres; nothing is converted. */
+export function textureAvailable(unit: string | undefined): boolean {
+  return unit === 'millimeter';
+}
+
+export function describeFeatureLabel(pattern: TexturePattern): string {
+  return pattern === 'dots' ? 'Dot diameter' : 'Line width';
+}
+
+export function describeDepthLabel(mode: TextureMode): string {
+  return mode === 'emboss' ? 'Height' : 'Depth';
+}
+
+export function describeDirection(mode: TextureMode): string {
+  return mode === 'emboss' ? 'Raised — added above the face' : 'Engraved — cut into the face';
+}
+
+/** "18% of surface". Undefined when the part has no area to compare with. */
+export function describeCoverage(area: number, partArea: number): string | undefined {
+  if (!(partArea > 0)) return undefined;
+  const percent = (area / partArea) * 100;
+  return `${percent < 1 ? percent.toFixed(1) : String(Math.round(percent))}% of surface`;
+}
+
+export function describeSelectionArea(area: number, unit: string | undefined): string {
+  return formatArea(area, unit);
+}
+
+export function describeTriangles(count: number): string {
+  return `${count.toLocaleString()} ${count === 1 ? 'triangle' : 'triangles'}`;
+}
+
+export const TEXTURE_COPY = Object.freeze({
+  selectionSection: 'Surface selection',
+  selectionGroup: 'Selection tool',
+  regionTool: 'Flat region',
+  regionToolDetail: `Click a face: selects the connected faces within ${String(TEXTURE_REGION_NORMAL_DEGREES)}° of it, up to 100,000 triangles. Flat regions only.`,
+  clearSelection: 'Clear',
+  noSelection: 'No surface selected.',
+  sourceSection: 'Texture source',
+  sourceGroup: 'Pattern',
+  mappingSection: 'Mapping',
+  mappingProjection: 'Flat, in the selected face’s own plane',
+  mappingNote:
+    'Elements are laid out on the face and kept whole: any that would cross its edge margin are left out rather than cut.',
+  parametersSection: 'Texture parameters',
+  directionGroup: 'Direction',
+  raised: 'Raised',
+  engraved: 'Engraved',
+  estimateSection: 'Layout',
+  previewButton: 'Generate preview',
+  applyButton: 'Apply texture',
+  discardButton: 'Discard preview',
+  resetButton: 'Reset',
+  undoButton: 'Undo texture',
+  noModel: 'Open a model to texture one of its flat faces.',
+  needsMillimetres:
+    'Texture sizes are millimetres, and this model does not state millimetres. CAD Fixer converts no units, so texturing is unavailable for it.',
+  hintSelect: 'Click a flat face of the model to select it',
+  hintSelected: 'Click another face to replace the selection',
+  previewLabel: 'Preview — not applied',
+  fastPreviewNote:
+    'Outlines show exactly where each element will be placed. No geometry has been built.',
+});

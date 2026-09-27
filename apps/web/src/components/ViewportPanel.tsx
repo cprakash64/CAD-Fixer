@@ -14,11 +14,12 @@ import {
 } from '../state/workspace-store';
 import { overlayForIssue } from '../state/repair-issues';
 import { useIssueNavigation } from '../state/use-issue-navigation';
-import { useSplitControls } from '../state/workflow-controllers';
+import { useSplitControls, useTextureControls } from '../state/workflow-controllers';
 import { WorkflowId } from '../state/workflows';
 import { analysisKey } from '../state/workspace-store';
 import { IssueHud } from './IssueHud';
 import { SplitHud } from './SplitHud';
+import { TextureHud } from './TextureHud';
 import { OutputSizeCard } from './OutputSizeCard';
 import { Icon } from './shell/Icon';
 import { IconButton, SegmentedControl, type SegmentedOption } from './shell/primitives';
@@ -65,12 +66,16 @@ export function ViewportPanel(): ReactNode {
    * arrow's drag reaches the CURRENT controller, and a model swap knows which
    * workspace it happened in without rebuilding the model on a tab change.
    */
+  const texture = useTextureControls();
+  const textureWorkspace = selectedWorkflow === WorkflowId.Texture;
   const splitRef = useRef(split);
+  const textureRef = useRef(texture);
   const splitWorkspaceRef = useRef(splitWorkspace);
   // Declared before the model effect, so a model swap already sees the
   // workspace it happened in.
   useEffect(() => {
     splitRef.current = split;
+    textureRef.current = texture;
     splitWorkspaceRef.current = splitWorkspace;
   });
   const issueSelection = navigation.selection;
@@ -114,8 +119,10 @@ export function ViewportPanel(): ReactNode {
       const viewport = createViewport(container, {
         onPick: (hit) => {
           store.selectPart(hit.partId);
-          if (store.getSnapshot().selectedWorkflow === 'texture')
-            window.dispatchEvent(new CustomEvent('cadfixer:texture-surface-pick', { detail: hit }));
+          // Surface Texture's one selection tool: the worker grows the flat
+          // region from this face. Nothing else listens for the click.
+          if (store.getSnapshot().selectedWorkflow === WorkflowId.Texture)
+            textureRef.current.pick(hit);
         },
         onOrientationChange: (orientation) => {
           const cube = cubeRef.current;
@@ -268,7 +275,9 @@ export function ViewportPanel(): ReactNode {
       selectedWorkflow !== 'texture' ||
       selection?.source.documentId !== model.handle.documentId ||
       selection.source.revision !== model.handle.revision ||
-      selection.partId !== activePartId
+      selection.partId !== activePartId ||
+      // A built preview replaces the face; the highlight would hide it.
+      texturePreview !== undefined
     ) {
       viewport?.setTextureSelection(undefined);
       return;
@@ -285,7 +294,23 @@ export function ViewportPanel(): ReactNode {
       positions.set(source.subarray(triangleId * 9, triangleId * 9 + 9), index * 9);
     });
     viewport.setTextureSelection({ positions, revision: model.revision });
-  }, [activePartId, model, selectedWorkflow, textureSelection]);
+  }, [activePartId, model, selectedWorkflow, textureSelection, texturePreview]);
+
+  /*
+   * THE FAST PREVIEW: the engine's layout outlines, drawn on the face until a
+   * geometry preview replaces them. Part-local, like the selection.
+   */
+  const footprint =
+    textureWorkspace && texture.preview === undefined ? texture.layout.result : undefined;
+  useEffect(() => {
+    const viewport = viewportRef.current;
+    if (viewport === undefined) return;
+    viewport.setTextureFootprint(
+      model === undefined || footprint?.source.revision !== model.handle.revision
+        ? undefined
+        : { segments: footprint.footprint, revision: model.revision },
+    );
+  }, [footprint, model]);
 
   /**
    * Pushes diagnostic overlays for the model that is actually displayed.
@@ -546,6 +571,7 @@ export function ViewportPanel(): ReactNode {
           <IssueHud navigation={navigation} />
         ) : null}
         {splitWorkspace && modelShown ? <SplitHud /> : null}
+        {textureWorkspace && modelShown ? <TextureHud /> : null}
         {showingPreview ? (
           <p className="viewport__preview-banner" role="status" data-testid="preview-banner">
             Preview — not applied

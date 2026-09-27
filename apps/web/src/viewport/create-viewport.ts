@@ -7,6 +7,8 @@ import {
   DirectionalLight,
   DoubleSide,
   GridHelper,
+  LineBasicMaterial,
+  LineSegments,
   Group,
   Mesh,
   Matrix4,
@@ -216,6 +218,13 @@ export interface ViewportHandle {
   setEditPlane(plane: ViewportEditPlane | undefined): void;
   /** Shows the worker-qualified connected surface before a Boolean preview exists. */
   setTextureSelection(selection: ViewportTextureSelection | undefined): void;
+  /**
+   * The texture layout's element outlines (pairs of ACTIVE-part-local points),
+   * from the engine's layout step. `undefined` clears them.
+   */
+  setTextureFootprint(
+    data: { readonly segments: Float32Array; readonly revision: number } | undefined,
+  ): void;
   /**
    * The split's cross-section outline (pairs of ACTIVE-part-local points), as
    * the engine reported it. `undefined` clears it.
@@ -545,24 +554,41 @@ export function createViewport(
     }),
   };
   let partTints: ReadonlyMap<string, ViewportPartTint> | undefined;
+  /*
+   * The selected surface: a muted rose over the model's grey, translucent
+   * enough to keep its shading readable. Presentation only — no material of
+   * the model, and nothing any exporter sees.
+   */
   const textureSelectionMaterial = new MeshBasicMaterial({
-    color: 0xffc857,
+    color: 0xe8897c,
     transparent: true,
-    opacity: 0.58,
+    opacity: 0.5,
     depthWrite: false,
     polygonOffset: true,
     polygonOffsetFactor: -2,
   });
+  /* The texture layout's outlines, on top of the selection. */
+  const textureFootprintMaterial = new LineBasicMaterial({
+    color: 0xfff4ef,
+    transparent: true,
+    opacity: 0.9,
+    depthTest: false,
+  });
+  let textureFootprint: LineSegments | undefined;
+  let textureFootprintEdges = 0;
   let textureSelectionMesh: Mesh | undefined;
 
   const setTextureSelection = (selection: ViewportTextureSelection | undefined): void => {
+    const hadSelection = textureSelectionMesh !== undefined;
     if (textureSelectionMesh) {
       activePartGroup.remove(textureSelectionMesh);
       textureSelectionMesh.geometry.dispose();
       textureSelectionMesh = undefined;
     }
     if (selection === undefined || selection.revision !== currentModel?.revision) {
-      render();
+      // Nothing was drawn, so nothing changed: no frame (a large model's frame
+      // is seconds under software WebGL, and this runs on every model change).
+      if (hadSelection) scheduleRender();
       return;
     }
     const geometry = new BufferGeometry();
@@ -571,7 +597,34 @@ export function createViewport(
     mesh.renderOrder = 8;
     activePartGroup.add(mesh);
     textureSelectionMesh = mesh;
-    render();
+    scheduleRender();
+  };
+
+  const setTextureFootprint = (
+    data: { readonly segments: Float32Array; readonly revision: number } | undefined,
+  ): void => {
+    const had = textureFootprint !== undefined;
+    if (textureFootprint !== undefined) {
+      activePartGroup.remove(textureFootprint);
+      textureFootprint.geometry.dispose();
+      textureFootprint = undefined;
+      textureFootprintEdges = 0;
+    }
+    if (
+      data === undefined ||
+      data.revision !== currentModel?.revision ||
+      data.segments.length < 6
+    ) {
+      if (had) scheduleRender();
+      return;
+    }
+    const geometry = new BufferGeometry();
+    geometry.setAttribute('position', new BufferAttribute(data.segments, 3));
+    textureFootprint = new LineSegments(geometry, textureFootprintMaterial);
+    textureFootprint.renderOrder = 12;
+    textureFootprintEdges = data.segments.length / 6;
+    activePartGroup.add(textureFootprint);
+    scheduleRender();
   };
 
   /**
@@ -706,6 +759,12 @@ export function createViewport(
     canvas.dataset.editArrow =
       arrow === undefined ? 'none' : arrow.map((value) => value.toFixed(1)).join(',');
     canvas.dataset.tintedParts = String(partTints?.size ?? 0);
+    canvas.dataset.textureSelectionTriangles = String(
+      textureSelectionMesh === undefined
+        ? 0
+        : textureSelectionMesh.geometry.getAttribute('position').count / 3,
+    );
+    canvas.dataset.textureFootprintEdges = String(textureFootprintEdges);
     canvas.dataset.sharedGeometries = String(sharedGeometry.size);
     canvas.dataset.geometriesCreated = String(sharedGeometry.lifecycle.created);
     canvas.dataset.geometriesDisposed = String(sharedGeometry.lifecycle.disposed);
@@ -1291,6 +1350,7 @@ export function createViewport(
     setTextureSelection,
     setSectionOutline,
     setPartTints,
+    setTextureFootprint,
     setOverlays,
     setPreview,
     setChangeOverlays,
@@ -1344,6 +1404,8 @@ export function createViewport(
       holeFillOverlays.dispose();
       if (scheduledFrame !== 0) cancelAnimationFrame(scheduledFrame);
       splitGizmo.dispose();
+      textureFootprint?.geometry.dispose();
+      textureFootprintMaterial.dispose();
       for (const material of Object.values(tintMaterials)) material.dispose();
       textureSelectionMaterial.dispose();
       markerMaterial.map?.dispose();

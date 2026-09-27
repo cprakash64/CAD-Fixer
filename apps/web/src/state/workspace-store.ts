@@ -256,6 +256,18 @@ const CONVERSION_CLOSED: ConversionSnapshot = Object.freeze({
   measured: Object.freeze([]),
 });
 
+export interface TextureSelectionState {
+  readonly source: DocumentHandle;
+  readonly partId: string;
+  readonly seedTriangle: number;
+  readonly triangleIds: readonly number[];
+  /** Summed area of the selected faces, part-local units squared. */
+  readonly area: number;
+  /** Summed area of every face of the part. */
+  readonly partArea: number;
+  readonly planarity: 'PLANAR' | 'NEAR_PLANAR';
+}
+
 export const AnalysisState = {
   /** No model is loaded, so there is nothing to analyse. */
   Unavailable: 'unavailable',
@@ -897,14 +909,14 @@ export interface WorkspaceState {
         readonly generation: number;
       }
     | undefined;
-  /** Worker-qualified connected region used only for the pre-preview highlight. */
-  readonly textureSelection:
-    | {
-        readonly source: DocumentHandle;
-        readonly partId: string;
-        readonly triangleIds: readonly number[];
-      }
-    | undefined;
+  /**
+   * THE Surface Texture selection — the one canonical copy. The worker grew it
+   * from `seedTriangle` and measured it; the viewport draws `triangleIds`, and
+   * the panel, HUD and inspector read the summary. It names ONE revision of ONE
+   * part: its ids index that exact mesh, so a selection whose `source` is not
+   * the loaded model's handle is stale and read as no selection.
+   */
+  readonly textureSelection: TextureSelectionState | undefined;
   readonly importProgress: ImportProgressState;
   readonly exportProgress: ExportProgressState;
   /**
@@ -1167,14 +1179,14 @@ export class WorkspaceStore {
     if (this.state.texturePreview !== undefined) this.update({ texturePreview: undefined });
   }
 
-  public setTextureSelection(
-    source: DocumentHandle,
-    partId: string,
-    triangleIds: readonly number[],
-  ): boolean {
-    if (!sameHandle(this.state.model?.handle, source) || this.state.activePartId !== partId)
+  /** Installs a worker-grown selection; refused for any revision or part not on screen. */
+  public setTextureSelection(selection: TextureSelectionState): boolean {
+    if (
+      !sameHandle(this.state.model?.handle, selection.source) ||
+      this.state.activePartId !== selection.partId
+    )
       return false;
-    this.update({ textureSelection: { source, partId, triangleIds } });
+    this.update({ textureSelection: selection });
     return true;
   }
 

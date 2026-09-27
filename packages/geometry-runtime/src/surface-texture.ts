@@ -521,3 +521,90 @@ export async function textureSurface(
     interfaceOverlap: layout.interfaceOverlap,
   };
 }
+
+/**
+ * WHAT A TEXTURE WOULD PLACE, WITHOUT BUILDING IT — UI-04's "fast preview".
+ *
+ * The same `buildSurfaceTextureLayout` the Boolean path runs first, so the
+ * admission rules, the refusals and the element positions are the ones Apply
+ * would use. No operand is built and no Boolean runs. `footprint` is every
+ * element's outline on the surface (pairs of part-local points): the exact
+ * 24-sided circle or rectangle the engine will extrude, not an approximation.
+ */
+export interface TextureLayoutSummary {
+  readonly elementCount: number;
+  readonly estimatedPrimitiveTriangles: number;
+  readonly edgeMargin: number;
+  readonly footprint: Float32Array;
+}
+
+export function describeTextureLayout(
+  mesh: CanonicalMesh,
+  request: SurfaceTextureRequest,
+  cancellation: CancellationToken,
+): TextureLayoutSummary {
+  requireSource(mesh, cancellation);
+  const layout = buildSurfaceTextureLayout(mesh, request, cancellation);
+  const frame = layout.region.frame;
+  const segments: number[] = [];
+  const edge = (a: Point2, b: Point2): void => {
+    segments.push(...pointFromLocal(frame, a[0], a[1], 0), ...pointFromLocal(frame, b[0], b[1], 0));
+  };
+  for (const instance of layout.instances) {
+    throwIfCancelled(cancellation);
+    const u = instance.localCenterU,
+      v = instance.localCenterV;
+    if (instance.kind === 'circle') {
+      const radius = instance.width / 2;
+      for (let i = 0; i < CIRCLE_SEGMENTS; i++) {
+        const a = (i * Math.PI * 2) / CIRCLE_SEGMENTS,
+          b = ((i + 1) * Math.PI * 2) / CIRCLE_SEGMENTS;
+        edge(
+          [u + Math.cos(a) * radius, v + Math.sin(a) * radius],
+          [u + Math.cos(b) * radius, v + Math.sin(b) * radius],
+        );
+      }
+      continue;
+    }
+    const c = Math.cos(instance.orientationRadians),
+      s = Math.sin(instance.orientationRadians),
+      hx = instance.length / 2,
+      hy = instance.width / 2;
+    const corners = [
+      [-hx, -hy],
+      [hx, -hy],
+      [hx, hy],
+      [-hx, hy],
+    ].map(([x = 0, y = 0]) => [u + x * c - y * s, v + x * s + y * c] as const);
+    for (let i = 0; i < 4; i++) edge(corners[i] ?? [u, v], corners[(i + 1) % 4] ?? [u, v]);
+  }
+  return {
+    elementCount: layout.instances.length,
+    estimatedPrimitiveTriangles: layout.estimatedPrimitiveTriangles,
+    edgeMargin: layout.edgeMargin,
+    footprint: Float32Array.from(segments),
+  };
+}
+
+/** Summed triangle area — of every face, or of the listed faces only. */
+export function meshSurfaceArea(mesh: CanonicalMesh, triangleIds?: readonly number[]): number {
+  const faceArea = (t: number): number => {
+    const a = vertex(mesh, mesh.indices[t * 3] ?? 0),
+      b = vertex(mesh, mesh.indices[t * 3 + 1] ?? 0),
+      c = vertex(mesh, mesh.indices[t * 3 + 2] ?? 0),
+      e1 = sub(b, a),
+      e2 = sub(c, a);
+    return (
+      Math.hypot(
+        e1[1] * e2[2] - e1[2] * e2[1],
+        e1[2] * e2[0] - e1[0] * e2[2],
+        e1[0] * e2[1] - e1[1] * e2[0],
+      ) / 2
+    );
+  };
+  let total = 0;
+  if (triangleIds === undefined) {
+    for (let t = 0; t < mesh.indices.length / 3; t++) total += faceArea(t);
+  } else for (const t of triangleIds) total += faceArea(t);
+  return total;
+}

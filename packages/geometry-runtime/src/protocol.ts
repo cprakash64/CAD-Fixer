@@ -18,7 +18,11 @@ import type { HoleFillCandidateHandle } from './hole-fill-candidates';
 import type { GeometryEditCandidateHandle, GeometryEditResourceAccounting } from './geometry-edit';
 import type { SplitCandidateHandle, SplitCandidateSummary } from './split-candidates';
 import type { SplitRequest } from './split-connectors';
-import type { SurfaceTextureRequest, SurfaceTextureResult } from './surface-texture';
+import type {
+  SurfaceTextureRequest,
+  SurfaceTextureResult,
+  TextureLayoutSummary,
+} from './surface-texture';
 import type { UndoableChangeKind } from './repair-history';
 // Type-only, exactly as the topology and repair contracts are, so no engine
 // code is pulled into the main-thread bundle. The VALUES the interface compares
@@ -220,6 +224,7 @@ export interface OperationMap {
   'split/commit': { payload: SplitCommitPayload; result: SplitCommitResult };
   'split/discard': { payload: SplitDiscardPayload; result: SplitDiscardResult };
   'texture/select': { payload: TextureSelectPayload; result: TextureSelectResult };
+  'texture/layout': { payload: TextureCreatePayload; result: TextureLayoutResult };
   'texture/create': { payload: TextureCreatePayload; result: TextureCreateResult };
 }
 
@@ -301,6 +306,19 @@ export interface TextureSelectResult {
   readonly partId: string;
   readonly triangleIds: readonly number[];
   readonly planarity: 'PLANAR' | 'NEAR_PLANAR';
+  /** Summed area of the selected faces, part-local units squared. */
+  readonly area: number;
+  /** Summed area of every face of the part, for coverage. */
+  readonly partArea: number;
+}
+/**
+ * The layout a texture request would produce, from the engine's own layout
+ * step — element count, the admission estimate and footprint outlines. No
+ * geometry is built.
+ */
+export interface TextureLayoutResult extends TextureLayoutSummary {
+  readonly source: DocumentHandle;
+  readonly partId: string;
 }
 export interface TextureCreatePayload {
   readonly source: DocumentHandle;

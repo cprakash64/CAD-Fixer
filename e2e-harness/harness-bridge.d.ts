@@ -101,6 +101,12 @@ declare global {
       }>;
       cancelTestBoolean(): void;
       testBooleanPhases(): readonly { phase: string; at: number }[];
+      /**
+       * Selects a Surface Texture region through the real worker and store,
+       * exactly as a viewport pick does — for tests that must name a part the
+       * camera cannot isolate. Resolves to the number of selected faces.
+       */
+      selectTextureSurface(partId: string, triangleIndex: number): Promise<number>;
       resetSplitQualification(): void;
       splitQualificationEvents(): readonly {
         documentId: string;

@@ -1,6 +1,8 @@
 import { computeBounds, partId, selectEditSurface } from '@cadfixer/mesh-core';
 import {
+  describeTextureLayout,
   isPart,
+  meshSurfaceArea,
   textureSurface,
   type BooleanBackend,
   type OperationHandler,
@@ -120,7 +122,25 @@ export const textureSelectHandler: OperationHandler<'texture/select'> = (payload
       partId: payload.partId,
       triangleIds: region.triangleIds,
       planarity: region.planarity.kind,
+      // Reported for display; neither decides anything.
+      area: meshSurfaceArea(sourcePart.mesh, region.triangleIds),
+      partArea: meshSurfaceArea(sourcePart.mesh),
     },
+  });
+};
+
+/**
+ * The fast preview: the engine's layout for this request, without the Boolean.
+ * Synchronous and bounded by the same element and primitive ceilings as Apply.
+ */
+export const textureLayoutHandler: OperationHandler<'texture/layout'> = (payload, context) => {
+  context.throwIfCancelled();
+  const sourcePart = residentDocuments.resolvePart(payload.source, partId(payload.partId));
+  if (!isPart(sourcePart)) throw sourcePart;
+  const summary = describeTextureLayout(sourcePart.mesh, payload.request, context.cancellation);
+  return Promise.resolve({
+    value: { ...summary, source: payload.source, partId: payload.partId },
+    transfer: [summary.footprint.buffer],
   });
 };
 

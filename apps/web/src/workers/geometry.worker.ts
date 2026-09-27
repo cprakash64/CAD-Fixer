@@ -28,7 +28,11 @@ import {
   editDiscardHandler,
 } from './geometry-edit-handlers';
 import { splitCommitHandler, splitCreateHandler, splitDiscardHandler } from './split-handlers';
-import { textureCreateHandler, textureSelectHandler } from './texture-handlers';
+import {
+  textureCreateHandler,
+  textureLayoutHandler,
+  textureSelectHandler,
+} from './texture-handlers';
 import {
   repairCommitHandler,
   repairCreateCandidateHandler,
@@ -91,6 +95,7 @@ host.register('split/commit', splitCommitHandler);
 host.register('split/discard', splitDiscardHandler);
 host.register('texture/create', textureCreateHandler);
 host.register('texture/select', textureSelectHandler);
+host.register('texture/layout', textureLayoutHandler);
 
 // Conservative repair. Five operations so planning, preview, apply and undo
 // stay separate acts; see apps/web/src/workers/repair-handlers.ts. No geometry

@@ -39,6 +39,7 @@ import {
   type SplitDiscardResult,
   type SurfaceTextureRequest,
   type TextureCreateResult,
+  type TextureLayoutResult,
   type TextureSelectResult,
 } from '@cadfixer/geometry-runtime';
 import { modelUnavailable } from '@cadfixer/shared';
@@ -530,6 +531,15 @@ export class GeometryClient {
       { source, partId, request },
       onProgress === undefined ? {} : { onProgress },
     );
+  }
+
+  /** The engine's texture layout for this request, without building geometry. */
+  public describeTextureLayout(
+    source: DocumentHandle,
+    partId: string,
+    request: SurfaceTextureRequest,
+  ): OperationHandle<TextureLayoutResult> {
+    return this.coordinator.dispatch('texture/layout', { source, partId, request }, {});
   }
 
   public selectTextureSurface(

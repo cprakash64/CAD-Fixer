@@ -8,7 +8,7 @@ import { OpenBoundaryPanel } from './OpenBoundaryPanel';
 import { RepairPanel } from './RepairPanel';
 import { SplitWorkspace } from './SplitWorkspace';
 import { StatusPanel } from './StatusPanel';
-import { TexturePanel } from './TexturePanel';
+import { TextureWorkspace } from './TextureWorkspace';
 import { keepTabWithin } from './shell/focus-trap';
 import { IconButton, PanelSection, WorkspaceHeader } from './shell/primitives';
 import { useShellLayout } from './shell/shell-layout';
@@ -24,9 +24,8 @@ import { DEFAULT_WORKSPACE, WORKSPACE_PRESENTATION } from './shell/workspaces';
  * effect of looking at a different workspace. `hidden` takes them out of
  * layout and out of the accessibility tree and ends nothing.
  *
- * The Convert and Split & Connect workspaces are hidden rather than unmounted
- * for the same reason. Texture decides its own visibility, as it always has,
- * and renders nothing outside its workspace.
+ * The Convert, Split & Connect and Surface Texture workspaces are hidden rather
+ * than unmounted for the same reason.
  *
  * The footer is the activity log. It stays visible in every workspace because
  * it is where every workflow reports what it did.
@@ -101,7 +100,9 @@ export function ToolPanel({ inert = false }: { readonly inert?: boolean }): Reac
         <div className="tool-panel__group" hidden={current !== WorkflowId.Split}>
           <SplitWorkspace />
         </div>
-        <TexturePanel />
+        <div className="tool-panel__group" hidden={current !== WorkflowId.Texture}>
+          <TextureWorkspace />
+        </div>
       </div>
 
       <div className="tool-panel__footer">

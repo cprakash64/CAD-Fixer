@@ -66,9 +66,13 @@ export const WORKFLOWS: readonly WorkflowDescriptor[] = Object.freeze([
     implemented: true,
   },
   {
+    /*
+     * UI-05 took the reference's tone and kept it exact: the engine raises OR
+     * cuts in, and only on a flat surface.
+     */
     id: WorkflowId.Texture,
     label: 'Texture',
-    summary: 'Add Dots, Lines or Diamond patterns to planar surfaces.',
+    summary: 'Emboss or engrave a pattern on a flat surface.',
     implemented: true,
   },
   {
