@@ -169,6 +169,18 @@ function HelpMenu(): ReactNode {
           <p className="menu__note">
             Models are read, checked and written on this device. Nothing is uploaded.
           </p>
+          {/* The licences of the third-party code and artwork this build
+              ships, as a static file beside the application. Relative, so it
+              resolves under any deployment path. */}
+          <a
+            className="menu__link"
+            href="third-party-notices.txt"
+            target="_blank"
+            rel="noopener noreferrer"
+            data-testid="third-party-notices"
+          >
+            Third-party notices
+          </a>
         </div>
       ) : null}
     </div>

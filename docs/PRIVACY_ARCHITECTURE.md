@@ -121,8 +121,11 @@ test fails if anything targets a foreign origin; a second fails if any request
 carries a body or uses a method other than GET/HEAD — because "no external
 requests" alone would not catch a POST back to our own origin.
 
-**No third-party runtime dependencies that fetch.** The runtime tree is React,
-React DOM, and Three.js. The interface fonts (Figtree, Space Grotesk, JetBrains
+**No third-party runtime dependency fetches anything but its own code.** The
+JavaScript runtime tree is React, React DOM, and Three.js. The two WebAssembly
+kernels (Geogram and Manifold) are loaded by Emscripten-generated loaders that
+`fetch()` their own `.wasm` from the application's origin, once each, when the
+worker that owns them starts; they request nothing else. The interface fonts (Figtree, Space Grotesk, JetBrains
 Mono) are SELF-HOSTED: they ship inside the build as fingerprinted same-origin
 assets, so loading them is a request to CAD Fixer's own origin and never to a
 font service. See `apps/web/src/styles/tokens.css`.
@@ -179,18 +182,24 @@ one tab.
 
 ### What leaves the machine
 
-Nothing. Verified three ways rather than asserted:
+Nothing. Verified four ways rather than asserted:
 
 1. **Lint** bans `fetch`, `XMLHttpRequest`, `WebSocket`, `EventSource`, and
    `navigator.sendBeacon` repo-wide.
-2. **The build output** contains none of those identifiers in either shipped
-   chunk. Vite's module-preload polyfill, which used to contribute the single
-   `fetch(` in the bundle, is disabled in `vite.config.ts` so the grep result has
-   no exception to explain.
+2. **The build output** contains no such call in the application script or in
+   the geometry and export workers. The only `fetch` / `XMLHttpRequest` in the
+   build are the Emscripten loaders in the self-intersection, hole-fill and
+   Boolean workers, which load their own `.wasm` from the same origin (PR-01
+   audit). Vite's module-preload polyfill, which used to contribute a `fetch(`
+   to the application script, is disabled in `vite.config.ts`.
 3. **An end-to-end test** records every network request the page makes during
    import, automatic analysis, overlay use, and export, and asserts each is a
    same-origin `GET`/`HEAD` for a first-party asset with no request body and no
    model identity in the URL.
+4. **The Content Security Policy** the production host sends, and `vite
+preview` sends in every end-to-end run, is `connect-src 'self'` with
+   `default-src 'none'`: even a defect could not open a connection to another
+   origin. See `apps/web/security-headers.ts`.
 
 ### What diagnostics may log or report
 

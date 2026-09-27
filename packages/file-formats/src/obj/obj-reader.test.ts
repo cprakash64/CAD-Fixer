@@ -406,6 +406,31 @@ describe('OBJ-P09/P10/P11: invalid indices and numbers', () => {
     );
   });
 
+  // PR-01: `Number` reads these as 16, 3 and 7; OBJ numbers are decimal, so
+  // each is a malformed token, and reading it invented a coordinate.
+  it.each(['0x10', '0b11', '0o7', '1_0'])(
+    'refuses the non-decimal token %s as a coordinate',
+    async (token) => {
+      await expectRefusal(
+        () => read(`v 0 0 0\nv ${token} 0 0\nv 0 1 0\nf 1 2 3\n`),
+        AppErrorCode.MalformedFile,
+        token === '1_0' ? ImportRefusal.ObjNonFinite : ImportRefusal.ObjMalformedNumber,
+      );
+    },
+  );
+
+  it('still reads every decimal form a writer produces', async () => {
+    const result = await read('v +1.5 -.25 1e2\nv 1. 0.0 -3E-1\nv 0 1 0\nf 1 2 3\n');
+    expect(Array.from(result.document.parts[0]?.mesh.positions.slice(0, 6) ?? [])).toEqual([
+      1.5,
+      -0.25,
+      100,
+      1,
+      0,
+      Math.fround(-0.3),
+    ]);
+  });
+
   it('refuses a missing coordinate rather than defaulting it to zero', async () => {
     await expectRefusal(
       () => read('v 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n'),

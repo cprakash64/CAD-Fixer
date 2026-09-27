@@ -135,8 +135,10 @@ export function ViewportPanel(): ReactNode {
           else splitRef.current.dragPlane(distance);
         },
         onContextLost: () => {
+          // The model lives in a worker and is untouched, and a reload would
+          // discard applied work — so the advice is to export first (PR-01).
           store.setViewportFailure(
-            'The graphics context was lost. Reload the page to restore the viewport.',
+            'The graphics context was lost, so the 3D view has stopped. Your model is unaffected. If you have applied changes, export them first, then reload the page to restore the view.',
           );
           store.pushStatus(StatusSeverity.Error, 'The 3D viewport lost its graphics context.');
         },
@@ -148,13 +150,22 @@ export function ViewportPanel(): ReactNode {
         viewport.dispose();
       };
     } catch (cause) {
-      // Surfaced, not swallowed: without WebGL the viewport genuinely cannot run.
-      const message =
-        cause instanceof Error
-          ? `The 3D viewport could not start: ${cause.message}`
-          : 'The 3D viewport could not start.';
-      store.setViewportFailure(message);
-      store.pushStatus(StatusSeverity.Error, message);
+      /*
+       * Surfaced, not swallowed: without WebGL the viewport genuinely cannot
+       * run. The user gets what still works and what to do; the renderer's own
+       * wording ("THREE.WebGLRenderer: Error creating WebGL context.") names a
+       * library, not a remedy, and stays out of the sentence (PR-01). The
+       * activity log keeps a short cause for support.
+       */
+      store.setViewportFailure(
+        'The 3D viewport could not start because this browser did not provide WebGL graphics. Models can still be opened, checked and exported. To see them, turn on hardware acceleration or use a current Chromium-based browser, then reload.',
+      );
+      store.pushStatus(
+        StatusSeverity.Error,
+        cause instanceof Error && /webgl/i.test(cause.message)
+          ? 'The 3D viewport could not start: WebGL is unavailable in this browser.'
+          : 'The 3D viewport could not start.',
+      );
       return undefined;
     }
   }, [store]);

@@ -32,6 +32,14 @@ section _Stage 6D-A4_.
 | A 3MF entry that expands beyond 320 MiB                  | **no**    | `ZIP_ENTRY_TOO_LARGE`, naming the size and the limit. Raised from 256 MiB in v0.3.0. Entries from 128 MiB up are read by streaming; the whole package still expands to at most 512 MiB, so a package cannot hold two maximum-sized parts.                                                   |
 | A 3MF package expanding beyond 512 MiB, or ratio > 200:1 | no        | Resource refusals naming the metric, value and limit.                                                                                                                                                                                                                                       |
 
+**Numbers are read in their format's own lexical form (PR-01).** An OBJ
+coordinate must be a decimal number, and a 3MF coordinate an `xs:double` and a
+triangle index an `xs:nonNegativeInteger` (surrounding whitespace allowed, as
+XML Schema collapses it). `0x10`, `0b11`, `0o7`, and `1e1` or `2.0` as an index
+are refused (`OBJ_MALFORMED_NUMBER`, `THREEMF_MALFORMED_COORDINATE`,
+`THREEMF_MALFORMED_TRIANGLE_INDEX`) rather than coerced into values the file does
+not state. ASCII STL already worked this way.
+
 ## Export
 
 | Target | Supported | Notes                                                                                                                                          |

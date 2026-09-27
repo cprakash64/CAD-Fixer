@@ -94,10 +94,15 @@ load-bearing — sniffing is a way for a misconfigured host to appear to work.
 `no-referrer` is appropriate for an application that has no reason to tell
 anyone where its users came from.
 
-**No Content-Security-Policy is currently defined.** See
-`docs/release/STAGE_5B_RELEASE_QUALIFICATION.md` for the reasoning; a CSP that
-forgets `worker-src` or WASM evaluation breaks the product, so it is deliberately
-deferred rather than added untested.
+**A Content-Security-Policy, `Permissions-Policy` and `X-Frame-Options` are
+required since PR-01.** Stage 5B deferred a CSP because one that forgot workers
+or WASM evaluation would break the product; PR-01 measured the narrowest policy
+the product runs under in Chromium and WebKit and made `vite preview` send it,
+so the whole end-to-end suite runs under it. The values and the reason for each
+allowance are in `docs/DEPLOYMENT_REQUIREMENTS.md` §2 and
+`apps/web/security-headers.ts`; `deploy/nginx/cad-fixer-security-headers.conf`
+sends them, and a test holds the two to each other. **A deployed host must
+reinstall that snippet** to pick them up.
 
 ## 7. What the host must NOT do
 

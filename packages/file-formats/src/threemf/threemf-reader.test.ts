@@ -456,6 +456,51 @@ describe('MF-P11/MF-P12/MF-P13: structural validity is not mesh health', () => {
     );
   });
 
+  // PR-01: `Number` coerces all of these, and none is the schema's lexical
+  // form, so reading them imported geometry the file never stated.
+  it.each(['0x10', '0b11', '0o7'])('refuses the non-decimal coordinate %s', async (token) => {
+    const mesh = `<mesh><vertices>
+      <vertex x="0" y="0" z="0"/><vertex x="${token}" y="0" z="0"/><vertex x="0" y="1" z="0"/>
+      </vertices><triangles><triangle v1="0" v2="1" v3="2"/></triangles></mesh>`;
+    await expectRefusal(
+      async () =>
+        read3mf(await valid3mf(modelXml({ resources: object('1', '', mesh) })), testReadContext()),
+      AppErrorCode.MalformedFile,
+      ImportRefusal.ThreeMfMalformedCoordinate,
+    );
+  });
+
+  it.each(['0x2', '2.0', '1e0', '-1', ' 2 x'])(
+    'refuses %s as a triangle index rather than coercing it',
+    async (token) => {
+      const mesh = `<mesh><vertices>
+        <vertex x="0" y="0" z="0"/><vertex x="1" y="0" z="0"/><vertex x="0" y="1" z="0"/>
+        </vertices><triangles><triangle v1="0" v2="1" v3="${token}"/></triangles></mesh>`;
+      await expectRefusal(
+        async () =>
+          read3mf(
+            await valid3mf(modelXml({ resources: object('1', '', mesh) })),
+            testReadContext(),
+          ),
+        AppErrorCode.MalformedFile,
+        ImportRefusal.ThreeMfMalformedTriangleIndex,
+      );
+    },
+  );
+
+  it('still reads every lexical form the schema allows, whitespace included', async () => {
+    const mesh = `<mesh><vertices>
+      <vertex x=" +1.5 " y="-.25" z="1E2"/><vertex x="1." y="0" z="0"/><vertex x="0" y="1" z="0"/>
+      </vertices><triangles><triangle v1="0" v2="+1" v3=" 002 "/></triangles></mesh>`;
+    const result = await read3mf(
+      await valid3mf(modelXml({ resources: object('1', '', mesh) })),
+      testReadContext(),
+    );
+    const part = result.document.parts[0];
+    expect(Array.from(part?.mesh.positions.slice(0, 3) ?? [])).toEqual([1.5, -0.25, 100]);
+    expect(Array.from(part?.mesh.indices ?? [])).toEqual([0, 1, 2]);
+  });
+
   it('refuses two objects sharing an id', async () => {
     await expectRefusal(
       async () =>

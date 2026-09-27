@@ -566,6 +566,25 @@
   font-size: var(--fs-secondary);
 }
 
+.menu__link {
+  display: inline-block;
+  margin-top: 8px;
+  color: var(--cad-text);
+  font-size: var(--fs-secondary);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.menu__link:hover {
+  color: var(--cad-text-strong);
+}
+
+.menu__link:focus-visible {
+  outline: none;
+  border-radius: 2px;
+  box-shadow: var(--focus-ring);
+}
+
 /* ------------------------------------------------------ compact switch -- */
 
 .switch {

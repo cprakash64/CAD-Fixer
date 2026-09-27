@@ -219,6 +219,7 @@ npm run test:e2e     # Playwright end-to-end (needs `npx playwright install chro
 npm run test:e2e:timing # Timing/responsiveness proofs, SERIAL (see below)
 npm run test:e2e:harness # Multi-part document proofs in Chromium, SERIAL (see below)
 npm run verify       # format:check + lint + typecheck + test + build
+npm run release:check # verify + test:e2e + test:e2e:harness + test:e2e:timing, in order
 npm run bench:stl      # STL parser benchmark (NOT in CI)
 npm run bench:topology # small topology benchmark (NOT in CI)
 npm run bench:pipeline # whole-pipeline benchmark, 1/10/50/100 MiB (NOT in CI)
@@ -597,6 +598,10 @@ materialise -> RELEASE -> next`. The entry buffer and the decoded XML are
 - **OBJ TOKENS ARE CHECKED LEXICALLY BEFORE THEY ARE COERCED**, as 3MF transform
   tokens are. A face corner is `v`, `v/`, `v/vt`, `v//vn` or `v/vt/vn` with
   integer components (`OBJ_CORNER`); `Number` would have read `0x2` as two.
+  **So are coordinates, in both formats (PR-01)**: an OBJ number is decimal
+  (`OBJ_DECIMAL`), a 3MF coordinate an `xs:double` and a triangle index an
+  `xs:nonNegativeInteger`, after XML Schema's whitespace collapse. `Number`
+  alone had imported `v 0x10 0 0` as sixteen.
 - **AN ASCII STL LINE ENDS AT LF OR CR.** A classic-Mac file's `solid` line used
   to run to the end of the file.
 - **EVERY OBJ GROUP BOUNDARY SURVIVES EXPORT.** OBJ has run-START records and no
@@ -1076,6 +1081,31 @@ lost`, `printable`, `watertight`, and the rest. **"The numbers are unchanged"
   conventionally Z-up, and no print orientation or unit is asserted.
 - **Below 600 px every target is at least 40 px**, primary actions included.
 
+## Release invariants (PR-01)
+
+- **EVERYTHING THE BUILD DISTRIBUTES HAS ITS LICENCE IN IT.**
+  `apps/web/public/third-party-notices.txt` carries the fonts, icons, React,
+  React DOM, scheduler, three.js, Geogram + zlib, Manifold, the Emscripten
+  runtime and musl — each held VERBATIM to a tracked source by
+  `scripts/third-party-notices.test.ts`, which also fails when a bundled npm
+  package changes version. A new runtime dependency, kernel or asset is not
+  done until it is there. The Help menu links the file.
+- **THE SECURITY HEADERS ARE STATED ONCE**, in `apps/web/security-headers.ts`.
+  `vite preview` sends them, so every end-to-end run executes under the
+  production CSP; the nginx snippet sends them, held to the module by a test.
+  The CSP needs `'wasm-unsafe-eval'` (kernel compilation) and `connect-src
+'self'` (each Emscripten loader fetches its own `.wasm`); `'none'` broke
+  Split, Texture and the self-intersection check. Never add `'unsafe-eval'`,
+  `'unsafe-inline'` or a remote origin.
+- **LEAVING WITH UNEXPORTED WORK ASKS FIRST, AND ONLY THEN.**
+  `hasUnexportedChanges` is DERIVED — the model's revision is neither the one
+  it was imported at (`importedHandle`) nor one a whole-document export was
+  written from — and `UnsavedChangesGuard` attaches `beforeunload` only while it
+  holds. Never store a "dirty" flag beside it.
+- **A FAILURE MESSAGE NAMES A REMEDY, NOT A LIBRARY.** WebGL-unavailable says
+  what still works and what to do; context loss says to export applied work
+  BEFORE reloading, because a reload discards it.
+
 ## Hole-fill invariants (Stage 4B-1B1 engine, 4B-1B2 workflow)
 
 - **THE ENGINE IS UNCHANGED BY THE WORKFLOW.** Stage 4B-1B2 added selection,
@@ -1308,13 +1338,15 @@ validated`, and the qualifier naming what was NOT examined travels with it.
 
 ## Repair invariants (Stage 3B-1)
 
-- **ONE GEOMETRY KERNEL IN PRODUCTION, CONFINED TO ONE WORKER.** As of Stage
-  3C-1B, Geogram v1.10.0 ships as the WebAssembly kernel behind the read-only
-  self-intersection diagnostic, imported by
-  `apps/web/src/workers/self-intersection.worker.ts` and by nothing else. The
-  boundary scan asserts exactly that. Manifold and PMP remain research artifacts
-  under `experiments/`; nothing in `apps/**` or `packages/**` may import them.
-  Repair itself is still kernel-free.
+- **TWO GEOMETRY KERNELS IN PRODUCTION, EACH CONFINED TO ITS WORKERS.**
+  Geogram v1.10.0 (Stage 3C-1B) is the WebAssembly kernel behind the read-only
+  self-intersection diagnostic and the hole-fill narrowphase. Manifold (Stage
+  7A, vendored under `apps/web/src/workers/third-party/manifold/`) runs the
+  Boolean behind Split and Texture, called only from
+  `manifold-boolean-backend.ts` in a disposable worker. PMP remains a research
+  artifact under `experiments/`. Repair itself is still kernel-free. Both
+  kernels' licences — and the Emscripten runtime's — ship in
+  `third-party-notices.txt` (PR-01).
 - **No tolerance in the conservative repair API.** No epsilon, weld distance,
   merge tolerance or proximity threshold. Stage 3A proved no global tolerance
   can be correct — the value that heals R19's crack destroys R21's intentional

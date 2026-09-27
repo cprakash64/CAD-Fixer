@@ -3,6 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { PRODUCTION_SECURITY_HEADERS } from '../apps/web/security-headers';
 
 /**
  * HV-C01–HV-C20 — THE HOSTINGER DEPLOYMENT CONTRACT.
@@ -69,8 +70,6 @@ const stripComments = (text: string): string =>
       return hash === -1 ? line : line.slice(0, hash);
     })
     .join('\n');
-
-const snippetCode = stripComments(snippetText);
 
 const artifactBuilt = existsSync(SITE_DIR) && existsSync(MANIFEST);
 
@@ -281,7 +280,7 @@ describe('HV-C12–HV-C19 — headers, inheritance and cache policy', () => {
     expect(directive('Referrer-Policy')).toBe('no-referrer');
   });
 
-  it('HV-C12-16: every directive uses `always`, and no CSP is declared', () => {
+  it('HV-C12-16: every directive uses `always`', () => {
     const headers = [...snippetText.matchAll(/^\s*add_header\s+(\S+)/gm)].map((m) => m[1]);
     expect(headers).toEqual([
       'Cross-Origin-Opener-Policy',
@@ -289,11 +288,36 @@ describe('HV-C12–HV-C19 — headers, inheritance and cache policy', () => {
       'Cross-Origin-Resource-Policy',
       'X-Content-Type-Options',
       'Referrer-Policy',
+      'Content-Security-Policy',
+      'Permissions-Policy',
+      'X-Frame-Options',
     ]);
     /* `always` is what puts the headers on a 404 as well as a 200. */
-    const count = [...snippetText.matchAll(/^\s*add_header\s[^;]*\salways;/gm)].length;
-    expect(count).toBe(5);
-    expect(snippetCode).not.toMatch(/Content-Security-Policy/i);
+    // Parsed as name, QUOTED value, `always` — the CSP's value contains `;`.
+    const count = [...snippetText.matchAll(/^\s*add_header\s+\S+\s+"[^"]*"\s+always;/gm)].length;
+    expect(count).toBe(8);
+  });
+
+  /*
+   * PR-01 REVERSES THE 5C-1A DEFERRAL, ON EVIDENCE. The policy is stated once,
+   * in apps/web/security-headers.ts; `vite preview` sends it, so every
+   * end-to-end run exercises the product under it, and this holds production
+   * to the same values rather than to a second hand-written copy.
+   */
+  it('PR01-H1: the snippet sends exactly the security headers the application states', () => {
+    for (const [name, value] of Object.entries(PRODUCTION_SECURITY_HEADERS))
+      expect(directive(name), name).toBe(value);
+  });
+
+  it('PR01-H2: the CSP allows what the product needs and nothing broader', () => {
+    const csp = directive('Content-Security-Policy') ?? '';
+    // The kernels compile WebAssembly and their loaders fetch their own .wasm.
+    expect(csp).toContain("script-src 'self' 'wasm-unsafe-eval'");
+    expect(csp).toContain("connect-src 'self'");
+    // Never eval, never inline script, never a remote origin, never framed.
+    expect(csp).not.toMatch(/'unsafe-eval'|'unsafe-inline'|https?:|\*/);
+    expect(csp).toContain("frame-ancestors 'none'");
+    expect(csp).toContain("default-src 'none'");
   });
 
   it('HV-C17: every location setting a header re-includes the security snippet', () => {

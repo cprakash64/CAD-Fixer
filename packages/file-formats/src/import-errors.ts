@@ -123,6 +123,14 @@ export const ImportRefusal = {
   ThreeMfMissingObject: 'THREEMF_MISSING_OBJECT_REFERENCE',
   ThreeMfBadVertexIndex: 'THREEMF_TRIANGLE_INDEX_OUT_OF_RANGE',
   ThreeMfNonFinite: 'THREEMF_NON_FINITE_COORDINATE',
+  /**
+   * PR-01. A coordinate or triangle index that `Number` would coerce but that
+   * is not the schema's lexical form — `0x10`, `0b11`, `1e1` as an index, `2.0`
+   * as an index. Refused rather than read, because reading it invents a value
+   * the file does not state.
+   */
+  ThreeMfMalformedCoordinate: 'THREEMF_MALFORMED_COORDINATE',
+  ThreeMfMalformedTriangleIndex: 'THREEMF_MALFORMED_TRIANGLE_INDEX',
   ThreeMfBadTransform: 'THREEMF_MALFORMED_TRANSFORM',
   ThreeMfComponentCycle: 'THREEMF_COMPONENT_CYCLE',
   ThreeMfComponentTooDeep: 'THREEMF_COMPONENT_TOO_DEEP',

@@ -12,10 +12,13 @@ and no analytics.
 
 **Try it: <https://fixcad.thelunai.com>**
 
-CAD Fixer **v0.1.0** is available as a Technical Preview.
+This repository carries the **v0.4.0 Technical Preview** feature set — see the
+[v0.4.0 release notes](docs/release/V0_4_0_TECHNICAL_PREVIEW_RELEASE.md).
 
-- Qualified on **Chromium-based desktop browsers** (Chrome, Edge). Firefox,
-  Safari and mobile are **not** release-qualified.
+- Qualified on **Chromium-based desktop browsers** (Chrome, Edge). The critical
+  flow also runs in Playwright's WebKit build; Safari, Firefox and real mobile
+  devices are **not** release-qualified. See
+  [BROWSER_SUPPORT.md](docs/release/BROWSER_SUPPORT.md).
 - All geometry is processed in your browser. Nothing is uploaded.
 - Deliberately bounded: see
   [What is and is not implemented](#what-is-and-is-not-implemented).
@@ -26,12 +29,14 @@ observed unless you report it. See
 [Beta feedback issue](https://github.com/cprakash64/CAD-Fixer/issues/new/choose).
 Please do not attach models you are not authorised to share.
 
-> **Current status: v0.1.0 Technical Preview — released.**
+> **Current status: v0.4.0 Technical Preview.**
 > You can open an **STL, OBJ or 3MF** file, inspect it in a real 3D viewport,
 > read a full topology report about it, highlight its defects in 3D, **run a
 > conservative repair with a before/after preview, apply it, undo it**, fill one
-> planar opening at a time, run a read-only self-intersection check, and convert
-> or export to any of the three formats — entirely on your own machine.
+> planar opening at a time, run a read-only self-intersection check, **split a
+> closed part with one flat cut** (optionally with pin or dovetail connectors),
+> **add a Dots, Lines or Diamond texture to one flat region**, and convert or
+> export to any of the three formats — entirely on your own machine.
 >
 > **"Conservative" is the operative word and it is not marketing.** The Repair
 > workflow removes exact duplicate triangles, removes safely-removable degenerate
@@ -42,7 +47,8 @@ Please do not attach models you are not authorised to share.
 > Self-intersections and wall thickness are still not checked at all, so nothing
 > in CAD Fixer tells you a model will print.
 >
-> **Split, Texture and Hollow are not implemented.** See
+> **Hollow is not implemented**, and Split and Texture do exactly the bounded
+> things described above and nothing more. See
 > [What is and is not implemented](#what-is-and-is-not-implemented). Nothing in
 > this repository fakes a working feature.
 
@@ -52,8 +58,8 @@ Please do not attach models you are not authorised to share.
 | -------- | -------------------------------------------------- | ------------------------------------------- |
 | Repair   | Repair and prepare meshes for printing             | **Conservative subset implemented** (below) |
 | Convert  | Translate between STL, OBJ, and 3MF                | **Implemented** (below)                     |
-| Split    | Cut oversized models into parts and add connectors | Not implemented                             |
-| Texture  | Apply surface displacement patterns                | Not implemented                             |
+| Split    | Cut oversized models into parts and add connectors | **Implemented**: one flat cut per split     |
+| Texture  | Apply surface displacement patterns                | **Implemented**: flat regions, 3 patterns   |
 | Hollow   | Hollow solid models and place drainage holes       | Not implemented                             |
 
 ### What "conservative repair" covers
@@ -136,18 +142,19 @@ sends cross-origin isolation headers, matching what production must send.
 
 ## Commands
 
-| Command                | What it does                                        |
-| ---------------------- | --------------------------------------------------- |
-| `npm install`          | Install dependencies from the lockfile              |
-| `npm run dev`          | Start the development server                        |
-| `npm run build`        | Production build into `apps/web/dist/`              |
-| `npm run preview`      | Serve the production build on http://localhost:4173 |
-| `npm run lint`         | ESLint across the repository                        |
-| `npm run format:check` | Verify formatting (`npm run format` to fix)         |
-| `npm run typecheck`    | TypeScript across every project                     |
-| `npm test`             | Vitest unit and component tests                     |
-| `npm run test:e2e`     | Playwright end-to-end tests                         |
-| `npm run verify`       | format:check + lint + typecheck + test + build      |
+| Command                 | What it does                                        |
+| ----------------------- | --------------------------------------------------- |
+| `npm install`           | Install dependencies from the lockfile              |
+| `npm run dev`           | Start the development server                        |
+| `npm run build`         | Production build into `apps/web/dist/`              |
+| `npm run preview`       | Serve the production build on http://localhost:4173 |
+| `npm run lint`          | ESLint across the repository                        |
+| `npm run format:check`  | Verify formatting (`npm run format` to fix)         |
+| `npm run typecheck`     | TypeScript across every project                     |
+| `npm test`              | Vitest unit and component tests                     |
+| `npm run test:e2e`      | Playwright end-to-end tests                         |
+| `npm run verify`        | format:check + lint + typecheck + test + build      |
+| `npm run release:check` | verify, then all three browser suites, in order     |
 
 End-to-end tests need a browser binary once:
 
@@ -224,8 +231,8 @@ running first.
   are bounded during inflation, not after. The exact support statement is
   [SUPPORT_MATRIX.md](docs/release/SUPPORT_MATRIX.md); see also
   [ADR 0015](docs/adr/0015-production-obj-and-3mf-import.md).
-- **Format conversion to STL, OBJ or 3MF**, through one `Export / Convert`
-  action that writes the WHOLE document. Before anything is written it reports
+- **Format conversion to STL, OBJ or 3MF**, in the Convert workspace, which
+  writes the WHOLE document. Before anything is written it reports
   what the chosen format will keep and what it cannot — derived from your actual
   model, so a one-part file is not warned about merged parts and a file with no
   names is not warned about dropped names.
@@ -286,12 +293,17 @@ running first.
 - **No filling of a rim that is not flat.** A rim that curves out of its own
   plane needs a shaped surface, which this version does not build. It is refused
   with a reason rather than approximated.
-- **No boolean operations, splitting, connectors, displacement, hollowing, or
-  drainage holes.** Import deliberately does not weld vertices, drop degenerate
+- **No hollowing or drainage holes, no curved or image-based textures, and no
+  cut other than one flat plane per split.** Split and Texture are the only
+  operations that run Boolean geometry, and each accepts only a closed,
+  manifold part. Import deliberately does not weld vertices, drop degenerate
   triangles, deduplicate facets, reorient winding, or rescale anything — see
   [ADR 0007](docs/adr/0007-stl-preservation-policy.md). Parsing is not repair,
   and repair only happens when you ask for it and confirm the preview.
-- **No geometry kernel.** No Manifold, Geogram, lib3mf, OpenVDB, CGAL, or
+- **Two geometry kernels, each confined to its own worker.** Geogram (BSD-3)
+  runs the self-intersection check and validates hole fills; Manifold
+  (Apache-2.0) runs Split and Texture. Both are WebAssembly and their licences
+  ship in the build's `third-party-notices.txt`. No lib3mf, OpenVDB, CGAL, or
   OpenCascade — these need licence and WASM-portability evaluation first. The
   licence question is per-kernel (and for CGAL, per package); see
   [Geometry kernel licensing](docs/DEPENDENCIES.md#geometry-kernel-licensing).
@@ -363,8 +375,14 @@ a browser dependency breaks the test run.
 
 ## Known issues
 
-- The main JavaScript bundle is ~842 kB raw (~224 kB gzipped), dominated by
-  Three.js. Acceptable for a professional tool; worth code-splitting if first
+- **Sessions are not saved.** Models live in memory; a reload or a closed tab
+  starts empty. While a model has applied changes that have not been exported,
+  the browser asks before leaving the page; export to keep your work.
+- Importing a very large model (≈500,000 triangles) pauses the page for 1–2 s
+  while its render buffers are uploaded to the GPU, after the import progress
+  finishes. The import itself runs in a worker.
+- The main JavaScript bundle is ~1.07 MB raw (~285 kB gzipped), dominated by
+  Three.js and React. Acceptable for a professional tool; worth code-splitting if first
   load becomes a concern. The repair ENGINE is not in it — it lives in the
   ~83 kB worker chunk, and the repair contract's constants are restated in
   `geometry-runtime` rather than re-exported precisely so that stays true.

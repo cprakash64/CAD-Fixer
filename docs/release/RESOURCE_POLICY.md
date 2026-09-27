@@ -15,34 +15,39 @@ Import resource bounds re-derived and re-qualified in Stage 6D-R3.
 
 All enforced **before** the allocation they protect against.
 
-| Subsystem                        | Ceiling                                         | Enforced in                                    |
-| -------------------------------- | ----------------------------------------------- | ---------------------------------------------- |
-| Input bytes, any format          | 512 MiB                                         | `budget.ts`, `obj/limits.ts`, `threemf/zip.ts` |
-| STL triangles                    | 20,000,000                                      | `checkAllocation`                              |
-| Import geometry, any format      | **768 MiB** distinct canonical + render bytes   | `checkImportGeometry`                          |
-| Unshared (STL) triangles         | **6,710,886 → a 320.00 MiB binary file**        | `checkAllocation`, before the first array      |
-| OBJ line / objects / groups      | 65,536 each                                     | `obj/limits.ts`                                |
-| OBJ vertices                     | 40,000,000                                      | `obj/limits.ts`                                |
-| OBJ face vertices                | 3 — n-gons refused, never fanned                | `obj-reader.ts`                                |
-| 3MF archive / entries            | 512 MiB / 4,096                                 | `zip.ts`                                       |
-| 3MF model entry, expanded        | **384 MiB** (6E-A4; 256 MiB before)             | `size-limits.ts` → `zip.ts`                    |
-| 3MF streaming route threshold    | **128 MiB** per model entry                     | `ingestion-route.ts`                           |
-| 3MF expanded total               | 512 MiB, charged **per chunk during inflation** | `InflationBudget`                              |
-| 3MF compression ratio            | 200:1                                           | `zip.ts`                                       |
-| 3MF objects / component depth    | 65,536 / 16                                     | `threemf-reader.ts`                            |
-| XML elements / depth             | 80,000,000 / 64                                 | `xml-scan.ts`                                  |
-| Document parts                   | 4,096                                           | `document.ts`                                  |
-| Document triangles / vertices    | 20,000,000 / 60,000,000                         | `document-validation.ts`                       |
-| Document geometry bytes          | 768 MiB                                         | `document-validation.ts`                       |
-| Topology workspace               | 1,024 MiB → **4,549,753 unshared faces**        | `requestAnalysisWorkspace`                     |
-| Boundary-loop listing            | not run above **250,000 faces**                 | `holeFillListLoopsHandler`                     |
-| Self-intersection automatic band | 25,000 faces                                    | `policy.ts`                                    |
-| Self-intersection hard ceiling   | 250,000 faces                                   | `policy.ts`                                    |
-| Conservative repair peak         | 1,024 MiB                                       | `requestRepairPeak`                            |
-| Hole-fill boundary vertices      | 512                                             | `mesh-hole-fill/limits.ts`                     |
-| Hole-fill part faces             | 250,000                                         | `mesh-hole-fill/limits.ts`                     |
-| Export output / serialised       | 256 MiB / 512 MiB, 3MF XML also ≤ entry ceiling | `export-contract.ts`, incrementally            |
-| Render device pixel ratio        | **2**                                           | `create-viewport.ts`                           |
+| Subsystem                         | Ceiling                                         | Enforced in                                             |
+| --------------------------------- | ----------------------------------------------- | ------------------------------------------------------- |
+| Input bytes, any format           | 512 MiB                                         | `budget.ts`, `obj/limits.ts`, `threemf/zip.ts`          |
+| STL triangles                     | 20,000,000                                      | `checkAllocation`                                       |
+| Import geometry, any format       | **768 MiB** distinct canonical + render bytes   | `checkImportGeometry`                                   |
+| Unshared (STL) triangles          | **6,710,886 → a 320.00 MiB binary file**        | `checkAllocation`, before the first array               |
+| OBJ line / objects / groups       | 65,536 each                                     | `obj/limits.ts`                                         |
+| OBJ vertices                      | 40,000,000                                      | `obj/limits.ts`                                         |
+| OBJ face vertices                 | 3 — n-gons refused, never fanned                | `obj-reader.ts`                                         |
+| 3MF archive / entries             | 512 MiB / 4,096                                 | `zip.ts`                                                |
+| 3MF model entry, expanded         | **320 MiB** (6E-A4; 256 MiB before)             | `size-limits.ts` → `zip.ts`                             |
+| 3MF streaming route threshold     | **128 MiB** per model entry                     | `ingestion-route.ts`                                    |
+| 3MF expanded total                | 512 MiB, charged **per chunk during inflation** | `InflationBudget`                                       |
+| 3MF compression ratio             | 200:1                                           | `zip.ts`                                                |
+| 3MF objects / component depth     | 65,536 / 16                                     | `threemf-reader.ts`                                     |
+| XML elements / depth              | 80,000,000 / 64                                 | `xml-scan.ts`                                           |
+| Document parts                    | 4,096                                           | `document.ts`                                           |
+| Document triangles / vertices     | 20,000,000 / 60,000,000                         | `document-validation.ts`                                |
+| Document geometry bytes           | 768 MiB                                         | `document-validation.ts`                                |
+| Topology workspace                | 1,024 MiB → **4,549,753 unshared faces**        | `requestAnalysisWorkspace`                              |
+| Boundary-loop listing             | not run above **250,000 faces**                 | `holeFillListLoopsHandler`                              |
+| Self-intersection automatic band  | 25,000 faces                                    | `policy.ts`                                             |
+| Self-intersection hard ceiling    | 250,000 faces                                   | `policy.ts`                                             |
+| Conservative repair peak          | 1,024 MiB                                       | `requestRepairPeak`                                     |
+| Hole-fill boundary vertices       | 512                                             | `mesh-hole-fill/limits.ts`                              |
+| Hole-fill part faces              | 250,000                                         | `mesh-hole-fill/limits.ts`                              |
+| Export output / serialised        | 256 MiB / 512 MiB, 3MF XML also ≤ entry ceiling | `export-contract.ts`, incrementally                     |
+| Render device pixel ratio         | **2**                                           | `create-viewport.ts`                                    |
+| Boolean input (Split, Texture)    | 2,000,000 triangles                             | `boolean-adapter.ts`, `boolean-operation-controller.ts` |
+| Boolean input copies / known work | 256 MiB / 768 MiB; kernel workspace 1 GiB       | `boolean-operation-controller.ts`, `boolean-adapter.ts` |
+| Texture selection region          | 100,000 triangles, one flat connected region    | `surface-texture.ts`, `texture-handlers.ts`             |
+| Texture elements / primitives     | 500 elements / 64,000 element triangles         | `surface-texture.ts`                                    |
+| Split section outline             | 65,536 edges                                    | `split-connectors.ts`                                   |
 
 **These are not all the same number, and that is correct.** Different operations
 have different memory profiles, so a model can legitimately be importable,

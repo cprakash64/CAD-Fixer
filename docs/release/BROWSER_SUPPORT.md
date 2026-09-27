@@ -7,6 +7,29 @@ headers in `PRODUCTION_HOSTING_REQUIREMENTS.md`.
 **Every row below is backed by something that was actually run.** Rows with no
 evidence say so.
 
+## PR-01 re-qualification (supersedes the rows below where they differ)
+
+Run against the production build of the PR-01 working tree, served with the
+production response headers — including the Content Security Policy — on the
+same 8 GiB macOS host. The critical journey is: load, import STL with automatic
+analysis, orbit / pan / zoom, conservative repair preview → apply → undo, 3MF
+import, Convert export, Split preview → discard, Texture select → generate →
+discard, and the Geogram self-intersection check.
+
+| Environment                            | Result                                                                                                                                                                                                                                                            |
+| -------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Chromium 151**, desktop              | **RELEASE QUALIFIED.** Full suite (e2e, harness, timing) plus the journey, zero console errors, under the CSP                                                                                                                                                     |
+| **WebKit 26.5** (Playwright build)     | **CRITICAL JOURNEY PASSES, NOT RELEASE QUALIFIED.** Every step, cross-origin isolated, WebGL2, zero console errors, under the CSP. Not Safari; no full suite. (It cannot load pages from `vite preview` on this host, so the suite cannot run it as configured.)  |
+| **Safari**                             | **NOT TESTED.**                                                                                                                                                                                                                                                   |
+| **Firefox**                            | **NOT TESTED** — Playwright's Firefox still cannot launch on this host (`browserType.launch` timeout at 90 s), as in Stage 5B.                                                                                                                                    |
+| **Chromium touch** (Pixel 7 emulation) | **INTERACTIONS VERIFIED, NOT QUALIFIED ON DEVICES.** Real touch events: one-finger orbit, pinch, tap-to-switch workspace, tap selects a texture surface, the split arrow drags by touch without orbiting, the position slider drags. No physical device was used. |
+
+The layout itself is responsive from 320 px (UI-01…UI-06); the "900 px minimum
+editor width" below records Stage 5B's qualification, not a current limit.
+
+**The release policy is unchanged: Chromium-based desktop browsers.** WebKit's
+result is evidence the engine can run the product, not a support claim.
+
 ## Support matrix
 
 | Environment                             | Status                                           | Evidence                                                                                                                                                                                 |

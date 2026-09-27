@@ -137,3 +137,58 @@ export function watchErrors(page: Page): string[] {
   });
   return errors;
 }
+
+/**
+ * A millimetre box 40 × 20 × 60 subdivided n × n per face — 12·n² triangles,
+ * indexed so every edge is shared: a closed, consistently wound solid Split and
+ * Texture accept, dense enough that their work takes measurable time.
+ */
+export function gridBox(n: number): Buffer {
+  const size = [40, 20, 60];
+  const vertices: string[] = [];
+  const index = new Map<string, number>();
+  const triangles: string[] = [];
+  const at = (p: readonly number[]): number => {
+    const key = p.join(',');
+    let id = index.get(key);
+    if (id === undefined) {
+      id = vertices.length;
+      index.set(key, id);
+      vertices.push(`<vertex x="${String(p[0])}" y="${String(p[1])}" z="${String(p[2])}"/>`);
+    }
+    return id;
+  };
+  // Each face: the fixed axis, its side, and the two axes it spans.
+  const faces: readonly (readonly [number, number, number, number])[] = [
+    [2, 1, 0, 1],
+    [2, 0, 0, 1],
+    [1, 1, 2, 0],
+    [1, 0, 2, 0],
+    [0, 1, 1, 2],
+    [0, 0, 1, 2],
+  ];
+  for (const [axis, side, u, v] of faces) {
+    const rightHanded = ['012', '120', '201'].includes(`${String(axis)}${String(u)}${String(v)}`);
+    const outward = (side === 1) === rightHanded;
+    for (let i = 0; i < n; i += 1)
+      for (let j = 0; j < n; j += 1) {
+        const corner = (di: number, dj: number): number => {
+          const p = [0, 0, 0];
+          p[axis] = side * (size[axis] ?? 0);
+          p[u] = ((i + di) / n) * (size[u] ?? 0);
+          p[v] = ((j + dj) / n) * (size[v] ?? 0);
+          return at(p);
+        };
+        const [a, b, c, d] = [corner(0, 0), corner(1, 0), corner(1, 1), corner(0, 1)];
+        const tri = (x: number, y: number, z: number): string =>
+          `<triangle v1="${String(x)}" v2="${String(y)}" v3="${String(z)}"/>`;
+        triangles.push(outward ? tri(a, b, c) + tri(a, c, d) : tri(a, c, b) + tri(a, d, c));
+      }
+  }
+  return threeMf(
+    modelXml({
+      unit: 'millimeter',
+      resources: `<object id="1" type="model" name="Grid box"><mesh><vertices>${vertices.join('')}</vertices><triangles>${triangles.join('')}</triangles></mesh></object>`,
+    }),
+  );
+}

@@ -5,6 +5,7 @@ import { Inspector } from './components/Inspector';
 import { StatusBar } from './components/StatusBar';
 import { ToolPanel } from './components/ToolPanel';
 import { TopBar } from './components/TopBar';
+import { UnsavedChangesGuard } from './components/UnsavedChangesGuard';
 import { ViewportPanel } from './components/ViewportPanel';
 import { ShellLayoutProvider, useShellLayout } from './components/shell/shell-layout';
 import { WorkflowControllersProvider } from './state/workflow-controllers';
@@ -79,6 +80,7 @@ function Shell(): ReactNode {
       <div className="app__contents" inert={modal !== undefined}>
         <StatusBar />
       </div>
+      <UnsavedChangesGuard />
     </div>
   );
 }

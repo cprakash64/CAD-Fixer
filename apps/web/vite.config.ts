@@ -1,5 +1,6 @@
 import react from '@vitejs/plugin-react';
 import { defineConfig } from 'vite';
+import { PRODUCTION_SECURITY_HEADERS } from './security-headers';
 
 /**
  * Headers that put the document into a cross-origin isolated context, which is
@@ -27,7 +28,9 @@ export default defineConfig({
     // arguments through npm workspace indirection.
     port: 4173,
     strictPort: true,
-    headers: { ...crossOriginIsolationHeaders },
+    // Preview serves what production serves, CSP included, so the whole
+    // end-to-end suite runs under the production policy (PR-01).
+    headers: { ...crossOriginIsolationHeaders, ...PRODUCTION_SECURITY_HEADERS },
   },
   worker: {
     // Geometry workers are authored as ES modules and import workspace packages.

@@ -45,12 +45,13 @@ Notably absent:
 - **No UI component library.** The shell is plain semantic HTML and CSS.
 - **No router.** The application is a single workspace view.
 - **No HTTP client.** By design — CAD Fixer makes no network requests.
-- **Exactly ONE geometry kernel, and only inside one worker.** As of Stage
-  3C-1B, Geogram v1.10.0 ships — compiled to WebAssembly and imported by the
-  disposable self-intersection diagnostic worker, and by nothing else. Manifold,
-  lib3mf, OpenVDB, CGAL and OpenCascade remain deliberately absent. See
-  "Geogram, as shipped" below; the rest are evaluated separately, with licensing
-  as a first-class criterion.
+- **Two geometry kernels, each confined to its own workers.** Geogram v1.10.0
+  (Stage 3C-1B) runs the self-intersection diagnostic and the hole-fill
+  narrowphase; Manifold (Stage 7A) runs the Boolean behind Split and Surface
+  Texture, in a disposable worker per call. lib3mf, OpenVDB, CGAL and
+  OpenCascade remain deliberately absent. See "Geogram, as shipped" and
+  "Manifold, as shipped" below; anything else is evaluated separately, with
+  licensing as a first-class criterion.
 - **No third-party STL parser.** The STL codec in `packages/file-formats` is our
   own. Parsing is the trusted boundary for hostile input; we do not delegate it,
   and specifically do not use Three.js's `STLLoader`, which is a rendering
@@ -78,15 +79,17 @@ build-input audit **and** scans the emitted artifact, refusing to produce one if
 either check fails. The shipped `.wasm` contains zero `tetgenmesh`, `tetgenio`
 or `triangulateio` symbols.
 
-**Attribution obligation.** BSD-3-Clause requires the copyright notice and
-licence text to accompany binary distributions. Geogram's notice travels with
-the pinned source under `experiments/repair-kernels/geogram/upstream/`; a
-user-facing acknowledgement must accompany any public deployment of the built
-application. **This is an open obligation for whoever first deploys publicly —
-it is not discharged by this file.**
+**Attribution obligation — discharged in PR-01.** BSD-3-Clause requires the
+copyright notice and licence text to accompany binary distributions. Until PR-01
+nothing shipped them: the licence lived only in the (unversioned) pinned source.
+Geogram's `LICENSE` and the zlib notice from its bundled `zlib.h`, both taken
+verbatim from commit `c8529bb`, are now tracked in
+`packages/self-intersection-kernel/licenses/` and shipped in the build's
+`third-party-notices.txt`, which the Help menu links to.
+`scripts/third-party-notices.test.ts` holds the shipped copy to the tracked one.
 
-zlib is also linked (Geogram satisfies `<zlib.h>` from its own bundled copy) and
-carries the permissive zlib licence's attribution requirement.
+zlib is also linked (Geogram satisfies `<zlib.h>` from its own bundled copy);
+its notice ships with Geogram's.
 
 **Stage 4B-1B1 added a second entry point to the SAME artifact, not a second
 kernel.** `cf_hf_begin` / `cf_hf_classify` / `cf_hf_end` classify a
@@ -108,6 +111,32 @@ uncatchably inside the module on a legal 512-vertex loop, loses append-only
 provenance, refines a 128-vertex loop by +1,193 vertices, and times out at
 2,000. CAD Fixer's own ear clipping is the production triangulator, and a
 boundary test scans for PMP imports and artifacts in every shipped package.
+
+## Manifold, as shipped
+
+**This section describes code that is distributed to users.**
+
+|                |                                                                                           |
+| -------------- | ----------------------------------------------------------------------------------------- |
+| Upstream       | https://github.com/elalish/manifold, commit `11235e6b8ebea2dbed8aec4285685aafd3d95667`    |
+| Where          | `apps/web/src/workers/third-party/manifold/manifold-candidate.{js,wasm}`, unmodified      |
+| Toolchain      | emsdk 4.0.16 (`experiments/repair-kernels/manifold/build.sh`)                             |
+| Reachable from | `apps/web/src/workers/manifold-boolean-backend.ts`, in the disposable Boolean worker only |
+| Licence        | **Apache-2.0**. Upstream has no `NOTICE` file at that commit (checked in PR-01)           |
+| Linked         | Manifold core and the Emscripten runtime only — no Clipper2, TBB or other library symbols |
+
+Stage 7A copied the pinned research artifact into the worker source; see
+`docs/design/STAGE_7_GEOMETRY_EDITING_FOUNDATION.md`. Apache-2.0 requires a copy
+of the licence with any redistribution: the vendored `LICENSE` (byte-identical
+to upstream's) ships in `third-party-notices.txt`.
+
+## Emscripten runtime, as shipped
+
+Both WebAssembly modules carry the Emscripten 4.0.16 JavaScript runtime and its
+musl-based C library (MIT / NCSA and MIT), whose texts — taken verbatim from the
+`4.0.16` tag — are tracked in `apps/web/src/workers/third-party/emscripten/` and
+shipped in `third-party-notices.txt`. libc++, libc++abi and compiler-rt are
+Apache-2.0 WITH LLVM-exception, which requires no notice for object code.
 
 ## Geometry kernel licensing
 

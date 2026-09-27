@@ -873,6 +873,16 @@ export interface WorkspaceState {
    */
   readonly model: LoadedModel | undefined;
   /**
+   * The document as it was IMPORTED — handle and revision.
+   *
+   * A reference point, not a second authority: `hasUnexportedChanges` compares
+   * the current handle with it, and with the revisions a whole-document export
+   * was written from, to decide whether leaving the page would discard work
+   * that exists nowhere else (PR-01). Set by `commitImport`, cleared when the
+   * geometry session is lost.
+   */
+  readonly importedHandle: DocumentHandle | undefined;
+  /**
    * The part every part-targeted action currently addresses.
    *
    * WORKSPACE STATE, NOT GEOMETRY IDENTITY. Changing it does NOT change the
@@ -1021,6 +1031,7 @@ const MAX_STATUS_ENTRIES = 50;
 const INITIAL_STATE: WorkspaceState = {
   selectedWorkflow: undefined,
   model: undefined,
+  importedHandle: undefined,
   activePartId: undefined,
   splitPreview: undefined,
   splitPlane: undefined,
@@ -1382,6 +1393,7 @@ export class WorkspaceStore {
 
     this.update({
       model: { ...model, revision },
+      importedHandle: model.handle,
       activePartId: activePart?.partId,
       splitPreview: undefined,
       splitPlane: undefined,
@@ -3021,6 +3033,7 @@ export class WorkspaceStore {
     this.currentSelfIntersectionToken = undefined;
     this.update({
       model: undefined,
+      importedHandle: undefined,
       geometrySessionLost: reason,
       importProgress: { state: ImportState.Idle, fraction: 0 },
       exportProgress: { state: ExportState.Idle, fraction: 0 },

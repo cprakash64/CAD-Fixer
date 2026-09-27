@@ -1,10 +1,21 @@
 # Third-party notices
 
-The index of third-party material that ships inside CAD Fixer's static assets
-and is not an npm package, as introduced by the UI-01 shell. The npm runtime
-packages (React, React DOM, three.js) and the Geogram kernel are recorded in
-[`docs/DEPENDENCIES.md`](docs/DEPENDENCIES.md); the vendored Manifold build
-carries its licence beside it in `apps/web/src/workers/third-party/manifold/`.
+The index of third-party material CAD Fixer distributes. Everything the build
+ships — the fonts and icons below, the bundled npm packages (React, React DOM,
+scheduler, three.js), the Geogram and Manifold WebAssembly kernels, and the
+Emscripten runtime and musl libc they carry — has its licence in the build's
+`third-party-notices.txt`, which the Help menu links to (PR-01). Why each
+dependency exists is recorded in [`docs/DEPENDENCIES.md`](docs/DEPENDENCIES.md).
+
+| Component                   | Licence (SPDX)         | Tracked licence text                                                                                            |
+| --------------------------- | ---------------------- | --------------------------------------------------------------------------------------------------------------- |
+| React, React DOM, scheduler | `MIT`                  | `node_modules/{react,react-dom,scheduler}/LICENSE` (held verbatim by the notices test at the installed version) |
+| three.js                    | `MIT`                  | `node_modules/three/LICENSE`                                                                                    |
+| Geogram v1.10.0 + zlib      | `BSD-3-Clause`, `Zlib` | `packages/self-intersection-kernel/licenses/`                                                                   |
+| Manifold                    | `Apache-2.0`           | `apps/web/src/workers/third-party/manifold/LICENSE`                                                             |
+| Emscripten runtime, musl    | `MIT OR NCSA`, `MIT`   | `apps/web/src/workers/third-party/emscripten/`                                                                  |
+
+The artwork below, introduced by the UI-01 shell:
 
 Every entry below keeps its full licence text beside it in the source tree, and
 the deployed build carries the same texts in `third-party-notices.txt` at the

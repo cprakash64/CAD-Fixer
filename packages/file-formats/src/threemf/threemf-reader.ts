@@ -454,6 +454,22 @@ function isCoreElement(name: string, prefixes: ReadonlyMap<string, string>): boo
   return prefixes.get(name.slice(0, colon)) === CORE_NAMESPACE;
 }
 
+/**
+ * XML Schema's whitespace COLLAPSE, as `xs:double` and `xs:nonNegativeInteger`
+ * apply it: surrounding blanks are not part of the value.
+ */
+function collapsed(raw: string): string {
+  // Called once per coordinate and index — millions of times for a large
+  // model — so the common case (no surrounding blank) allocates nothing.
+  const first = raw.charCodeAt(0);
+  const last = raw.charCodeAt(raw.length - 1);
+  const blank = (code: number): boolean => code === 32 || code === 9 || code === 10 || code === 13;
+  return blank(first) || blank(last) ? raw.replace(/^[ \t\r\n]+|[ \t\r\n]+$/g, '') : raw;
+}
+
+/** `xs:nonNegativeInteger`'s lexical form: an optional `+`, then digits. */
+const XS_NON_NEGATIVE_INTEGER = /^\+?\d+$/;
+
 function readCoordinate(raw: string | undefined, what: string, objectId: string): number {
   const value = Number(raw);
   /*
@@ -466,6 +482,19 @@ function readCoordinate(raw: string | undefined, what: string, objectId: string)
     throw importMalformed(
       ImportRefusal.ThreeMfNonFinite,
       'This 3MF file contains a vertex coordinate CAD Fixer cannot use.',
+      { objectId: objectId.slice(0, 64), axis: what },
+    );
+  }
+  /*
+   * LEXICAL, AS THE TRANSFORM IS (PR-01). `Number` also reads `0x10` as
+   * sixteen, `0b11` as three and `0o7` as seven, and none of those is an
+   * `xs:double`: accepting them imported a malformed file as if it were valid,
+   * with coordinates it never stated.
+   */
+  if (!XS_DOUBLE.test(collapsed(raw))) {
+    throw importMalformed(
+      ImportRefusal.ThreeMfMalformedCoordinate,
+      'This 3MF file contains a vertex coordinate that is not a number CAD Fixer can read.',
       { objectId: objectId.slice(0, 64), axis: what },
     );
   }
@@ -533,6 +562,15 @@ function parseTransform(raw: string | undefined): PartTransform {
 }
 
 function readIndex(raw: string | undefined, objectId: string): number {
+  // Lexical first (PR-01): `Number` turns `0x2`, `1e1` and `2.0` into integers,
+  // none of which is an `xs:nonNegativeInteger`.
+  if (raw !== undefined && raw !== '' && !XS_NON_NEGATIVE_INTEGER.test(collapsed(raw))) {
+    throw importMalformed(
+      ImportRefusal.ThreeMfMalformedTriangleIndex,
+      'This 3MF file contains a triangle index that is not a whole number CAD Fixer can read.',
+      { objectId: objectId.slice(0, 64) },
+    );
+  }
   const value = Number(raw);
   if (!Number.isInteger(value)) {
     throw importMalformed(

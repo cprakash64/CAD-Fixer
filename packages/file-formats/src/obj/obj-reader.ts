@@ -33,6 +33,8 @@ import { DEFAULT_OBJ_LIMITS, type ObjLimits } from './limits';
  * enforces, and linear — no nested quantifier can backtrack.
  */
 const OBJ_CORNER = /^[+-]?\d+(?:\/[+-]?\d*){0,2}$/;
+/** A decimal number, optionally signed and with an exponent — what OBJ writes. */
+const OBJ_DECIMAL = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/;
 
 /**
  * THE PRODUCTION OBJ READER.
@@ -94,12 +96,20 @@ function decodeText(
   return decode(bytes);
 }
 
+/**
+ * "an x value", "a y value", "a normal x value": the article the value's name
+ * takes when read aloud. Of the names this reader uses, only a bare "x" does.
+ */
+function article(word: string): string {
+  return word === 'x' ? 'an' : 'a';
+}
+
 /** A finite number, or a refusal naming the token that was not one. */
 function readFinite(token: string | undefined, line: number, what: string): number {
   if (token === undefined || token === '') {
     throw importMalformed(
       ImportRefusal.ObjMalformedNumber,
-      `This OBJ file has a ${what} value missing on line ${String(line)}.`,
+      `This OBJ file has ${article(what)} ${what} value missing on line ${String(line)}.`,
       { line, what },
     );
   }
@@ -113,7 +123,20 @@ function readFinite(token: string | undefined, line: number, what: string): numb
   if (!Number.isFinite(value)) {
     throw importMalformed(
       ImportRefusal.ObjNonFinite,
-      `This OBJ file has a ${what} value CAD Fixer cannot use on line ${String(line)}.`,
+      `This OBJ file has ${article(what)} ${what} value CAD Fixer cannot use on line ${String(line)}.`,
+      { line, what, token: token.slice(0, 64) },
+    );
+  }
+  /*
+   * LEXICAL, AS FACE CORNERS ARE (PR-01). `Number` also reads `0x10` as sixteen,
+   * `0b11` as three and `0o7` as seven; OBJ numbers are decimal, so those are
+   * malformed tokens, and reading them imported coordinates the file never
+   * stated.
+   */
+  if (!OBJ_DECIMAL.test(token)) {
+    throw importMalformed(
+      ImportRefusal.ObjMalformedNumber,
+      `This OBJ file has ${article(what)} ${what} value that is not a decimal number on line ${String(line)}.`,
       { line, what, token: token.slice(0, 64) },
     );
   }

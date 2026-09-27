@@ -51,25 +51,38 @@ reinforce each other.
 If isolation ever has to be dropped, the cost is losing multithreaded WASM.
 That is an architectural decision requiring an ADR, not a hosting tweak.
 
-## 2. Additional security headers (recommended)
+## 2. Security headers (required, PR-01)
+
+Stated once in `apps/web/security-headers.ts`, sent by `vite preview` (so every
+end-to-end run exercises the product under them) and by
+`deploy/nginx/cad-fixer-security-headers.conf` in production, which
+`scripts/hostinger-deployment.test.ts` holds to the same values:
 
 ```
-Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; worker-src 'self' blob:; connect-src 'none'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'
+Content-Security-Policy: default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self' data: blob:; font-src 'self'; worker-src 'self'; connect-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'
+Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), usb=(), serial=(), bluetooth=(), hid=()
+X-Frame-Options: DENY
 X-Content-Type-Options: nosniff
 Referrer-Policy: no-referrer
 ```
 
-`connect-src 'none'` is the browser-level counterpart to the lint rule banning
-network APIs: it makes the privacy promise enforceable by the user's browser
-rather than only by our CI. It must be revisited if update checks or
-authentication are ever added.
+**Why each allowance exists — measured, not assumed.** The policy previously
+recorded here (`connect-src 'none'`, no `wasm-unsafe-eval`) was run against the
+built application in PR-01 and broke Split, Surface Texture and the
+self-intersection check:
 
-`worker-src 'self' blob:` is required because the geometry worker is a separate
-bundled chunk.
+- `script-src 'wasm-unsafe-eval'` — compiling the Geogram and Manifold
+  WebAssembly modules requires it. No `'unsafe-eval'`, no inline script.
+- `connect-src 'self'` — each kernel's Emscripten loader `fetch()`es its own
+  `.wasm` from this origin. That same-origin fetch is the only request the
+  application makes after load; `'self'` still stops any connection to another
+  origin, which is what makes the privacy promise browser-enforced.
+- `worker-src 'self'` — every worker is a same-origin module file; no `blob:`.
+- `img-src data:` — the favicon is an inline SVG data URI.
 
-**These headers are documented, not yet applied** — no deployment environment
-exists yet. They must be configured when one is chosen, and the CSP in
-particular needs testing against the built output before it is enabled.
+`vite dev` deliberately does not send the CSP: its hot-reload preamble is an
+inline script. Anything that changes what the application loads must be re-run
+under the policy — the end-to-end suite does this automatically.
 
 ## 3. Serving requirements
 
