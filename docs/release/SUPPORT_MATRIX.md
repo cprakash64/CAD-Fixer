@@ -1,6 +1,6 @@
 # Format support matrix and known limitations
 
-Released capability reference for the **v0.4.0 Technical Preview**. The 3MF
+Released capability reference for the **Pybrix v0.5.0 Technical Preview**. The 3MF
 per-entry ceiling remains 320 MiB; model entries from 128 MiB up are read by
 streaming.
 
