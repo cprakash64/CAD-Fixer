@@ -453,6 +453,11 @@ describe('sampling and completion', () => {
 
   it('distinguishes a clean model from one whose defects need assisted repair', () => {
     expect(describeNoRepairsAvailable(true)).toContain('assisted or reconstructive repair');
+    // BRAND-01 regression: this sentence was split across a `+` as 'CAD ' +
+    // 'Fixer', so a per-string scan missed it and the bundle shipped it joined.
+    expect(describeNoRepairsAvailable(true)).toContain('which Pybrix does not offer yet');
+    for (const clean of [true, false])
+      expect(describeNoRepairsAvailable(clean)).not.toMatch(/cad[\s_-]*fixer/i);
     expect(describeNoRepairsAvailable(false)).toContain('not a statement about the entire model');
   });
 });

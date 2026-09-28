@@ -235,6 +235,20 @@ describe('HV-C21 — the Pybrix identity in the artifact (BRAND-01)', () => {
   });
 
   it.skipIf(!artifactBuilt)(
+    'HV-C21e: no shipped text names the legacy product (identifiers excepted)',
+    () => {
+      // The display name has a space; the retained identifiers never do
+      // (`cadfixer.geometry.v1`, `cadfixer-geometry`). Checking the BUILT text
+      // catches a name split across a `+` in source, which the bundler joins:
+      // exactly how one sentence escaped the source-level audit.
+      for (const path of siteFiles().filter((p) => TEXT.test(p))) {
+        const text = readFileSync(join(SITE_DIR, path), 'utf8');
+        expect(text, path).not.toMatch(/CAD\s+Fixer/i);
+      }
+    },
+  );
+
+  it.skipIf(!artifactBuilt)(
     'HV-C21d: only the used brand derivatives ship, never a source original',
     () => {
       const brand = siteFiles().filter((p) => /pybrix/i.test(p));

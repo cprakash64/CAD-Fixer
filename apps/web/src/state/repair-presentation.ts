@@ -664,8 +664,8 @@ export const NO_REPAIRS_AVAILABLE_HEADLINE = 'No conservative repairs are curren
 export function describeNoRepairsAvailable(hasRemainingDefects: boolean): string {
   return hasRemainingDefects
     ? 'This model still has topological issues, but none of them can be resolved from the stored ' +
-        'coordinates alone. Resolving them needs assisted or reconstructive repair, which CAD ' +
-        'Fixer does not offer yet. The operations above show what was checked and why each was ' +
+        'coordinates alone. Resolving them needs assisted or reconstructive repair, which Pybrix ' +
+        'does not offer yet. The operations above show what was checked and why each was ' +
         'left alone.'
     : 'The four operations above found nothing to act on. That covers exact duplicates, degenerate ' +
         'triangles and relative winding only — it is not a statement about the entire model.';
