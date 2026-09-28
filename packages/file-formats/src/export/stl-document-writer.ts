@@ -64,7 +64,7 @@ const TRIANGLES_PER_BATCH = 32_768;
  * field many tools display verbatim, so user text placed there travels with any
  * copy of the file the user shares.
  */
-const BINARY_HEADER_TEXT = 'CAD Fixer binary STL';
+const BINARY_HEADER_TEXT = 'Pybrix binary STL';
 
 /**
  * The largest triangle count that fits this export's ceiling.

@@ -191,7 +191,7 @@ function requireSolid(mesh: CanonicalMesh, label: string, cancellation: Cancella
     r.repeatedPositionFaceCount
   )
     throw invalidState(
-      'This part is not currently a closed manifold solid, so CAD Fixer cannot split it safely yet. Run Repair or choose another part.',
+      'This part is not currently a closed manifold solid, so Pybrix cannot split it safely yet. Run Repair or choose another part.',
       { label },
     );
 }

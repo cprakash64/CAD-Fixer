@@ -257,7 +257,7 @@ test('STL → STL writes the whole document and re-opens unchanged', async ({ pa
   expect(artifact.declaredTriangles).toBe(STL_TRIANGLES);
   expect(artifact.byteLength).toBe(84 + STL_TRIANGLES * 50);
   // No user text in the fixed header.
-  expect(artifact.header).toBe('CAD Fixer binary STL');
+  expect(artifact.header).toBe('Pybrix binary STL');
 });
 
 test('STL → OBJ states the generated name as an addition, not a loss', async ({ page }) => {
@@ -492,7 +492,7 @@ test('a source import loss survives, and does not move when the target changes',
      * that would have kept textures if we wrote them.
      */
     await expect(page.getByTestId('convert-source-warnings')).toContainText(
-      'texture information that CAD Fixer did not import',
+      'texture information that Pybrix did not import',
     );
     await expect(page.getByTestId('convert-source-warnings')).toContainText('cannot put it back');
   }

@@ -1,5 +1,5 @@
 /*
- * CAD Fixer design tokens.
+ * Pybrix design tokens.
  *
  * THE ONE PLACE A COLOUR, A FONT OR A SHELL DIMENSION IS WRITTEN AS A LITERAL.
  * Every component rule refers to these by their semantic name, so a surface
@@ -81,11 +81,35 @@
   --cad-text-subtle: #6b7a89;
 
   /* -------------------------------------------------------------- brand -- */
-  --cad-accent: #ff7457;
-  --cad-accent-hover: #ff8a70;
-  --cad-accent-soft: rgba(255, 116, 87, 0.14);
-  --cad-accent-ring: rgba(255, 116, 87, 0.45);
+  /*
+   * PYBRIX BLUE, TWO ROLES, EVERY VALUE SAMPLED FROM THE SUPPLIED ARTWORK
+   * (apps/web/brand-source/README.md). The artwork's own blue is too dark to be
+   * read ON these surfaces, and its lighter faces are too light to carry white
+   * text, so one colour cannot do both jobs:
+   *
+   *   --cad-accent*       marks ON dark: icons, current state, borders, focus,
+   *                       links, data graphics. #12A0FB is >= 4.6 : 1 on every
+   *                       surface token, including --cad-hover.
+   *   --cad-accent-fill*  a filled control carrying --cad-on-accent text.
+   *                       White on #004DF9 is 6.1 : 1, on the hover 4.7 : 1.
+   *
+   * The ring is 0.75 alpha because that is the lowest that clears the 3 : 1 of
+   * WCAG 1.4.11 against every surface (3.26 at worst); the coral ring it
+   * replaced measured 2.03. Brand blue is IDENTITY AND INTERACTION ONLY —
+   * warning, error and success keep their own tokens below.
+   */
+  --cad-accent: #12a0fb;
+  --cad-accent-hover: #18c1fc;
+  --cad-accent-soft: rgba(18, 160, 251, 0.14);
+  --cad-accent-ring: rgba(18, 160, 251, 0.75);
+  --cad-accent-fill: #004df9;
+  --cad-accent-fill-hover: #016afc;
+  --cad-accent-fill-active: #003afb;
   --cad-on-accent: #ffffff;
+  /* The ground the supplied lockups were drawn on. Their navy wordmark is
+     16 : 1 here and illegible on the chrome, so a lockup sits on this or
+     nowhere. */
+  --cad-brand-plate: #f5f7fa;
 
   /* ------------------------------------------------------------- status -- */
   --cad-error: #f25565;

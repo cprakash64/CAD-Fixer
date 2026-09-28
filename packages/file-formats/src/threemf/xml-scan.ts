@@ -125,10 +125,10 @@ export function describeUnsafeXml(text: string): ImportRefusal | undefined {
 function refuseUnsafe(refusal: ImportRefusal): never {
   const message =
     refusal === ImportRefusal.XmlDoctypeRefused
-      ? 'This 3MF file declares a document type definition. CAD Fixer refuses those rather than interpreting them.'
+      ? 'This 3MF file declares a document type definition. Pybrix refuses those rather than interpreting them.'
       : refusal === ImportRefusal.XmlEntityRefused
-        ? 'This 3MF file declares XML entities. CAD Fixer refuses those rather than expanding them.'
-        : 'This 3MF file references an external XML resource. CAD Fixer never fetches those, and refuses the file rather than ignoring the reference.';
+        ? 'This 3MF file declares XML entities. Pybrix refuses those rather than expanding them.'
+        : 'This 3MF file references an external XML resource. Pybrix never fetches those, and refuses the file rather than ignoring the reference.';
   throw importMalformed(refusal, message);
 }
 
@@ -232,7 +232,7 @@ export function applyTag(
   if (state.elements > limits.maxElements) {
     throw importTooLarge(
       ImportRefusal.XmlTooManyElements,
-      `This 3MF file contains more than ${formatCount(limits.maxElements)} XML elements, which is CAD Fixer's limit.`,
+      `This 3MF file contains more than ${formatCount(limits.maxElements)} XML elements, which is Pybrix's limit.`,
       { limit: limits.maxElements },
     );
   }
@@ -241,7 +241,7 @@ export function applyTag(
     if (state.depth > limits.maxDepth) {
       throw importTooLarge(
         ImportRefusal.XmlTooDeep,
-        `This 3MF file nests XML ${formatCount(state.depth)} levels deep; CAD Fixer's limit is ${formatCount(limits.maxDepth)} levels.`,
+        `This 3MF file nests XML ${formatCount(state.depth)} levels deep; Pybrix's limit is ${formatCount(limits.maxDepth)} levels.`,
         { depth: state.depth, limit: limits.maxDepth },
       );
     }
@@ -382,7 +382,7 @@ export function readAttrs(
     if (raw.length > limits.maxAttributeLength) {
       throw importTooLarge(
         ImportRefusal.XmlAttributeTooLong,
-        `This 3MF file contains an XML attribute of ${formatCount(raw.length)} characters; CAD Fixer's limit is ${formatCount(limits.maxAttributeLength)} characters.`,
+        `This 3MF file contains an XML attribute of ${formatCount(raw.length)} characters; Pybrix's limit is ${formatCount(limits.maxAttributeLength)} characters.`,
         { attribute: key.slice(0, 64), length: raw.length, limit: limits.maxAttributeLength },
       );
     }

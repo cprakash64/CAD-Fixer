@@ -124,7 +124,7 @@ export function validateGeometryDocument(
   if (partCount > limits.maxParts) {
     issues.push({
       code: DocumentValidationCode.TooManyParts,
-      message: `This document declares ${formatCount(partCount)} parts; CAD Fixer's limit is ${formatCount(limits.maxParts)} parts.`,
+      message: `This document declares ${formatCount(partCount)} parts; Pybrix's limit is ${formatCount(limits.maxParts)} parts.`,
       details: { partCount, limit: limits.maxParts },
     });
   }
@@ -132,7 +132,7 @@ export function validateGeometryDocument(
   if (document.unit !== undefined && !isLengthUnit(document.unit)) {
     issues.push({
       code: DocumentValidationCode.InvalidUnit,
-      message: 'This document states a unit CAD Fixer does not recognise.',
+      message: 'This document states a unit Pybrix does not recognise.',
       details: { unit: String(document.unit) },
     });
   }
@@ -169,7 +169,7 @@ export function validateGeometryDocument(
     if (part.name !== undefined && part.name.length > limits.maxNameLength) {
       issues.push({
         code: DocumentValidationCode.NameTooLong,
-        message: 'A part name in this document is longer than CAD Fixer will keep.',
+        message: 'A part name in this document is longer than Pybrix will keep.',
         details: { partIndex: index, length: part.name.length, limit: limits.maxNameLength },
       });
     }
@@ -177,7 +177,7 @@ export function validateGeometryDocument(
     if (part.materialRef !== undefined && part.materialRef.length > limits.maxMaterialRefLength) {
       issues.push({
         code: DocumentValidationCode.MaterialRefTooLong,
-        message: 'A material reference in this document is longer than CAD Fixer will keep.',
+        message: 'A material reference in this document is longer than Pybrix will keep.',
         details: {
           partIndex: index,
           length: part.materialRef.length,
@@ -219,21 +219,21 @@ export function validateGeometryDocument(
   if (triangles > limits.maxTotalTriangles) {
     issues.push({
       code: DocumentValidationCode.TooManyTriangles,
-      message: `This document contains ${formatCount(triangles)} triangles; CAD Fixer's limit is ${formatCount(limits.maxTotalTriangles)} triangles.`,
+      message: `This document contains ${formatCount(triangles)} triangles; Pybrix's limit is ${formatCount(limits.maxTotalTriangles)} triangles.`,
       details: { triangleCount: triangles, limit: limits.maxTotalTriangles },
     });
   }
   if (vertices > limits.maxTotalVertices) {
     issues.push({
       code: DocumentValidationCode.TooManyVertices,
-      message: `This document contains ${formatCount(vertices)} vertices; CAD Fixer's limit is ${formatCount(limits.maxTotalVertices)} vertices.`,
+      message: `This document contains ${formatCount(vertices)} vertices; Pybrix's limit is ${formatCount(limits.maxTotalVertices)} vertices.`,
       details: { vertexCount: vertices, limit: limits.maxTotalVertices },
     });
   }
   if (geometryBytes > limits.maxTotalGeometryBytes) {
     issues.push({
       code: DocumentValidationCode.TooManyBytes,
-      message: `This document holds ${formatBytes(geometryBytes)} of geometry; CAD Fixer's limit is ${formatBytes(limits.maxTotalGeometryBytes)} in one session.`,
+      message: `This document holds ${formatBytes(geometryBytes)} of geometry; Pybrix's limit is ${formatBytes(limits.maxTotalGeometryBytes)} in one session.`,
       details: { geometryBytes, limit: limits.maxTotalGeometryBytes },
     });
   }
@@ -263,7 +263,7 @@ export function assertGeometryDocument(
   if (report.valid) return;
 
   const codes = [...new Set(report.issues.map((issue) => issue.code))];
-  throw geometryValidationFailed(`${operation} produced a document CAD Fixer cannot accept.`, {
+  throw geometryValidationFailed(`${operation} produced a document Pybrix cannot accept.`, {
     operation,
     partCount: report.partCount,
     triangleCount: report.triangleCount,

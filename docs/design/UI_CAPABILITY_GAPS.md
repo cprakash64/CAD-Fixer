@@ -1,12 +1,12 @@
 # UI capability gaps
 
-What the PrintPrep reference design shows that CAD Fixer does not, and why the
+What the PrintPrep reference design shows that Pybrix does not, and why the
 interface omits it. **This is not a roadmap and promises nothing.** It exists
 so that an intentional omission is not mistaken for a UI bug: every row is
 absent because the capability underneath does not exist, and the interface
 never offers a control with no command behind it.
 
-Columns: the reference capability · what CAD Fixer has today · what the
+Columns: the reference capability · what Pybrix has today · what the
 interface does instead · what would have to exist first.
 
 ## Repair
@@ -36,7 +36,7 @@ interface does instead · what would have to exist first.
 | ----------------------------------------------------- | ------------------------------------------------------ | ----------------------------------------- | ------------------------------------------------- |
 | Cut list, custom / three-point / align-to-face planes | One flat XY/XZ/YZ plane with one bounded tilt          | Axis segmented control, position and tilt | Arbitrary plane definition and picking            |
 | More connector types, manual placement, patterns      | None / round pins / one dovetail, placed automatically | Three cards; "placed automatically"       | Connector engine support and a placement workflow |
-| Connectors on unitless models                         | Millimetre documents only                              | Connectors explained as unavailable       | A stated unit (CAD Fixer converts none)           |
+| Connectors on unitless models                         | Millimetre documents only                              | Connectors explained as unavailable       | A stated unit (Pybrix converts none)              |
 | Bed fit, orientation                                  | No printer model                                       | Absent                                    | Printer profiles and a chosen print orientation   |
 
 ## Surface Texture
@@ -60,9 +60,9 @@ interface does instead · what would have to exist first.
 
 ## General
 
-| Reference           | Current state                    | UI behaviour                              | Needed                                                |
-| ------------------- | -------------------------------- | ----------------------------------------- | ----------------------------------------------------- |
-| Save, recent files  | Local, stateless session         | Open and Export only                      | A local persistence model                             |
-| Undo / redo history | One undoable change per document | Undo lives in each workflow's panel       | A multi-step history with bounded retained memory     |
-| mm / inch switch    | No unit conversion               | The status bar states the document's unit | A unit-conversion policy (CAD Fixer rescales nothing) |
-| Account menu        | No accounts                      | Absent                                    | Out of scope for the product today                    |
+| Reference           | Current state                    | UI behaviour                              | Needed                                             |
+| ------------------- | -------------------------------- | ----------------------------------------- | -------------------------------------------------- |
+| Save, recent files  | Local, stateless session         | Open and Export only                      | A local persistence model                          |
+| Undo / redo history | One undoable change per document | Undo lives in each workflow's panel       | A multi-step history with bounded retained memory  |
+| mm / inch switch    | No unit conversion               | The status bar states the document's unit | A unit-conversion policy (Pybrix rescales nothing) |
+| Account menu        | No accounts                      | Absent                                    | Out of scope for the product today                 |

@@ -250,7 +250,7 @@ export const SPLIT_COPY = Object.freeze({
   placementNote:
     'Placed automatically on the cut face, inside its material and away from its edges. There is no manual placement.',
   connectorsNeedMillimetres:
-    'Connectors need a model that states millimetres, because their sizes are millimetres and CAD Fixer converts no units.',
+    'Connectors need a model that states millimetres, because their sizes are millimetres and Pybrix converts no units.',
   fitNote: 'Printers vary: 0.2 mm is a starting point, not a guarantee of fit.',
   resultSection: 'Result',
   noPart: 'Open a model to split it.',

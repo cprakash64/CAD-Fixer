@@ -1,7 +1,11 @@
-# CAD Fixer
+# Pybrix
 
-A local-first, browser-based tool for repairing and preparing 3D printing
-meshes.
+Repair, convert, split, and texture 3D-print models — locally in your browser.
+
+Pybrix (formerly CAD Fixer) is a local-first, browser-based tool for repairing
+and preparing 3D printing meshes. The repository, its packages and its
+deployment paths keep the `cad-fixer` / `@cadfixer` names; they are identifiers,
+not the product's name.
 
 **Your models never leave your machine.** Files are read, processed, and
 exported entirely in the browser using Web Workers, WebAssembly, and your own
@@ -45,7 +49,7 @@ Please do not attach models you are not authorised to share.
 > topology, or decide which side of a surface is outside — and it refuses, with a
 > stated reason, anything it cannot decide from the stored coordinates alone.
 > Self-intersections and wall thickness are still not checked at all, so nothing
-> in CAD Fixer tells you a model will print.
+> in Pybrix tells you a model will print.
 >
 > **Hollow is not implemented**, and Split and Texture do exactly the bounded
 > things described above and nothing more. See
@@ -64,21 +68,21 @@ Please do not attach models you are not authorised to share.
 
 ### What "conservative repair" covers
 
-| Operation                              | Implemented | Note                                                                   |
-| -------------------------------------- | ----------- | ---------------------------------------------------------------------- |
-| Remove exact duplicate triangles       | Yes         | Same rotational order only. Reversed duplicates are never removed.     |
-| Remove repeated-position triangles     | Yes         | Refused when removal would open the surface or create a defect.        |
-| Remove exact zero-area triangles       | Yes         | Exactly collinear corners. No "nearly flat" judgement, no tolerance.   |
-| Unify relative face winding            | Yes         | RELATIVE to neighbours. CAD Fixer never decides which side is outside. |
-| Weld nearby vertices                   | No          | Would need a tolerance. See the policy document.                       |
-| Close openings in a surface            | Partly      | ONE flat opening at a time, chosen by you. See below.                  |
-| Resolve non-manifold edges or vertices | No          | Reported, and they can block winding unification. Never rewritten.     |
-| Detect or resolve self-intersections   | No          | Not checked at all.                                                    |
-| Determine printability                 | No          | Wall thickness is not measured.                                        |
+| Operation                              | Implemented | Note                                                                 |
+| -------------------------------------- | ----------- | -------------------------------------------------------------------- |
+| Remove exact duplicate triangles       | Yes         | Same rotational order only. Reversed duplicates are never removed.   |
+| Remove repeated-position triangles     | Yes         | Refused when removal would open the surface or create a defect.      |
+| Remove exact zero-area triangles       | Yes         | Exactly collinear corners. No "nearly flat" judgement, no tolerance. |
+| Unify relative face winding            | Yes         | RELATIVE to neighbours. Pybrix never decides which side is outside.  |
+| Weld nearby vertices                   | No          | Would need a tolerance. See the policy document.                     |
+| Close openings in a surface            | Partly      | ONE flat opening at a time, chosen by you. See below.                |
+| Resolve non-manifold edges or vertices | No          | Reported, and they can block winding unification. Never rewritten.   |
+| Detect or resolve self-intersections   | No          | Not checked at all.                                                  |
+| Determine printability                 | No          | Wall thickness is not measured.                                      |
 
 ### What "automatic filling" covers
 
-CAD Fixer can close ONE open boundary you select, and validates the result
+Pybrix can close ONE open boundary you select, and validates the result
 against the part it came from before offering it. What it will not do is as
 important as what it will:
 
@@ -97,7 +101,7 @@ important as what it will:
 
 Some flat openings are still refused — a rim where more than two surfaces meet,
 or where the surrounding triangles disagree about which way they face, has no
-single side for a new surface to join, and CAD Fixer will not guess. When the
+single side for a new surface to join, and Pybrix will not guess. When the
 generated surface would pass through the model, it is discarded rather than
 applied, and the panel says so.
 
@@ -105,21 +109,21 @@ Target formats: **STL, OBJ, 3MF**.
 
 ### What each format can carry
 
-CAD Fixer reads and writes all three. What survives a conversion depends on the
+Pybrix reads and writes all three. What survives a conversion depends on the
 target, and the app tells you which of these apply to **your** model before it
 writes anything.
 
-|                               | STL                                       | OBJ                                 | 3MF                                 |
-| ----------------------------- | ----------------------------------------- | ----------------------------------- | ----------------------------------- |
-| Triangle geometry             | yes                                       | yes                                 | yes                                 |
-| Physical unit                 | not stored by the format                  | not stored                          | stored, one of six                  |
-| Separate parts                | merged into one mesh                      | kept                                | kept                                |
-| Part placements               | applied to the coordinates                | applied to the coordinates          | kept as placements                  |
-| Repeated shapes               | written out in full                       | written out in full                 | stored once, placed many times      |
-| Part names                    | dropped                                   | kept                                | kept                                |
-| Face groups                   | dropped                                   | kept                                | dropped                             |
-| Materials, textures, colours  | never written by CAD Fixer, in any format |                                     |                                     |
-| Names with unusual characters | n/a — names dropped                       | adjusted, and the app says so first | adjusted, and the app says so first |
+|                               | STL                                    | OBJ                                 | 3MF                                 |
+| ----------------------------- | -------------------------------------- | ----------------------------------- | ----------------------------------- |
+| Triangle geometry             | yes                                    | yes                                 | yes                                 |
+| Physical unit                 | not stored by the format               | not stored                          | stored, one of six                  |
+| Separate parts                | merged into one mesh                   | kept                                | kept                                |
+| Part placements               | applied to the coordinates             | applied to the coordinates          | kept as placements                  |
+| Repeated shapes               | written out in full                    | written out in full                 | stored once, placed many times      |
+| Part names                    | dropped                                | kept                                | kept                                |
+| Face groups                   | dropped                                | kept                                | dropped                             |
+| Materials, textures, colours  | never written by Pybrix, in any format |                                     |                                     |
+| Names with unusual characters | n/a — names dropped                    | adjusted, and the app says so first | adjusted, and the app says so first |
 
 Coordinates are never rescaled in any direction. Exporting a model that states
 inches as OBJ writes the same numbers and drops the label — the app says exactly
@@ -240,7 +244,7 @@ running first.
   re-import uses and compared against what it was written from. If the two
   disagree the export is refused rather than saved. There is no way to skip it.
 - **An export-time unit choice for 3MF.** 3MF has to state what its numbers
-  mean; a model from an STL or an OBJ does not know, and CAD Fixer will not
+  mean; a model from an STL or an OBJ does not know, and Pybrix will not
   guess. You pick one of the six units, nothing is preselected, and the choice
   LABELS the numbers — it never resizes anything and never touches the model.
 - **Automatic filling of one selected flat opening.** The Open boundaries panel
@@ -319,7 +323,7 @@ running first.
   256 MiB is refused with a message naming its size and the limit.
 - **No wall-thickness analysis**, and therefore **no printability verdict**. The
   report's printability status is never "printable"; the most it says is "not
-  yet determined". Filling an opening does not change this: the most CAD Fixer
+  yet determined". Filling an opening does not change this: the most Pybrix
   says afterwards is that the selected opening was filled and validated.
 - **No tolerance welding.** Two corners one float apart are two vertices, and
   the edge between them is reported as a boundary. That is what the file says.
@@ -330,10 +334,10 @@ running first.
   explicitly, with a stated tolerance you choose and a preview.
 - **No general mesh repair.** Conservative repair fixes four exactly-decidable
   things and refuses everything else with a reason. Diagnostics identify many
-  defects that nothing in CAD Fixer can currently fix.
+  defects that nothing in Pybrix can currently fix.
 - **No automatic repair.** Nothing is changed without a preview you looked at and
   an Apply you pressed.
-- **No units for STL.** STL files carry no unit, so CAD Fixer reports
+- **No units for STL.** STL files carry no unit, so Pybrix reports
   "Unspecified by STL" rather than assuming millimetres.
 - **No accounts, authentication, payments, pricing, or download gating.** Usage
   is completely open.

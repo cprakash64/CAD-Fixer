@@ -138,7 +138,7 @@ describe('6E-A4: the per-entry ceiling, at its edges', () => {
 
     const archive = await declaring(justOver);
     const refusal = await refusalOfRead(() => read3mf(archive, testReadContext()));
-    expect(refusal.message).toContain(`CAD Fixer's per-entry expansion limit is ${ceiling}`);
+    expect(refusal.message).toContain(`Pybrix's per-entry expansion limit is ${ceiling}`);
     expect(refusal.message).toContain(
       `expands to ${formatBytesAgainst(justOver, MAX_THREEMF_MODEL_ENTRY_BYTES)}`,
     );

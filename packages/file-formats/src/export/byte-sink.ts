@@ -48,7 +48,7 @@ export function createByteSink(
     if (produced + encoded.byteLength > maxBytes) {
       throw exportTooLarge(
         reason,
-        'This export would produce a larger file than CAD Fixer will write.',
+        'This export would produce a larger file than Pybrix will write.',
         { produced: produced + encoded.byteLength, limit: maxBytes },
       );
     }

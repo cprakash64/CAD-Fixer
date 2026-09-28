@@ -954,10 +954,10 @@ body {
 
 .crashed__action {
   padding: 0.55rem 1.1rem;
-  color: var(--surface-base);
+  color: var(--cad-on-accent);
   font: inherit;
   font-weight: 600;
-  background: var(--accent);
+  background: var(--cad-accent-fill);
   border: 1px solid transparent;
   border-radius: var(--radius);
   cursor: pointer;

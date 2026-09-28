@@ -49,7 +49,7 @@ test('exports a binary STL of exactly the right size', async ({ page }) => {
   expect(bytes.byteLength).toBe(BINARY_PREFIX_BYTES + triangles * BINARY_FACET_BYTES);
   expect(bytes.readUInt32LE(80)).toBe(triangles);
   // The header must not carry the source filename or any other user data.
-  expect(bytes.subarray(0, 80).toString('ascii')).toContain('CAD Fixer');
+  expect(bytes.subarray(0, 80).toString('ascii')).toContain('Pybrix');
 });
 
 test('exports an ASCII STL that is valid, locale-independent text', async ({ page }) => {
@@ -68,8 +68,8 @@ test('exports an ASCII STL that is valid, locale-independent text', async ({ pag
   for await (const chunk of stream) chunks.push(chunk as Buffer);
   const text = Buffer.concat(chunks).toString('ascii');
 
-  expect(text.startsWith('solid cadfixer')).toBe(true);
-  expect(text.trimEnd().endsWith('endsolid cadfixer')).toBe(true);
+  expect(text.startsWith('solid pybrix')).toBe(true);
+  expect(text.trimEnd().endsWith('endsolid pybrix')).toBe(true);
   expect(text.match(/facet normal/g)).toHaveLength(triangles);
   expect(text.match(/vertex /g)).toHaveLength(triangles * 3);
   // A decimal comma here would mean the writer picked up the host locale and

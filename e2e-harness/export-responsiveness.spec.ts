@@ -246,7 +246,7 @@ test('§56: a large OBJ export leaves the page usable, validation included', asy
 
   expect(result.status).toBe('SUCCESS');
   expect(result.triangleCount).toBe(320_000);
-  expect(result.head).toContain('# Written by CAD Fixer');
+  expect(result.head).toContain('# Written by Pybrix');
   expectWindowCoveredValidation(result, 'OBJ');
 
   /*

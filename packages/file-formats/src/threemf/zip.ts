@@ -300,7 +300,7 @@ export function readZipDirectory(
   if (bytes.byteLength > limits.maxArchiveBytes) {
     throw importTooLarge(
       ImportRefusal.ZipArchiveTooLarge,
-      `This archive is ${formatBytes(bytes.byteLength)}; CAD Fixer's archive limit is ${formatBytes(limits.maxArchiveBytes)}.`,
+      `This archive is ${formatBytes(bytes.byteLength)}; Pybrix's archive limit is ${formatBytes(limits.maxArchiveBytes)}.`,
       { bytes: bytes.byteLength, limit: limits.maxArchiveBytes },
     );
   }
@@ -349,7 +349,7 @@ export function readZipDirectory(
   if (entryCount > limits.maxEntries) {
     throw importTooLarge(
       ImportRefusal.ZipTooManyEntries,
-      `This archive contains ${formatCount(entryCount)} entries; CAD Fixer's limit is ${formatCount(limits.maxEntries)} entries.`,
+      `This archive contains ${formatCount(entryCount)} entries; Pybrix's limit is ${formatCount(limits.maxEntries)} entries.`,
       { entries: entryCount, limit: limits.maxEntries },
     );
   }
@@ -436,13 +436,13 @@ export function readZipDirectory(
     if ((flags & 0x1) !== 0) {
       throw importMalformed(
         ImportRefusal.ZipEncrypted,
-        'This archive is encrypted, so CAD Fixer cannot read it.',
+        'This archive is encrypted, so Pybrix cannot read it.',
       );
     }
     if (method !== 0 && method !== 8) {
       throw importMalformed(
         ImportRefusal.ZipUnsupportedMethod,
-        'This archive uses a compression method CAD Fixer does not support.',
+        'This archive uses a compression method Pybrix does not support.',
         { method },
       );
     }
@@ -452,7 +452,7 @@ export function readZipDirectory(
     if (unsafe !== undefined) {
       throw importMalformed(
         ImportRefusal.ZipUnsafePath,
-        'This archive contains an unsafe file path, so CAD Fixer will not open it.',
+        'This archive contains an unsafe file path, so Pybrix will not open it.',
         { reasonDetail: unsafe },
       );
     }
@@ -472,7 +472,7 @@ export function readZipDirectory(
     if (uncompressedSize > limits.maxEntryBytes) {
       throw importTooLarge(
         ImportRefusal.ZipEntryTooLarge,
-        `A file inside this archive expands to ${formatBytesAgainst(uncompressedSize, limits.maxEntryBytes)}; CAD Fixer's per-entry expansion limit is ${formatBytes(limits.maxEntryBytes)}.`,
+        `A file inside this archive expands to ${formatBytesAgainst(uncompressedSize, limits.maxEntryBytes)}; Pybrix's per-entry expansion limit is ${formatBytes(limits.maxEntryBytes)}.`,
         { declared: uncompressedSize, limit: limits.maxEntryBytes },
       );
     }
@@ -486,7 +486,7 @@ export function readZipDirectory(
     if (declaredTotal > limits.maxTotalUncompressedBytes) {
       throw importTooLarge(
         ImportRefusal.ZipTotalTooLarge,
-        `This archive is ${formatBytes(bytes.byteLength)} on disk but expands to ${formatBytes(declaredTotal)} in total; CAD Fixer's total expansion limit is ${formatBytes(limits.maxTotalUncompressedBytes)}. The limit is on expanded data, not on the size of the file.`,
+        `This archive is ${formatBytes(bytes.byteLength)} on disk but expands to ${formatBytes(declaredTotal)} in total; Pybrix's total expansion limit is ${formatBytes(limits.maxTotalUncompressedBytes)}. The limit is on expanded data, not on the size of the file.`,
         {
           archiveBytes: bytes.byteLength,
           declared: declaredTotal,
@@ -527,8 +527,8 @@ export function readZipDirectory(
       throw importTooLarge(
         ImportRefusal.ZipRatioExceeded,
         unboundedRatio
-          ? `A file inside this archive declares ${formatBytes(uncompressedSize)} of data from no compressed bytes at all; CAD Fixer's compression-ratio limit is ${formatCount(limits.maxCompressionRatio)}:1.`
-          : `A file inside this archive expands at ${formatRatio(uncompressedSize, compressedSize)}; CAD Fixer's compression-ratio limit is ${formatCount(limits.maxCompressionRatio)}:1.`,
+          ? `A file inside this archive declares ${formatBytes(uncompressedSize)} of data from no compressed bytes at all; Pybrix's compression-ratio limit is ${formatCount(limits.maxCompressionRatio)}:1.`
+          : `A file inside this archive expands at ${formatRatio(uncompressedSize, compressedSize)}; Pybrix's compression-ratio limit is ${formatCount(limits.maxCompressionRatio)}:1.`,
         {
           ...(unboundedRatio
             ? { declared: uncompressedSize, compressed: 0 }
@@ -667,7 +667,7 @@ export async function readZipEntry(
   const refuseTotal = (prospective: number): never => {
     throw importTooLarge(
       ImportRefusal.ZipTotalTooLarge,
-      `This archive expands beyond the ${formatBytes(budget.maxTotalBytes)} of data CAD Fixer will extract in total. That limit is on expanded data, not on the size of the file.`,
+      `This archive expands beyond the ${formatBytes(budget.maxTotalBytes)} of data Pybrix will extract in total. That limit is on expanded data, not on the size of the file.`,
       { produced: prospective, limit: budget.maxTotalBytes, entry: entry.name.slice(0, 128) },
     );
   };
@@ -676,7 +676,7 @@ export async function readZipEntry(
     if (compressed.byteLength > limits.maxEntryBytes) {
       throw importTooLarge(
         ImportRefusal.ZipEntryTooLarge,
-        `A file inside this archive is ${formatBytesAgainst(compressed.byteLength, limits.maxEntryBytes)}; CAD Fixer's per-entry expansion limit is ${formatBytes(limits.maxEntryBytes)}.`,
+        `A file inside this archive is ${formatBytesAgainst(compressed.byteLength, limits.maxEntryBytes)}; Pybrix's per-entry expansion limit is ${formatBytes(limits.maxEntryBytes)}.`,
         { declared: compressed.byteLength, limit: limits.maxEntryBytes },
       );
     }
@@ -702,7 +702,7 @@ export async function readZipEntry(
   if (declared > limits.maxEntryBytes) {
     throw importTooLarge(
       ImportRefusal.ZipEntryTooLarge,
-      `A file inside this archive expands to ${formatBytesAgainst(declared, limits.maxEntryBytes)}; CAD Fixer's per-entry expansion limit is ${formatBytes(limits.maxEntryBytes)}.`,
+      `A file inside this archive expands to ${formatBytesAgainst(declared, limits.maxEntryBytes)}; Pybrix's per-entry expansion limit is ${formatBytes(limits.maxEntryBytes)}.`,
       { declared, limit: limits.maxEntryBytes },
     );
   }
@@ -765,7 +765,7 @@ export async function readZipEntry(
       if (prospectiveEntry > limits.maxEntryBytes) {
         throw importTooLarge(
           ImportRefusal.ZipEntryTooLarge,
-          `A file inside this archive expands beyond CAD Fixer's per-entry expansion limit of ${formatBytes(limits.maxEntryBytes)}.`,
+          `A file inside this archive expands beyond Pybrix's per-entry expansion limit of ${formatBytes(limits.maxEntryBytes)}.`,
           { limit: limits.maxEntryBytes },
         );
       }
@@ -777,7 +777,7 @@ export async function readZipEntry(
       ) {
         throw importTooLarge(
           ImportRefusal.ZipRatioExceeded,
-          `A file inside this archive expands beyond CAD Fixer's compression-ratio limit of ${formatCount(limits.maxCompressionRatio)}:1.`,
+          `A file inside this archive expands beyond Pybrix's compression-ratio limit of ${formatCount(limits.maxCompressionRatio)}:1.`,
           { limit: limits.maxCompressionRatio },
         );
       }
@@ -797,7 +797,7 @@ export async function readZipEntry(
       if (prospectiveEntry > declared) {
         throw importMalformed(
           ImportRefusal.ZipDeclaredSizeOverrun,
-          'A file inside this archive contains more data than the archive says it does, so CAD Fixer will not read it.',
+          'A file inside this archive contains more data than the archive says it does, so Pybrix will not read it.',
           { declared, atLeast: prospectiveEntry },
         );
       }
@@ -823,7 +823,7 @@ export async function readZipEntry(
   if (produced !== declared) {
     throw importMalformed(
       ImportRefusal.ZipDeclaredSizeShortfall,
-      'A file inside this archive is smaller than the archive says it is, so CAD Fixer will not read it.',
+      'A file inside this archive is smaller than the archive says it is, so Pybrix will not read it.',
       { declared, produced },
     );
   }
@@ -948,7 +948,7 @@ function streamZipEntry(
     if (compressed.byteLength > limits.maxEntryBytes) {
       throw importTooLarge(
         ImportRefusal.ZipEntryTooLarge,
-        `A file inside this archive is ${formatBytesAgainst(compressed.byteLength, limits.maxEntryBytes)}; CAD Fixer's per-entry expansion limit is ${formatBytes(limits.maxEntryBytes)}.`,
+        `A file inside this archive is ${formatBytesAgainst(compressed.byteLength, limits.maxEntryBytes)}; Pybrix's per-entry expansion limit is ${formatBytes(limits.maxEntryBytes)}.`,
         { declared: compressed.byteLength, limit: limits.maxEntryBytes },
       );
     }
@@ -970,7 +970,7 @@ function streamZipEntry(
   if (declared > limits.maxEntryBytes) {
     throw importTooLarge(
       ImportRefusal.ZipEntryTooLarge,
-      `A file inside this archive expands to ${formatBytesAgainst(declared, limits.maxEntryBytes)}; CAD Fixer's per-entry expansion limit is ${formatBytes(limits.maxEntryBytes)}.`,
+      `A file inside this archive expands to ${formatBytesAgainst(declared, limits.maxEntryBytes)}; Pybrix's per-entry expansion limit is ${formatBytes(limits.maxEntryBytes)}.`,
       { declared, limit: limits.maxEntryBytes },
     );
   }
@@ -983,7 +983,7 @@ function streamZipEntry(
 function totalTooLarge(budget: InflationBudget, prospective: number, entry: ZipEntry): Error {
   return importTooLarge(
     ImportRefusal.ZipTotalTooLarge,
-    `This archive expands beyond the ${formatBytes(budget.maxTotalBytes)} of data CAD Fixer will extract in total. That limit is on expanded data, not on the size of the file.`,
+    `This archive expands beyond the ${formatBytes(budget.maxTotalBytes)} of data Pybrix will extract in total. That limit is on expanded data, not on the size of the file.`,
     { produced: prospective, limit: budget.maxTotalBytes, entry: entry.name.slice(0, 128) },
   );
 }
@@ -1086,7 +1086,7 @@ class InflatedEntryChunks implements AsyncIterator<Uint8Array> {
       if (this.produced !== this.declared) {
         throw importMalformed(
           ImportRefusal.ZipDeclaredSizeShortfall,
-          'A file inside this archive is smaller than the archive says it is, so CAD Fixer will not read it.',
+          'A file inside this archive is smaller than the archive says it is, so Pybrix will not read it.',
           { declared: this.declared, produced: this.produced },
         );
       }
@@ -1117,7 +1117,7 @@ class InflatedEntryChunks implements AsyncIterator<Uint8Array> {
     if (prospective > this.limits.maxEntryBytes) {
       throw importTooLarge(
         ImportRefusal.ZipEntryTooLarge,
-        `A file inside this archive expands beyond CAD Fixer's per-entry expansion limit of ${formatBytes(this.limits.maxEntryBytes)}.`,
+        `A file inside this archive expands beyond Pybrix's per-entry expansion limit of ${formatBytes(this.limits.maxEntryBytes)}.`,
         { limit: this.limits.maxEntryBytes },
       );
     }
@@ -1132,14 +1132,14 @@ class InflatedEntryChunks implements AsyncIterator<Uint8Array> {
     ) {
       throw importTooLarge(
         ImportRefusal.ZipRatioExceeded,
-        `A file inside this archive expands beyond CAD Fixer's compression-ratio limit of ${formatCount(this.limits.maxCompressionRatio)}:1.`,
+        `A file inside this archive expands beyond Pybrix's compression-ratio limit of ${formatCount(this.limits.maxCompressionRatio)}:1.`,
         { limit: this.limits.maxCompressionRatio },
       );
     }
     if (prospective > this.declared) {
       throw importMalformed(
         ImportRefusal.ZipDeclaredSizeOverrun,
-        'A file inside this archive contains more data than the archive says it does, so CAD Fixer will not read it.',
+        'A file inside this archive contains more data than the archive says it does, so Pybrix will not read it.',
         { declared: this.declared, atLeast: prospective },
       );
     }

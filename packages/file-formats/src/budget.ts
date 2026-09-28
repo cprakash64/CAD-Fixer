@@ -161,7 +161,7 @@ export function checkAllocation(
   }
   if (plan.triangles > budget.maxTriangles) {
     return reject(
-      'This model has more triangles than CAD Fixer can load.',
+      'This model has more triangles than Pybrix can load.',
       plan.triangles,
       budget.maxTriangles,
     );
@@ -175,7 +175,7 @@ export function checkAllocation(
    */
   if (plan.triangles > budget.maxUnsharedImportTriangles) {
     return reject(
-      `This model has ${formatCount(plan.triangles)} triangles; CAD Fixer's limit for a ` +
+      `This model has ${formatCount(plan.triangles)} triangles; Pybrix's limit for a ` +
         `file that stores every triangle separately is ` +
         `${formatCount(budget.maxUnsharedImportTriangles)}.`,
       plan.triangles,
@@ -184,14 +184,14 @@ export function checkAllocation(
   }
   if (plan.vertices > budget.maxVertices) {
     return reject(
-      'This model has more vertices than CAD Fixer can load.',
+      'This model has more vertices than Pybrix can load.',
       plan.vertices,
       budget.maxVertices,
     );
   }
   if (plan.outputBytes > budget.maxOutputBytes) {
     return reject(
-      'Loading this model would need more memory than CAD Fixer allows.',
+      'Loading this model would need more memory than Pybrix allows.',
       plan.outputBytes,
       budget.maxOutputBytes,
     );
@@ -212,7 +212,7 @@ export function checkInputSize(
   operation: string,
 ): AppError | undefined {
   if (inputBytes > budget.maxInputBytes) {
-    return resourceLimitExceeded('This file is larger than CAD Fixer can open.', {
+    return resourceLimitExceeded('This file is larger than Pybrix can open.', {
       operation,
       requested: inputBytes,
       limit: budget.maxInputBytes,

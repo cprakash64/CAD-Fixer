@@ -113,9 +113,9 @@ test('I-05: the inspector’s route into Convert is not a second primary action'
   await page.goto('/');
   await openBox(page);
   await enter(page, 'convert');
-  // The workspace's own export is the one orange button: the accent, as the
-  // stylesheet defines it, and nothing else carries it.
-  const accent = 'rgb(255, 116, 87)';
+  // The workspace's own export is the one filled Pybrix-blue button: the
+  // accent fill, as the stylesheet defines it, and nothing else carries it.
+  const accent = 'rgb(0, 77, 249)';
   await expect(page.getByTestId('convert-export')).toBeEnabled();
   await expect(page.getByTestId('convert-export')).toHaveCSS('background-color', accent);
   await expect(page.getByTestId('open-convert')).not.toHaveCSS('background-color', accent);
@@ -215,7 +215,11 @@ test('I-10: the page names its icon and theme colour and asks the server for no 
   page.on('request', (request) => requested.push(new URL(request.url()).pathname));
   await page.goto('/');
   await expect(page.getByTestId('browse-button')).toBeVisible();
-  await expect(page.locator('link[rel="icon"]')).toHaveAttribute('href', /^data:image\/svg\+xml,/);
+  // BRAND-01: a fingerprinted same-origin Pybrix PNG, no longer an inline SVG.
+  await expect(page.locator('link[rel="icon"]')).toHaveAttribute(
+    'href',
+    /^\/assets\/pybrix-favicon-32-[\w-]+\.png$/,
+  );
   await expect(page.locator('meta[name="theme-color"]')).toHaveAttribute('content', '#121b24');
   expect(requested).not.toContain('/favicon.ico');
 });

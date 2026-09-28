@@ -80,7 +80,7 @@ export function FileIntakeProvider({ children }: { readonly children: ReactNode 
         store.pushStatus(
           StatusSeverity.Warning,
           `${describeFormat(screening.claimedFormat).label} import is not implemented yet. ` +
-            `CAD Fixer can open ${describeImplementedFormats()}.`,
+            `Pybrix can open ${describeImplementedFormats()}.`,
         );
         return;
       }

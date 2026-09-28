@@ -157,7 +157,7 @@ function FixAction({
           <SuggestedFix
             text={
               row.refusal === undefined
-                ? 'CAD Fixer cannot attempt this boundary.'
+                ? 'Pybrix cannot attempt this boundary.'
                 : describeBoundaryRefusal(row.refusal)
             }
           />
@@ -213,7 +213,7 @@ function FixAction({
     case RepairIssueId.SelfIntersections:
     case RepairIssueId.Components:
       return (
-        <SuggestedFix text="CAD Fixer has no automatic repair for this. Its location is shown so it can be fixed in the source model." />
+        <SuggestedFix text="Pybrix has no automatic repair for this. Its location is shown so it can be fixed in the source model." />
       );
   }
 }
@@ -227,7 +227,7 @@ function SuggestedFix({
 }): ReactNode {
   return (
     <div className="suggested-fix" data-testid="issue-suggested-fix">
-      <p className="suggested-fix__eyebrow">What CAD Fixer can do</p>
+      <p className="suggested-fix__eyebrow">What Pybrix can do</p>
       <p className="suggested-fix__text">{text}</p>
       {children === undefined ? null : <div className="suggested-fix__actions">{children}</div>}
     </div>

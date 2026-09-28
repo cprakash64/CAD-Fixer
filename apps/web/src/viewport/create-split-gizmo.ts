@@ -74,7 +74,11 @@ export interface SplitGizmo {
   dispose(): void;
 }
 
-/** Warm red-orange, from the shell's accent. */
+/**
+ * Warm red-orange: a workspace colour, not the brand accent. The split pieces
+ * are drawn blue and coral (`.piece-swatch--a/b`), and a brand-blue plane would
+ * sink into piece A, so the plane stays warm through the Pybrix rebrand.
+ */
 const PLANE_COLOR = 0xff7457;
 const BORDER_COLOR = 0xff9a82;
 const OUTLINE_COLOR = 0xffe2d8;

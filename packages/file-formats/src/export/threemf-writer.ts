@@ -256,7 +256,7 @@ export async function write3mfDocument(
   if (snapshot.unit === undefined) {
     throw exportBlocked(
       ExportRefusal.UnitRequired,
-      'This model states no unit, and a 3MF file has to declare one. CAD Fixer will not choose a unit on your behalf.',
+      'This model states no unit, and a 3MF file has to declare one. Pybrix will not choose a unit on your behalf.',
     );
   }
   if (!THREE_MF_UNITS.includes(snapshot.unit)) {
@@ -298,7 +298,7 @@ export async function write3mfDocument(
   if (bytes.byteLength > context.limits.maxOutputBytes) {
     throw exportTooLarge(
       ExportRefusal.OutputTooLarge,
-      'This export would produce a larger file than CAD Fixer will write.',
+      'This export would produce a larger file than Pybrix will write.',
       { produced: bytes.byteLength, limit: context.limits.maxOutputBytes },
     );
   }

@@ -91,7 +91,7 @@ describe('binary STL writer', () => {
     }
 
     expect(header).not.toContain('client-confidential');
-    expect(header).toContain('CAD Fixer');
+    expect(header).toContain('Pybrix');
   });
 
   it('writes zero for the attribute byte count', async () => {
@@ -178,8 +178,8 @@ describe('ASCII STL writer', () => {
     const second = decode(await asciiBytes(mesh, testContext()));
 
     expect(first).toBe(second);
-    expect(first.startsWith('solid cadfixer\n')).toBe(true);
-    expect(first.trimEnd().endsWith('endsolid cadfixer')).toBe(true);
+    expect(first.startsWith('solid pybrix\n')).toBe(true);
+    expect(first.trimEnd().endsWith('endsolid pybrix')).toBe(true);
     expect(first.match(/facet normal/g)).toHaveLength(SAMPLE.length);
     expect(first.match(/vertex/g)).toHaveLength(SAMPLE.length * 3);
   });

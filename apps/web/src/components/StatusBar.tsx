@@ -6,6 +6,7 @@ import { WorkflowId } from '../state/workflows';
 import { AnalysisState, ImportState } from '../state/workspace-store';
 import { describePhase } from './ImportDropZone';
 import { Icon, type IconName } from './shell/Icon';
+import { PRODUCT_VERSION } from './shell/brand';
 
 /**
  * The status bar: what the application is doing, and the loaded model's size.
@@ -126,8 +127,10 @@ export function StatusBar(): ReactNode {
         </>
       )}
 
-      <span className="statusbar__release" data-testid="release-stage">
-        v0.4.0 Technical Preview
+      {/* The version only: the header already says Technical Preview, and
+          Help → About says both. */}
+      <span className="statusbar__release" data-testid="release-version">
+        {PRODUCT_VERSION}
       </span>
     </footer>
   );

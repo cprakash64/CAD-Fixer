@@ -184,7 +184,7 @@ test('keyboard focus on the CURRENT workspace tab shows the focus ring', async (
   await expect(current).toHaveAttribute('aria-current', 'page');
   await expect
     .poll(() => current.evaluate((element) => getComputedStyle(element).boxShadow))
-    .toContain('rgba(255, 116, 87, 0.45)');
+    .toContain('rgba(18, 160, 251, 0.75)');
 });
 
 test('shell type is set in its own faces, not the fallback', async ({ page }) => {

@@ -93,7 +93,7 @@ test('writes an OBJ of the whole document, through both workers', async ({ page 
   expect(result.byteLength).toBeGreaterThan(0);
   expect(result.fileName).toBe('bracket.obj');
   // The bytes ARE an OBJ, identified without holding the file.
-  expect(result.head).toContain('# Written by CAD Fixer');
+  expect(result.head).toContain('# Written by Pybrix');
   // Progress crossed the boundary as scalars.
   expect(result.progressUpdates).toBeGreaterThan(0);
 

@@ -16,7 +16,10 @@
  *     makes after load; `'none'` broke Split, Texture and the self-intersection
  *     check.
  *   - `worker-src 'self'` — every worker is a same-origin module file.
- *   - `img-src 'self' data: blob:` — the favicon is a data: URI.
+ *   - `img-src 'self' data: blob:` — the Pybrix icons and brand images are
+ *     same-origin files (BRAND-01); `data:` is where Vite puts any imported
+ *     image under its 4 KiB inlining limit, and was the old favicon's home.
+ *     The rebrand changed no directive.
  *   - `style-src 'self'` — the stylesheet is a file; React's `style` props and
  *     the view cube's transform go through the CSSOM, which CSP does not govern.
  *   - `frame-ancestors 'none'`, with `X-Frame-Options: DENY` for older

@@ -265,7 +265,7 @@ describe('a refusal is toned as a decision, not a failure', () => {
     }
   });
 
-  it('reserves the failure tone for CAD Fixer being broken', () => {
+  it('reserves the failure tone for Pybrix being broken', () => {
     /*
      * EXACTLY ONE STATUS. `INTERNAL_FAILURE` means CAD Fixer is broken, and
      * nothing expected may be routed there — the same rule the engine's own
@@ -333,7 +333,7 @@ describe('the listing wording', () => {
     const sentence = describePartSizeRefusal(400_000);
     expect(sentence).toContain('400,000');
     expect(sentence).toContain('250,000');
-    expect(sentence.toLowerCase()).toContain('everything else cad fixer does is unaffected');
+    expect(sentence.toLowerCase()).toContain('everything else pybrix does is unaffected');
   });
 
   it('distinguishes zero, one and many openings', () => {

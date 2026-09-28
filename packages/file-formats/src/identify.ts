@@ -186,7 +186,7 @@ export function identifyFormat(bytes: Uint8Array, fileName: string): FormatIdent
 
     throw importUnsupported(
       ImportRefusal.UnknownFormat,
-      'CAD Fixer could not recognise this file. It reads STL, OBJ and 3MF.',
+      'Pybrix could not recognise this file. It reads STL, OBJ and 3MF.',
       { evidence, claimed: claimed ?? 'none' },
     );
   }
@@ -195,7 +195,7 @@ export function identifyFormat(bytes: Uint8Array, fileName: string): FormatIdent
   if (detected === undefined) {
     throw importUnsupported(
       ImportRefusal.UnknownFormat,
-      'CAD Fixer could not recognise this file. It reads STL, OBJ and 3MF.',
+      'Pybrix could not recognise this file. It reads STL, OBJ and 3MF.',
       { evidence },
     );
   }
@@ -209,7 +209,7 @@ export function identifyFormat(bytes: Uint8Array, fileName: string): FormatIdent
      */
     throw importUnsupported(
       ImportRefusal.ContentExtensionMismatch,
-      `This file is named as ${claimed.toUpperCase()} but its contents are not ${claimed.toUpperCase()}. CAD Fixer will not guess which is right — rename it if the contents are correct.`,
+      `This file is named as ${claimed.toUpperCase()} but its contents are not ${claimed.toUpperCase()}. Pybrix will not guess which is right — rename it if the contents are correct.`,
       { claimed, evidence, detected },
     );
   }

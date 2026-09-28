@@ -1,6 +1,7 @@
 import { createServer, type Server } from 'node:http';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
+  IDENTITY_PATTERN,
   CERT_FAIL_DAYS,
   CERT_WARN_DAYS,
   EXIT_CODE,
@@ -149,6 +150,31 @@ describe('MON-T01–MON-T12 — monitor semantics', () => {
     const report = await runMonitor({ url: f.url, retryDelayMs: 1 });
     expect(stateOf(report, 'M03')).toBe(FAIL);
     await close(f.server);
+  });
+
+  it('MON-T03b: both product titles pass M04 while the rebrand rolls out', async () => {
+    for (const title of ['Pybrix — 3D Print Repair &amp; Editing', 'CAD Fixer']) {
+      const f = await startFixture({ title });
+      const report = await runMonitor({ url: f.url, retryDelayMs: 1 });
+      expect(stateOf(report, 'M04'), title).toBe(PASS);
+      await close(f.server);
+    }
+  });
+
+  it('MON-T03c: the identity must be the product name, not merely contain it', () => {
+    for (const ok of [
+      '<title>Pybrix</title>',
+      '<title>Pybrix — 3D Print Repair &amp; Editing</title>',
+      '<title>CAD Fixer</title>',
+    ])
+      expect(IDENTITY_PATTERN.test(ok), ok).toBe(true);
+    for (const bad of [
+      '<title>Pybrixx</title>',
+      '<title>Welcome to Pybrix</title>',
+      '<title>nginx</title>',
+      '<title>CAD Fixer 2</title>',
+    ])
+      expect(IDENTITY_PATTERN.test(bad), bad).toBe(false);
   });
 
   it('MON-T03: 200 with the wrong page identity is FAIL', async () => {

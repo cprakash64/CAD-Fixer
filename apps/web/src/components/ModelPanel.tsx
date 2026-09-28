@@ -135,7 +135,7 @@ export function ModelExportPanel(): ReactNode {
   return (
     <section className="panel" aria-label="Model export">
       <p className="panel__note">
-        CAD Fixer reads STL, OBJ and 3MF, and writes all three. Files are written on this device;
+        Pybrix reads STL, OBJ and 3MF, and writes all three. Files are written on this device;
         nothing is uploaded.
       </p>
       <div className="panel__actions">

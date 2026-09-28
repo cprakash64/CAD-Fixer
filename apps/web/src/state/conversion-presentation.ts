@@ -169,7 +169,7 @@ export function describeOutput(format: ExportFormat): string {
 
 /** One line under the output grid, so the missing formats are not a mystery. */
 export const OUTPUT_FORMATS_NOTE =
-  'CAD Fixer writes STL, OBJ and 3MF, one format per export. ASCII STL is written one part at a time, from Inspector › Model.';
+  'Pybrix writes STL, OBJ and 3MF, one format per export. ASCII STL is written one part at a time, from Inspector › Model.';
 
 /* ------------------------------------------------------- output size -- */
 
@@ -195,7 +195,7 @@ export function describeOutputSizeKind(kind: OutputSizeKind): string {
     case OutputSizeKind.Exact:
       return 'Exact — binary STL is 84 bytes plus 50 per triangle.';
     case OutputSizeKind.Measured:
-      return 'Measured from the file CAD Fixer wrote for this version of the model.';
+      return 'Measured from the file Pybrix wrote for this version of the model.';
     case OutputSizeKind.Unknown:
       return 'Known once the file is written: this format’s size depends on its content.';
   }
@@ -459,7 +459,7 @@ export const UNIT_ASSERTION_EXPLANATION =
   '25 wide, choosing millimetres records 25 mm and choosing inches records 25 in.';
 
 export const UNIT_ASSERTION_SCOPE =
-  'This applies to the exported file only. The model in CAD Fixer keeps saying nothing about ' +
+  'This applies to the exported file only. The model in Pybrix keeps saying nothing about ' +
   'its units.';
 
 /* ------------------------------------------------------------- severities -- */
@@ -509,7 +509,7 @@ export function verdictSeverity(verdict: ConversionVerdict): ConversionSeverity 
 export function describeVerdict(verdict: ConversionVerdict): string {
   switch (verdict) {
     case ConversionVerdict.Lossless:
-      return 'Nothing CAD Fixer holds for this model will be left out.';
+      return 'Nothing Pybrix holds for this model will be left out.';
     case ConversionVerdict.LossyMetadata:
       return 'The shape is written exactly. Some labels this format cannot store are left out.';
     case ConversionVerdict.LossyStructure:
@@ -600,7 +600,7 @@ export function describeFact(fact: CompatibilityFact): string {
 
     case CompatibilityFeature.GroupMaterialReferences:
       return fact.disposition === CompatibilityDisposition.Preserved
-        ? `${count.toLocaleString()} face group${plural} keep the material name they refer to. CAD Fixer writes no material library, so the names point at nothing.`
+        ? `${count.toLocaleString()} face group${plural} keep the material name they refer to. Pybrix writes no material library, so the names point at nothing.`
         : `${count.toLocaleString()} face group${plural} refer to a material by name, and that name is not written.`;
 
     case CompatibilityFeature.MeshSharing:
@@ -628,10 +628,10 @@ export function describeFact(fact: CompatibilityFact): string {
       );
 
     case CompatibilityFeature.Normals:
-      return `${count.toLocaleString()} mesh${count === 1 ? '' : 'es'} carry stored vertex normals. CAD Fixer does not write them; shading is recalculated from the triangles.`;
+      return `${count.toLocaleString()} mesh${count === 1 ? '' : 'es'} carry stored vertex normals. Pybrix does not write them; shading is recalculated from the triangles.`;
 
     case CompatibilityFeature.TextureCoordinates:
-      return `${count.toLocaleString()} mesh${count === 1 ? '' : 'es'} carry texture coordinates. CAD Fixer does not write them.`;
+      return `${count.toLocaleString()} mesh${count === 1 ? '' : 'es'} carry texture coordinates. Pybrix does not write them.`;
 
     case CompatibilityFeature.OutputSize:
       /*
@@ -646,11 +646,11 @@ export function describeFact(fact: CompatibilityFact): string {
 
     /* --- SOURCE facts. About the file that was OPENED. --- */
     case CompatibilityFeature.SourceTextures:
-      return 'The original file contained texture information that CAD Fixer did not import. Exporting cannot put it back.';
+      return 'The original file contained texture information that Pybrix did not import. Exporting cannot put it back.';
     case CompatibilityFeature.SourceMaterials:
-      return 'The original file contained colour or material definitions that CAD Fixer did not import. Exporting cannot put them back.';
+      return 'The original file contained colour or material definitions that Pybrix did not import. Exporting cannot put them back.';
     case CompatibilityFeature.SourceMaterialLibrary:
-      return 'The original file referred to a separate material library. CAD Fixer never opens it, so its contents were never available to export.';
+      return 'The original file referred to a separate material library. Pybrix never opens it, so its contents were never available to export.';
     case CompatibilityFeature.SourceUnreferencedObjects:
       return 'The original file defined shapes its build never placed. They were not imported, so they are not in the export either.';
     case CompatibilityFeature.SourceComponentHierarchy:
@@ -678,7 +678,7 @@ export const TRANSFORMATIONS_HEADLINE = 'What changes shape to fit this format';
  * unless told otherwise.
  */
 export const CONVERSION_QUALIFIER =
-  'CAD Fixer reads every file it writes back in and checks it describes the same model. That ' +
+  'Pybrix reads every file it writes back in and checks it describes the same model. That ' +
   'is a check on the file, not on the model: self-intersections and wall thickness are still ' +
   'not examined.';
 
@@ -736,7 +736,7 @@ export function describeExportFailure(status: ExportStatus, reason: string | und
        * disagree. Telling someone their model is at fault for that would be a
        * lie with their name on it.
        */
-      return 'CAD Fixer wrote a file it could not read back as the same model, so it was not saved. This is a problem with CAD Fixer, not with your model.';
+      return 'Pybrix wrote a file it could not read back as the same model, so it was not saved. This is a problem with Pybrix, not with your model.';
     case ExportStatus.InternalFailure:
     case ExportStatus.Success:
       return reason === undefined

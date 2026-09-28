@@ -78,7 +78,7 @@ export const HOLE_FILL_SECTION_TITLE = 'Open boundaries';
 
 export const HOLE_FILL_SECTION_SUMMARY =
   'Each open boundary is a rim where the surface stops. Some are intentional — an open tube, a ' +
-  'shell, a vase — and CAD Fixer never closes one unless you choose it.';
+  'shell, a vase — and Pybrix never closes one unless you choose it.';
 
 /**
  * What automatic filling can and cannot attempt, stated on screen.
@@ -129,7 +129,7 @@ export function describeOpeningSize(vertexCount: number): string {
  * Deliberately not a colour either: a user who cannot distinguish the row tints
  * still reads which openings CAD Fixer will attempt.
  */
-export const OPENING_ELIGIBLE = 'CAD Fixer can attempt this opening';
+export const OPENING_ELIGIBLE = 'Pybrix can attempt this opening';
 export const OPENING_INELIGIBLE = 'Automatic fill unavailable for this opening';
 
 /**
@@ -157,7 +157,7 @@ export function describeBoundaryRefusal(refusal: BoundaryLoopRefusal): string {
   switch (refusal) {
     case BoundaryLoopRefusal.BranchedBoundary:
     case BoundaryLoopRefusal.ConvergentBoundary:
-      return 'This rim splits into more than one path, so there is no single opening to close. CAD Fixer will not choose one for you.';
+      return 'This rim splits into more than one path, so there is no single opening to close. Pybrix will not choose one for you.';
     case BoundaryLoopRefusal.NotClosed:
       return 'This rim does not come back to where it started, so it does not enclose an opening.';
     case BoundaryLoopRefusal.RepeatedVertex:
@@ -165,13 +165,13 @@ export function describeBoundaryRefusal(refusal: BoundaryLoopRefusal): string {
     case BoundaryLoopRefusal.TooFewVertices:
       return 'This rim has fewer than three distinct points, so there is no area to close.';
     case BoundaryLoopRefusal.TooManyVertices:
-      return `This rim has more than ${HOLE_FILL_MAX_BOUNDARY_VERTICES.toLocaleString()} points, which is beyond what CAD Fixer's automatic fill is proven to handle.`;
+      return `This rim has more than ${HOLE_FILL_MAX_BOUNDARY_VERTICES.toLocaleString()} points, which is beyond what Pybrix's automatic fill is proven to handle.`;
     case BoundaryLoopRefusal.DegenerateSegment:
       return 'Part of this rim has zero length, so its shape cannot be determined.';
     case BoundaryLoopRefusal.NonFinite:
       return 'A coordinate on this rim is not a usable number, so its shape cannot be determined.';
     case BoundaryLoopRefusal.NonManifoldAdjacency:
-      return 'More than two surfaces meet along this rim, so there is no single side for a new surface to join. CAD Fixer will not guess which one you meant.';
+      return 'More than two surfaces meet along this rim, so there is no single side for a new surface to join. Pybrix will not guess which one you meant.';
     case BoundaryLoopRefusal.AmbiguousOrientation:
       return 'The surfaces around this rim disagree about which way they face, so a new surface has no side to match. Conservative repair can often resolve this first.';
   }
@@ -293,7 +293,7 @@ export function presentHoleFillStatus(status: HoleFillStatus): PresentedHoleFill
         tone: HoleFillTone.Refusal,
         headline: 'This opening is not flat enough to fill automatically',
         detail:
-          'Its rim curves out of a plane, and CAD Fixer only fills flat openings. Closing a ' +
+          'Its rim curves out of a plane, and Pybrix only fills flat openings. Closing a ' +
           'curved rim needs a shaped surface, which this version does not build.',
         retryable: false,
       };
@@ -303,7 +303,7 @@ export function presentHoleFillStatus(status: HoleFillStatus): PresentedHoleFill
         headline: 'This rim is not a single closed loop',
         detail:
           'It branches, or does not return to where it started, so there is no single opening ' +
-          'to close. CAD Fixer will not choose one of the possibilities for you.',
+          'to close. Pybrix will not choose one of the possibilities for you.',
         retryable: false,
       };
     case HoleFillStatus.RefusedNonManifoldBoundary:
@@ -312,7 +312,7 @@ export function presentHoleFillStatus(status: HoleFillStatus): PresentedHoleFill
         headline: 'The surrounding surface is ambiguous',
         detail:
           'More than two surfaces meet along this rim, so a new surface has no single side to ' +
-          'join. CAD Fixer will not guess which one you meant.',
+          'join. Pybrix will not guess which one you meant.',
         retryable: false,
       };
     case HoleFillStatus.RefusedAmbiguousOrientation:
@@ -337,7 +337,7 @@ export function presentHoleFillStatus(status: HoleFillStatus): PresentedHoleFill
       return {
         tone: HoleFillTone.Refusal,
         headline: 'This opening is too complex for the automatic fill',
-        detail: `Its rim has more than ${HOLE_FILL_MAX_BOUNDARY_VERTICES.toLocaleString()} points, which is beyond what CAD Fixer's automatic fill is proven to handle.`,
+        detail: `Its rim has more than ${HOLE_FILL_MAX_BOUNDARY_VERTICES.toLocaleString()} points, which is beyond what Pybrix's automatic fill is proven to handle.`,
         retryable: false,
       };
     case HoleFillStatus.RefusedPartSize:
@@ -350,7 +350,7 @@ export function presentHoleFillStatus(status: HoleFillStatus): PresentedHoleFill
     case HoleFillStatus.NoEarFound:
       return {
         tone: HoleFillTone.Refusal,
-        headline: 'CAD Fixer could not build a surface for this opening',
+        headline: 'Pybrix could not build a surface for this opening',
         detail:
           'The rim shape did not yield a valid set of triangles. Nothing was changed, and no ' +
           'partial surface was kept.',
@@ -364,7 +364,7 @@ export function presentHoleFillStatus(status: HoleFillStatus): PresentedHoleFill
         tone: HoleFillTone.Rejected,
         headline: 'The new surface would pass through this part',
         detail:
-          'CAD Fixer built a surface for this opening, checked it against the part, and found ' +
+          'Pybrix built a surface for this opening, checked it against the part, and found ' +
           'that it would cross the model. It was discarded rather than applied.',
         retryable: false,
       };
@@ -382,7 +382,7 @@ export function presentHoleFillStatus(status: HoleFillStatus): PresentedHoleFill
         tone: HoleFillTone.Rejected,
         headline: 'The new surface contained unusable triangles',
         detail:
-          'Some of the triangles CAD Fixer built had no area, or repeated one another. The ' +
+          'Some of the triangles Pybrix built had no area, or repeated one another. The ' +
           'result was discarded rather than applied.',
         retryable: false,
       };
@@ -391,7 +391,7 @@ export function presentHoleFillStatus(status: HoleFillStatus): PresentedHoleFill
         tone: HoleFillTone.Rejected,
         headline: 'The new surface did not pass checking',
         detail:
-          'CAD Fixer built a surface for this opening and then found a problem with it, so it ' +
+          'Pybrix built a surface for this opening and then found a problem with it, so it ' +
           'was discarded. Your model was not changed.',
         retryable: false,
       };
@@ -403,7 +403,7 @@ export function presentHoleFillStatus(status: HoleFillStatus): PresentedHoleFill
         tone: HoleFillTone.ResourceLimit,
         headline: 'This opening is within the supported shape, but this model is too large',
         detail:
-          'Filling it would need more work than CAD Fixer will do in a browser tab without ' +
+          'Filling it would need more work than Pybrix will do in a browser tab without ' +
           'risking the page. Your model was not changed.',
         retryable: false,
       };
@@ -431,9 +431,9 @@ export function presentHoleFillStatus(status: HoleFillStatus): PresentedHoleFill
     case HoleFillStatus.InternalFailure:
       return {
         tone: HoleFillTone.Failure,
-        headline: 'CAD Fixer could not complete this fill',
+        headline: 'Pybrix could not complete this fill',
         detail:
-          'Something went wrong inside CAD Fixer. Your model was not changed. Trying again is ' +
+          'Something went wrong inside Pybrix. Your model was not changed. Trying again is ' +
           'safe; if it keeps happening, this opening cannot be filled in this version.',
         retryable: true,
       };
@@ -454,9 +454,9 @@ export function presentHoleFillStatus(status: HoleFillStatus): PresentedHoleFill
 export function describeUninventoriedPart(partFaceCount: number): string {
   return (
     `This part has ${partFaceCount.toLocaleString()} triangles. Automatic filling runs on parts ` +
-    `of up to ${HOLE_FILL_MAX_PART_FACES.toLocaleString()}, so CAD Fixer did not look for this ` +
+    `of up to ${HOLE_FILL_MAX_PART_FACES.toLocaleString()}, so Pybrix did not look for this ` +
     `part's open boundaries — it cannot fill any of them. Nothing here says whether the part has ` +
-    `any. Everything else CAD Fixer does is unaffected.`
+    `any. Everything else Pybrix does is unaffected.`
   );
 }
 
@@ -465,7 +465,7 @@ export function describePartSizeRefusal(partFaceCount: number): string {
   return (
     `This part has ${partFaceCount.toLocaleString()} triangles. Automatic filling runs on parts ` +
     `of up to ${HOLE_FILL_MAX_PART_FACES.toLocaleString()}, so that it stays responsive in a ` +
-    `browser. Everything else CAD Fixer does is unaffected.`
+    `browser. Everything else Pybrix does is unaffected.`
   );
 }
 
@@ -480,7 +480,7 @@ export function describePartSizeRefusal(partFaceCount: number): string {
 export function describeTruncatedInventory(shown: number, total: number): string {
   return (
     `Showing the first ${shown.toLocaleString()} of ${total.toLocaleString()} open boundaries. ` +
-    `The rest are not listed; CAD Fixer fills one opening at a time and never all of them.`
+    `The rest are not listed; Pybrix fills one opening at a time and never all of them.`
   );
 }
 

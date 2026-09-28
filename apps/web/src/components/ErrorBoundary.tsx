@@ -63,7 +63,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
      * off-origin, and the privacy architecture does not have an exception for
      * it.
      */
-    console.error('CAD Fixer interface error', error, info.componentStack);
+    console.error('Pybrix interface error', error, info.componentStack);
     this.props.onError?.(error, info);
   }
 
@@ -72,7 +72,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
 
     return (
       <div className="crashed" role="alert" data-testid="app-crashed">
-        <h1 className="crashed__title">CAD Fixer ran into a problem</h1>
+        <h1 className="crashed__title">Pybrix ran into a problem</h1>
         <p className="crashed__body">
           Something in the interface stopped working, so this page cannot continue. Nothing was sent
           anywhere, and no file on your computer was changed.
@@ -89,7 +89,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
             globalThis.location.reload();
           }}
         >
-          Reload CAD Fixer
+          Reload Pybrix
         </button>
       </div>
     );

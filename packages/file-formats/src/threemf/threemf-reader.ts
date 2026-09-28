@@ -481,7 +481,7 @@ function readCoordinate(raw: string | undefined, what: string, objectId: string)
   if (raw === undefined || raw === '' || !Number.isFinite(value)) {
     throw importMalformed(
       ImportRefusal.ThreeMfNonFinite,
-      'This 3MF file contains a vertex coordinate CAD Fixer cannot use.',
+      'This 3MF file contains a vertex coordinate Pybrix cannot use.',
       { objectId: objectId.slice(0, 64), axis: what },
     );
   }
@@ -494,7 +494,7 @@ function readCoordinate(raw: string | undefined, what: string, objectId: string)
   if (!XS_DOUBLE.test(collapsed(raw))) {
     throw importMalformed(
       ImportRefusal.ThreeMfMalformedCoordinate,
-      'This 3MF file contains a vertex coordinate that is not a number CAD Fixer can read.',
+      'This 3MF file contains a vertex coordinate that is not a number Pybrix can read.',
       { objectId: objectId.slice(0, 64), axis: what },
     );
   }
@@ -552,7 +552,7 @@ function parseTransform(raw: string | undefined): PartTransform {
     if (!Number.isFinite(value)) {
       throw importMalformed(
         ImportRefusal.ThreeMfBadTransform,
-        'This 3MF file contains a placement value CAD Fixer cannot use.',
+        'This 3MF file contains a placement value Pybrix cannot use.',
         { token: token.slice(0, 32) },
       );
     }
@@ -567,7 +567,7 @@ function readIndex(raw: string | undefined, objectId: string): number {
   if (raw !== undefined && raw !== '' && !XS_NON_NEGATIVE_INTEGER.test(collapsed(raw))) {
     throw importMalformed(
       ImportRefusal.ThreeMfMalformedTriangleIndex,
-      'This 3MF file contains a triangle index that is not a whole number CAD Fixer can read.',
+      'This 3MF file contains a triangle index that is not a whole number Pybrix can read.',
       { objectId: objectId.slice(0, 64) },
     );
   }
@@ -575,7 +575,7 @@ function readIndex(raw: string | undefined, objectId: string): number {
   if (!Number.isInteger(value)) {
     throw importMalformed(
       ImportRefusal.ThreeMfBadVertexIndex,
-      'This 3MF file contains a triangle index CAD Fixer cannot read.',
+      'This 3MF file contains a triangle index Pybrix cannot read.',
       { objectId: objectId.slice(0, 64) },
     );
   }
@@ -708,7 +708,7 @@ export function createModelXmlParser(
             if (namespace === PRODUCTION_NAMESPACE) continue;
             throw importUnsupported(
               ImportRefusal.ThreeMfUnsupportedExtension,
-              'This 3MF requires a 3MF extension that CAD Fixer does not support yet. Try exporting a plain 3MF, or an STL, from the tool that made it.',
+              'This 3MF requires a 3MF extension that Pybrix does not support yet. Try exporting a plain 3MF, or an STL, from the tool that made it.',
               {
                 extension: (namespace ?? prefix).slice(0, 128),
                 resolved: namespace !== undefined,
@@ -720,7 +720,7 @@ export function createModelXmlParser(
         if (unit !== undefined && !THREE_MF_UNITS.includes(unit)) {
           throw importMalformed(
             ImportRefusal.ThreeMfUnsupportedUnit,
-            'This 3MF file declares a unit CAD Fixer does not recognise.',
+            'This 3MF file declares a unit Pybrix does not recognise.',
             { unit: unit.slice(0, 32) },
           );
         }
@@ -840,7 +840,7 @@ export function createModelXmlParser(
         if (objects.size > limits.maxObjects) {
           throw importTooLarge(
             ImportRefusal.ThreeMfTooManyObjects,
-            `This 3MF file declares ${formatCount(objects.size)} objects; CAD Fixer's limit is ${formatCount(limits.maxObjects)} objects.`,
+            `This 3MF file declares ${formatCount(objects.size)} objects; Pybrix's limit is ${formatCount(limits.maxObjects)} objects.`,
             { declared: objects.size, limit: limits.maxObjects },
           );
         }
@@ -858,7 +858,7 @@ export function createModelXmlParser(
       if (ALTERNATIVES_ELEMENTS.includes(local) && resolvesToAlternatives(name, prefixes)) {
         throw importUnsupported(
           ImportRefusal.ThreeMfModelResolutionUnsupported,
-          'This 3MF offers more than one version of the same object — a full-resolution one and a reduced or obscured one. CAD Fixer cannot tell which you meant, so it will not guess.',
+          'This 3MF offers more than one version of the same object — a full-resolution one and a reduced or obscured one. Pybrix cannot tell which you meant, so it will not guess.',
           { element: local },
         );
       }
@@ -903,7 +903,7 @@ export function createModelXmlParser(
         if (current.positions.length / 3 > limits.maxVerticesPerObject) {
           throw importTooLarge(
             ImportRefusal.ThreeMfTooManyVertices,
-            `An object in this 3MF file contains ${formatCount(current.positions.length / 3)} vertices; CAD Fixer's limit is ${formatCount(limits.maxVerticesPerObject)} vertices for one object.`,
+            `An object in this 3MF file contains ${formatCount(current.positions.length / 3)} vertices; Pybrix's limit is ${formatCount(limits.maxVerticesPerObject)} vertices for one object.`,
             { declared: current.positions.length / 3, limit: limits.maxVerticesPerObject },
           );
         }
@@ -940,7 +940,7 @@ export function createModelXmlParser(
         if (current.triangles.length / 3 > limits.maxTrianglesPerObject) {
           throw importTooLarge(
             ImportRefusal.ThreeMfTooManyTriangles,
-            `An object in this 3MF file contains ${formatCount(current.triangles.length / 3)} triangles; CAD Fixer's limit is ${formatCount(limits.maxTrianglesPerObject)} triangles for one object.`,
+            `An object in this 3MF file contains ${formatCount(current.triangles.length / 3)} triangles; Pybrix's limit is ${formatCount(limits.maxTrianglesPerObject)} triangles for one object.`,
             { declared: current.triangles.length / 3, limit: limits.maxTrianglesPerObject },
           );
         }
@@ -1346,7 +1346,7 @@ async function expandPackageBuild(
     const part = await graph.ensurePart(resolved.key, ModelPartRole.Referenced, (failure) => {
       throw importTooLarge(
         ImportRefusal.ThreeMfTooManyModelParts,
-        `This 3MF would need ${formatCount(failure.loaded + 1)} model parts loaded; CAD Fixer's limit is ${formatCount(failure.limit)}.`,
+        `This 3MF would need ${formatCount(failure.loaded + 1)} model parts loaded; Pybrix's limit is ${formatCount(failure.limit)}.`,
         { loaded: failure.loaded, limit: failure.limit },
       );
     });
@@ -1365,7 +1365,7 @@ async function expandPackageBuild(
     if (depth > limits.maxComponentDepth) {
       throw importTooLarge(
         ImportRefusal.ThreeMfComponentTooDeep,
-        `This 3MF file nests components ${formatCount(depth)} levels deep; CAD Fixer's limit is ${formatCount(limits.maxComponentDepth)} levels.`,
+        `This 3MF file nests components ${formatCount(depth)} levels deep; Pybrix's limit is ${formatCount(limits.maxComponentDepth)} levels.`,
         { depth, limit: limits.maxComponentDepth },
       );
     }
@@ -1462,7 +1462,7 @@ async function expandPackageBuild(
       if (parts.length >= limits.maxParts) {
         throw importTooLarge(
           ImportRefusal.ThreeMfTooManyParts,
-          `This 3MF file expands to more than ${formatCount(limits.maxParts)} parts, which is CAD Fixer's limit.`,
+          `This 3MF file expands to more than ${formatCount(limits.maxParts)} parts, which is Pybrix's limit.`,
           { limit: limits.maxParts, emitted: parts.length },
         );
       }
@@ -1471,7 +1471,7 @@ async function expandPackageBuild(
       if (prospectiveTriangles > limits.maxTotalTriangles) {
         throw importTooLarge(
           ImportRefusal.ThreeMfTooManyTriangles,
-          `Placing every part of this 3MF file would produce ${formatCount(prospectiveTriangles)} triangles in total; CAD Fixer's limit is ${formatCount(limits.maxTotalTriangles)} triangles.`,
+          `Placing every part of this 3MF file would produce ${formatCount(prospectiveTriangles)} triangles in total; Pybrix's limit is ${formatCount(limits.maxTotalTriangles)} triangles.`,
           {
             produced: prospectiveTriangles,
             limit: limits.maxTotalTriangles,
@@ -1483,7 +1483,7 @@ async function expandPackageBuild(
       if (prospectiveVertices > limits.maxTotalVertices) {
         throw importTooLarge(
           ImportRefusal.ThreeMfTooManyVertices,
-          `Placing every part of this 3MF file would produce ${formatCount(prospectiveVertices)} vertices in total; CAD Fixer's limit is ${formatCount(limits.maxTotalVertices)} vertices.`,
+          `Placing every part of this 3MF file would produce ${formatCount(prospectiveVertices)} vertices in total; Pybrix's limit is ${formatCount(limits.maxTotalVertices)} vertices.`,
           {
             produced: prospectiveVertices,
             limit: limits.maxTotalVertices,
@@ -1671,7 +1671,7 @@ async function resolveRootModelEntry(
 
   throw importMalformed(
     ImportRefusal.ThreeMfAmbiguousRootModelPart,
-    `This 3MF contains ${formatCount(models.length)} model parts and does not say which one is the main one, so CAD Fixer cannot tell which model you meant.`,
+    `This 3MF contains ${formatCount(models.length)} model parts and does not say which one is the main one, so Pybrix cannot tell which model you meant.`,
     { modelParts: models.length },
   );
 }
@@ -2123,7 +2123,7 @@ async function readThreeMfPackageUnguarded(
   const rootPart = await graph.ensurePart(graph.rootKey, ModelPartRole.Root, (failure) => {
     throw importTooLarge(
       ImportRefusal.ThreeMfTooManyModelParts,
-      `This 3MF would need ${formatCount(failure.loaded + 1)} model parts loaded; CAD Fixer's limit is ${formatCount(failure.limit)}.`,
+      `This 3MF would need ${formatCount(failure.loaded + 1)} model parts loaded; Pybrix's limit is ${formatCount(failure.limit)}.`,
       { loaded: failure.loaded, limit: failure.limit },
     );
   });
@@ -2165,7 +2165,7 @@ async function readThreeMfPackageUnguarded(
     if (partUnit === rootUnit) continue;
     throw importUnsupported(
       ImportRefusal.ThreeMfInconsistentModelPartUnits,
-      'This 3MF stores its objects in several parts that declare different units. CAD Fixer keeps one unit for a model and never rescales geometry, so it cannot combine them.',
+      'This 3MF stores its objects in several parts that declare different units. Pybrix keeps one unit for a model and never rescales geometry, so it cannot combine them.',
       {
         rootUnit: rootUnit.slice(0, 32),
         partUnit: partUnit.slice(0, 32),
@@ -2225,7 +2225,7 @@ async function readThreeMfPackageUnguarded(
     warnings.push(
       diagnostic(
         'THREEMF_TEXTURES_NOT_IMPORTED',
-        'This 3MF file contains textures. CAD Fixer imports geometry only: the textures were not read, and nothing was downloaded.',
+        'This 3MF file contains textures. Pybrix imports geometry only: the textures were not read, and nothing was downloaded.',
       ),
     );
   }
@@ -2234,7 +2234,7 @@ async function readThreeMfPackageUnguarded(
     warnings.push(
       diagnostic(
         'THREEMF_MATERIALS_NOT_IMPORTED',
-        'This 3MF file contains colour or material definitions. CAD Fixer keeps the reference each part names but does not interpret them, so colours are not shown.',
+        'This 3MF file contains colour or material definitions. Pybrix keeps the reference each part names but does not interpret them, so colours are not shown.',
       ),
     );
   }

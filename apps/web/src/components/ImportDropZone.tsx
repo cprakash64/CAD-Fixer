@@ -74,6 +74,9 @@ export function ImportDropZone({ children }: { readonly children: ReactNode }): 
                 extension.replace('.', '').toUpperCase(),
               ).join(' · ')}
             </p>
+            <p className="import__tagline" data-testid="drop-tagline">
+              Repair, convert, split and texture — locally in your browser.
+            </p>
             {/* Drag and drop is never the only route in: this button and the top
                 bar's Open button keep intake reachable by keyboard and by
                 assistive technology. */}

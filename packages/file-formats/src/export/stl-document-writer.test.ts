@@ -174,7 +174,7 @@ describe('STL-WD01 — one identity part', () => {
   it('writes no user text into the fixed 80-byte header', async () => {
     const written = await exportStl(documentOf([{ mesh: TRIANGLE, name: 'secret/project/path' }]));
     const inspection = inspectBinaryStl(written.bytes);
-    expect(inspection.header).toBe('CAD Fixer binary STL');
+    expect(inspection.header).toBe('Pybrix binary STL');
     expect(inspection.header).not.toContain('secret');
   });
 });

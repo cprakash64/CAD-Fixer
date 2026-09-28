@@ -3,6 +3,16 @@ import { useWorkspaceState } from '../state/store-context';
 import { useFileIntake } from './FileIntake';
 import { WorkflowNav } from './WorkflowNav';
 import { WorkspaceSwitcher } from './WorkspaceSwitcher';
+import {
+  BRAND_LOCKUP_HEIGHT,
+  BRAND_LOCKUP_URL,
+  BRAND_LOCKUP_WIDTH,
+  BRAND_TILE_URL,
+  PRODUCT_NAME,
+  PRODUCT_STATUS,
+  PRODUCT_SUMMARY,
+  PRODUCT_VERSION,
+} from './shell/brand';
 import { Icon } from './shell/Icon';
 import { CompactSwitch, IconButton } from './shell/primitives';
 import { useOpenConvertWorkspace } from './shell/open-convert';
@@ -33,8 +43,22 @@ export function TopBar(): ReactNode {
           rather than on whatever space the left-hand controls leave over. */}
       <div className="topbar__start">
         <div className="topbar__brand">
-          <BrandMark />
-          <h1 className="topbar__title">CAD Fixer</h1>
+          {/* Decorative: the heading beside it carries the name, so the image
+              is not announced a second time. Width and height reserve its box
+              before it decodes, so the bar never shifts. */}
+          <img
+            className="topbar__mark"
+            src={BRAND_TILE_URL}
+            width={26}
+            height={26}
+            alt=""
+            decoding="async"
+            data-testid="brand-mark"
+          />
+          <h1 className="topbar__title">{PRODUCT_NAME}</h1>
+          <span className="topbar__status" data-testid="release-stage">
+            {PRODUCT_STATUS}
+          </span>
         </div>
         <span className="topbar__divider topbar__divider--brand" aria-hidden="true" />
 
@@ -101,29 +125,6 @@ export function TopBar(): ReactNode {
   );
 }
 
-/** The product mark. Decorative: the heading beside it carries the name. */
-function BrandMark(): ReactNode {
-  return (
-    <svg className="topbar__mark" width="24" height="24" viewBox="0 0 24 24" aria-hidden="true">
-      <rect x="2" y="2" width="20" height="20" rx="6" fill="var(--cad-accent)" />
-      <path
-        d="M8 9.5 12 7l4 2.5v5L12 17l-4-2.5z"
-        fill="none"
-        stroke="var(--cad-on-accent)"
-        strokeWidth="1.8"
-        strokeLinejoin="round"
-      />
-      <path
-        d="M8 9.5 12 12l4-2.5M12 12v5"
-        fill="none"
-        stroke="var(--cad-on-accent)"
-        strokeWidth="1.8"
-        strokeLinejoin="round"
-      />
-    </svg>
-  );
-}
-
 /**
  * How to drive the viewport. Static facts about the camera controls, which are
  * OrbitControls' mapping plus the navigation mode in the viewport toolbar.
@@ -173,9 +174,29 @@ function HelpMenu(): ReactNode {
               <dd>Pan tool in the viewport</dd>
             </div>
           </dl>
-          <p className="menu__note">
-            Models are read, checked and written on this device. Nothing is uploaded.
-          </p>
+          {/* ABOUT — the one place the full lockup appears. Its wordmark is
+              navy, so it sits on the light brand plate rather than on the dark
+              menu. Standalone, so the image itself is named. */}
+          <section className="about" aria-label={`About ${PRODUCT_NAME}`} data-testid="about">
+            <div className="about__plate">
+              <img
+                className="about__lockup"
+                src={BRAND_LOCKUP_URL}
+                width={BRAND_LOCKUP_WIDTH}
+                height={BRAND_LOCKUP_HEIGHT}
+                alt={PRODUCT_NAME}
+                decoding="async"
+                data-testid="about-lockup"
+              />
+            </div>
+            <p className="about__status" data-testid="about-status">
+              {PRODUCT_STATUS} · {PRODUCT_VERSION}
+            </p>
+            <p className="about__summary">{PRODUCT_SUMMARY}</p>
+            <p className="menu__note">
+              Models are processed locally in your browser. Nothing is uploaded.
+            </p>
+          </section>
           {/* The licences of the third-party code and artwork this build
               ships, as a static file beside the application. Relative, so it
               resolves under any deployment path. */}

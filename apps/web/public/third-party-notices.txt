@@ -1,4 +1,4 @@
-CAD Fixer — third-party notices for software and assets shipped in this build
+Pybrix — third-party notices for software and assets shipped in this build
 
 This file accompanies the third-party code, WebAssembly and artwork the
 application ships: the fonts and icons (sections 1-2), the JavaScript libraries

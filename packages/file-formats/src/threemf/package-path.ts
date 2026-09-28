@@ -237,13 +237,13 @@ export function resolvePackageModelPath(
        */
       throw importUnsupported(
         ImportRefusal.ThreeMfModelPartNotAModel,
-        'This 3MF refers to a part that is not a model, and CAD Fixer reads geometry only.',
+        'This 3MF refers to a part that is not a model, and Pybrix reads geometry only.',
         { reasonDetail: canonical.refusal },
       );
     }
     throw importMalformed(
       ImportRefusal.ThreeMfMalformedModelPartPath,
-      'This 3MF contains a reference to another part of the package that CAD Fixer will not follow.',
+      'This 3MF contains a reference to another part of the package that Pybrix will not follow.',
       { reasonDetail: canonical.refusal },
     );
   }

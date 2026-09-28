@@ -301,7 +301,7 @@ export class XmlStreamScanner {
     if (this.buffer.length > this.streamLimits.maxTagLength) {
       throw importTooLarge(
         ImportRefusal.XmlTagTooLong,
-        `This 3MF file contains an XML tag longer than ${formatCount(this.streamLimits.maxTagLength)} characters, which is CAD Fixer's limit for one tag.`,
+        `This 3MF file contains an XML tag longer than ${formatCount(this.streamLimits.maxTagLength)} characters, which is Pybrix's limit for one tag.`,
         { limit: this.streamLimits.maxTagLength },
       );
     }

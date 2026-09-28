@@ -80,7 +80,7 @@ export const REPAIR_EXCLUSIONS: readonly string[] = Object.freeze([
   'Merge vertices that are near each other but not identical. No tolerance is used anywhere in this workflow.',
   'Close boundary loops or openings in the surface. An opening may be exactly what the model is meant to have.',
   'Resolve non-manifold edges or vertices. They are reported, and they can block operations, but they are never rewritten.',
-  'Detect or resolve self-intersections. Nothing in CAD Fixer checks for these yet.',
+  'Detect or resolve self-intersections. Nothing in Pybrix checks for these yet.',
   'Decide which side of the surface is outside. Winding is made consistent relative to its neighbours, not turned outward.',
   'Determine whether a model will print. Wall thickness is not measured and self-intersections are not checked.',
 ]);
@@ -114,7 +114,7 @@ export const REPAIR_QUALIFIER = 'Self-intersections and wall thickness have not 
 export const REPAIR_ISOLATION_HEADLINE = 'Conservative repair is unavailable in this context';
 
 export const REPAIR_ISOLATION_DETAIL =
-  'Repair needs a cancellation signal it can act on while the work is running, which requires a cross-origin isolated page (COOP and COEP). This page is not cross-origin isolated, so CAD Fixer will not offer a repair it could not stop. Import, Mesh Health analysis and export are unaffected.';
+  'Repair needs a cancellation signal it can act on while the work is running, which requires a cross-origin isolated page (COOP and COEP). This page is not cross-origin isolated, so Pybrix will not offer a repair it could not stop. Import, Mesh Health analysis and export are unaffected.';
 
 /* ------------------------------------------------------------- operations -- */
 
@@ -146,7 +146,7 @@ export const REPAIR_OPERATION_COPY: Readonly<Record<RepairOperation, RepairOpera
   },
   [RepairOperation.UnifyWinding]: {
     label: 'Unify relative face winding',
-    help: 'Makes neighbouring triangles traverse their shared edge in opposite directions, so the surface is consistently wound. The choice is RELATIVE: the lowest-numbered surviving triangle in each component keeps its orientation, and CAD Fixer never decides which side is outside.',
+    help: 'Makes neighbouring triangles traverse their shared edge in opposite directions, so the surface is consistently wound. The choice is RELATIVE: the lowest-numbered surviving triangle in each component keeps its orientation, and Pybrix never decides which side is outside.',
   },
 };
 
@@ -261,7 +261,7 @@ function presentNotNeeded(entry: RepairOperationDecision): RepairDecisionPresent
       reason:
         entry.targetedCount > 0
           ? `Mesh Health reports ${formatCount(entry.targetedCount, 'instance')} of this in your model, but the earlier operations in this plan resolve all of them — the triangles that survive leave nothing for this operation to do.`
-          : 'CAD Fixer checked for this and found none.',
+          : 'Pybrix checked for this and found none.',
       selectable: true,
     };
   }
@@ -293,15 +293,15 @@ function describeApplicable(entry: RepairOperationDecision): string {
 export function describeReason(entry: RepairOperationDecision): string {
   switch (entry.reason) {
     case RepairReason.NoDefectPresent:
-      return 'CAD Fixer checked for this and found none.';
+      return 'Pybrix checked for this and found none.';
     case RepairReason.NotRequested:
       return 'This operation is not selected, so it was left out of the plan.';
     case RepairReason.NonManifoldEdgePresent:
-      return 'More than two triangles meet along at least one edge in this component. Relative winding cannot be assigned without choosing arbitrarily which pair of triangles are neighbours, so CAD Fixer leaves it unchanged.';
+      return 'More than two triangles meet along at least one edge in this component. Relative winding cannot be assigned without choosing arbitrarily which pair of triangles are neighbours, so Pybrix leaves it unchanged.';
     case RepairReason.NonManifoldVertexPresent:
       return 'Triangles around at least one vertex in this component do not form a single continuous fan. Relative winding cannot be propagated across that pinch conservatively.';
     case RepairReason.NonOrientableComponent:
-      return 'This component cannot be given one consistent set of face orientations. Any answer would require an arbitrary choice, so CAD Fixer makes none.';
+      return 'This component cannot be given one consistent set of face orientations. Any answer would require an arbitrary choice, so Pybrix makes none.';
     case RepairReason.RemovalIntroducesBoundary:
       return 'Removing these triangles would leave the surface open where it is currently closed. That is a change to the model’s shape, not a cleanup, so it is refused.';
     case RepairReason.RemovalIntroducesNonManifold:
@@ -311,11 +311,11 @@ export function describeReason(entry: RepairOperationDecision): string {
     case RepairReason.RemovalIntroducesWindingConflict:
       return 'Removing these triangles would leave neighbouring triangles disagreeing about winding where they currently agree.';
     case RepairReason.DuplicatesSpanGroups:
-      return 'Identical triangles occur in different mesh groups. Removing one would discard a group assignment the file records, so CAD Fixer leaves them unchanged.';
+      return 'Identical triangles occur in different mesh groups. Removing one would discard a group assignment the file records, so Pybrix leaves them unchanged.';
     case RepairReason.OperationNotImplemented:
       return 'This operation is not part of conservative repair.';
     case RepairReason.ResourceLimitExceeded:
-      return 'This repair would need more memory than CAD Fixer’s safety limit allows on this device.';
+      return 'This repair would need more memory than Pybrix’s safety limit allows on this device.';
   }
 }
 
@@ -349,7 +349,7 @@ export function presentAcceptance(
         headline: 'Repair validated — not applied yet',
         qualifier: REPAIR_QUALIFIER,
         detail:
-          'CAD Fixer re-analysed the proposed result and confirmed the selected issues improved and nothing else regressed. Nothing has changed yet: review the preview, then apply or discard it.',
+          'Pybrix re-analysed the proposed result and confirmed the selected issues improved and nothing else regressed. Nothing has changed yet: review the preview, then apply or discard it.',
         previewable: true,
         retryable: false,
       };
@@ -366,7 +366,7 @@ export function presentAcceptance(
       return {
         headline: 'Proposed repair rejected',
         qualifier: REPAIR_QUALIFIER,
-        detail: `CAD Fixer built a proposed result, re-analysed it, and refused it: ${listRegressions(regressions)} Your model is unchanged.`,
+        detail: `Pybrix built a proposed result, re-analysed it, and refused it: ${listRegressions(regressions)} Your model is unchanged.`,
         previewable: false,
         retryable: true,
       };
@@ -400,7 +400,7 @@ export function presentAcceptance(
       return {
         headline: 'Repair did not complete',
         qualifier: REPAIR_QUALIFIER,
-        detail: 'CAD Fixer could not finish this repair. Your model is unchanged.',
+        detail: 'Pybrix could not finish this repair. Your model is unchanged.',
         previewable: false,
         retryable: true,
       };
@@ -415,7 +415,7 @@ export function presentAcceptance(
  * again would suggest their file is the problem when the limit is ours.
  */
 export const RESOURCE_LIMIT_DETAIL =
-  'This repair needs more local memory than CAD Fixer’s current safety limit allows, so it was ' +
+  'This repair needs more local memory than Pybrix’s current safety limit allows, so it was ' +
   'refused before anything was allocated. Your model is still loaded and can be viewed, ' +
   'analysed and exported as usual.';
 
@@ -590,7 +590,7 @@ export function buildMetricRows(validation: RepairValidation): readonly RepairMe
  */
 export const BOUNDARY_DELTA_NOTE =
   'Removing a duplicate triangle can reveal boundary edges that the duplicate was hiding: two ' +
-  'coincident triangles pair each other’s edges and look closed. CAD Fixer predicted this exact ' +
+  'coincident triangles pair each other’s edges and look closed. Pybrix predicted this exact ' +
   'count before rebuilding and confirmed it afterwards.';
 
 export function describeVolumeComparison(comparison: VolumeComparison): string {

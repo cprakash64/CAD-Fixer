@@ -68,6 +68,10 @@ describe('ErrorBoundary', () => {
     expect(panel.textContent.length).toBeGreaterThan(40);
     // And a way out.
     expect(screen.getByTestId('app-crashed-reload')).toBeInTheDocument();
+    // BRAND-01: the recovery screen names the product it belongs to.
+    expect(panel).toHaveTextContent('Pybrix ran into a problem');
+    expect(screen.getByTestId('app-crashed-reload')).toHaveTextContent('Reload Pybrix');
+    expect(panel.textContent).not.toMatch(/cad[\s_-]*fixer/i);
   });
 
   it('announces the failure rather than leaving it silent', () => {

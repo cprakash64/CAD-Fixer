@@ -197,7 +197,7 @@ function reportFor(
 function requireInterruptible(context: OperationContext): void {
   if (context.interruptible) return;
   throw invalidState(
-    'Conservative repair needs an interruptible cancellation signal, which this context cannot provide. CAD Fixer must be served cross-origin isolated (COOP and COEP) so SharedArrayBuffer is available.',
+    'Conservative repair needs an interruptible cancellation signal, which this context cannot provide. Pybrix must be served cross-origin isolated (COOP and COEP) so SharedArrayBuffer is available.',
   );
 }
 

@@ -8,7 +8,7 @@ bounded outline, final piece volumes).
 
 ## Capability matrix
 
-| Reference feature                                                             | CAD Fixer                                                                                  |
+| Reference feature                                                             | Pybrix                                                                                     |
 | ----------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
 | Planar cut                                                                    | **Yes** — Manifold Boolean in a disposable nested worker, validated closed/manifold pieces |
 | Dovetail / zigzag cut, fit to bed                                             | No — not offered                                                                           |
@@ -23,7 +23,7 @@ bounded outline, final piece volumes).
 | Part A / Part B colouring                                                     | **Yes** — presentation-only tints of the real piece ids                                    |
 | Part picking and selection                                                    | **Yes** — existing raycast picking of real part ids                                        |
 | Per-part bounds, triangles, volume                                            | **Yes** — descriptors; volumes from the engine's metrics                                   |
-| Bed fit / printer profile                                                     | No — CAD Fixer has no printer profiles                                                     |
+| Bed fit / printer profile                                                     | No — Pybrix has no printer profiles                                                        |
 | Dowel pin (single)                                                            | **Round pin**, 1–4, automatic placement                                                    |
 | Double dowel                                                                  | Partial — two round pins (count 2); no fixed anti-rotation pattern                         |
 | Dovetail (sliding)                                                            | **Yes** — one straight dovetail, 0° / 90°                                                  |

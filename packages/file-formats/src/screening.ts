@@ -124,7 +124,7 @@ export function screenFile(
     return {
       accepted: false,
       reason: FileRejectionReason.TooLarge,
-      message: `This file is ${formatBytes(input.size)}; CAD Fixer's intake limit is ${formatBytes(maxBytes)}.`,
+      message: `This file is ${formatBytes(input.size)}; Pybrix's intake limit is ${formatBytes(maxBytes)}.`,
     };
   }
 

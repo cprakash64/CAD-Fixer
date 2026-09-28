@@ -12,7 +12,7 @@ import { isAppOrigin } from './app-origin';
 test('the application opens and renders the shell', async ({ page }) => {
   await page.goto('/');
 
-  await expect(page.getByRole('heading', { level: 1, name: 'CAD Fixer' })).toBeVisible();
+  await expect(page.getByRole('heading', { level: 1, name: 'Pybrix' })).toBeVisible();
   await expect(page.getByRole('region', { name: '3D workspace' })).toBeVisible();
   await expect(page.getByTestId('drop-zone')).toBeVisible();
 });

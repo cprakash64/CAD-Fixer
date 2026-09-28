@@ -1,11 +1,18 @@
-# CAD Fixer — Project Rules
+# Pybrix — Project Rules
 
 Read this before changing anything. These rules exist to prevent architectural
 drift across sessions.
 
 ## What this is
 
-**CAD Fixer is production software, not a prototype.** It is a local-first,
+**Product display name: Pybrix** (formerly CAD Fixer; BRAND-01). Legacy
+repository, package (`@cadfixer/*`), environment-variable (`CADFIXER_*`), CSS
+class, test id, worker, protocol and deployment identifiers (`/var/www/cad-fixer`,
+the nginx files, the GitHub repository) KEEP their CAD Fixer naming until a
+separately qualified infrastructure migration. Invariants below that were written
+before BRAND-01 say "CAD Fixer"; they mean this product. See "Brand invariants".
+
+**Pybrix is production software, not a prototype.** It is a local-first,
 browser-based tool for repairing and preparing 3D printing meshes, intended to
 become a commercial product. Code quality, correctness, and privacy guarantees
 matter more than moving fast.
@@ -1429,6 +1436,35 @@ validated`, and the qualifier naming what was NOT examined travels with it.
   runtime dependency of the main-thread bundle. `packages/geometry-runtime/src/repair.ts`
   mirrors them and two tests keep the mirror honest — one at compile time, one on
   the runtime values.
+
+## Brand invariants (BRAND-01)
+
+- **THE DISPLAY NAME IS `Pybrix`, EXACTLY.** Not PYBRIX, PyBrix or "Pybrix CAD".
+  It lives in `apps/web/src/components/shell/brand.ts`; nothing restates it.
+- **NEVER MASS-RENAME `cad-fixer` / `cadfixer` / `CADFIXER_`.** Those are
+  identifiers. Only user-visible text changes, and it was changed inside string
+  tokens only — never in comments, never in identifiers. Historical documents
+  (release notes v0.1–v0.4, stage reports, ADRs) stay historically accurate.
+- **BRAND ASSETS:** production derivatives in `apps/web/src/brand/` (Vite
+  fingerprints them into `/assets/`: same-origin, immutable, `img-src 'self'`);
+  the untouched originals in `apps/web/brand-source/`, never shipped. The
+  release packager refuses an artifact without the Pybrix icons, and HV-C21
+  asserts the shipped brand set, the Pybrix title and that no deployable file
+  holds a local filesystem path.
+- **THE LOCKUPS ARE NEVER PLACED ON THE DARK CHROME.** Their navy wordmark is
+  illegible there. Dark surfaces get the mark on its white tile beside HTML text.
+- **BRAND BLUE HAS TWO ROLES AND NEVER MEANS STATUS.** `--cad-accent` for marks
+  on dark, `--cad-accent-fill` for a filled primary with white text. Warning,
+  error, success and the workspace colours are untouched.
+- **EXPORTS STAMP `Pybrix`, NEVER A USER'S NAME:** the binary STL header, the
+  ASCII solid name `pybrix` and the OBJ header comment. File names still come
+  from the model.
+- **THE PRODUCTION MONITOR ACCEPTS BOTH TITLES** (`IDENTITY_PATTERN`), because it
+  runs from `main` every fifteen minutes and `main` moves before the site. Drop
+  the CAD Fixer alternative once a Pybrix release is live.
+- **NO PERSISTED SETTINGS EXIST** (no `localStorage`, no `sessionStorage`), so
+  the rebrand migrated none. If one is ever added, its key is an identifier and
+  is not renamed with the brand.
 
 ## Things that will trip you up
 

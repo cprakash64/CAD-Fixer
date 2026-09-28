@@ -142,7 +142,7 @@ export async function writeObjDocument(
    * file. Every string that DOES come from the document goes through
    * `objRoundTripName`, which strips exactly that.
    */
-  sink.write('# Written by CAD Fixer. Geometry only: no materials, no textures.\n');
+  sink.write('# Written by Pybrix. Geometry only: no materials, no textures.\n');
 
   let anyBaked = false;
   let anyGroups = false;

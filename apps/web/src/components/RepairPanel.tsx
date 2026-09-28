@@ -289,7 +289,7 @@ export function RepairPanel(): ReactNode {
           </button>
           {isCancelling ? (
             <p className="panel__note" role="status" data-testid="repair-cancelling">
-              Cancelling… CAD Fixer has told the repair to stop and is waiting for it to confirm.
+              Cancelling… Pybrix has told the repair to stop and is waiting for it to confirm.
               Nothing has been changed.
             </p>
           ) : null}
@@ -440,7 +440,7 @@ function OperationList({
               >
                 <span className="repair__operation-name">{copy.label}</span>
                 <p className="repair__operation-reason">
-                  CAD Fixer did not report a decision for this operation.
+                  Pybrix did not report a decision for this operation.
                 </p>
               </li>
             );

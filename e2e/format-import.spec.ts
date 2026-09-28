@@ -243,7 +243,7 @@ test.describe('hostile files are refused in the browser, exactly as in the reade
       'bomb.3mf',
       zipCompressionBomb,
       // The ratio and the ceiling, both in the sentence — Stage 6B-C1.
-      /expands at [\d,]+:1; CAD Fixer's compression-ratio limit is 200:1/i,
+      /expands at [\d,]+:1; Pybrix's compression-ratio limit is 200:1/i,
     ],
     ['an encrypted entry', 'locked.3mf', zipEncryptedEntry, /encrypted/i],
     ['a DOCTYPE declaration', 'xxe.3mf', threeMfWithDoctype, /document type definition/i],
@@ -286,7 +286,10 @@ test.describe('untrusted names render as text, never as markup', () => {
       // ...and the handler never ran: no element was created, and the payload's
       // own effect did not fire.
       expect(await page.title()).not.toBe('XSS');
-      expect(await page.locator('img').count()).toBe(0);
+      // The only image on the page is the product's own header mark (BRAND-01);
+      // the payload created none, and no element anywhere carries a handler.
+      expect(await page.locator('img:not([data-testid="brand-mark"])').count()).toBe(0);
+      expect(await page.locator('[onerror]').count()).toBe(0);
       // The whole payload survives as one text node rather than being parsed.
       const rendered = await page
         .getByTestId('part-option-part-1')
@@ -361,7 +364,7 @@ test('a failed 3MF import leaves the loaded model untouched', async ({ page }) =
   await openFile(page, 'bomb.3mf', zipCompressionBomb());
   await expect
     .poll(async () => statusText(page), { timeout: 60_000 })
-    .toMatch(/expands at [\d,]+:1; CAD Fixer's compression-ratio limit is 200:1/i);
+    .toMatch(/expands at [\d,]+:1; Pybrix's compression-ratio limit is 200:1/i);
 
   await expect(page.getByTestId('fact-parts')).toHaveText('2');
   expect((await readScene(page)).modelObjects).toBe(2);
@@ -482,7 +485,7 @@ test.describe('a document that cannot be held is refused without disturbing the 
     await openFile(page, 'toomany.3mf', threeMfPlacements(4_097));
     await expect
       .poll(async () => statusText(page), { timeout: 120_000 })
-      .toMatch(/expands to more than 4,096 parts, which is CAD Fixer's limit/i);
+      .toMatch(/expands to more than 4,096 parts, which is Pybrix's limit/i);
 
     // THE PREVIOUS MODEL IS UNTOUCHED: same parts, same selection, same scene.
     await expect(page.getByTestId('fact-parts')).toHaveText('2');
@@ -515,7 +518,7 @@ test.describe('a document that cannot be held is refused without disturbing the 
        * to learn the ceiling was about expanded bytes.
        */
       .toMatch(
-        /on disk but expands to [\d.]+ [KMG]iB in total; CAD Fixer's total expansion limit is 512 MiB/i,
+        /on disk but expands to [\d.]+ [KMG]iB in total; Pybrix's total expansion limit is 512 MiB/i,
       );
 
     await expect(page.getByTestId('fact-parts')).toHaveText('2');

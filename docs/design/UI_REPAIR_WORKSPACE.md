@@ -2,17 +2,17 @@
 
 UI-02 rebuilt the Repair workspace around the PrintPrep reference's first two
 screens — a findings list with a health summary, an occurrence navigator, a
-viewport issue HUD and an inspector selection — on top of CAD Fixer's existing
+viewport issue HUD and an inspector selection — on top of Pybrix's existing
 analysis, conservative repair and single-boundary fill. No geometry algorithm
 changed.
 
 ## Decisions taken with the product owner
 
-- **No Simplify / reduce section, and the workspace stays "Repair".** CAD Fixer
+- **No Simplify / reduce section, and the workspace stays "Repair".** Pybrix
   has no decimation engine (`docs/repair/REPAIR_ARCHITECTURE.md` lists
   simplification as out of scope). Naming the workspace "Repair & Optimize"
   and promising a triangle-count reduction would be a false claim.
-- **CAD Fixer's vocabulary, the reference's layout.** "Open boundaries", not
+- **Pybrix's vocabulary, the reference's layout.** "Open boundaries", not
   holes; "Winding conflicts", not flipped normals; no "watertight", no "Fix
   all". The forbidden-term lists in `topology-presentation.ts` and
   `hole-fill-presentation.ts` are unchanged and a new test holds this module to
@@ -20,7 +20,7 @@ changed.
 
 ## Capability matrix
 
-| Reference row         | CAD Fixer                                              | Occurrences                     |
+| Reference row         | Pybrix                                                 | Occurrences                     |
 | --------------------- | ------------------------------------------------------ | ------------------------------- |
 | Open edges / holes    | **Open boundaries** — boundary components, exact       | openings inventory (≤ 256), rim |
 | Non-manifold edges    | exact                                                  | sampled edges                   |

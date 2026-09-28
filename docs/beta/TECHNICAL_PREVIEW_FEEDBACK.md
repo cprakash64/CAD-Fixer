@@ -1,4 +1,4 @@
-# Sending feedback on the CAD Fixer Technical Preview
+# Sending feedback on the Pybrix Technical Preview
 
 **<https://fixcad.thelunai.com>**
 
@@ -7,7 +7,7 @@ programmer to file useful feedback.
 
 ## Why we have to ask
 
-CAD Fixer has **no analytics and no telemetry**. Your model is processed
+Pybrix has **no analytics and no telemetry**. Your model is processed
 entirely in your browser and never reaches a server, which is the whole point of
 the product — and it also means **we genuinely cannot see what happened to
 you.** If you do not tell us, we will not know.
@@ -25,9 +25,9 @@ GitHub issues are **public**. Treat anything you attach there as published.
 
 ## The single most useful thing you can send
 
-**The exact message CAD Fixer showed you.**
+**The exact message Pybrix showed you.**
 
-CAD Fixer refuses work deliberately and explains why — for example that an
+Pybrix refuses work deliberately and explains why — for example that an
 opening is not flat enough to fill, or that a file exceeds a limit. That wording
 identifies the precise decision the software made. Copy it exactly, rather than
 paraphrasing it.
@@ -75,7 +75,7 @@ Triangle count (if shown):
 Operation:
 Expected:
 Actual:
-Exact message CAD Fixer showed:
+Exact message Pybrix showed:
 Steps to reproduce:
 If exported — did it reopen, and where?:
 Screenshot attached?:
@@ -95,12 +95,12 @@ preview:
 - **Opening fill handles flat openings only**, one at a time. There is no
   "fill everything" button on purpose.
 - **Self-intersections are reported, not repaired.**
-- **CAD Fixer never says a model is "printable" or "watertight"**, because it
+- **Pybrix never says a model is "printable" or "watertight"**, because it
   does not check wall thickness or printability.
 - **Undo is one step**, and there is no redo.
 - Splitting, hollowing, texturing, booleans and remeshing are not implemented.
 
-**A refusal is usually CAD Fixer working correctly**, not a bug — it declines
+**A refusal is usually Pybrix working correctly**, not a bug — it declines
 rather than guessing at your geometry. Refusals are still worth reporting: if
 the software keeps refusing something you genuinely need, that is exactly the
 evidence that should shape what gets built next.

@@ -8,7 +8,7 @@ no writer, reader or policy.
 
 ## Capability matrix
 
-What CAD Fixer can actually do, checked against the code rather than the
+What Pybrix can actually do, checked against the code rather than the
 reference's cards.
 
 | Format   | Import                        | Export (whole document)               | Multi-object               | Materials / colours / textures                                | Metadata         | Units                                                              | Axis | Binary / ASCII                                 | Tests                                         |
@@ -21,7 +21,7 @@ reference's cards.
 | GLB/glTF | no                            | no                                    | —                          | —                                                             | —                | —                                                                  | —    | —                                              | —                                             |
 | FBX      | no                            | no                                    | —                          | —                                                             | —                | —                                                                  | —    | —                                              | —                                             |
 
-Batch-safe: nothing. CAD Fixer holds ONE document and `DocumentExportService`
+Batch-safe: nothing. Pybrix holds ONE document and `DocumentExportService`
 runs one export at a time.
 
 ## Reference cards and features, reconciled

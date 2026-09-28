@@ -277,10 +277,16 @@
   justify-self: start;
 }
 
+/*
+ * MARK + NAME + STATUS (BRAND-01). The mark is the white tile raster, drawn at
+ * its reserved 26 px from a 96 px source, so it is sharp at 3x and never
+ * stretched. The status is a quiet chip: secondary to the name, and dropped
+ * first when the bar gets tight.
+ */
 .topbar__brand {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 9px;
   padding-right: 6px;
   flex: none;
 }
@@ -288,6 +294,21 @@
 .topbar__mark {
   display: block;
   flex: none;
+  width: 26px;
+  height: 26px;
+  object-fit: contain;
+}
+
+.topbar__status {
+  flex: none;
+  padding: 2px 6px;
+  border: 1px solid var(--cad-border-control);
+  border-radius: 5px;
+  color: var(--cad-text-muted);
+  font: 500 10px / 1.3 var(--font-mono);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap;
 }
 
 .topbar__title {
@@ -403,9 +424,9 @@
 }
 
 .workspace-tabs__tab[aria-current='page'] {
-  background: rgba(255, 116, 87, 0.11);
+  background: rgba(18, 160, 251, 0.12);
   box-shadow:
-    inset 0 0 0 1px rgba(255, 116, 87, 0.3),
+    inset 0 0 0 1px rgba(18, 160, 251, 0.34),
     0 1px 2px rgba(0, 0, 0, 0.35);
   color: var(--cad-text-strong);
 }
@@ -631,6 +652,52 @@
   font-size: var(--fs-secondary);
 }
 
+/* Help → About: the one surface that shows the full lockup. */
+.about {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 4px;
+  padding-top: 12px;
+  border-top: 1px solid var(--cad-border-subtle);
+}
+
+.about__plate {
+  display: flex;
+  justify-content: center;
+  padding: 10px 12px;
+  border-radius: var(--radius-control);
+  background: var(--cad-brand-plate);
+}
+
+.about__lockup {
+  display: block;
+  width: 188px;
+  max-width: 100%;
+  height: auto;
+  aspect-ratio: 600 / 202;
+  object-fit: contain;
+}
+
+.about__status {
+  margin: 2px 0 0;
+  color: var(--cad-text-muted);
+  font: 500 var(--fs-meta) var(--font-mono);
+  letter-spacing: 0.04em;
+}
+
+.about__summary {
+  margin: 0;
+  color: var(--cad-text);
+  font-size: var(--fs-secondary);
+  line-height: 1.45;
+}
+
+.about .menu__note {
+  padding-top: 0;
+  border-top: 0;
+}
+
 .menu__link {
   display: inline-block;
   margin-top: 8px;
@@ -693,7 +760,7 @@
 }
 
 .switch__input:checked + .switch__track {
-  background: var(--cad-accent);
+  background: var(--cad-accent-fill);
 }
 
 .switch__input:checked + .switch__track .switch__thumb {
@@ -716,7 +783,7 @@
   padding: 0 14px;
   border: 0;
   border-radius: var(--radius-control);
-  background: var(--cad-accent);
+  background: var(--cad-accent-fill);
   color: var(--cad-on-accent);
   font: 600 var(--fs-ui) var(--font-body);
   cursor: pointer;
@@ -724,12 +791,12 @@
 }
 
 .primary-action:hover:not(:disabled) {
-  background: var(--cad-accent-hover);
+  background: var(--cad-accent-fill-hover);
   color: var(--cad-on-accent);
 }
 
 .primary-action:active:not(:disabled) {
-  background: #f15a36;
+  background: var(--cad-accent-fill-active);
 }
 
 .primary-action:disabled {
@@ -743,14 +810,14 @@
 .action.action--primary {
   min-height: 36px;
   border-color: transparent;
-  background: var(--cad-accent);
+  background: var(--cad-accent-fill);
   color: var(--cad-on-accent);
   font-weight: 600;
 }
 
 .action.action--primary:hover:not(:disabled) {
   border-color: transparent;
-  background: var(--cad-accent-hover);
+  background: var(--cad-accent-fill-hover);
 }
 
 /* --------------------------------------------------- segmented control -- */
@@ -1274,6 +1341,12 @@
   letter-spacing: 0.02em;
 }
 
+.import__tagline {
+  margin: 0;
+  color: var(--cad-text);
+  font-size: var(--fs-ui);
+}
+
 .import__browse {
   width: auto;
   height: 40px;
@@ -1297,8 +1370,8 @@
   justify-content: center;
   border: 2px dashed var(--cad-accent);
   border-radius: 16px;
-  background: rgba(255, 116, 87, 0.08);
-  color: #ffa48c;
+  background: rgba(18, 160, 251, 0.08);
+  color: var(--cad-accent-hover);
   font: 600 18px var(--font-display);
   pointer-events: none;
 }
@@ -1603,7 +1676,7 @@
 
 .view-cube__face:hover:not(:disabled) {
   border-color: #52616f;
-  background: var(--cad-accent);
+  background: var(--cad-accent-fill);
   color: var(--cad-on-accent);
 }
 
@@ -2152,7 +2225,7 @@
   padding: 0 10px;
   border: 0;
   border-radius: 999px;
-  background: var(--cad-accent);
+  background: var(--cad-accent-fill);
   color: var(--cad-on-accent);
   font: 600 var(--fs-secondary) var(--font-body);
   cursor: pointer;
@@ -2160,7 +2233,7 @@
 
 .issue-hud__zoom:hover:not(:disabled) {
   border: 0;
-  background: var(--cad-accent-hover);
+  background: var(--cad-accent-fill-hover);
   color: var(--cad-on-accent);
 }
 
@@ -2663,7 +2736,7 @@
 }
 
 .convert-footer__primary[aria-busy='true'] {
-  background: var(--cad-accent);
+  background: var(--cad-accent-fill);
   color: var(--cad-on-accent);
   opacity: 0.75;
 }
@@ -3123,8 +3196,13 @@
   }
 }
 
-/* Below 1200: the inspector becomes a drawer over the viewport. */
+/* Below 1200: the inspector becomes a drawer over the viewport, and the brand
+   drops its status chip so the centred navigation keeps the bar's centre. */
 @media (width < 1200px) {
+  .topbar__status {
+    display: none;
+  }
+
   .topbar__drawer-toggle--inspector {
     display: inline-flex;
   }

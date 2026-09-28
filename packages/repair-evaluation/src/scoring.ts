@@ -64,7 +64,7 @@ export const SCORING_MODEL: readonly ScoringDimension[] = [
     label: 'Browser suitability',
     weight: 10,
     rationale:
-      'CAD Fixer is local-first and runs in a tab. A kernel that cannot be cancelled, or that grows memory without bound, is unusable here regardless of its geometry quality — several of these are also hard gates.',
+      'Pybrix is local-first and runs in a tab. A kernel that cannot be cancelled, or that grows memory without bound, is unusable here regardless of its geometry quality — several of these are also hard gates.',
     measures: [
       'WASM artifact builds and runs',
       'initialisation cost',

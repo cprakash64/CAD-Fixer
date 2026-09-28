@@ -208,8 +208,8 @@ test('a selected card reads the same in every workspace, and not by colour alone
     await expect(card.locator('input')).toBeChecked();
     // The accent border and its soft fill, as the tokens define them. The
     // retrying assertion waits out the card's border-colour transition.
-    await expect(card).toHaveCSS('border-top-color', 'rgb(255, 116, 87)');
-    await expect(card).toHaveCSS('background-color', 'rgba(255, 116, 87, 0.14)');
+    await expect(card).toHaveCSS('border-top-color', 'rgb(18, 160, 251)');
+    await expect(card).toHaveCSS('background-color', 'rgba(18, 160, 251, 0.14)');
     // Keyboard focus shows the shared ring on the card, not just the input.
     await card.locator('input').focus();
     await page.keyboard.press('Shift+Tab');

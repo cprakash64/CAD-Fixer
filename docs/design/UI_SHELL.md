@@ -30,7 +30,7 @@ whose legacy variable names now alias the tokens.
   opens the whole-document Export / Convert dialog; Compare calls the same store
   action as the repair panel's Before/After toggle. The reference's Save, Recent
   files, Undo/Redo, account menu, transform tools, display modes and
-  orthographic toggle are absent because CAD Fixer has no command behind them.
+  orthographic toggle are absent because Pybrix has no command behind them.
   The projection is shown as a label ("Perspective"), not a switch.
 - **Three new viewport calls, all camera-only:** `viewFrom(direction)`,
   `zoomToFit()` and `setNavigationMode('orbit' | 'pan')`. None touches geometry.
@@ -153,7 +153,7 @@ loaded. Nothing scrolls the inspector programmatically.
   names the three states: layout outlines only (nothing built), generated
   texture geometry (a preview), or the model.
 - **No floor, no grid under a model.** The viewport world is Y-up; printable
-  files are conventionally Z-up, and CAD Fixer has not chosen a print
+  files are conventionally Z-up, and Pybrix has not chosen a print
   orientation, so a floor would assert a resting face. A scaled grid would
   imply a unit and scale many documents do not state. The empty-state grid
   stays because there is no model to misstate.
@@ -168,7 +168,7 @@ line (their meta truncates). Below 760 px of height the activity log caps at
 ### Visual regression
 
 Pixel snapshots are deliberately not used: the viewport is software-rendered
-WebGL whose anti-aliasing is not CAD Fixer's. Invariants are asserted as
+WebGL whose anti-aliasing is not Pybrix's. Invariants are asserted as
 computed style and layout instead — shell geometry per tier, the control
 families above, inspector order, HUD placement, and phone drawer fit and
 target sizes. Content-dependent dimensions are not compared.
@@ -181,7 +181,7 @@ changed) vs Apply (the transaction); Export writes a file, Convert is the
 workspace that chooses its format; Repair, never Fix, for the conservative
 operations; triangles, never tris; Units (the document's statement).
 
-Capabilities the reference shows and CAD Fixer does not have are listed in
+Capabilities the reference shows and Pybrix does not have are listed in
 `UI_CAPABILITY_GAPS.md`.
 
 ## UI-07A — one workspace selector
@@ -214,3 +214,33 @@ Capabilities the reference shows and CAD Fixer does not have are listed in
 - **The nav is a `<nav>` of buttons with `aria-current="page"`**, not a tablist:
   the workspaces are not panels of one widget, and a tablist would promise
   arrow-key roving plain navigation does not need.
+
+## BRAND-01 — the Pybrix identity
+
+- **The product's display name is Pybrix**, exactly so capitalised. Identity
+  lives in `components/shell/brand.ts` (name, status, version, summary, asset
+  URLs); the header, Help and status bar read it and never restate it.
+- **On the dark chrome: the mark on its white tile, beside HTML text.** The
+  supplied mark's "P" is a transparent cut-out and its right face is navy, and
+  both lockups have a navy wordmark: all three are illegible directly on the
+  chrome. The header shows `pybrix-tile-96.png` at 26 px + "Pybrix" + a quiet
+  "Technical Preview" chip. The full horizontal lockup appears once, in Help →
+  About, on the light brand plate (`--cad-brand-plate`). The vertical lockup has
+  no surface and does not ship.
+- **Never stretch, crop, recolour or filter the artwork.** Images carry their
+  width and height (no layout shift) and `object-fit: contain`; derivatives are
+  drawn at or below their pixel size, so they stay sharp at 3×. Derivation is
+  documented in `apps/web/brand-source/README.md`.
+- **No repeated branding inside workspaces.** The header identifies the product;
+  panels, HUDs and the viewport do not add logos. The drop target carries one
+  line of copy and no image.
+- **Brand blue is interaction and identity, never status.** `--cad-accent`
+  (`#12A0FB`) marks things on dark surfaces; `--cad-accent-fill` (`#004DF9`)
+  fills the one primary action with white text. Warning, error and success keep
+  their own tokens, and workspace colours (split pieces, defect overlays, the
+  cut plane) keep theirs.
+- **"Technical Preview" is secondary** — a muted chip, dropped below 1200 px;
+  below 600 px the name is visually hidden and the tile alone remains, while the
+  `<h1>` still names the page for assistive technology.
+- **Decorative vs named images.** The header mark is `alt=""` because the
+  heading beside it says "Pybrix"; the standalone About lockup is `alt="Pybrix"`.

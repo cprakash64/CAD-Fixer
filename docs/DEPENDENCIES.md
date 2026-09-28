@@ -3,7 +3,7 @@
 Every dependency must justify its presence. This file records what we use, why,
 and the licence risk.
 
-**Licence policy.** CAD Fixer is intended to become a proprietary commercial
+**Licence policy.** Pybrix is intended to become a proprietary commercial
 application. Runtime dependencies must therefore carry licences compatible with
 that intent — permissive ones (MIT, Apache-2.0, BSD, ISC) need no further
 analysis. **No GPL or AGPL code may be copied into the project, and no GPL/AGPL
@@ -44,7 +44,7 @@ Notably absent:
   `useSyncExternalStore`. A dependency would not earn its place at this size.
 - **No UI component library.** The shell is plain semantic HTML and CSS.
 - **No router.** The application is a single workspace view.
-- **No HTTP client.** By design — CAD Fixer makes no network requests.
+- **No HTTP client.** By design — Pybrix makes no network requests.
 - **Two geometry kernels, each confined to its own workers.** Geogram v1.10.0
   (Stage 3C-1B) runs the self-intersection diagnostic and the hole-fill
   narrowphase; Manifold (Stage 7A) runs the Boolean behind Split and Surface
@@ -94,7 +94,7 @@ its notice ships with Geogram's.
 **Stage 4B-1B1 added a second entry point to the SAME artifact, not a second
 kernel.** `cf_hf_begin` / `cf_hf_classify` / `cf_hf_end` classify a
 caller-supplied list of face pairs and attribute each finding to patch/source or
-patch/patch, reusing Geogram's exact `triangles_intersections` and CAD Fixer's
+patch/patch, reusing Geogram's exact `triangles_intersections` and Pybrix's
 own frozen classifier unchanged. Nothing new is linked, no build option changed,
 and `si_core.h` and `si_bvh.h` stay byte-identical to the research copies. The
 build was verified REPRODUCIBLE first: rebuilding the unchanged source produced
@@ -109,7 +109,7 @@ deliberately added.
 assumed.** ADR 0018 qualified `pmp::fill_hole` and rejected it: it traps
 uncatchably inside the module on a legal 512-vertex loop, loses append-only
 provenance, refines a 128-vertex loop by +1,193 vertices, and times out at
-2,000. CAD Fixer's own ear clipping is the production triangulator, and a
+2,000. Pybrix's own ear clipping is the production triangulator, and a
 boundary test scans for PMP imports and artifacts in every shipped package.
 
 ## Manifold, as shipped

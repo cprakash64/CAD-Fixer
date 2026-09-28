@@ -77,7 +77,7 @@ export function describePhase(
       if (band === SelfIntersectionBand.SizeLimit) {
         return {
           headline: 'Not checked for this model size',
-          detail: `CAD Fixer runs this check on models up to ${SELF_INTERSECTION_MAX_FACES.toLocaleString()} triangles. This model is larger, so the check was not started.`,
+          detail: `Pybrix runs this check on models up to ${SELF_INTERSECTION_MAX_FACES.toLocaleString()} triangles. This model is larger, so the check was not started.`,
           clean: false,
         };
       }
@@ -166,7 +166,7 @@ export function describeReport(report: SelfIntersectionReport): SelfIntersection
     case SelfIntersectionStatus.NotRunSizePolicy:
       return {
         headline: 'Not checked for this model size',
-        detail: `CAD Fixer runs this check on models up to ${SELF_INTERSECTION_MAX_FACES.toLocaleString()} triangles.`,
+        detail: `Pybrix runs this check on models up to ${SELF_INTERSECTION_MAX_FACES.toLocaleString()} triangles.`,
         clean: false,
       };
   }

@@ -5,19 +5,20 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta
       name="description"
-      content="CAD Fixer prepares 3D printing meshes entirely inside your browser."
+      content="Pybrix repairs, converts, splits and textures STL, OBJ and 3MF models in your browser. Models are processed locally and never uploaded."
     />
+    <meta name="application-name" content="Pybrix" />
+    <!-- The top bar's colour, so the browser chrome continues the application
+         chrome rather than breaking it with a stripe of brand blue. -->
     <meta name="theme-color" content="#121b24" />
     <meta name="color-scheme" content="dark" />
-    <!-- The top bar's mark, inline: no request, and within the documented
-         policy's `img-src 'self' data:`. Without it every load asked the
-         server for /favicon.ico. -->
-    <link
-      rel="icon"
-      type="image/svg+xml"
-      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect x='2' y='2' width='20' height='20' rx='6' fill='%23ff7457'/%3E%3Cpath d='M8 9.5 12 7l4 2.5v5L12 17l-4-2.5zM8 9.5 12 12l4-2.5M12 12v5' fill='none' stroke='%23fff' stroke-width='1.8' stroke-linejoin='round'/%3E%3C/svg%3E"
-    />
-    <title>CAD Fixer</title>
+    <!-- Same-origin and fingerprinted: Vite emits link icons into /assets/
+         (never inlined for rel="icon" / "apple-touch-icon"), so they are
+         served immutable, need nothing beyond the policy's img-src 'self',
+         and stop the browser asking the server for /favicon.ico. -->
+    <link rel="icon" type="image/png" sizes="32x32" href="/src/brand/pybrix-favicon-32.png" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/src/brand/pybrix-apple-touch-icon.png" />
+    <title>Pybrix — 3D Print Repair &amp; Editing</title>
   </head>
   <body>
     <div id="root"></div>

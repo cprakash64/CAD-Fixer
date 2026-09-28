@@ -169,7 +169,7 @@ describe('every fact the policy can produce has a wording', () => {
 
 /* ------------------------------------------------------- forbidden claims -- */
 
-describe('no conversion wording makes a claim CAD Fixer cannot support', () => {
+describe('no conversion wording makes a claim Pybrix cannot support', () => {
   function everyString(): readonly string[] {
     const strings: string[] = [
       CONVERSION_QUALIFIER,
@@ -304,7 +304,7 @@ describe('the target descriptions', () => {
     }
   });
 
-  it('describes what CAD Fixer writes, not what the format can express', () => {
+  it('describes what Pybrix writes, not what the format can express', () => {
     /*
      * 3MF SUPPORTS TEXTURES AND THIS WRITER EMITS NONE. A summary describing the
      * format's capabilities rather than ours would be an advertisement for
@@ -416,14 +416,14 @@ describe('export outcomes', () => {
     expect(sentence.toLowerCase()).toContain('choose a unit');
   });
 
-  it('blames CAD Fixer, not the model, when validation fails', () => {
+  it('blames Pybrix, not the model, when validation fails', () => {
     /*
      * A VALIDATION FAILURE IS OURS. It means our writer and our reader disagree;
      * telling someone their model is at fault for that would be a lie with their
      * name on it.
      */
     const sentence = describeExportFailure(ExportStatus.ValidationFailed, undefined).toLowerCase();
-    expect(sentence).toContain('problem with cad fixer');
+    expect(sentence).toContain('problem with pybrix');
     expect(sentence).toContain('not with your model');
   });
 

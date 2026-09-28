@@ -1,6 +1,6 @@
 # Privacy Architecture
 
-CAD Fixer's central promise is that a user's model never leaves their machine.
+Pybrix's central promise is that a user's model never leaves their machine.
 This document defines what that means concretely, what network traffic is
 permitted, and how the constraint is enforced rather than merely intended.
 
@@ -127,8 +127,10 @@ kernels (Geogram and Manifold) are loaded by Emscripten-generated loaders that
 `fetch()` their own `.wasm` from the application's origin, once each, when the
 worker that owns them starts; they request nothing else. The interface fonts (Figtree, Space Grotesk, JetBrains
 Mono) are SELF-HOSTED: they ship inside the build as fingerprinted same-origin
-assets, so loading them is a request to CAD Fixer's own origin and never to a
-font service. See `apps/web/src/styles/tokens.css`.
+assets, so loading them is a request to Pybrix's own origin and never to a
+font service. See `apps/web/src/styles/tokens.css`. The Pybrix favicon, touch
+icon, header mark and Help lockup are the same: fingerprinted files under
+`/assets/`, never a CDN, image host or remote URL (`apps/web/src/brand/`).
 
 ## 6. Data at rest
 
@@ -270,7 +272,7 @@ network API in the codebase at all.
 allocating. It is recorded here because it is the one runtime-addressable
 configuration this stage added, and the privacy-relevant facts about it are:
 
-- it can only ever make CAD Fixer refuse **sooner** — `requestRepairPeak` in the
+- it can only ever make Pybrix refuse **sooner** — `requestRepairPeak` in the
   worker ignores any value above the product ceiling, so it is enforced on the
   side that does not trust the message;
 - it carries no data anywhere, and reads nothing;
@@ -299,9 +301,9 @@ application, and no repair path constructs a URL from file contents.
 Two new formats reach the parser boundary, and both of them can NAME things
 outside themselves in a way STL cannot. This section records what was checked.
 
-### The new references, and what CAD Fixer does with them
+### The new references, and what Pybrix does with them
 
-| Reference in the file                      | What CAD Fixer does                                                                                   |
+| Reference in the file                      | What Pybrix does                                                                                      |
 | ------------------------------------------ | ----------------------------------------------------------------------------------------------------- |
 | OBJ `mtllib path/to/materials.mtl`         | records the name, reports it, opens nothing                                                           |
 | OBJ `usemtl name`                          | kept as an opaque string on the mesh group                                                            |

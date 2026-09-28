@@ -1,4 +1,4 @@
-# CAD Fixer Architecture
+# Pybrix Architecture
 
 Status: Stage 2 (STL import, viewing, export, and read-only topology
 diagnostics). This document describes the
@@ -230,7 +230,7 @@ click.
 #### No property reference is ever written
 
 3MF core types `object@pid` as an `ST_ResourceID` naming a property-group
-resource that must exist. CAD Fixer writes no property resources, so it writes
+resource that must exist. Pybrix writes no property resources, so it writes
 no `pid` — a reference to a resource that is not there is a malformed file, not
 a preserved material. The document's opaque `materialRef` is therefore reported
 as a loss for every target, before the export. The reader enforces the same
@@ -241,7 +241,7 @@ is not lexically a positive integer, is refused. See
 
 #### Export-time unit assertion
 
-3MF must declare a unit and CAD Fixer will not invent one. A document that
+3MF must declare a unit and Pybrix will not invent one. A document that
 states none is BLOCKED for 3MF until the user picks one of the six; there is no
 default, no preselection and no inference from filename, dimensions, extension
 or printer convention. The choice labels the numbers and resizes nothing, it
@@ -560,7 +560,7 @@ closed, simple, manifold cycle — exactly decidable from the stored coordinates
 Planarity is not in it, because the planarity policy lives in the fill engine
 and the fill engine stays out of the geometry worker. So a perfectly simple rim
 that curves out of its plane is listed as ATTEMPTABLE and refused when the engine
-looks at it, and the interface says "CAD Fixer can attempt this opening" rather
+looks at it, and the interface says "Pybrix can attempt this opening" rather
 than "can be filled" — a promise the listing has no way to keep would be a
 promise broken once per curved rim.
 
@@ -630,7 +630,7 @@ See [docs/adr/0018-hole-filling-qualification.md](adr/0018-hole-filling-qualific
 Two distinctions the interface is careful about, because both are easy to
 overstate:
 
-- **A conversion is lossless only for what CAD Fixer holds.** Every report says
+- **A conversion is lossless only for what Pybrix holds.** Every report says
   "for supported features", because the claim is about this document and this
   build — not about the file the user originally had. A 3MF whose textures were
   never imported still cannot get them back.
@@ -642,7 +642,7 @@ overstate:
   integrity. It says nothing about whether a model is watertight, manifold, or
   manufacturable.
 - **An accepted repair is not a printable model.** Repair acceptance means the
-  requested defects improved and nothing else regressed, judged by CAD Fixer's
+  requested defects improved and nothing else regressed, judged by Pybrix's
   own re-analysis. Self-intersections and wall thickness remain unchecked, and
   every repair verdict says so beside itself.
 - **A validated patch is not a repaired model.** A hole-fill candidate means

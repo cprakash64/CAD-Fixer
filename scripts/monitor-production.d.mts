@@ -49,6 +49,8 @@ export declare const UNKNOWN: 'UNKNOWN_UNREACHABLE';
 export declare const EXIT_CODE: Record<MonitorState, number>;
 export declare const CERT_WARN_DAYS: number;
 export declare const CERT_FAIL_DAYS: number;
+/** M04: the page title must begin with the product name (either, during the rebrand). */
+export declare const IDENTITY_PATTERN: RegExp;
 export declare const REQUIRED_HEADERS: Record<string, string>;
 
 export declare function evaluateCertificate(

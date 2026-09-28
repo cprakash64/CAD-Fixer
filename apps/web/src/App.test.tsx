@@ -38,7 +38,7 @@ describe('application shell', () => {
   it('renders the header and the local-processing statement', () => {
     renderApp();
 
-    expect(screen.getByRole('heading', { level: 1, name: 'CAD Fixer' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 1, name: 'Pybrix' })).toBeInTheDocument();
     expect(screen.getByTestId('privacy-badge')).toHaveTextContent(
       'Models are processed locally in your browser',
     );
@@ -48,7 +48,9 @@ describe('application shell', () => {
     // Stage 6D-A4: the header read "Stage 0 — foundation" in public releases.
     renderApp();
 
-    expect(screen.getByTestId('release-stage')).toHaveTextContent('v0.4.0 Technical Preview');
+    // BRAND-01: the header carries the status, the status bar the version.
+    expect(screen.getByTestId('release-stage')).toHaveTextContent(/^Technical Preview$/);
+    expect(screen.getByTestId('release-version')).toHaveTextContent(/^v0\.4\.0$/);
     expect(document.body.textContent).not.toMatch(/Stage \d|foundation/i);
   });
 
@@ -83,6 +85,96 @@ describe('application shell', () => {
     const entries = within(screen.getByTestId('status-list')).getAllByRole('listitem');
     expect(entries).toHaveLength(1);
     expect(entries[0]).toHaveTextContent(/3D viewport could not start/i);
+  });
+});
+
+/**
+ * BRAND-01. The product's display name is Pybrix everywhere a user can meet it:
+ * rendered text AND the text assistive technology and tooltips read. The legacy
+ * name survives on purpose in identifiers (packages, test ids, CSS classes,
+ * worker names, deployment paths) and in history, so this checks what is
+ * RENDERED, never the repository.
+ */
+const LEGACY_NAME = /cad[\s_-]*fixer/i;
+
+/** Every user-readable string in the document: text plus the attributes read aloud or shown. */
+function userReadableText(): string {
+  const attributes = [
+    'aria-label',
+    'title',
+    'alt',
+    'placeholder',
+    'data-tooltip',
+    'aria-description',
+  ];
+  const parts = [document.title, document.body.textContent];
+  for (const element of document.body.querySelectorAll('*'))
+    for (const name of attributes) {
+      const value = element.getAttribute(name);
+      if (value !== null) parts.push(value);
+    }
+  return parts.join('\n');
+}
+
+describe('brand identity', () => {
+  it('names the product Pybrix in the header, beside a decorative mark', () => {
+    renderApp();
+
+    const mark = screen.getByTestId('brand-mark');
+    // Decorative: the heading beside it carries the name, so it is not read twice.
+    expect(mark).toHaveAttribute('alt', '');
+    expect(mark.getAttribute('src')).toMatch(/pybrix-tile-96.*\.png$/);
+    // Its box is reserved before it decodes, so the header cannot shift.
+    expect(mark).toHaveAttribute('width', '26');
+    expect(mark).toHaveAttribute('height', '26');
+    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent(/^Pybrix$/);
+  });
+
+  it('shows the lockup, status, version and local-processing statement in Help', () => {
+    renderApp();
+    fireEvent.click(screen.getByTestId('help-menu'));
+
+    const about = screen.getByRole('region', { name: 'About Pybrix' });
+    // Standalone, so the image itself carries the name — once.
+    const lockup = within(about).getByRole('img', { name: 'Pybrix' });
+    expect(lockup.getAttribute('src')).toMatch(/pybrix-logo-horizontal.*\.png$/);
+    expect(lockup).toHaveAttribute('width', '188');
+    expect(lockup).toHaveAttribute('height', '63');
+    expect(within(about).getByTestId('about-status')).toHaveTextContent(
+      'Technical Preview · v0.4.0',
+    );
+    expect(about).toHaveTextContent('Models are processed locally in your browser.');
+    expect(screen.getByTestId('third-party-notices')).toHaveAttribute(
+      'href',
+      'third-party-notices.txt',
+    );
+  });
+
+  it('exposes the legacy product name nowhere a user can read it, in any workspace', () => {
+    renderApp();
+    fireEvent.click(screen.getByTestId('help-menu'));
+    expect(userReadableText()).not.toMatch(LEGACY_NAME);
+
+    for (const id of [
+      WorkflowId.Convert,
+      WorkflowId.Split,
+      WorkflowId.Texture,
+      WorkflowId.Repair,
+    ]) {
+      fireEvent.click(screen.getByTestId(`workflow-${id}`));
+      expect(userReadableText(), id).not.toMatch(LEGACY_NAME);
+    }
+    fireEvent.click(screen.getByTestId('settings-menu'));
+    expect(userReadableText()).not.toMatch(LEGACY_NAME);
+  });
+
+  it('offers the brand line on the empty drop target, and no lockup there', () => {
+    renderApp();
+    const zone = screen.getByTestId('drop-zone');
+    expect(within(zone).getByTestId('drop-tagline')).toHaveTextContent(
+      'Repair, convert, split and texture — locally in your browser.',
+    );
+    expect(within(zone).queryAllByRole('img')).toHaveLength(0);
   });
 });
 

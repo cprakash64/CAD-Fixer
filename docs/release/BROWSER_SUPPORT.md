@@ -70,7 +70,7 @@ Without these there is no usable application.
 | **Cross-origin isolation** (`crossOriginIsolated === true`) | The precondition browsers impose on `SharedArrayBuffer` |
 
 **These fail closed.** Without them the repair panel is replaced by a refusal
-naming the cause; import, Mesh Health and export continue to work. CAD Fixer will
+naming the cause; import, Mesh Health and export continue to work. Pybrix will
 not offer a repair it could not stop.
 
 ### Required for specific formats

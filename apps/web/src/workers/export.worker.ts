@@ -106,7 +106,7 @@ async function run(message: ExportSnapshotMessage): Promise<void> {
       operationId: message.operationId,
       code: 'INVALID_STATE',
       reason: 'EXPORT_UNSUPPORTED_TARGET',
-      message: 'CAD Fixer cannot write that format.',
+      message: 'Pybrix cannot write that format.',
     });
     return;
   }

@@ -203,6 +203,53 @@ describe('HV-C01–HV-C06 — the release artifact', () => {
   });
 });
 
+describe('HV-C21 — the Pybrix identity in the artifact (BRAND-01)', () => {
+  const TEXT = /\.(html|js|css|txt|json|svg)$/;
+
+  it.skipIf(!artifactBuilt)('HV-C21a: both declared icons are shipped, fingerprinted files', () => {
+    const shell = readFileSync(join(SITE_DIR, 'index.html'), 'utf8');
+    for (const rel of ['icon', 'apple-touch-icon']) {
+      const href = new RegExp(`<link rel="${rel}"[^>]*href="/(assets/pybrix-[^"]+\\.png)"`).exec(
+        shell,
+      )?.[1];
+      expect(href, rel).toBeDefined();
+      expect(siteFiles()).toContain(href);
+    }
+  });
+
+  it.skipIf(!artifactBuilt)(
+    'HV-C21b: the shell is titled Pybrix and names no legacy product',
+    () => {
+      const shell = readFileSync(join(SITE_DIR, 'index.html'), 'utf8');
+      expect(shell).toMatch(/<title>Pybrix — /);
+      expect(shell).toContain('<meta name="application-name" content="Pybrix" />');
+      expect(shell).not.toMatch(/cad[\s_-]*fixer/i);
+    },
+  );
+
+  it.skipIf(!artifactBuilt)('HV-C21c: no deployable file carries a local filesystem path', () => {
+    for (const path of siteFiles().filter((p) => TEXT.test(p))) {
+      const text = readFileSync(join(SITE_DIR, path), 'utf8');
+      expect(text, path).not.toMatch(/\/Users\/|cprakash|Documents\/CAD|brand-source/);
+    }
+  });
+
+  it.skipIf(!artifactBuilt)(
+    'HV-C21d: only the used brand derivatives ship, never a source original',
+    () => {
+      const brand = siteFiles().filter((p) => /pybrix/i.test(p));
+      expect(brand.map((p) => p.replace(/-[A-Za-z0-9_-]{8}\.png$/, '.png')).sort()).toEqual([
+        'assets/pybrix-apple-touch-icon.png',
+        'assets/pybrix-favicon-32.png',
+        'assets/pybrix-logo-horizontal.png',
+        'assets/pybrix-tile-96.png',
+      ]);
+      const bytes = brand.reduce((sum, p) => sum + statSync(join(SITE_DIR, p)).size, 0);
+      expect(bytes).toBeLessThan(160 * 1024);
+    },
+  );
+});
+
 describe('HV-C07–HV-C11 — the nginx site template', () => {
   it('HV-C07: declares no default_server', () => {
     /*

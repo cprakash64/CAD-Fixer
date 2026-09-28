@@ -26,7 +26,7 @@ import { xmlSafeText } from '../threemf/xml-scan';
 function fail(detail: string, details?: Record<string, string | number>): never {
   throw exportInternal(
     ExportRefusal.ValidationFailed,
-    'CAD Fixer wrote a file it could not read back as the same model, so the export was refused.',
+    'Pybrix wrote a file it could not read back as the same model, so the export was refused.',
     { detail, ...details },
   );
 }
@@ -70,7 +70,7 @@ export function assertExportSnapshot(snapshot: ExportDocumentSnapshot): void {
     if (!(mesh.positions instanceof Float32Array) || !(mesh.indices instanceof Uint32Array)) {
       throw exportBlocked(
         ExportRefusal.MalformedSnapshot,
-        'The export request contained geometry CAD Fixer cannot read.',
+        'The export request contained geometry Pybrix cannot read.',
         { meshIndex: index },
       );
     }
@@ -128,7 +128,7 @@ export function assertExportSnapshot(snapshot: ExportDocumentSnapshot): void {
       if (!Number.isFinite(value)) {
         throw exportBlocked(
           ExportRefusal.NonFiniteTransform,
-          'A part in the export request has a placement CAD Fixer cannot write.',
+          'A part in the export request has a placement Pybrix cannot write.',
           { partIndex: index },
         );
       }

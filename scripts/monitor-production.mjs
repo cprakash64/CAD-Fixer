@@ -63,8 +63,18 @@ export const DEFAULT_RETRY_DELAY_MS = 3_000;
 export const CERT_WARN_DAYS = 21;
 export const CERT_FAIL_DAYS = 14;
 
-/** The shell's own title. NOT a marker added for monitoring. */
-const IDENTITY_PATTERN = /<title>\s*CAD Fixer\s*<\/title>/i;
+/**
+ * The shell's own title. NOT a marker added for monitoring.
+ *
+ * BOTH PRODUCT NAMES ARE ACCEPTED DURING THE REBRAND. The product became Pybrix
+ * in BRAND-01, but this monitor runs every fifteen minutes from `main` and
+ * `main` moves before the site does: pinning the new title would page on the
+ * still-live CAD Fixer build, and pinning the old one would page the moment
+ * the Pybrix release is deployed. The CAD Fixer alternative is to be removed
+ * once a Pybrix release is live. Either way the title must BEGIN with the
+ * product name, so a default vhost or an unrelated site still fails.
+ */
+export const IDENTITY_PATTERN = /<title>\s*(?:Pybrix(?:\s[^<]*)?|CAD Fixer)\s*<\/title>/i;
 
 const MISSING_ASSET_PATH = '/__cad_fixer_monitor_missing_asset__.js';
 
@@ -314,11 +324,11 @@ export async function runMonitor({
       : check('M03', FAIL, `HTTPS root returned ${status}`),
   );
 
-  /* M04 — is this actually CAD Fixer, or a default vhost? */
+  /* M04 — is this actually Pybrix, or a default vhost? */
   checks.push(
     IDENTITY_PATTERN.test(body)
       ? check('M04', PASS, 'page identity confirmed')
-      : check('M04', FAIL, 'CAD Fixer page identity absent — possible vhost misrouting'),
+      : check('M04', FAIL, 'Pybrix page identity absent — possible vhost misrouting'),
   );
 
   /* M05–M09 */
@@ -445,7 +455,7 @@ if (isMain || process.argv.some((a) => a === '--run')) {
   if (asJson) {
     process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
   } else {
-    process.stdout.write(`CAD Fixer production monitor\n  target: ${report.target}\n\n`);
+    process.stdout.write(`Pybrix production monitor\n  target: ${report.target}\n\n`);
     for (const c of report.checks) {
       const mark = c.state === PASS ? 'PASS' : c.state === FAIL ? 'FAIL' : 'UNKN';
       process.stdout.write(`  [${mark}] ${c.id}  ${c.detail}\n`);

@@ -140,7 +140,7 @@ export const TEXTURE_COPY = Object.freeze({
   undoButton: 'Undo texture',
   noModel: 'Open a model to texture one of its flat faces.',
   needsMillimetres:
-    'Texture sizes are millimetres, and this model does not state millimetres. CAD Fixer converts no units, so texturing is unavailable for it.',
+    'Texture sizes are millimetres, and this model does not state millimetres. Pybrix converts no units, so texturing is unavailable for it.',
   hintSelect: 'Click a flat face of the model to select it',
   hintSelected: 'Click another face to replace the selection',
   previewLabel: 'Preview — not applied',

@@ -116,10 +116,12 @@ function reject(
   limit: number,
   breakdown: Readonly<Record<string, number>>,
 ): AppError {
-  return resourceLimitExceeded(
-    'This would use more memory than CAD Fixer allows for one session.',
-    { operation, requested, limit, ...breakdown },
-  );
+  return resourceLimitExceeded('This would use more memory than Pybrix allows for one session.', {
+    operation,
+    requested,
+    limit,
+    ...breakdown,
+  });
 }
 
 /**
@@ -160,7 +162,7 @@ export function checkImportGeometry(
   if (total > budget.maxImportGeometryBytes) {
     return resourceLimitExceeded(
       `Opening this model would need ${formatBytes(total)} of geometry and render buffers; ` +
-        `CAD Fixer's limit is ${formatBytes(budget.maxImportGeometryBytes)}.`,
+        `Pybrix's limit is ${formatBytes(budget.maxImportGeometryBytes)}.`,
       {
         operation: 'session/import-geometry',
         requested: total,
@@ -240,7 +242,7 @@ function rejectWorkspace(
 ): AppError {
   return resourceLimitExceeded(
     `This part has ${formatCount(faceCount)} triangles, which needs ` +
-      `${formatBytes(estimatedBytes)} of working memory; CAD Fixer's limit for this ` +
+      `${formatBytes(estimatedBytes)} of working memory; Pybrix's limit for this ` +
       `is ${formatBytes(limit)}.`,
     { operation, requested: estimatedBytes, limit, ...context },
   );

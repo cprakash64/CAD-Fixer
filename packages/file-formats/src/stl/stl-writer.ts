@@ -38,10 +38,10 @@ const TRIANGLES_PER_BATCH = 65_536;
  * verbatim; putting unsanitised user data there is an easy way to leak a
  * filename into a file the user then shares.
  */
-const BINARY_HEADER_TEXT = 'CAD Fixer binary STL';
+const BINARY_HEADER_TEXT = 'Pybrix binary STL';
 
 /** Solid name used by the ASCII writer, for the same reason. */
-const ASCII_SOLID_NAME = 'cadfixer';
+const ASCII_SOLID_NAME = 'pybrix';
 
 /**
  * Significant digits used by the ASCII writer.

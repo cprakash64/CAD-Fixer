@@ -307,7 +307,7 @@ describe('3MF-C2: a valid production-extension package', () => {
 });
 
 describe('3MF-C3: a declared required extension', () => {
-  it('accepts a required PRODUCTION extension, because CAD Fixer implements it', async () => {
+  it('accepts a required PRODUCTION extension, because Pybrix implements it', async () => {
     /*
      * THE COMPATIBILITY TRANSITION, STAGE 6D-A2.
      *
@@ -484,7 +484,7 @@ describe('3MF-R1: raw intake size', () => {
 
     expect(result.accepted).toBe(false);
     if (result.accepted) return;
-    expect(result.message).toBe("This file is 537 MiB; CAD Fixer's intake limit is 512 MiB.");
+    expect(result.message).toBe("This file is 537 MiB; Pybrix's intake limit is 512 MiB.");
   });
 
   it('derives the ceiling from the enforcing constant', () => {
@@ -538,7 +538,7 @@ describe('3MF-R3: per-entry expanded size', () => {
 
     expect(refusal.reason).toBe(ImportRefusal.ZipEntryTooLarge);
     expect(refusal.message).toBe(
-      "A file inside this archive expands to 4 MiB; CAD Fixer's per-entry expansion limit is 1 MiB.",
+      "A file inside this archive expands to 4 MiB; Pybrix's per-entry expansion limit is 1 MiB.",
     );
   });
 
@@ -560,7 +560,7 @@ describe('3MF-R4: compression ratio', () => {
     expect(refusal.reason).toBe(ImportRefusal.ZipRatioExceeded);
     expect(refusal.message).toMatch(/^A file inside this archive expands at [\d,]+:1;/);
     expect(refusal.message).toContain(
-      `CAD Fixer's compression-ratio limit is ${String(DEFAULT_ZIP_LIMITS.maxCompressionRatio)}:1.`,
+      `Pybrix's compression-ratio limit is ${String(DEFAULT_ZIP_LIMITS.maxCompressionRatio)}:1.`,
     );
   });
 });
@@ -579,9 +579,7 @@ describe('3MF-R5: geometry count ceilings', () => {
     );
 
     expect(refusal.reason).toBe(ImportRefusal.ThreeMfTooManyObjects);
-    expect(refusal.message).toBe(
-      "This 3MF file declares 4 objects; CAD Fixer's limit is 3 objects.",
-    );
+    expect(refusal.message).toBe("This 3MF file declares 4 objects; Pybrix's limit is 3 objects.");
     expect(refusal.message).not.toMatch(/larger|size|bytes/i);
   });
 
@@ -594,7 +592,7 @@ describe('3MF-R5: geometry count ceilings', () => {
 
     expect(refusal.reason).toBe(ImportRefusal.ThreeMfTooManyTriangles);
     expect(refusal.message).toBe(
-      "An object in this 3MF file contains 3 triangles; CAD Fixer's limit is 2 triangles for one object.",
+      "An object in this 3MF file contains 3 triangles; Pybrix's limit is 2 triangles for one object.",
     );
   });
 
@@ -607,7 +605,7 @@ describe('3MF-R5: geometry count ceilings', () => {
 
     expect(refusal.reason).toBe(ImportRefusal.ThreeMfTooManyVertices);
     expect(refusal.message).toBe(
-      "An object in this 3MF file contains 3 vertices; CAD Fixer's limit is 2 vertices for one object.",
+      "An object in this 3MF file contains 3 vertices; Pybrix's limit is 2 vertices for one object.",
     );
   });
 
@@ -634,7 +632,7 @@ describe('3MF-R5: geometry count ceilings', () => {
 
     expect(refusal.reason).toBe(ImportRefusal.ThreeMfComponentTooDeep);
     expect(refusal.message).toBe(
-      "This 3MF file nests components 3 levels deep; CAD Fixer's limit is 2 levels.",
+      "This 3MF file nests components 3 levels deep; Pybrix's limit is 2 levels.",
     );
   });
 
@@ -647,7 +645,7 @@ describe('3MF-R5: geometry count ceilings', () => {
 
     expect(refusal.reason).toBe(ImportRefusal.XmlTooDeep);
     expect(refusal.message).toBe(
-      "This 3MF file nests XML 3 levels deep; CAD Fixer's limit is 2 levels.",
+      "This 3MF file nests XML 3 levels deep; Pybrix's limit is 2 levels.",
     );
   });
 });
@@ -696,7 +694,7 @@ describe('3MF-R6: every number comes from the enforcing constant', () => {
       }),
     );
 
-    expect(refusal.message).toContain(`CAD Fixer's limit is ${rendered}.`);
+    expect(refusal.message).toContain(`Pybrix's limit is ${rendered}.`);
   });
 
   /**
@@ -750,7 +748,7 @@ describe('3MF-R7: expanded size is never called the file size', () => {
     );
 
     expect(refusal.reason).toBe(ImportRefusal.ZipArchiveTooLarge);
-    expect(refusal.message).toMatch(/^This archive is \d+ B; CAD Fixer's archive limit is 16 B\.$/);
+    expect(refusal.message).toMatch(/^This archive is \d+ B; Pybrix's archive limit is 16 B\.$/);
     expect(refusal.message).not.toContain('expands');
   });
 });

@@ -199,6 +199,26 @@ if (!deployable.some((p) => p.endsWith('.wasm'))) {
   fail('build output contains no .wasm — the Geogram kernel is missing');
 }
 
+/*
+ * THE PRODUCT'S OWN IDENTITY SHIPS WITH IT (BRAND-01). The shell declares a
+ * Pybrix favicon and touch icon; an artifact without them serves a page whose
+ * <link rel="icon"> 404s. Each must be a fingerprinted file under assets/, and
+ * index.html must point at exactly that file.
+ */
+{
+  const shell = readFileSync(join(distDir, 'index.html'), 'utf8');
+  for (const [rel, stem] of [
+    ['icon', 'pybrix-favicon-32'],
+    ['apple-touch-icon', 'pybrix-apple-touch-icon'],
+  ]) {
+    const file = deployable.find((p) => p.startsWith(`assets/${stem}-`) && p.endsWith('.png'));
+    if (file === undefined) fail(`build output has no ${stem} icon`);
+    if (!shell.includes(`rel="${rel}"`) || !shell.includes(`href="/${file}"`)) {
+      fail(`index.html does not declare rel="${rel}" at /${file}`);
+    }
+  }
+}
+
 /* A stale site directory must not leak a file the new release does not have. */
 rmSync(siteDir, { recursive: true, force: true });
 mkdirSync(siteDir, { recursive: true });

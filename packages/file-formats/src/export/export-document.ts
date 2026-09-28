@@ -130,7 +130,7 @@ export async function exportDocument(options: ExportDocumentOptions): Promise<Wr
     if (isAppError(cause) && cause.code === 'OPERATION_CANCELLED') throw cause;
     throw exportInternal(
       ExportRefusal.ValidationUnreadable,
-      'CAD Fixer wrote a file it could not read back, so the export was refused.',
+      'Pybrix wrote a file it could not read back, so the export was refused.',
       { cause: isAppError(cause) ? cause.code : 'unknown' },
     );
   }

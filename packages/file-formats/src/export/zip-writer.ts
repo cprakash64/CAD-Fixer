@@ -73,7 +73,7 @@ async function deflateBounded(
     if (alreadyProduced + produced + chunk.byteLength > options.maxOutputBytes) {
       throw exportTooLarge(
         ExportRefusal.OutputTooLarge,
-        'This export would produce a larger file than CAD Fixer will write.',
+        'This export would produce a larger file than Pybrix will write.',
         { limit: options.maxOutputBytes },
       );
     }
@@ -149,7 +149,7 @@ export async function buildZipArchive(
   if (total > options.maxOutputBytes) {
     throw exportTooLarge(
       ExportRefusal.OutputTooLarge,
-      'This export would produce a larger file than CAD Fixer will write.',
+      'This export would produce a larger file than Pybrix will write.',
       { produced: total, limit: options.maxOutputBytes },
     );
   }
@@ -164,7 +164,7 @@ export async function buildZipArchive(
   if (total > 0xffffffff || offset > 0xffffffff) {
     throw exportTooLarge(
       ExportRefusal.OutputTooLarge,
-      'This export is too large for the archive format CAD Fixer writes.',
+      'This export is too large for the archive format Pybrix writes.',
       { produced: total },
     );
   }

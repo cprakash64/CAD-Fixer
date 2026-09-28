@@ -89,7 +89,7 @@ function decodeText(
   if (bytes.byteLength > limits.maxBytes) {
     throw importTooLarge(
       ImportRefusal.InputTooLarge,
-      'This OBJ file is larger than CAD Fixer will open.',
+      'This OBJ file is larger than Pybrix will open.',
       { bytes: bytes.byteLength, limit: limits.maxBytes },
     );
   }
@@ -123,7 +123,7 @@ function readFinite(token: string | undefined, line: number, what: string): numb
   if (!Number.isFinite(value)) {
     throw importMalformed(
       ImportRefusal.ObjNonFinite,
-      `This OBJ file has ${article(what)} ${what} value CAD Fixer cannot use on line ${String(line)}.`,
+      `This OBJ file has ${article(what)} ${what} value Pybrix cannot use on line ${String(line)}.`,
       { line, what, token: token.slice(0, 64) },
     );
   }
@@ -203,7 +203,7 @@ async function parseRecords(
     if (lineLength > limits.maxLineLength) {
       throw importTooLarge(
         ImportRefusal.ObjLineTooLong,
-        `This OBJ file has a line longer than CAD Fixer will read (line ${String(lineNumber)}).`,
+        `This OBJ file has a line longer than Pybrix will read (line ${String(lineNumber)}).`,
         { line: lineNumber, length: lineLength, limit: limits.maxLineLength },
       );
     }
@@ -229,7 +229,7 @@ async function parseRecords(
             if (positions.length / 3 > limits.maxVertices) {
               throw importTooLarge(
                 ImportRefusal.ObjTooManyVertices,
-                'This OBJ file contains more vertices than CAD Fixer will hold.',
+                'This OBJ file contains more vertices than Pybrix will hold.',
                 { limit: limits.maxVertices },
               );
             }
@@ -268,7 +268,7 @@ async function parseRecords(
             if (objects.length > limits.maxObjects) {
               throw importTooLarge(
                 ImportRefusal.ObjTooManyObjects,
-                'This OBJ file declares more objects than CAD Fixer will hold.',
+                'This OBJ file declares more objects than Pybrix will hold.',
                 { limit: limits.maxObjects },
               );
             }
@@ -281,7 +281,7 @@ async function parseRecords(
             if (groups.length > limits.maxGroups) {
               throw importTooLarge(
                 ImportRefusal.ObjTooManyGroups,
-                'This OBJ file declares more groups than CAD Fixer will hold.',
+                'This OBJ file declares more groups than Pybrix will hold.',
                 { limit: limits.maxGroups },
               );
             }
@@ -321,7 +321,7 @@ async function parseRecords(
             if (faceCount > limits.maxFaces) {
               throw importTooLarge(
                 ImportRefusal.ObjTooManyFaces,
-                'This OBJ file contains more faces than CAD Fixer will hold.',
+                'This OBJ file contains more faces than Pybrix will hold.',
                 { limit: limits.maxFaces },
               );
             }
@@ -402,7 +402,7 @@ function readFace(
        */
       throw importUnsupported(
         ImportRefusal.ObjPolygonUnsupported,
-        'CAD Fixer currently supports triangle faces in OBJ files. This file contains a face with more than three corners, and CAD Fixer will not split it into triangles, because doing so would invent geometry the file does not describe.',
+        'Pybrix currently supports triangle faces in OBJ files. This file contains a face with more than three corners, and Pybrix will not split it into triangles, because doing so would invent geometry the file does not describe.',
         { line },
       );
     }
@@ -432,7 +432,7 @@ function readFace(
     if (token.length > 0 && !OBJ_CORNER.test(corner)) {
       throw importMalformed(
         ImportRefusal.ObjBadIndex,
-        `This OBJ file has a face index CAD Fixer cannot read on line ${String(line)}.`,
+        `This OBJ file has a face index Pybrix cannot read on line ${String(line)}.`,
         { line, token: corner.slice(0, 64) },
       );
     }
@@ -453,7 +453,7 @@ function readFace(
     if (!Number.isInteger(parsed)) {
       throw importMalformed(
         ImportRefusal.ObjBadIndex,
-        `This OBJ file has a face index CAD Fixer cannot read on line ${String(line)}.`,
+        `This OBJ file has a face index Pybrix cannot read on line ${String(line)}.`,
         { line, token: token.slice(0, 64) },
       );
     }
@@ -645,7 +645,7 @@ export async function readObj(
   if (plans.length > DEFAULT_DOCUMENT_LIMITS.maxParts) {
     throw importTooLarge(
       ImportRefusal.ObjTooManyObjects,
-      'This OBJ file declares more objects than CAD Fixer will hold.',
+      'This OBJ file declares more objects than Pybrix will hold.',
       { limit: DEFAULT_DOCUMENT_LIMITS.maxParts, planned: plans.length },
     );
   }
@@ -687,7 +687,7 @@ export async function readObj(
     warnings.push(
       diagnostic(
         'OBJ_MTLLIB_NOT_LOADED',
-        'This OBJ file names a material library. CAD Fixer imports geometry only and does not open it, so materials and colours are not loaded.',
+        'This OBJ file names a material library. Pybrix imports geometry only and does not open it, so materials and colours are not loaded.',
         { library: parsed.mtllib.slice(0, 128) },
       ),
     );

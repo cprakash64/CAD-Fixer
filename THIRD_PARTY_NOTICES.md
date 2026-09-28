@@ -1,6 +1,6 @@
 # Third-party notices
 
-The index of third-party material CAD Fixer distributes. Everything the build
+The index of third-party material Pybrix distributes. Everything the build
 ships — the fonts and icons below, the bundled npm packages (React, React DOM,
 scheduler, three.js), the Geogram and Manifold WebAssembly kernels, and the
 Emscripten runtime and musl libc they carry — has its licence in the build's
