@@ -2,12 +2,14 @@ import { act, cleanup, fireEvent, render, screen, within } from '@testing-librar
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { IDENTITY_PART_TRANSFORM } from '@cadfixer/mesh-core';
 import {
+  BoundaryFillScanStatus,
   PrintabilityStatus,
   RepairAcceptance,
   RepairDecision,
   RepairOperation,
   RepairReason,
   SelfIntersectionStatus,
+  type BoundaryFillPlan,
   type ConservativeRepairPlan,
   type DocumentHandle,
   type DocumentRenderSnapshot,
@@ -247,11 +249,29 @@ function planWith(decisions: readonly RepairOperationDecision[]): ConservativeRe
 }
 
 /** Installs a plan as if the worker had answered. Must run after render. */
-function commitPlan(store: WorkspaceStore, plan: ConservativeRepairPlan): void {
+function commitPlan(
+  store: WorkspaceStore,
+  plan: ConservativeRepairPlan,
+  fill: BoundaryFillPlan = fillPlan(0),
+): void {
   act(() => {
     const token = store.beginRepairPlan(HANDLE, PART, plan.requested);
-    store.commitRepairPlan(token, HANDLE, plan);
+    store.commitRepairPlan(token, HANDLE, plan, fill);
   });
+}
+
+function fillPlan(admitted: number): BoundaryFillPlan {
+  return {
+    status: BoundaryFillScanStatus.Scanned,
+    boundaryEdgeCount: 400,
+    simpleLoopCount: 6,
+    complexBoundaryCount: 7,
+    admittedCount: admitted,
+    admittedPatchFaces: admitted * 4,
+    loops: [],
+    loopsTruncated: false,
+    planHash: `bf-${String(admitted)}`,
+  };
 }
 
 const DEGENERATE_PLAN = planWith([
@@ -308,6 +328,7 @@ function commitPreview(store: WorkspaceStore): void {
       render: undefined,
       bounds: undefined,
       undoRetainedBytes: 0,
+      boundaryFill: undefined,
     });
   });
 }
@@ -554,7 +575,9 @@ describe('progressive disclosure', () => {
       isBoundaryFree: false,
       componentCount: 39,
     });
-    commitPlan(store, planWith([]));
+    // The reported model's shape: nothing for the four conservative operations,
+    // four openings the worker admitted for filling.
+    commitPlan(store, planWith([]), fillPlan(4));
     // The worker skips the openings walk above the filling ceiling.
     act(() => {
       const token = store.beginHoleFillListing(HANDLE, PART);
@@ -580,7 +603,7 @@ describe('progressive disclosure', () => {
       '6 simple loops · 7 complex',
     );
     expect(screen.getByTestId('issue-status-open-boundaries')).toHaveTextContent(
-      'Automatic filling isn’t available at this part size',
+      '4 fillable · 9 need attention',
     );
     expect(screen.getByTestId('issue-status-components')).toHaveTextContent('Review recommended');
     expect(screen.getByTestId('file-structure')).toHaveTextContent('File structure valid');
@@ -592,11 +615,30 @@ describe('progressive disclosure', () => {
     expect(screen.getByTestId('health-topology')).not.toBeVisible();
     expect(screen.getByTestId('issue-info-panel-open-boundaries')).not.toBeVisible();
     expect(screen.getByTestId('hole-fill-size-limit')).toHaveTextContent(
-      'Automatic filling isn’t available for this part at its current size.',
+      'Choosing openings one at a time isn’t available at this part size.',
     );
     expect(screen.getByTestId('hole-fill-not-inventoried')).not.toBeVisible();
     fireEvent.click(screen.getByTestId('hole-fill-size-limit-info'));
     expect(screen.getByTestId('hole-fill-not-inventoried')).toHaveTextContent('1,988,877');
+  });
+
+  it('enables Repair model on a large part when filling openings is the only work (REPAIR-CORE-02 §42)', () => {
+    renderAnalysed();
+    const button = screen.getByTestId('preview-repair');
+    expect(button).toBeEnabled();
+    expect(screen.getByTestId('repair-scope')).toHaveTextContent(
+      '4 openings can be filled. Other detected issues will remain.',
+    );
+    expect(screen.getByTestId('repair-op-status-fill-openings')).toHaveTextContent('4 to fill');
+  });
+
+  it('turning filling off disables Repair model when nothing else can run', () => {
+    const store = renderAnalysed();
+    fireEvent.click(screen.getByTestId('repair-op-toggle-fill-openings'));
+    expect(store.getSnapshot().repair.fillOpenings).toBe(false);
+    expect(screen.getByTestId('issue-status-open-boundaries')).toHaveTextContent(
+      'Automatic filling not selected',
+    );
   });
 
   it('starts Advanced diagnostics collapsed and reveals the full report when opened', () => {

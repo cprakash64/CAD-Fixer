@@ -1,4 +1,6 @@
 import type {
+  BoundaryFillOutcome,
+  BoundaryFillPlan,
   ConservativeRepairPlan,
   DocumentRenderSnapshot,
   EditCommitResult,
@@ -761,6 +763,10 @@ export interface RepairPreview {
   readonly bounds: MeshBounds | undefined;
   /** Bytes undo would retain if this candidate were applied. See the protocol. */
   readonly undoRetainedBytes: number;
+  /** What the fill stage did, when filling was requested — REPAIR-CORE-02. */
+  readonly boundaryFill: BoundaryFillOutcome | undefined;
+  /** Patch triangles only, for a fill-only candidate; `render` is then undefined. */
+  readonly patchRender?: RenderSnapshot;
 }
 
 /** A repair that has actually been applied, and what it takes to reverse it. */
@@ -773,6 +779,8 @@ export interface AppliedRepair {
   readonly parentRevision: number;
   readonly appliedOperations: readonly RepairOperation[];
   readonly counts: RepairChangeCounts;
+  /** Openings the applied candidate closed. Zero when none. */
+  readonly filledOpenings: number;
   readonly undoable: boolean;
 }
 
@@ -811,6 +819,10 @@ export interface RepairSnapshot {
   readonly planError: RepairFailure | undefined;
   /** Operations the user has selected. Never wider than what the plan allows. */
   readonly selection: readonly RepairOperation[];
+  /** Whether Repair model also fills eligible openings — REPAIR-CORE-02. */
+  readonly fillOpenings: boolean;
+  /** What filling would attempt, from the worker. Belongs to `plan`'s revision. */
+  readonly fillPlan: BoundaryFillPlan | undefined;
   readonly candidateState: RepairCandidateState;
   readonly candidate: RepairPreview | undefined;
   readonly candidateError: RepairFailure | undefined;
@@ -849,6 +861,11 @@ const EMPTY_REPAIR: RepairSnapshot = {
   plan: undefined,
   planError: undefined,
   selection: DEFAULT_REPAIR_SELECTION,
+  // ON BY DEFAULT, like the four conservative operations: each opening is
+  // admitted only if it independently qualifies, and nothing is filled before
+  // the user reviews the preview and presses Apply.
+  fillOpenings: true,
+  fillPlan: undefined,
   candidateState: RepairCandidateState.Idle,
   candidate: undefined,
   candidateError: undefined,
@@ -1491,6 +1508,7 @@ export class WorkspaceStore {
         // The user's operation choices are a preference about repair, not about
         // a particular part, so they survive a selection change.
         selection: this.state.repair.selection,
+        fillOpenings: this.state.repair.fillOpenings,
       },
       /*
        * SWITCHING PARTS ABANDONS THE FILL WORKFLOW, DELIBERATELY.
@@ -1772,6 +1790,7 @@ export class WorkspaceStore {
     token: RepairToken,
     handle: DocumentHandle,
     plan: ConservativeRepairPlan,
+    fillPlan?: BoundaryFillPlan,
   ): boolean {
     if (!this.isCurrentRepair(token)) return false;
     if (!sameHandle(this.state.model?.handle, handle)) return false;
@@ -1779,6 +1798,7 @@ export class WorkspaceStore {
     this.update({
       repair: {
         ...this.state.repair,
+        fillPlan,
         handle,
         planState: RepairPlanState.Ready,
         plan,
@@ -1820,6 +1840,7 @@ export class WorkspaceStore {
         ...EMPTY_REPAIR,
         handle,
         selection: this.state.repair.selection,
+        fillOpenings: this.state.repair.fillOpenings,
         lastApplied: this.state.repair.lastApplied,
       },
     });
@@ -1861,6 +1882,31 @@ export class WorkspaceStore {
   }
 
   /**
+   * Includes or excludes automatic opening fills from Repair model —
+   * REPAIR-CORE-02. A change of scope, so it replans exactly as a change of
+   * operation selection does, and any preview built for the old scope goes.
+   */
+  public setFillOpenings(fillOpenings: boolean): void {
+    const repair = this.state.repair;
+    if (repair.fillOpenings === fillOpenings) return;
+    this.currentRepairToken = undefined;
+    this.update({
+      repair: {
+        ...repair,
+        fillOpenings,
+        planState: RepairPlanState.Planning,
+        planError: undefined,
+        candidateState: RepairCandidateState.Idle,
+        candidate: undefined,
+        candidateError: undefined,
+        previewMode: RepairPreviewMode.Before,
+        fraction: 0,
+        phase: undefined,
+      },
+    });
+  }
+
+  /**
    * Claims a fresh token for building a candidate, keeping the plan on screen.
    *
    * Separate from `beginRepairPlan` because previewing does NOT re-plan: the
@@ -1874,7 +1920,10 @@ export class WorkspaceStore {
   public beginRepairPreview(): RepairToken | undefined {
     const repair = this.state.repair;
     if (repair.planState !== RepairPlanState.Ready || repair.plan === undefined) return undefined;
-    if (repair.plan.noOp) return undefined;
+    // REPAIR-CORE-02: a plan with no conservative work is still work when
+    // filling is selected and the fill plan admitted at least one opening.
+    const fills = repair.fillOpenings && (repair.fillPlan?.admittedCount ?? 0) > 0;
+    if (repair.plan.noOp && !fills) return undefined;
 
     const token = this.nextRepairToken as RepairToken;
     this.nextRepairToken += 1;
@@ -1919,7 +1968,9 @@ export class WorkspaceStore {
         candidate: preview,
         candidateError: undefined,
         previewMode:
-          preview.render === undefined ? RepairPreviewMode.Before : RepairPreviewMode.After,
+          preview.render === undefined && preview.patchRender === undefined
+            ? RepairPreviewMode.Before
+            : RepairPreviewMode.After,
         changeOverlays: CHANGE_OVERLAYS_SHOWN,
         fraction: 1,
         phase: undefined,
@@ -2145,6 +2196,7 @@ export class WorkspaceStore {
     readonly recordId: string;
     readonly appliedOperations: readonly RepairOperation[];
     readonly counts: RepairChangeCounts;
+    readonly filledOpenings?: number;
     readonly undoable: boolean;
     readonly partId: string;
     readonly render: RenderSnapshot;
@@ -2223,6 +2275,7 @@ export class WorkspaceStore {
         handle: result.handle,
         partId: this.state.activePartId,
         selection: this.state.repair.selection,
+        fillOpenings: this.state.repair.fillOpenings,
         lastApplied: {
           recordId: result.recordId,
           handle: result.handle,
@@ -2230,6 +2283,7 @@ export class WorkspaceStore {
           parentRevision: result.parentRevision,
           appliedOperations: result.appliedOperations,
           counts: result.counts,
+          filledOpenings: result.filledOpenings ?? 0,
           undoable: result.undoable,
         },
       },
@@ -2343,6 +2397,7 @@ export class WorkspaceStore {
         handle: result.handle,
         partId: this.state.activePartId,
         selection: this.state.repair.selection,
+        fillOpenings: this.state.repair.fillOpenings,
       },
     });
     return true;
@@ -2766,6 +2821,7 @@ export class WorkspaceStore {
         handle: result.handle,
         partId: this.state.activePartId,
         selection: this.state.repair.selection,
+        fillOpenings: this.state.repair.fillOpenings,
       },
       holeFill: {
         ...EMPTY_HOLE_FILL,

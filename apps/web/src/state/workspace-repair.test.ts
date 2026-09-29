@@ -10,6 +10,7 @@ import type {
   RepairCandidateHandle,
   RepairValidation,
 } from '@cadfixer/geometry-runtime';
+import { BoundaryFillScanStatus, NO_BOUNDARY_FILL_PLAN } from '@cadfixer/geometry-runtime';
 import {
   DEFAULT_REPAIR_SELECTION,
   RepairCandidateState,
@@ -133,6 +134,7 @@ function previewFor(source: DocumentHandle): RepairPreview {
       generation: 1,
     } as RepairCandidateHandle,
     source,
+    boundaryFill: undefined,
     partId: PART,
     planHash: 'plan-hash',
     validation: { acceptance: 'ACCEPTED' } as RepairValidation,
@@ -262,6 +264,33 @@ describe('planning', () => {
     const token = store.beginRepairPlan(handle(1), PART, DEFAULT_REPAIR_SELECTION);
     store.commitRepairPlan(token, handle(1), planFor(handle(1), true));
 
+    expect(store.beginRepairPreview()).toBeUndefined();
+  });
+
+  it('starts a preview for a no-op plan when openings were admitted for filling (REPAIR-CORE-02)', () => {
+    // Regression: the store's gate refused every no-op conservative plan, so
+    // Repair model was enabled on a model with fillable openings and pressing
+    // it did nothing at all.
+    const store = new WorkspaceStore();
+    const importToken = store.beginImport('part.stl');
+    store.commitImport(importToken, loadedModel());
+    const token = store.beginRepairPlan(handle(1), PART, DEFAULT_REPAIR_SELECTION);
+    store.commitRepairPlan(token, handle(1), planFor(handle(1), true), {
+      ...NO_BOUNDARY_FILL_PLAN,
+      status: BoundaryFillScanStatus.Scanned,
+      admittedCount: 3,
+      admittedPatchFaces: 6,
+    });
+    expect(store.beginRepairPreview()).toBeDefined();
+
+    // And not when filling is switched off.
+    store.setFillOpenings(false);
+    const replanned = store.beginRepairPlan(handle(1), PART, DEFAULT_REPAIR_SELECTION);
+    store.commitRepairPlan(replanned, handle(1), planFor(handle(1), true), {
+      ...NO_BOUNDARY_FILL_PLAN,
+      status: BoundaryFillScanStatus.Scanned,
+      admittedCount: 3,
+    });
     expect(store.beginRepairPreview()).toBeUndefined();
   });
 });

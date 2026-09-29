@@ -3971,6 +3971,25 @@
   overflow-y: auto;
 }
 
+.info-panel__list {
+  margin: 0 0 6px;
+  padding-left: 16px;
+}
+
+.repair-preview__left-open {
+  margin: 0 0 8px;
+  padding: 6px 8px;
+  border-left: 3px solid var(--cad-warning);
+  border-radius: var(--radius-sm);
+  background: var(--cad-warning-soft);
+}
+
+.repair-preview__left-open-headline {
+  margin: 0 0 2px;
+  color: var(--cad-text-strong);
+  font: 600 var(--fs-secondary) var(--font-body);
+}
+
 .holefill__limit {
   display: flex;
   align-items: flex-start;

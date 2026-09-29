@@ -87,3 +87,40 @@ export type HoleFillWorkerReply =
 export type HoleFillWorkerOutbound =
   | { readonly kind: 'ready' }
   | { readonly kind: 'started'; readonly operationId: string; readonly faceCount: number };
+
+/* ------------------------------------------ REPAIR-CORE-02: local check -- */
+
+/**
+ * Sent by the AUTHORITATIVE worker: the LOCAL region of every admitted patch.
+ *
+ * NOT THE PART. Only the existing triangles whose boxes can reach a patch, their
+ * distinct points welded by exact coordinates and widened to Float64, and the
+ * patches appended after them. Everything else about the model stays in the
+ * authoritative worker. The buffers are freshly built for this message, so
+ * transferring them detaches nothing authoritative.
+ */
+export interface LocalVerifyMessage {
+  readonly kind: 'verify-local';
+  readonly operationId: string;
+  readonly positions: Float64Array;
+  readonly triangles: Uint32Array;
+  readonly sourceFaceCount: number;
+  readonly loopRanges: Uint32Array;
+}
+
+/** One verdict per loop range, in the order the ranges were sent. */
+export interface LocalVerdictWire {
+  readonly complete: boolean;
+  readonly budgetExceeded: boolean;
+  readonly testedPairs: number;
+  readonly invalidPatchSourcePairs: number;
+  readonly invalidPatchPatchPairs: number;
+}
+
+export type LocalVerifyReply =
+  | {
+      readonly kind: 'verified';
+      readonly operationId: string;
+      readonly verdicts: readonly LocalVerdictWire[];
+    }
+  | { readonly kind: 'failed'; readonly operationId: string; readonly reason: string };

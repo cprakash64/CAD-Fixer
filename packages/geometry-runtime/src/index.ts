@@ -279,3 +279,17 @@ export type {
   TextureLayoutResult,
   TextureSelectResult,
 } from './protocol';
+
+export {
+  BOUNDARY_FILL_LOOP_LIST_LIMIT,
+  BOUNDARY_FILL_MAX_OPENINGS_PER_REPAIR,
+  BoundaryFillOutcomeStatus,
+  BoundaryFillScanStatus,
+  BoundaryFillVerdict,
+  NO_BOUNDARY_FILL_PLAN,
+} from './boundary-fill';
+export type {
+  BoundaryFillLoopSummary,
+  BoundaryFillOutcome,
+  BoundaryFillPlan,
+} from './boundary-fill';

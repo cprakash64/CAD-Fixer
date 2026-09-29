@@ -16,8 +16,10 @@ import {
   planConservativeRepair,
   RepairAcceptance,
   RepairCancelled,
+  VolumeComparison,
 } from '@cadfixer/mesh-repair';
 import {
+  NO_BOUNDARY_FILL_PLAN,
   UndoableChangeKind,
   documentByteLength,
   isDocument,
@@ -51,6 +53,7 @@ import {
   topologyReports,
   yieldToEventLoop,
 } from './stl-handlers';
+import { fillPlanKey, planBoundaryFill, releaseFillPlans, runFillStage } from './boundary-fill';
 
 /**
  * WORKER HANDLERS FOR CONSERVATIVE REPAIR.
@@ -222,6 +225,69 @@ function rethrowAsProtocolError(cause: unknown): never {
   throw cause;
 }
 
+/**
+ * The combined result of conservative repair and the fill stage — REPAIR-CORE-02.
+ *
+ * ONE CANDIDATE, ONE VALIDATION, and the validation describes the change from
+ * the SOURCE the user has to the candidate they would get: `before` is the
+ * source's report, `after` is Stage 2's independent analysis of the filled
+ * candidate. The fill stage has already held that analysis to its exact
+ * prediction, and conservative repair held its own stage to its own; nothing
+ * here decides acceptance, it only records it.
+ *
+ * VOLUME IS NOT COMPARED. Closing an opening changes whether a signed volume
+ * means anything at all, so the comparison is reported as not interpretable
+ * rather than as a change someone should worry about.
+ */
+function combineWithFill(
+  conservative: ReturnType<typeof executeConservativeRepair>,
+  sourceReport: TopologyReport,
+  candidate: CanonicalMesh,
+  after: TopologyReport,
+): ReturnType<typeof executeConservativeRepair> {
+  const base = conservative.validation;
+  const before = sourceReport;
+  return {
+    ...conservative,
+    candidate,
+    validation: {
+      ...base,
+      acceptance: RepairAcceptance.Accepted,
+      before,
+      after,
+      deltas: {
+        triangles: after.sourceFaceCount - before.sourceFaceCount,
+        topologicalVertices: after.topologicalVertexCount - before.topologicalVertexCount,
+        components: after.componentCount - before.componentCount,
+        boundaryEdges: after.boundaryEdgeCount - before.boundaryEdgeCount,
+        nonManifoldEdges: after.nonManifoldEdgeCount - before.nonManifoldEdgeCount,
+        nonManifoldVertices: after.nonManifoldVertexCount - before.nonManifoldVertexCount,
+        windingConflicts: after.windingConflictEdgeCount - before.windingConflictEdgeCount,
+        sameOrientationDuplicates:
+          after.sameOrientationDuplicateCount - before.sameOrientationDuplicateCount,
+        reversedOrientationDuplicates:
+          after.reversedOrientationDuplicateCount - before.reversedOrientationDuplicateCount,
+        repeatedPositionFaces: after.repeatedPositionFaceCount - before.repeatedPositionFaceCount,
+        zeroAreaFaces: after.zeroAreaFaceCount - before.zeroAreaFaceCount,
+      },
+      structurallyValid: true,
+      surfaceAreaBefore: before.totalSurfaceArea,
+      surfaceAreaAfter: after.totalSurfaceArea,
+      signedVolumeBefore: before.totalSignedVolume,
+      signedVolumeAfter: after.totalSignedVolume,
+      volumeComparison: VolumeComparison.NotInterpretable,
+      boundsAfter: computeBounds(candidate),
+      regressions: [],
+    },
+    counts: {
+      ...conservative.counts,
+      candidateFaceCount: triangleCount(candidate),
+    },
+    // Patch faces have no source face; the map keeps describing the prefix.
+    candidateToSourceFace: conservative.candidateToSourceFace,
+  };
+}
+
 const runRepairPlan: OperationHandler<'repair/plan'> = async (payload, context) => {
   requireInterruptible(context);
   const part = residentDocuments.resolvePart(payload.handle, payload.partId as PartId);
@@ -255,9 +321,25 @@ const runRepairPlan: OperationHandler<'repair/plan'> = async (payload, context) 
       ? {}
       : { memoryBudgetBytes: payload.memoryBudgetBytes }),
   });
+
+  /*
+   * REPAIR-CORE-02: what automatic filling would attempt, decided here from the
+   * compact scan. Cached per revision, so replanning after an option toggle
+   * does not rescan a part that has not changed.
+   */
+  const boundaryFill =
+    payload.fillOpenings === true
+      ? planBoundaryFill(
+          fillPlanKey(payload.handle.documentId, payload.handle.revision, part.id),
+          resolved,
+          () => {
+            context.throwIfCancelled();
+          },
+        ).plan
+      : NO_BOUNDARY_FILL_PLAN;
   context.reportProgress(1, 'planned');
 
-  return { value: { handle: payload.handle, partId: part.id, plan } };
+  return { value: { handle: payload.handle, partId: part.id, plan, boundaryFill } };
 };
 
 /**
@@ -340,10 +422,28 @@ const runRepairCreateCandidate: OperationHandler<'repair/create-candidate'> = as
     });
   }
 
+  /*
+   * FILL WHAT WAS PREVIEWED — REPAIR-CORE-02. The admitted set the user saw is
+   * bound by its hash; a different set now means the source changed.
+   */
+  const fillRequested = payload.fillOpenings === true;
+  const fillKey = fillPlanKey(payload.handle.documentId, payload.handle.revision, part.id);
+  const sourceFill = fillRequested
+    ? planBoundaryFill(fillKey, resolved, () => {
+        context.throwIfCancelled();
+      })
+    : undefined;
+  if (sourceFill !== undefined && sourceFill.plan.planHash !== payload.fillPlanHash) {
+    throw invalidState('The model changed since this repair was planned.', {
+      expected: payload.fillPlanHash ?? 'none',
+      computed: sourceFill.plan.planHash,
+    });
+  }
+
   // Cancellation thrown from here — or from the preparation above — is converted
   // at the handler boundary by `rethrowAsProtocolError`. M0 is untouched either
   // way: the pipeline only ever wrote to a candidate.
-  const outcome = executeConservativeRepair({
+  const conservative = executeConservativeRepair({
     source: resolved,
     plan,
     sourceReport: report,
@@ -358,6 +458,46 @@ const runRepairCreateCandidate: OperationHandler<'repair/create-candidate'> = as
       context.reportProgress(fraction, note);
     },
   });
+
+  /*
+   * THE FILL STAGE — REPAIR-CORE-02. It runs on what conservative repair
+   * produced (or on the source, when that was a no-op) and only when that
+   * result was ACCEPTED: filling never rescues a rejected candidate. The
+   * combined result is ONE candidate, applied atomically and undone as one.
+   */
+  const conservativeAccepted =
+    conservative.candidate !== undefined &&
+    conservative.validation.acceptance === RepairAcceptance.Accepted;
+  const conservativeRan = conservative.validation.acceptance !== RepairAcceptance.NoOp;
+  const fillBase: CanonicalMesh | undefined = conservativeAccepted
+    ? conservative.candidate
+    : conservativeRan
+      ? undefined
+      : resolved;
+  const fill =
+    fillRequested && fillBase !== undefined
+      ? await runFillStage({
+          mesh: fillBase,
+          report: fillBase === resolved ? report : conservative.validation.after,
+          record: fillBase === resolved ? sourceFill : undefined,
+          verifierPort: payload.verifierPort,
+          operationId: `${payload.handle.documentId}@${String(payload.handle.revision)}/${part.id}`,
+          documentId: payload.handle.documentId,
+          partId: part.id,
+          revision: payload.handle.revision,
+          cancellation: context.cancellation,
+          throwIfCancelled: () => {
+            context.throwIfCancelled();
+          },
+          onProgress: (fraction, note) => {
+            context.reportProgress(fraction, note);
+          },
+        })
+      : undefined;
+  const outcome =
+    fill?.candidate === undefined || fill.after === undefined
+      ? conservative
+      : combineWithFill(conservative, report, fill.candidate, fill.after);
 
   /*
    * THE SECOND CANCELLATION WINDOW, and the load-bearing one. It sits BEFORE the
@@ -377,8 +517,28 @@ const runRepairCreateCandidate: OperationHandler<'repair/create-candidate'> = as
       ? repairCandidates.create(payload.handle, part.id, outcome.candidate, outcome.validation)
       : undefined;
 
+  /*
+   * FILL-ONLY CANDIDATES SEND THE PATCH, NOT THE PART — REPAIR-CORE-02. When
+   * conservative repair changed nothing, the candidate is the source plus
+   * appended faces, so the preview needs only those faces. A full snapshot of
+   * a 2M-triangle part is ~144 MB and a multi-second upload for a change of a
+   * few dozen triangles.
+   */
+  const fillOnly =
+    outcome.candidate !== undefined &&
+    fill?.candidate === outcome.candidate &&
+    fillBase === resolved;
   const render: RenderSnapshot | undefined =
-    outcome.candidate === undefined ? undefined : buildRenderSnapshot(outcome.candidate);
+    outcome.candidate === undefined || fillOnly
+      ? undefined
+      : buildRenderSnapshot(outcome.candidate);
+  const patchRender: RenderSnapshot | undefined = fillOnly
+    ? buildRenderSnapshot({
+        positions: outcome.candidate.positions,
+        indices: outcome.candidate.indices.subarray(resolved.indices.length),
+        metadata: outcome.candidate.metadata,
+      })
+    : undefined;
 
   return {
     value: {
@@ -396,8 +556,12 @@ const runRepairCreateCandidate: OperationHandler<'repair/create-candidate'> = as
       candidateBounds:
         outcome.candidate === undefined ? undefined : computeBounds(outcome.candidate),
       render,
+      boundaryFill: fill?.outcome,
+      patchRender,
     },
-    ...(render === undefined ? {} : { transfer: [render.positions.buffer, render.normals.buffer] }),
+    transfer: [render, patchRender].flatMap((snapshot) =>
+      snapshot === undefined ? [] : [snapshot.positions.buffer, snapshot.normals.buffer],
+    ),
   };
 };
 
@@ -562,6 +726,7 @@ export function createRepairCommitHandler(
      */
     holeFillCandidates.releaseDocument(next.documentId);
     geometryEdits.releaseDocument(next.documentId);
+    releaseFillPlans(next.documentId);
 
     return Promise.resolve({
       value: {

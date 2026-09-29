@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import type { ConservativeRepairPlan } from '@cadfixer/geometry-runtime';
+import type { BoundaryFillPlan, ConservativeRepairPlan } from '@cadfixer/geometry-runtime';
 import { SelfIntersectionBand } from '@cadfixer/mesh-self-intersection';
 import { isInterruptibleRepairSupported } from '../runtime/cancellation-support';
 import { IssueSeverity, type RepairIssue, type RepairIssueId } from './repair-issues';
@@ -33,6 +33,10 @@ export interface RepairWorkspaceView {
   readonly reportIsCurrent: boolean;
   /** The plan, only when it was derived for the current revision and part. */
   readonly currentPlan: ConservativeRepairPlan | undefined;
+  /** The fill plan that belongs to `currentPlan`, when filling is selected. */
+  readonly currentFill: BoundaryFillPlan | undefined;
+  /** Openings Repair model would attempt: admitted, and filling selected. */
+  readonly fillableOpenings: number;
   /** Issue types currently detected (errors and warnings). */
   readonly detectedIssueTypes: number;
 }
@@ -62,6 +66,9 @@ export function useRepairWorkspace(): RepairWorkspaceView {
       ? plan
       : undefined;
 
+  const currentFill = currentPlan === undefined ? undefined : repair.fillPlan;
+  const fillableOpenings = repair.fillOpenings ? (currentFill?.admittedCount ?? 0) : 0;
+
   const report = reportIsCurrent ? analysis.report : undefined;
   const partFaceCount =
     model?.parts.find((part) => part.partId === activePartId)?.triangleCount ??
@@ -82,15 +89,25 @@ export function useRepairWorkspace(): RepairWorkspaceView {
           },
           partFaceCount,
           selfIntersectionSizeLimited: selfIntersection.band === SelfIntersectionBand.SizeLimit,
+          fillSelected: repair.fillOpenings,
+          fill: currentFill,
         }),
       );
     }
     return map;
-  }, [currentPlan, navigation.issues, partFaceCount, report, selfIntersection.band]);
+  }, [
+    currentFill,
+    currentPlan,
+    navigation.issues,
+    partFaceCount,
+    repair.fillOpenings,
+    report,
+    selfIntersection.band,
+  ]);
 
   const scope = useMemo(
-    () => deriveRepairScope(navigation.issues, statuses),
-    [navigation.issues, statuses],
+    () => deriveRepairScope(navigation.issues, statuses, fillableOpenings),
+    [fillableOpenings, navigation.issues, statuses],
   );
   const detectedIssueTypes = countDetected(navigation.issues);
 
@@ -101,6 +118,7 @@ export function useRepairWorkspace(): RepairWorkspaceView {
     isAnalyzing,
     planState: repair.planState,
     planNoOp: currentPlan?.noOp,
+    fillableOpenings,
     candidateState: repair.candidateState,
     commitState: repair.commitState,
     detectedIssueTypes,
@@ -113,6 +131,8 @@ export function useRepairWorkspace(): RepairWorkspaceView {
     action,
     reportIsCurrent,
     currentPlan,
+    currentFill,
+    fillableOpenings,
     detectedIssueTypes,
   };
 }

@@ -20,6 +20,7 @@ import {
 import { useGeometryClient } from '../runtime/client-context';
 import { useWorkspaceState, useWorkspaceStore } from './store-context';
 import { presentAcceptance, RESOURCE_LIMIT_DETAIL, describeApplied } from './repair-presentation';
+import { describeFillFailure } from './repair-workspace-presentation';
 import {
   AnalysisState,
   RepairCandidateState,
@@ -57,6 +58,8 @@ export interface ConservativeRepairControls {
   readonly applyRepair: () => void;
   readonly undoLastRepair: () => void;
   readonly setOperationSelected: (operation: RepairOperation, selected: boolean) => void;
+  /** Include or exclude automatic opening fills — REPAIR-CORE-02. */
+  readonly setFillOpenings: (fill: boolean) => void;
   readonly setPreviewMode: (mode: RepairPreviewMode) => void;
   readonly replan: () => void;
   readonly isBusy: boolean;
@@ -124,7 +127,12 @@ export function useConservativeRepair(): ConservativeRepairControls {
   /* ---------------------------------------------------------------- plan -- */
 
   const startPlan = useCallback(
-    (handle: DocumentHandle, partId: string, selection: readonly RepairOperation[]): void => {
+    (
+      handle: DocumentHandle,
+      partId: string,
+      selection: readonly RepairOperation[],
+      fillOpenings: boolean,
+    ): void => {
       if (client === undefined) return;
 
       sessionRef.current?.cancel();
@@ -135,6 +143,7 @@ export function useConservativeRepair(): ConservativeRepairControls {
         partId,
         client,
         requested: selection,
+        fillOpenings,
         memoryBudgetBytes: memoryCeiling.bytes,
         onProgress: (progress) => {
           store.reportRepairProgress(token, progress.fraction, progress.phase);
@@ -145,7 +154,7 @@ export function useConservativeRepair(): ConservativeRepairControls {
       session.promise.then(
         (outcome) => {
           sessionRef.current = undefined;
-          store.commitRepairPlan(token, outcome.handle, outcome.plan);
+          store.commitRepairPlan(token, outcome.handle, outcome.plan, outcome.boundaryFill);
         },
         (cause: unknown) => {
           sessionRef.current = undefined;
@@ -203,10 +212,10 @@ export function useConservativeRepair(): ConservativeRepairControls {
       return;
     }
 
-    const key = `${model.handle.documentId}@${String(model.handle.revision)}/${activePartId}#${repair.selection.join(',')}`;
+    const key = `${model.handle.documentId}@${String(model.handle.revision)}/${activePartId}#${repair.selection.join(',')}#fill=${String(repair.fillOpenings)}`;
     if (plannedForRef.current === key) return;
     plannedForRef.current = key;
-    startPlan(model.handle, activePartId, repair.selection);
+    startPlan(model.handle, activePartId, repair.selection, repair.fillOpenings);
   }, [
     activePartId,
     analysis.handle,
@@ -215,6 +224,7 @@ export function useConservativeRepair(): ConservativeRepairControls {
     analysis.state,
     client,
     model,
+    repair.fillOpenings,
     repair.selection,
     startPlan,
   ]);
@@ -261,7 +271,12 @@ export function useConservativeRepair(): ConservativeRepairControls {
   const previewRepair = useCallback((): void => {
     if (client === undefined || model === undefined || activePartId === undefined) return;
     const plan = repair.plan;
-    if (plan === undefined || plan.noOp) return;
+    // REPAIR-CORE-02: a plan with no conservative work may still fill openings.
+    const fill =
+      repair.fillOpenings && repair.fillPlan !== undefined && repair.fillPlan.admittedCount > 0
+        ? { planHash: repair.fillPlan.planHash }
+        : undefined;
+    if (plan === undefined || (plan.noOp && fill === undefined)) return;
     /*
      * THE CANDIDATE IS BUILT FOR THE PART THE PLAN WAS BUILT FOR. If the user
      * switched parts since planning, the slice was re-bound and there is no plan
@@ -287,6 +302,7 @@ export function useConservativeRepair(): ConservativeRepairControls {
       planHash: plan.planHash,
       memoryBudgetBytes: memoryCeiling.bytes,
       sampleLimit: CHANGE_SAMPLE_LIMIT,
+      ...(fill === undefined ? {} : { fill }),
       onProgress: (progress) => {
         store.reportRepairProgress(token, progress.fraction, progress.phase);
       },
@@ -306,6 +322,20 @@ export function useConservativeRepair(): ConservativeRepairControls {
           outcome.candidate === undefined ||
           outcome.validation.acceptance !== RepairAcceptance.Accepted
         ) {
+          // Nothing to preview because every opening was refused by the exact
+          // check: say that, rather than "no changes".
+          const fillFailure =
+            outcome.validation.acceptance === RepairAcceptance.NoOp
+              ? describeFillFailure(outcome.boundaryFill)
+              : undefined;
+          if (fillFailure !== undefined) {
+            store.failRepairCandidate(token, {
+              message: fillFailure,
+              code: 'fill-refused',
+              retryable: false,
+            });
+            return;
+          }
           const presented = presentAcceptance(
             outcome.validation.acceptance,
             outcome.validation.regressions,
@@ -329,6 +359,8 @@ export function useConservativeRepair(): ConservativeRepairControls {
           render: outcome.render,
           bounds: outcome.candidateBounds,
           undoRetainedBytes: outcome.undoRetainedBytes,
+          boundaryFill: outcome.boundaryFill,
+          ...(outcome.patchRender === undefined ? {} : { patchRender: outcome.patchRender }),
         });
 
         if (!installed) {
@@ -368,6 +400,8 @@ export function useConservativeRepair(): ConservativeRepairControls {
     memoryCeiling.bytes,
     model,
     releaseCandidate,
+    repair.fillOpenings,
+    repair.fillPlan,
     repair.partId,
     repair.plan,
     repair.selection,
@@ -432,6 +466,7 @@ export function useConservativeRepair(): ConservativeRepairControls {
           partId: result.partId,
           appliedOperations: result.appliedOperations,
           counts: preview.counts,
+          filledOpenings: preview.boundaryFill?.filledCount ?? 0,
           undoable: result.undoable,
           render: result.render,
           parts: result.parts,
@@ -544,6 +579,15 @@ export function useConservativeRepair(): ConservativeRepairControls {
     [releaseCandidate, repair.selection, store],
   );
 
+  const setFillOpenings = useCallback(
+    (fill: boolean): void => {
+      // A change of scope invalidates the preview exactly as a selection does.
+      releaseCandidate();
+      store.setFillOpenings(fill);
+    },
+    [releaseCandidate, store],
+  );
+
   const setPreviewMode = useCallback(
     (mode: RepairPreviewMode): void => {
       store.setRepairPreviewMode(mode);
@@ -554,8 +598,8 @@ export function useConservativeRepair(): ConservativeRepairControls {
   const replan = useCallback((): void => {
     if (model === undefined || activePartId === undefined) return;
     plannedForRef.current = undefined;
-    startPlan(model.handle, activePartId, repair.selection);
-  }, [activePartId, model, repair.selection, startPlan]);
+    startPlan(model.handle, activePartId, repair.selection, repair.fillOpenings);
+  }, [activePartId, model, repair.fillOpenings, repair.selection, startPlan]);
 
   return {
     previewRepair,
@@ -564,6 +608,7 @@ export function useConservativeRepair(): ConservativeRepairControls {
     applyRepair,
     undoLastRepair,
     setOperationSelected,
+    setFillOpenings,
     setPreviewMode,
     replan,
     isBusy:

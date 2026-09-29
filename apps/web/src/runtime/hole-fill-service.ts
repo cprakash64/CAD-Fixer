@@ -261,5 +261,58 @@ export class HoleFillService {
   }
 }
 
+/* ------------------------------------------------------------------------ */
+
+/**
+ * THE DISPOSABLE VERIFIER FOR AUTOMATIC FILLING — REPAIR-CORE-02.
+ *
+ * Repair model may close openings; the exact check that each patch passes
+ * through nothing runs in the Geogram kernel, which lives only in the
+ * disposable fill worker. This opens one such worker for ONE repair preview,
+ * hands the geometry worker its end of a channel, and throws both away when the
+ * preview settles or is cancelled. Constructed HERE, beside the per-opening
+ * service, so the fill worker has exactly one constructor in the application.
+ *
+ * CANCELLATION IS TERMINATION. The exact check polls no JavaScript flag, so the
+ * worker is terminated rather than asked to stop; the geometry worker's side of
+ * the exchange settles on the repair operation's own cancellation.
+ *
+ * BUILT ONLY WHEN A PREVIEW NEEDS IT — the same rule as the per-opening fill
+ * worker. Planning, opening the panel and toggling options construct nothing.
+ */
+export interface FillVerifier {
+  /** Transfer this to the geometry worker with the candidate request. */
+  readonly port: MessagePort;
+  /** Terminates the worker and closes the channel. Idempotent. */
+  dispose(): void;
+}
+
+export function openFillVerifier(
+  onFailure: () => void,
+  createWorker: HoleFillWorkerFactory = defaultWorkerFactory,
+): FillVerifier {
+  const worker = createWorker();
+  const channel = new MessageChannel();
+  let disposed = false;
+
+  // A worker that dies cannot answer; the caller must not wait for it.
+  worker.addEventListener('error', () => {
+    if (disposed) return;
+    onFailure();
+  });
+  worker.postMessage({ kind: 'port', port: channel.port2 }, [channel.port2]);
+
+  return {
+    port: channel.port1,
+    dispose(): void {
+      if (disposed) return;
+      disposed = true;
+      worker.terminate();
+      channel.port1.close();
+      channel.port2.close();
+    },
+  };
+}
+
 /** The ceilings and the status taxonomy, re-exported so callers need not reach past the service. */
 export { HOLE_FILL_MAX_BOUNDARY_VERTICES, HOLE_FILL_MAX_PART_FACES, HoleFillStatus };

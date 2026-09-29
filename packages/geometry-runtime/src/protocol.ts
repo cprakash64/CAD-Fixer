@@ -28,6 +28,7 @@ import type { UndoableChangeKind } from './repair-history';
 // code is pulled into the main-thread bundle. The VALUES the interface compares
 // against are restated in `hole-fill.ts`.
 import type { BoundaryLoopRefusal, HoleFillStatus, HoleFillValidationSummary } from './hole-fill';
+import type { BoundaryFillOutcome, BoundaryFillPlan } from './boundary-fill';
 
 /**
  * Wire protocol between the main thread and geometry workers.
@@ -563,12 +564,19 @@ export interface RepairPlanPayload {
   readonly requested: readonly RepairOperation[];
   /** Refuse before allocating if the estimated peak exceeds this. */
   readonly memoryBudgetBytes?: number;
+  /**
+   * Also plan automatic filling of eligible simple planar openings —
+   * REPAIR-CORE-02. Absent or false: nothing is scanned.
+   */
+  readonly fillOpenings?: boolean;
 }
 
 export interface RepairPlanOperationResult {
   readonly handle: DocumentHandle;
   readonly partId: string;
   readonly plan: ConservativeRepairPlan;
+  /** What automatic filling would attempt. `NOT_REQUESTED` when not asked for. */
+  readonly boundaryFill: BoundaryFillPlan;
 }
 
 export interface RepairCandidatePayload {
@@ -585,6 +593,16 @@ export interface RepairCandidatePayload {
   readonly planHash: string;
   readonly memoryBudgetBytes?: number;
   readonly sampleLimit?: number;
+  /** Fill eligible openings as part of this candidate — REPAIR-CORE-02. */
+  readonly fillOpenings?: boolean;
+  /** `BoundaryFillPlan.planHash` the caller saw. Re-checked against the source. */
+  readonly fillPlanHash?: string;
+  /**
+   * A channel to a disposable worker that runs the exact intersection check on
+   * the LOCAL region of the patches. Without it no opening can be verified, and
+   * none is filled.
+   */
+  readonly verifierPort?: ProtocolPort;
 }
 
 /**
@@ -614,6 +632,15 @@ export interface RepairCandidateResult {
   readonly undoRetainedBytes: number;
   readonly candidateBounds: MeshBounds | undefined;
   readonly render: RenderSnapshot | undefined;
+  /** What the fill stage did. Undefined when filling was not requested. */
+  readonly boundaryFill: BoundaryFillOutcome | undefined;
+  /**
+   * THE PATCH ONLY, when filling is the only change — REPAIR-CORE-02. Every
+   * existing triangle is untouched, so the preview draws these beside the model
+   * the viewport already holds instead of uploading a second copy of a
+   * multi-million-triangle part. `render` is then undefined.
+   */
+  readonly patchRender: RenderSnapshot | undefined;
 }
 
 export interface RepairCommitPayload {

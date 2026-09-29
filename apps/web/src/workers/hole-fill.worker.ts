@@ -1,6 +1,6 @@
 /// <reference lib="webworker" />
 
-import { runHoleFill, HoleFillStatus } from '@cadfixer/mesh-hole-fill';
+import { classifyLocalPatches, runHoleFill, HoleFillStatus } from '@cadfixer/mesh-hole-fill';
 import type { CanonicalMesh } from '@cadfixer/mesh-core';
 import { createKernelNarrowphase, loadHoleFillKernel } from './hole-fill-narrowphase';
 import type {
@@ -8,6 +8,8 @@ import type {
   HoleFillPortMessage,
   HoleFillWorkerOutbound,
   HoleFillWorkerReply,
+  LocalVerifyMessage,
+  LocalVerifyReply,
 } from './hole-fill-protocol';
 
 /**
@@ -107,10 +109,53 @@ async function runFill(port: MessagePort, message: HoleFillGeometryMessage): Pro
   ]);
 }
 
+/**
+ * REPAIR-CORE-02: the exact check over a LOCAL region, one verdict per loop.
+ *
+ * The same kernel and the same patch-attributed question as `runFill`, asked of
+ * the small region the authoritative worker collected rather than of a copy of
+ * the whole part. Nothing comes back but scalars: the patches themselves stay
+ * with the authoritative worker, which decides what to append.
+ */
+async function runLocalVerify(port: MessagePort, message: LocalVerifyMessage): Promise<void> {
+  const module = await loadHoleFillKernel();
+  const verdicts = classifyLocalPatches(
+    {
+      positions: message.positions,
+      triangles: message.triangles,
+      sourceFaceCount: message.sourceFaceCount,
+      loopRanges: message.loopRanges,
+      loopIds: [],
+      excluded: [],
+    },
+    createKernelNarrowphase(module),
+  );
+  const reply: LocalVerifyReply = {
+    kind: 'verified',
+    operationId: message.operationId,
+    verdicts: verdicts.map((verdict) => ({ ...verdict })),
+  };
+  port.postMessage(reply);
+}
+
 self.addEventListener('message', (event: MessageEvent<HoleFillPortMessage>) => {
   const port = event.data.port;
-  port.onmessage = (geometry: MessageEvent<HoleFillGeometryMessage>): void => {
-    void runFill(port, geometry.data).catch((cause: unknown) => {
+  port.onmessage = (geometry: MessageEvent<HoleFillGeometryMessage | LocalVerifyMessage>): void => {
+    if (geometry.data.kind === 'verify-local') {
+      const request = geometry.data;
+      void runLocalVerify(port, request).catch((cause: unknown) => {
+        // A failure is still an answer; the authoritative side is awaiting it.
+        const failure: LocalVerifyReply = {
+          kind: 'failed',
+          operationId: request.operationId,
+          reason: cause instanceof Error ? cause.message : 'the local check failed',
+        };
+        port.postMessage(failure);
+      });
+      return;
+    }
+    const fill = geometry.data;
+    void runFill(port, fill).catch((cause: unknown) => {
       /*
        * A FAILURE IS STILL AN ANSWER. The authoritative worker is awaiting this
        * channel; staying silent would leave its operation pending forever and
@@ -118,7 +163,7 @@ self.addEventListener('message', (event: MessageEvent<HoleFillPortMessage>) => {
        */
       const failure: HoleFillWorkerReply = {
         kind: 'failed',
-        operationId: geometry.data.operationId,
+        operationId: fill.operationId,
         reason: cause instanceof Error ? cause.message : 'the hole-fill engine failed',
       };
       port.postMessage(failure);

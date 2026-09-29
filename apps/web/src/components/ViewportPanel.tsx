@@ -104,7 +104,7 @@ export function ViewportPanel(): ReactNode {
    */
   const previewable =
     repair.candidateState === RepairCandidateState.Ready &&
-    repair.candidate?.render !== undefined &&
+    (repair.candidate?.render !== undefined || repair.candidate?.patchRender !== undefined) &&
     repair.candidate.source.documentId === model?.handle.documentId &&
     repair.candidate.source.revision === model.handle.revision &&
     repair.candidate.partId === activePartId
@@ -426,6 +426,8 @@ export function ViewportPanel(): ReactNode {
         ? currentTexture
         : undefined;
     const textureIsCurrent = texture !== undefined;
+    // A fill-only candidate has no full render: its patch is drawn as an
+    // overlay beside the unchanged model instead (see the hole-fill effect).
     const render = texture?.render ?? previewable?.render;
     if (render === undefined || model === undefined) {
       viewport.setPreview(undefined);
@@ -525,17 +527,30 @@ export function ViewportPanel(): ReactNode {
       candidate.source.revision === model.handle.revision &&
       candidate.partId === activePartId;
 
-    if (!rimBelongs && !patchBelongs) {
+    /*
+     * REPAIR-CORE-02: a fill-only repair preview is drawn the same way — the
+     * patch beside the unchanged model — and only while "After" is showing.
+     */
+    const repairPatch =
+      previewable?.patchRender !== undefined && repair.previewMode === RepairPreviewMode.After
+        ? previewable.patchRender
+        : undefined;
+
+    if (!rimBelongs && !patchBelongs && repairPatch === undefined) {
       viewport.setHoleFillOverlays(undefined);
       return;
     }
 
     viewport.setHoleFillOverlays({
       boundaryPositions: rimBelongs ? rim.positions : undefined,
-      patchPositions: patchBelongs ? candidate.patchPositions : undefined,
-      patchNormals: patchBelongs ? candidate.patchNormals : undefined,
+      patchPositions: patchBelongs ? candidate.patchPositions : repairPatch?.positions,
+      patchNormals: patchBelongs ? candidate.patchNormals : repairPatch?.normals,
       revision: model.revision,
-      generation: patchBelongs ? candidate.candidate.generation : 0,
+      generation: patchBelongs
+        ? candidate.candidate.generation
+        : repairPatch === undefined
+          ? 0
+          : (previewable?.candidate.generation ?? 0),
     });
   }, [
     activePartId,
@@ -544,6 +559,8 @@ export function ViewportPanel(): ReactNode {
     holeFill.selectedLoopId,
     holeFill.workState,
     model,
+    previewable,
+    repair.previewMode,
   ]);
 
   const showingPreview =

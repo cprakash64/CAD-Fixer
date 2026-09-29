@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
-  HOLE_FILL_MAX_PART_FACES,
+  BoundaryFillScanStatus,
   RepairDecision,
   RepairOperation,
   RepairReason,
+  type BoundaryFillPlan,
   type ConservativeRepairPlan,
   type RepairOperationDecision,
 } from '@cadfixer/geometry-runtime';
@@ -116,7 +117,23 @@ function context(overrides: Partial<IssueStatusContext> = {}): IssueStatusContex
     boundaries: { simpleLoops: 0, openChains: 0, branched: 0 },
     partFaceCount: 1_000,
     selfIntersectionSizeLimited: false,
+    fillSelected: true,
+    fill: undefined,
     ...overrides,
+  };
+}
+
+function fillPlan(admitted: number): BoundaryFillPlan {
+  return {
+    status: BoundaryFillScanStatus.Scanned,
+    boundaryEdgeCount: 40,
+    simpleLoopCount: 6,
+    complexBoundaryCount: 7,
+    admittedCount: admitted,
+    admittedPatchFaces: admitted * 2,
+    loops: [],
+    loopsTruncated: false,
+    planHash: 'bf-test',
   };
 }
 
@@ -128,6 +145,7 @@ function action(overrides: Partial<RepairActionInput> = {}): RepairActionKind {
     isAnalyzing: false,
     planState: 'ready',
     planNoOp: false,
+    fillableOpenings: 0,
     candidateState: 'idle',
     commitState: 'idle',
     detectedIssueTypes: 1,
@@ -234,30 +252,48 @@ describe('issue fixability', () => {
     }
   });
 
-  it('splits open boundaries into simple and complex, and states the part-size limit', () => {
+  it('reads open boundaries from the worker’s fill plan, never from a count (REPAIR-CORE-02)', () => {
     const boundaries = { simpleLoops: 6, openChains: 2, branched: 5 };
-    const large = deriveIssueStatus(
-      issue(RepairIssueId.OpenBoundaries, 13),
-      context({ boundaries, partFaceCount: 1_988_877 }),
+    const open = issue(RepairIssueId.OpenBoundaries, 13);
+    const detail = '6 simple loops · 7 complex';
+
+    // Four of thirteen admitted, on a two-million-triangle part: partial, and
+    // the part size is no longer what decides.
+    expect(
+      deriveIssueStatus(open, context({ boundaries, partFaceCount: 1_988_877, fill: fillPlan(4) })),
+    ).toEqual({ fixability: Fixability.Partial, text: '4 fillable · 9 need attention', detail });
+
+    // Every opening admitted.
+    expect(
+      deriveIssueStatus(issue(RepairIssueId.OpenBoundaries, 2), context({ fill: fillPlan(2) })),
+    ).toMatchObject({ fixability: Fixability.Repairable, text: '2 fillable openings' });
+
+    // None admitted — e.g. only branched boundaries — is never presented as fillable.
+    expect(deriveIssueStatus(open, context({ boundaries, fill: fillPlan(0) })).fixability).toBe(
+      Fixability.NotRepairable,
     );
-    expect(large).toEqual({
+
+    // The scan refused to assemble loops: a resource limit, stated as such.
+    expect(
+      deriveIssueStatus(
+        open,
+        context({
+          boundaries,
+          fill: { ...fillPlan(0), status: BoundaryFillScanStatus.TooManyBoundaryEdges },
+        }),
+      ),
+    ).toMatchObject({
       fixability: Fixability.ResourceLimit,
-      text: 'Automatic filling isn’t available at this part size',
-      detail: '6 simple loops · 7 complex',
+      text: 'Too many open edges to check automatically',
     });
 
-    const small = deriveIssueStatus(
-      issue(RepairIssueId.OpenBoundaries, 13),
-      context({ boundaries, partFaceCount: HOLE_FILL_MAX_PART_FACES }),
+    // Filling switched off, and the plan still pending.
+    expect(deriveIssueStatus(open, context({ fillSelected: false })).fixability).toBe(
+      Fixability.NotSelected,
     );
-    expect(small.fixability).toBe(Fixability.Partial);
-
-    // Branched-only boundaries are never presented as fillable.
-    const complexOnly = deriveIssueStatus(
-      issue(RepairIssueId.OpenBoundaries, 7),
-      context({ boundaries: { simpleLoops: 0, openChains: 0, branched: 7 } }),
+    expect(deriveIssueStatus(open, context({ fill: undefined })).fixability).toBe(
+      Fixability.Pending,
     );
-    expect(complexOnly.fixability).toBe(Fixability.NotRepairable);
   });
 
   it('reads repairability from the plan decisions, never from the count alone', () => {
@@ -367,7 +403,7 @@ describe('issue fixability', () => {
 /* ------------------------------------------------------------ repair scope -- */
 
 describe('the repair scope line', () => {
-  it('counts issue TYPES Repair model acts on, and never the boundaries it cannot fill', () => {
+  it('counts issue TYPES Repair model acts on, including openings it can fill', () => {
     const issues = [
       issue(RepairIssueId.OpenBoundaries, 13),
       issue(RepairIssueId.NonManifoldVertices, 155, IssueSeverity.Error),
@@ -376,21 +412,50 @@ describe('the repair scope line', () => {
       issue(RepairIssueId.DuplicateFaces, 0),
     ];
     const statuses = new Map<RepairIssueId, IssueStatus>([
-      [RepairIssueId.OpenBoundaries, { fixability: Fixability.Partial, text: '' }],
+      [RepairIssueId.OpenBoundaries, { fixability: Fixability.NotRepairable, text: '' }],
       [RepairIssueId.NonManifoldVertices, { fixability: Fixability.NotRepairable, text: '' }],
       [RepairIssueId.DegenerateFaces, { fixability: Fixability.Repairable, text: '' }],
       [RepairIssueId.Components, { fixability: Fixability.Review, text: '' }],
     ]);
     const scope = deriveRepairScope(issues, statuses);
-    expect(scope).toEqual({ detected: 4, repairable: 1 });
+    expect(scope).toEqual({ detected: 4, repairable: 1, openings: 0 });
     expect(describeRepairScope(scope)).toBe(
       '1 repairable issue type of 4 detected. 3 types will need other attention.',
     );
     // A complete scope still promises only a review, never a result.
-    expect(describeRepairScope({ detected: 2, repairable: 2 })).toBe(
+    expect(describeRepairScope({ detected: 2, repairable: 2, openings: 0 })).toBe(
       '2 repairable issue types of 2 detected. You review the result before anything changes.',
     );
-    expect(describeRepairScope({ detected: 0, repairable: 0 })).toBe(REPAIR_MODEL_SUPPORT);
+    expect(describeRepairScope({ detected: 0, repairable: 0, openings: 0 })).toBe(
+      REPAIR_MODEL_SUPPORT,
+    );
+  });
+
+  it('names the openings when filling is the only work (the reported model)', () => {
+    const issues = [
+      issue(RepairIssueId.OpenBoundaries, 13),
+      issue(RepairIssueId.NonManifoldVertices, 155, IssueSeverity.Error),
+      issue(RepairIssueId.Components, 39),
+    ];
+    const statuses = new Map<RepairIssueId, IssueStatus>([
+      [RepairIssueId.OpenBoundaries, { fixability: Fixability.Partial, text: '' }],
+      [RepairIssueId.NonManifoldVertices, { fixability: Fixability.NotRepairable, text: '' }],
+      [RepairIssueId.Components, { fixability: Fixability.Review, text: '' }],
+    ]);
+    const scope = deriveRepairScope(issues, statuses, 4);
+    expect(scope).toEqual({ detected: 3, repairable: 1, openings: 4 });
+    expect(describeRepairScope(scope)).toBe(
+      '4 openings can be filled. Other detected issues will remain.',
+    );
+    // Never "13 boundaries repaired", never "fully".
+    expect(describeRepairScope(scope)).not.toMatch(/13|fully|all/);
+  });
+
+  it('enables Repair model for openings alone, even when every conservative operation is a no-op', () => {
+    expect(action({ planNoOp: true, fillableOpenings: 4 })).toBe(RepairActionKind.Ready);
+    expect(action({ planNoOp: true, fillableOpenings: 0, detectedIssueTypes: 3 })).toBe(
+      RepairActionKind.NothingSafe,
+    );
   });
 });
 
@@ -498,7 +563,7 @@ describe('vocabulary', () => {
       HOLE_FILL_SIZE_LIMIT_LINE,
       describeFileStructure(true),
       describeFileStructure(false),
-      describeRepairScope({ detected: 5, repairable: 2 }),
+      describeRepairScope({ detected: 5, repairable: 2, openings: 0 }),
       ...Object.values(REPAIR_OPTION_LABELS),
       ...[SUMMARY_INFO, REPAIR_OPTIONS_INFO, FILE_STRUCTURE_INFO, ADVANCED_INFO].flatMap((info) => [
         info.meaning,

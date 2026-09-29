@@ -1,4 +1,9 @@
 import type { ReactNode } from 'react';
+import {
+  BoundaryFillVerdict,
+  type BoundaryFillOutcome,
+  type BoundaryFillPlan,
+} from '@cadfixer/geometry-runtime';
 import type {
   ConservativeRepairPlan,
   RepairChangeCounts,
@@ -32,8 +37,13 @@ import {
   presentDecision,
 } from '../state/repair-presentation';
 import {
+  FILL_OPTION_INFO,
+  FILL_OPTION_LABEL,
   REPAIR_OPTIONS_INFO,
   REPAIR_OPTION_LABELS,
+  describeFillOptionStatus,
+  describeFillVerdict,
+  summariseFillVerdicts,
   UNDO_REPAIR_ACTION,
   describeAppliedChanges,
   describeOptionStatus,
@@ -74,7 +84,7 @@ export function RepairPanel(): ReactNode {
   const { model, activePartId, repair } = useWorkspaceState();
   const store = useWorkspaceStore();
   const controls = useRepairControls();
-  const { navigation, reportIsCurrent } = useRepairWorkspace();
+  const { navigation, reportIsCurrent, currentFill } = useRepairWorkspace();
 
   if (model === undefined) return null;
 
@@ -109,7 +119,7 @@ export function RepairPanel(): ReactNode {
     <PanelSection
       title="Repair options"
       testId="auto-repair"
-      meta={`${String(repair.selection.length)} of 4 selected`}
+      meta={`${String(repair.selection.length + (repair.fillOpenings ? 1 : 0))} of 5 selected`}
       info={REPAIR_OPTIONS_INFO}
     >
       <div className="repair-options" data-testid="repair-panel">
@@ -129,6 +139,7 @@ export function RepairPanel(): ReactNode {
           <AppliedResult
             operations={repair.lastApplied.appliedOperations}
             counts={repair.lastApplied.counts}
+            filledOpenings={repair.lastApplied.filledOpenings}
             remaining={reportIsCurrent ? describeRemaining(navigation.issues) : undefined}
             undoable={repair.lastApplied.undoable}
             undoing={repair.commitState === RepairCommitState.Undoing}
@@ -148,6 +159,11 @@ export function RepairPanel(): ReactNode {
               selection={repair.selection}
               disabled={isBuilding || isCommitting || previewReady}
               onToggle={controls.setOperationSelected}
+              fill={{
+                selected: repair.fillOpenings,
+                plan: currentFill,
+                onToggle: controls.setFillOpenings,
+              }}
             />
             {plan.warnings.length > 0 ? (
               <ul className="repair__warnings" data-testid="repair-plan-warnings">
@@ -171,6 +187,7 @@ export function RepairPanel(): ReactNode {
           <CandidateReview
             validation={candidate.validation}
             counts={candidate.counts}
+            boundaryFill={candidate.boundaryFill}
             samples={candidate.samples}
             unit={model.source.unit}
             previewMode={repair.previewMode}
@@ -216,16 +233,24 @@ export function RepairExclusions(): ReactNode {
 
 /* ------------------------------------------------------------- operations -- */
 
+interface FillOption {
+  readonly selected: boolean;
+  readonly plan: BoundaryFillPlan | undefined;
+  readonly onToggle: (selected: boolean) => void;
+}
+
 function OperationList({
   plan,
   selection,
   disabled,
   onToggle,
+  fill,
 }: {
   readonly plan: ConservativeRepairPlan;
   readonly selection: readonly RepairOperation[];
   readonly disabled: boolean;
   readonly onToggle: (operation: RepairOperation, selected: boolean) => void;
+  readonly fill: FillOption;
 }): ReactNode {
   const byOperation = new Map<RepairOperation, RepairOperationDecision>(
     plan.decisions.map((entry) => [entry.operation, entry]),
@@ -259,7 +284,78 @@ function OperationList({
           />
         );
       })}
+      <FillOptionRow fill={fill} disabled={disabled} />
     </ul>
+  );
+}
+
+/**
+ * REPAIR-CORE-02: automatic filling of simple flat openings, as a fifth option.
+ *
+ * The status is the WORKER'S admission count; the ⓘ breaks down why the other
+ * openings are left alone. Nothing here decides eligibility.
+ */
+function FillOptionRow({
+  fill,
+  disabled,
+}: {
+  readonly fill: FillOption;
+  readonly disabled: boolean;
+}): ReactNode {
+  const info = useInfoDisclosure();
+  const reasons =
+    fill.plan === undefined
+      ? []
+      : summariseFillVerdicts(fill.plan.loops, [BoundaryFillVerdict.Admitted]);
+  return (
+    <li
+      className={`repair-option repair-option--${
+        fill.selected && (fill.plan?.admittedCount ?? 0) > 0 ? 'available' : 'inactive'
+      }`}
+      data-testid="repair-op-fill-openings"
+    >
+      <div className="repair-option__row">
+        <label className="repair-option__label">
+          <input
+            type="checkbox"
+            checked={fill.selected}
+            disabled={disabled}
+            onChange={(event) => {
+              fill.onToggle(event.target.checked);
+            }}
+            data-testid="repair-op-toggle-fill-openings"
+          />
+          <span className="repair-option__name">{FILL_OPTION_LABEL}</span>
+        </label>
+        <span className="repair-option__status" data-testid="repair-op-status-fill-openings">
+          {describeFillOptionStatus(fill.selected, fill.plan)}
+        </span>
+        <InfoButton
+          disclosure={info}
+          label={FILL_OPTION_LABEL}
+          testId="repair-op-info-fill-openings"
+        />
+      </div>
+      <InfoPanel
+        disclosure={info}
+        label={FILL_OPTION_LABEL}
+        info={FILL_OPTION_INFO}
+        testId="repair-op-info-panel-fill-openings"
+      >
+        {reasons.length === 0 ? null : (
+          <ul className="info-panel__list" data-testid="fill-plan-reasons">
+            {reasons.map((entry) => (
+              <li key={entry.verdict}>
+                {entry.count.toLocaleString()} — {describeFillVerdict(entry.verdict)}
+              </li>
+            ))}
+          </ul>
+        )}
+        {fill.plan?.loopsTruncated === true ? (
+          <p className="info-panel__text">The first openings are listed; the counts are exact.</p>
+        ) : null}
+      </InfoPanel>
+    </li>
   );
 }
 
@@ -349,6 +445,7 @@ function OperationRow({
 function AppliedResult({
   operations,
   counts,
+  filledOpenings,
   remaining,
   undoable,
   undoing,
@@ -357,13 +454,14 @@ function AppliedResult({
 }: {
   readonly operations: readonly RepairOperation[];
   readonly counts: RepairChangeCounts;
+  readonly filledOpenings: number;
   readonly remaining: readonly string[] | undefined;
   readonly undoable: boolean;
   readonly undoing: boolean;
   readonly busy: boolean;
   readonly onUndo: () => void;
 }): ReactNode {
-  const changed = describeAppliedChanges(counts);
+  const changed = describeAppliedChanges(counts, filledOpenings);
   return (
     <div className="repair-result" role="status" data-testid="repair-applied">
       <p className="repair-result__headline" data-testid="repair-applied-headline">
@@ -430,6 +528,7 @@ function AppliedResult({
 function CandidateReview({
   validation,
   counts,
+  boundaryFill,
   samples,
   unit,
   previewMode,
@@ -439,6 +538,7 @@ function CandidateReview({
 }: {
   readonly validation: RepairValidation;
   readonly counts: RepairChangeCounts;
+  readonly boundaryFill: BoundaryFillOutcome | undefined;
   readonly samples: RepairChangeSamples;
   readonly unit: string | undefined;
   readonly previewMode: RepairPreviewMode;
@@ -510,7 +610,15 @@ function CandidateReview({
           value={counts.flippedFaces.toLocaleString()}
           testId="change-count-flippedFaces"
         />
+        {boundaryFill === undefined ? null : (
+          <Fact
+            label="Openings filled"
+            value={boundaryFill.filledCount.toLocaleString()}
+            testId="change-count-filledOpenings"
+          />
+        )}
       </dl>
+      {boundaryFill === undefined ? null : <FillLeftOpen outcome={boundaryFill} />}
 
       <button
         id={details.buttonId}
@@ -620,6 +728,32 @@ function CandidateReview({
           onToggle={onOverlayToggle}
         />
       </div>
+    </div>
+  );
+}
+
+/**
+ * Openings the fill stage left open, by reason, in one line each. Complex
+ * boundaries are named as such rather than hidden: the user should know they
+ * were looked at and deliberately left alone.
+ */
+function FillLeftOpen({ outcome }: { readonly outcome: BoundaryFillOutcome }): ReactNode {
+  const reasons = summariseFillVerdicts(outcome.loops, [BoundaryFillVerdict.Filled]);
+  if (reasons.length === 0) return null;
+  let total = 0;
+  for (const entry of reasons) total += entry.count;
+  return (
+    <div className="repair-preview__left-open" data-testid="fill-left-open">
+      <p className="repair-preview__left-open-headline" data-testid="fill-left-open-count">
+        {total.toLocaleString()} {total === 1 ? 'opening' : 'openings'} left open
+      </p>
+      <ul className="repair-result__list">
+        {reasons.map((entry) => (
+          <li key={entry.verdict} data-testid={`fill-left-open-${entry.verdict}`}>
+            {entry.count.toLocaleString()} — {describeFillVerdict(entry.verdict)}
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }

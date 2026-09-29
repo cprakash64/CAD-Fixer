@@ -81,3 +81,28 @@ export type {
   NarrowphaseSamples,
   PatchNarrowphase,
 } from './contract';
+
+/* REPAIR-CORE-02: automatic, per-loop boundary filling for Repair model. */
+export {
+  admitBoundaryLoops,
+  BoundaryFillVerdict,
+  DEFAULT_BOUNDARY_FILL_LIMITS,
+  narrowBoundaryFillLimits,
+  triangleArea,
+} from './admission';
+export type {
+  AdmittedLoop,
+  BoundaryFillAdmission,
+  BoundaryFillLimits,
+  LoopDecision,
+} from './admission';
+export { buildLocalPatchProblem } from './local-region';
+export type { LocalPatchProblem, LocalRegionOptions } from './local-region';
+export { classifyLocalPatches } from './local-intersection';
+export type { LocalLoopVerdict } from './local-intersection';
+export {
+  appendPatches,
+  FillRegression,
+  judgeFilledCandidate,
+  sourcePreserved,
+} from './fill-candidate';

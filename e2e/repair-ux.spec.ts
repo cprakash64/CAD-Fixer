@@ -192,8 +192,12 @@ test('RUX03: a large model is described honestly — limits stated, nothing impl
   );
   await expect(page.getByTestId('run-self-intersection')).toHaveCount(0);
 
+  // REPAIR-CORE-02: part size no longer decides. The sheet's rim has 1,440
+  // points (over the 512-point loop limit) and the bow-ties are branched, so
+  // the worker admits nothing — and says so.
   await expect(page.getByTestId('issue-status-open-boundaries')).toHaveText(
-    'Automatic filling isn’t available at this part size',
+    'Not automatically fillable',
+    { timeout: 120_000 },
   );
   await expect(page.getByTestId('issue-detail-open-boundaries')).toContainText('complex');
   await expect(page.getByTestId('hole-fill-size-limit')).toBeVisible();

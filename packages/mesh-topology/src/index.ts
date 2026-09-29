@@ -19,7 +19,7 @@ export {
 } from './identity';
 export type { CoordinateIdentity, TopologicalGeometry, VertexIdentityResult } from './identity';
 
-export { buildDirectedEdges, groupEdges } from './edges';
+export { buildDirectedEdges, estimateEdgeBytes, groupEdges } from './edges';
 export type { DirectedEdges, EdgeGroups } from './edges';
 
 export {
@@ -27,6 +27,7 @@ export {
   analyseVertexManifoldness,
   buildVertexIncidence,
   EdgeClass,
+  estimateManifoldBytes,
 } from './manifold';
 export type { EdgeAnalysis, VertexIncidence, VertexManifoldAnalysis } from './manifold';
 
@@ -66,3 +67,12 @@ export type {
   BoundaryLoopOptions,
   BoundaryLoopSet,
 } from './boundary-loops';
+
+export { BoundaryScanStatus, estimateBoundaryScanBytes, scanBoundaries } from './boundary-scan';
+export type {
+  BoundaryScan,
+  BoundaryScanLimits,
+  BoundaryScanOptions,
+  EdgeIncidenceQuery,
+  ScannedLoop,
+} from './boundary-scan';

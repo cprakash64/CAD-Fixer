@@ -556,6 +556,11 @@ describe('the self-intersection kernel is confined to its own worker', () => {
          * ships.
          */
         join('apps', 'web', 'src', 'workers', 'node-tests', 'kernel-differential.test.ts'),
+        /*
+         * REPAIR-CORE-02. The local-region fill pipeline against the shipped
+         * kernel, beside the whole-part engine with the same kernel. Never ships.
+         */
+        join('apps', 'web', 'src', 'workers', 'node-tests', 'local-fill-kernel.test.ts'),
       ].sort(),
     );
   });
@@ -734,6 +739,13 @@ describe('the hole-fill engine stays where Stage 4B-1B1 put it', () => {
         join('apps', 'web', 'src', 'workers', 'hole-fill-narrowphase.ts'),
         join('packages', 'geometry-runtime', 'src', 'hole-fill.ts'),
         /*
+         * REPAIR-CORE-02, and ONLY through `/admission` — asserted below. The
+         * authoritative geometry worker plans and assembles automatic fills;
+         * the engine entry, the BVH and the narrowphase stay in the disposable
+         * worker.
+         */
+        join('apps', 'web', 'src', 'workers', 'boundary-fill.ts'),
+        /*
          * THE HARNESS, and it is named rather than excluded so its access is
          * visible in review. It imports the TEST-ONLY fixture corpus in order to
          * build documents the shipped importers cannot — a 512-vertex rim, and
@@ -743,6 +755,41 @@ describe('the hole-fill engine stays where Stage 4B-1B1 put it', () => {
         join('apps', 'web', 'e2e-harness', 'fixtures.ts'),
       ].sort(),
     );
+  });
+
+  it('reaches the geometry worker only through the bounded admission subpath (REPAIR-CORE-02)', () => {
+    const worker = readFileSync(
+      join(REPO_ROOT, 'apps', 'web', 'src', 'workers', 'boundary-fill.ts'),
+      'utf8',
+    );
+    const specifiers = [
+      ...worker.matchAll(/from\s+['"](@cadfixer\/mesh-hole-fill[^'"]*)['"]/g),
+    ].map((match) => match[1]);
+    expect(specifiers).toEqual(['@cadfixer/mesh-hole-fill/admission']);
+
+    // Everything the subpath reaches, transitively, inside the package.
+    const packageSource = join(REPO_ROOT, 'packages', 'mesh-hole-fill', 'src');
+    const reached = new Set<string>();
+    const visit = (file: string): void => {
+      if (reached.has(file)) return;
+      reached.add(file);
+      const contents = readFileSync(join(packageSource, file), 'utf8');
+      for (const match of contents.matchAll(/from\s+['"]\.\/([^'"]+)['"]/g)) {
+        visit(`${match[1] ?? ''}.ts`);
+      }
+    };
+    visit('admission-entry.ts');
+    for (const forbidden of [
+      'engine.ts',
+      'bvh.ts',
+      'local-intersection.ts',
+      'validate.ts',
+      'index.ts',
+    ]) {
+      expect(reached.has(forbidden), `the admission subpath must not reach ${forbidden}`).toBe(
+        false,
+      );
+    }
   });
 
   it('ships NO narrowphase of its own', () => {

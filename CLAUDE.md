@@ -20,6 +20,10 @@ matter more than moving fast.
 Five workflows are planned: **Repair, Convert, Split, Texture, Hollow**. Target
 formats: **STL, OBJ, 3MF**.
 
+**REPAIR-UX-01 and REPAIR-CORE-02 (branches `repair-ux-01`, `repair-core-02`,
+the v0.6.0 candidate) redesigned the Repair workspace and added automatic,
+per-loop filling of simple flat openings to Repair model at large part sizes.**
+
 **Current stage: Stage 7B qualified — a PRODUCTION SPLIT + CONNECTORS MVP on
 the qualified Stage 7A editing foundation, plus the PRODUCTION USER-FACING PLANAR
 HOLE-FILL WORKFLOW on top of the qualified engine, the user-facing format
@@ -1153,19 +1157,67 @@ lost`, `printable`, `watertight`, and the rest. **"The numbers are unchanged"
   ADR 0009: two records at one coordinate are one topological vertex, so the
   validator would reject it on every input.
   `mesh-topology/src/vertex-split-audit.test.ts` holds the evidence; making it
-  meaningful is an identity-policy decision (REPAIR-CORE-02). Likewise the
-  250,000-face filling ceiling stays until a loop-local design is qualified —
-  see `docs/design/REPAIR_UX_01.md` §7–§8.
+  meaningful is an identity-policy decision (REPAIR-CORE-03 / TOPOLOGY-IDENTITY,
+  not yet scheduled). The 250,000-face ceiling still bounds the PER-OPENING
+  workflow; Repair model's automatic filling is the loop-local design REPAIR-CORE-02
+  qualified — see the section below.
+
+## Automatic boundary filling invariants (REPAIR-CORE-02)
+
+- **ADMISSION IS BY THE LOOP, NEVER BY THE PART.** Repair model fills an opening
+  only when it independently qualifies — simple closed cycle, ≤ 512 points,
+  relatively planar, ear-clipped without a new point, no zero-area triangle,
+  no existing edge reused, rim edges once and diagonals twice opposite ways —
+  and is independent of every other admitted opening (boxes that touch are
+  deferred, never batched). Part size is bounded only by the repair preflight.
+  NEVER raise `HOLE_FILL_MAX_PART_FACES` to get large-part fills: that is the
+  per-opening engine's ceiling and the old whole-part path is why it exists.
+- **THE SCAN IS `extractBoundaryLoops` IN FIVE BYTES AN EDGE.** `scanBoundaries`
+  must stay loop-for-loop identical to `extractBoundaryLoops` — same refusals,
+  same order, same cycles — and the differential suite holds it. No tolerance,
+  ADR 0009's exact identity, `-0` normalised. Everything after the edge table is
+  proportional to the boundary, and the boundary is capped (100,000 edges)
+  BEFORE it is allocated.
+- **THE LOCAL REGION IS COMPLETE BY CONSTRUCTION.** Every face whose box meets a
+  loop's box, inclusive. Never a radius, never a "nearby" heuristic. A loop whose
+  region exceeds the budget is excluded, never checked partially.
+- **THE EXACT CHECK STAYS IN THE DISPOSABLE WORKER.** The geometry worker imports
+  ONLY `@cadfixer/mesh-hole-fill/admission`; the engine entry, the BVH, the
+  local classifier and the kernel never reach it (boundary test + bundle).
+  Cancel terminates the verifier and cancels the repair operation.
+- **FAIL CLOSED.** No verifier port → nothing filled. An incomplete or budget-
+  stopped check → `NOT_VERIFIABLE`. A re-analysis that misses ANY predicted count
+  (`judgeFilledCandidate`) → nothing filled. Filling never rescues a rejected
+  conservative candidate.
+- **ONE CANDIDATE, ONE TRANSACTION.** Conservative operations then fills, one
+  candidate, the existing `repair/commit` and `repair/undo`. No second commit
+  path, no partial apply.
+- **A FILL-ONLY PREVIEW SENDS THE PATCH, NOT THE PART.** Never ship a full render
+  snapshot for a change that only appends faces.
+- **THE UI READS THE WORKER'S FILL PLAN.** "N fillable" is `admittedCount`; the
+  preview's "N filled" and "M left open" are the candidate's outcome. Never
+  derive either from a count, and never say more openings were repaired than
+  the outcome states.
+- **HEADLESS FRAME GAPS AT MILLIONS OF TRIANGLES MEASURE SWIFTSHADER.** Headless
+  Chromium rasterises WebGL on the CPU: one redraw of a 2M-triangle part takes
+  1.3–1.7 s with no page script at all. Main-thread responsiveness for large
+  parts is measured with `qualify:boundary-fill -- <size> --hardware-gl`
+  (34 ms at 2M), and a CPU profile decides before any "the page is blocked"
+  claim. Memory numbers from headless runs remain valid.
+- **NON-MANIFOLD VERTICES ARE NOT REPAIRED** and ADR 0009 is not amended; see
+  `docs/design/REPAIR_CORE_02.md` §11.
 
 ## Hole-fill invariants (Stage 4B-1B1 engine, 4B-1B2 workflow)
 
 - **THE ENGINE IS UNCHANGED BY THE WORKFLOW.** Stage 4B-1B2 added selection,
   previews, Apply and Undo and did not relax, extend or re-tune a single ceiling,
   refusal or validator. `holefill/send-for-fill` still produces CANDIDATES ONLY.
-- **BATCH FILLING IS STILL FORBIDDEN**, and a boundary test asserts the strings
+- **"FILL ALL" IS STILL FORBIDDEN**, and a boundary test asserts the strings
   `Fill All`, `Fill Holes`, `fill every` and `Close All` appear nowhere in
-  `components/` or `state/`. Closing every opening in a model from one click
-  would close the intentional ones too. Do not add one "while we are here".
+  `components/` or `state/`. REPAIR-CORE-02 made the one deliberate exception
+  the stage brief asked for: Repair model fills openings that EACH qualify
+  independently, bounded per repair, behind a user option — never every opening,
+  and never with that wording.
 - **ONE SELECTED LOOP PER OPERATION, NAMED BY AN IDENTITY THE WORKER PRODUCED.**
   `holefill/list-loops` is the only source of a `boundaryLoopId`. Never an
   index, never a position in a UI list, never a boundary the caller describes.
@@ -1264,8 +1316,9 @@ validated`, and the qualifier naming what was NOT examined travels with it.
 
 - **LISTING IS TOPOLOGICAL; PLANARITY IS THE ENGINE'S.** `holefill/list-loops`
   says whether a component is one ordered, closed, simple, manifold cycle, and
-  nothing more — the planarity policy lives in `mesh-hole-fill`, which must stay
-  out of the geometry worker. So a simple rim that curves out of its plane is
+  nothing more — the planarity policy lives in `mesh-hole-fill`, whose ENGINE
+  must stay out of the geometry worker (since REPAIR-CORE-02 only the bounded
+  `/admission` subpath may enter it, for Repair model's automatic filling). So a simple rim that curves out of its plane is
   listed as ATTEMPTABLE and refused when the engine looks at it, and the row
   reads `CAD Fixer can attempt this opening`, NEVER `can be filled`. A promise
   the listing cannot keep is broken once per curved rim. Asserted by test.

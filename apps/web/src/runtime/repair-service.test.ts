@@ -12,6 +12,7 @@ import {
   type RepairPlanOperationResult,
   type RepairUndoResult,
 } from '@cadfixer/geometry-runtime';
+import { NO_BOUNDARY_FILL_PLAN } from '@cadfixer/geometry-runtime';
 import {
   createRepairCandidate,
   describeRepairPhase,
@@ -197,7 +198,12 @@ describe('planning', () => {
       memoryBudgetBytes: 1234,
       onProgress: (progress) => seen.push(progress),
     });
-    pending.resolve({ handle: HANDLE, partId: PART, plan: plan() });
+    pending.resolve({
+      handle: HANDLE,
+      partId: PART,
+      plan: plan(),
+      boundaryFill: NO_BOUNDARY_FILL_PLAN,
+    });
     await session.promise;
 
     // The ceiling reaches the worker, which is what makes the refusal path
@@ -221,6 +227,7 @@ describe('planning', () => {
       handle: { documentId: 'model-2', revision: 1 } as DocumentHandle,
       partId: PART,
       plan: plan(),
+      boundaryFill: NO_BOUNDARY_FILL_PLAN,
     });
 
     await expect(session.promise).rejects.toMatchObject({ code: AppErrorCode.Internal });
@@ -236,7 +243,12 @@ describe('planning', () => {
     });
 
     session.cancel();
-    pending.resolve({ handle: HANDLE, partId: PART, plan: plan() });
+    pending.resolve({
+      handle: HANDLE,
+      partId: PART,
+      plan: plan(),
+      boundaryFill: NO_BOUNDARY_FILL_PLAN,
+    });
 
     await expect(session.promise).rejects.toMatchObject({
       code: AppErrorCode.OperationCancelled,

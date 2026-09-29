@@ -1,6 +1,7 @@
 import { internalError, operationCancelled } from '@cadfixer/shared';
 import {
   DEFAULT_SESSION_MEMORY_BUDGET,
+  type BoundaryFillPlan,
   type ConservativeRepairPlan,
   type DocumentHandle,
   type OperationHandle,
@@ -13,6 +14,8 @@ import {
   type RepairPlanOperationResult,
   type RepairUndoResult,
 } from '@cadfixer/geometry-runtime';
+import type { RepairCandidateOptions } from './geometry-client';
+import { openFillVerifier, type FillVerifier } from './hole-fill-service';
 
 /**
  * The one path from a loaded model to a conservative repair.
@@ -48,6 +51,7 @@ const PHASE_LABELS: Readonly<Record<string, string>> = {
   'solving winding': 'Solving relative winding',
   'building candidate': 'Building the proposed result',
   'validating candidate': 'Revalidating the proposed result',
+  'checking openings': 'Checking the openings to fill',
   applied: 'Applying',
   'restoring previous version': 'Restoring the previous version',
   restored: 'Restored',
@@ -79,6 +83,7 @@ export interface RepairCapableClient {
     requested: readonly RepairOperation[],
     onProgress: (update: ProgressUpdate) => void,
     memoryBudgetBytes?: number,
+    fillOpenings?: boolean,
   ): OperationHandle<RepairPlanOperationResult>;
   createRepairCandidate(
     handle: DocumentHandle,
@@ -86,7 +91,7 @@ export interface RepairCapableClient {
     requested: readonly RepairOperation[],
     planHash: string,
     onProgress: (update: ProgressUpdate) => void,
-    options?: { readonly memoryBudgetBytes?: number; readonly sampleLimit?: number },
+    options?: RepairCandidateOptions,
   ): OperationHandle<RepairCandidateResult>;
   commitRepair(
     candidate: RepairCandidateHandle,
@@ -124,6 +129,8 @@ export interface RepairPlanOutcome {
   readonly handle: DocumentHandle;
   readonly partId: string;
   readonly plan: ConservativeRepairPlan;
+  /** What automatic filling would attempt — REPAIR-CORE-02. */
+  readonly boundaryFill: BoundaryFillPlan;
   readonly durationMs: number;
 }
 
@@ -187,6 +194,8 @@ export interface RepairPlanRequest {
   readonly client: RepairCapableClient;
   readonly requested: readonly RepairOperation[];
   readonly memoryBudgetBytes?: number;
+  /** Also plan automatic filling of eligible openings. */
+  readonly fillOpenings?: boolean;
   /**
    * Declared as a property rather than a method so it can be PASSED to the
    * shared session builder without `this` ambiguity — a method shorthand read
@@ -206,6 +215,7 @@ export function planConservativeRepair(
       request.requested,
       report,
       request.memoryBudgetBytes,
+      request.fillOpenings === true,
     );
     register(operation);
 
@@ -218,6 +228,7 @@ export function planConservativeRepair(
       handle: result.handle,
       partId: result.partId,
       plan: result.plan,
+      boundaryFill: result.boundaryFill,
       durationMs: Date.now() - startedAt,
     };
   });
@@ -236,6 +247,14 @@ export interface RepairCandidateRequest {
   readonly memoryBudgetBytes?: number;
   readonly sampleLimit?: number;
   /**
+   * Fill the openings the plan admitted — REPAIR-CORE-02. When set, a
+   * disposable verifier worker is opened for this preview only, and closed
+   * when it settles or is cancelled.
+   */
+  readonly fill?: { readonly planHash: string };
+  /** Injectable for tests; the application uses the real verifier. */
+  readonly openVerifier?: (onFailure: () => void) => FillVerifier;
+  /**
    * Declared as a property rather than a method so it can be PASSED to the
    * shared session builder without `this` ambiguity — a method shorthand read
    * as a value is exactly the unbound-method hazard the linter guards.
@@ -248,44 +267,85 @@ export function createRepairCandidate(
 ): RepairSession<RepairCandidateOutcome> {
   return runSession(request.onProgress, (report, register, isCancelled) => async () => {
     const startedAt = Date.now();
-    const operation = request.client.createRepairCandidate(
-      request.handle,
-      request.partId,
-      request.requested,
-      request.planHash,
-      report,
-      {
-        ...(request.memoryBudgetBytes === undefined
-          ? {}
-          : { memoryBudgetBytes: request.memoryBudgetBytes }),
-        ...(request.sampleLimit === undefined ? {} : { sampleLimit: request.sampleLimit }),
-      },
-    );
-    register(operation);
+    // A record, because it is written from a callback: a plain `let` would be
+    // narrowed to `false` at every read.
+    const verifierState = { failed: false };
+    let cancelOperation: (() => void) | undefined;
+    const verifier =
+      request.fill === undefined
+        ? undefined
+        : (request.openVerifier ?? openFillVerifier)(() => {
+            // The verifier died: stop the repair rather than wait for an
+            // answer that cannot come.
+            verifierState.failed = true;
+            cancelOperation?.();
+          });
+    try {
+      const operation = request.client.createRepairCandidate(
+        request.handle,
+        request.partId,
+        request.requested,
+        request.planHash,
+        report,
+        {
+          ...(request.memoryBudgetBytes === undefined
+            ? {}
+            : { memoryBudgetBytes: request.memoryBudgetBytes }),
+          ...(request.sampleLimit === undefined ? {} : { sampleLimit: request.sampleLimit }),
+          ...(request.fill === undefined || verifier === undefined
+            ? {}
+            : {
+                fillOpenings: true,
+                fillPlanHash: request.fill.planHash,
+                verifierPort: verifier.port,
+              }),
+        },
+      );
+      cancelOperation = (): void => {
+        operation.cancel();
+      };
+      register({
+        cancel: (): void => {
+          // Termination is the verifier's cancel; the operation's own flag
+          // stops the geometry worker.
+          verifier?.dispose();
+          operation.cancel();
+        },
+      });
 
-    const result = await operation.promise;
-
-    /*
-     * A CANCEL THAT LANDS WHILE THE RESULT IS IN FLIGHT MUST NOT PRODUCE A
-     * PREVIEW. The candidate is real and worker-resident at this point, so it is
-     * discarded rather than abandoned — otherwise cancelling would leave a
-     * multi-hundred-megabyte candidate in the worker that nothing will ever
-     * commit or release.
-     */
-    if (isCancelled()) {
-      if (result.candidate !== undefined) {
-        request.client.discardRepairCandidate(result.candidate).promise.catch(() => {
-          // Discarding an already-gone candidate is not a fault, and there is no
-          // user-facing consequence either way: the model was never touched.
-        });
+      let result: RepairCandidateResult;
+      try {
+        result = await operation.promise;
+      } catch (cause) {
+        if (verifierState.failed)
+          throw internalError('The worker checking the openings stopped unexpectedly.');
+        throw cause;
       }
-      throw operationCancelled('Repair was cancelled.');
+
+      /*
+       * A CANCEL THAT LANDS WHILE THE RESULT IS IN FLIGHT MUST NOT PRODUCE A
+       * PREVIEW. The candidate is real and worker-resident at this point, so it is
+       * discarded rather than abandoned — otherwise cancelling would leave a
+       * multi-hundred-megabyte candidate in the worker that nothing will ever
+       * commit or release.
+       */
+      if (isCancelled()) {
+        if (result.candidate !== undefined) {
+          request.client.discardRepairCandidate(result.candidate).promise.catch(() => {
+            // Discarding an already-gone candidate is not a fault, and there is no
+            // user-facing consequence either way: the model was never touched.
+          });
+        }
+        throw operationCancelled('Repair was cancelled.');
+      }
+
+      assertSameModel(result.source, request.handle, 'repair candidate');
+      assertSamePart(result.partId, request.partId, 'repair candidate');
+
+      return { ...result, durationMs: Date.now() - startedAt };
+    } finally {
+      verifier?.dispose();
     }
-
-    assertSameModel(result.source, request.handle, 'repair candidate');
-    assertSamePart(result.partId, request.partId, 'repair candidate');
-
-    return { ...result, durationMs: Date.now() - startedAt };
   });
 }
 

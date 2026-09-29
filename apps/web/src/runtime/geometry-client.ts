@@ -108,6 +108,15 @@ export interface GeometryClientOptions {
  */
 let nextSessionId = 1;
 
+/** Options for `createRepairCandidate`. REPAIR-CORE-02 added the fill fields. */
+export interface RepairCandidateOptions {
+  readonly memoryBudgetBytes?: number;
+  readonly sampleLimit?: number;
+  readonly fillOpenings?: boolean;
+  readonly fillPlanHash?: string;
+  readonly verifierPort?: MessagePort;
+}
+
 export class GeometryClient {
   private readonly worker: Worker;
   private readonly coordinator: GeometryCoordinator;
@@ -566,12 +575,13 @@ export class GeometryClient {
     requested: readonly RepairOperation[],
     onProgress: (update: ProgressUpdate) => void,
     memoryBudgetBytes?: number,
+    fillOpenings = false,
   ): OperationHandle<RepairPlanOperationResult> {
     return this.coordinator.dispatch(
       'repair/plan',
       memoryBudgetBytes === undefined
-        ? { handle, partId, requested }
-        : { handle, partId, requested, memoryBudgetBytes },
+        ? { handle, partId, requested, fillOpenings }
+        : { handle, partId, requested, memoryBudgetBytes, fillOpenings },
       // Planning builds connectivity and can be seconds on a large model, so it
       // gets a signal that can interrupt it rather than one that waits for the
       // event loop.
@@ -593,7 +603,7 @@ export class GeometryClient {
     requested: readonly RepairOperation[],
     planHash: string,
     onProgress: (update: ProgressUpdate) => void,
-    options: { readonly memoryBudgetBytes?: number; readonly sampleLimit?: number } = {},
+    options: RepairCandidateOptions = {},
   ): OperationHandle<RepairCandidateResult> {
     return this.coordinator.dispatch(
       'repair/create-candidate',
@@ -606,11 +616,23 @@ export class GeometryClient {
           ? {}
           : { memoryBudgetBytes: options.memoryBudgetBytes }),
         ...(options.sampleLimit === undefined ? {} : { sampleLimit: options.sampleLimit }),
+        ...(options.fillOpenings === true
+          ? {
+              fillOpenings: true,
+              ...(options.fillPlanHash === undefined ? {} : { fillPlanHash: options.fillPlanHash }),
+              ...(options.verifierPort === undefined ? {} : { verifierPort: options.verifierPort }),
+            }
+          : {}),
       },
       // THE OPERATION THIS STAGE EXISTS FOR. The repair pipeline is one long
       // synchronous pass; without a shared signal its Cancel could only discard
-      // a finished result, never stop the work.
-      { onProgress, interruptible: true },
+      // a finished result, never stop the work. The verifier's port, when there
+      // is one, is TRANSFERRED: the geometry worker owns that end of the channel.
+      {
+        onProgress,
+        interruptible: true,
+        ...(options.verifierPort === undefined ? {} : { transfer: [options.verifierPort] }),
+      },
     );
   }
 

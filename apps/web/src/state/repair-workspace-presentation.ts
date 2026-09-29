@@ -1,8 +1,14 @@
 import {
-  HOLE_FILL_MAX_PART_FACES,
+  BOUNDARY_FILL_MAX_OPENINGS_PER_REPAIR,
+  HOLE_FILL_MAX_BOUNDARY_VERTICES,
+  BoundaryFillOutcomeStatus,
+  BoundaryFillScanStatus,
+  BoundaryFillVerdict,
   RepairDecision,
   RepairOperation,
   RepairReason,
+  type BoundaryFillOutcome,
+  type BoundaryFillPlan,
   type ConservativeRepairPlan,
   type RepairChangeCounts,
   type RepairOperationDecision,
@@ -143,6 +149,10 @@ export interface IssueStatusContext {
   readonly partFaceCount: number;
   /** True when the self-intersection check will not run at this size. */
   readonly selfIntersectionSizeLimited: boolean;
+  /** Whether the user has automatic opening fills selected — REPAIR-CORE-02. */
+  readonly fillSelected: boolean;
+  /** The worker's fill plan for the CURRENT revision, or `undefined` while pending. */
+  readonly fill: BoundaryFillPlan | undefined;
 }
 
 /**
@@ -168,20 +178,7 @@ export function deriveIssueStatus(issue: RepairIssue, context: IssueStatusContex
       const { simpleLoops, openChains, branched } = context.boundaries;
       const complex = openChains + branched;
       const detail = `${plural(simpleLoops, 'simple loop')} · ${complex.toLocaleString()} complex`;
-      if (context.partFaceCount > HOLE_FILL_MAX_PART_FACES) {
-        return {
-          fixability: Fixability.ResourceLimit,
-          text: 'Automatic filling isn’t available at this part size',
-          detail,
-        };
-      }
-      return simpleLoops === 0
-        ? { fixability: Fixability.NotRepairable, text: 'Not automatically fillable', detail }
-        : {
-            fixability: Fixability.Partial,
-            text: 'Simple loops can be filled one at a time below',
-            detail,
-          };
+      return openBoundaryStatus(issue.count, detail, context);
     }
     case RepairIssueId.NonManifoldEdges:
     case RepairIssueId.NonManifoldVertices:
@@ -213,6 +210,45 @@ export function deriveIssueStatus(issue: RepairIssue, context: IssueStatusContex
       return fromDecisions(context.plan, [RepairOperation.RemoveDuplicateFaces], true);
     }
   }
+}
+
+/**
+ * REPAIR-CORE-02: open boundaries read the WORKER'S FILL PLAN, never a count.
+ * "Fillable" means admitted: simple, flat, triangulable without a new point,
+ * adding no existing edge, and within the batch limits. The exact intersection
+ * check still runs at preview, so this line never promises a closure.
+ */
+function openBoundaryStatus(
+  count: number,
+  detail: string,
+  context: IssueStatusContext,
+): IssueStatus {
+  if (!context.fillSelected) {
+    return { fixability: Fixability.NotSelected, text: 'Automatic filling not selected', detail };
+  }
+  const fill = context.fill;
+  if (fill === undefined || fill.status === BoundaryFillScanStatus.NotRequested) {
+    return { fixability: Fixability.Pending, text: 'Checking…', detail };
+  }
+  if (fill.status === BoundaryFillScanStatus.TooManyBoundaryEdges) {
+    return {
+      fixability: Fixability.ResourceLimit,
+      text: 'Too many open edges to check automatically',
+      detail,
+    };
+  }
+  const fillable = fill.admittedCount;
+  if (fillable === 0) {
+    return { fixability: Fixability.NotRepairable, text: 'Not automatically fillable', detail };
+  }
+  const rest = Math.max(0, count - fillable);
+  return rest === 0
+    ? { fixability: Fixability.Repairable, text: plural(fillable, 'fillable opening'), detail }
+    : {
+        fixability: Fixability.Partial,
+        text: `${fillable.toLocaleString()} fillable · ${rest.toLocaleString()} need attention`,
+        detail,
+      };
 }
 
 /**
@@ -286,11 +322,14 @@ export interface RepairScope {
   readonly detected: number;
   /** Of those, how many the current plan repairs fully or in part. */
   readonly repairable: number;
+  /** Openings the fill plan admitted. Zero when filling is off or none qualify. */
+  readonly openings: number;
 }
 
 export function deriveRepairScope(
   issues: readonly RepairIssue[],
   statuses: ReadonlyMap<RepairIssueId, IssueStatus>,
+  fillableOpenings = 0,
 ): RepairScope {
   let detected = 0;
   let repairable = 0;
@@ -300,24 +339,133 @@ export function deriveRepairScope(
     detected += 1;
     const status = statuses.get(issue.id);
     if (status === undefined) continue;
-    // Open boundaries are filled one at a time in their own section, never by
-    // Repair model, so they are not counted as something this button repairs.
-    if (issue.id === RepairIssueId.OpenBoundaries) continue;
     if (status.fixability === Fixability.Repairable || status.fixability === Fixability.Partial) {
       repairable += 1;
     }
   }
-  return { detected, repairable };
+  return { detected, repairable, openings: fillableOpenings };
 }
 
-/** The supporting line under an enabled Repair model. */
+/**
+ * The supporting line under an enabled Repair model. Counts issue TYPES, names
+ * how many openings would be attempted, and never claims more than that.
+ */
 export function describeRepairScope(scope: RepairScope): string {
   if (scope.detected === 0) return REPAIR_MODEL_SUPPORT;
   const remaining = scope.detected - scope.repairable;
-  const head = `${plural(scope.repairable, 'repairable issue type')} of ${scope.detected.toLocaleString()} detected.`;
-  return remaining === 0
-    ? `${head} You review the result before anything changes.`
+  const openings = scope.openings > 0 ? `${plural(scope.openings, 'opening')} can be filled. ` : '';
+  const head =
+    scope.openings > 0 && scope.repairable === 1
+      ? openings.trimEnd()
+      : `${openings}${plural(scope.repairable, 'repairable issue type')} of ${scope.detected.toLocaleString()} detected.`;
+  if (remaining === 0) return `${head} You review the result before anything changes.`;
+  return scope.openings > 0 && scope.repairable === 1
+    ? `${head} Other detected issues will remain.`
     : `${head} ${plural(remaining, 'type')} will need other attention.`;
+}
+
+/* --------------------------------------------------- automatic filling -- */
+
+export const FILL_OPTION_LABEL = 'Fill simple openings';
+
+/** The trailing status beside the fill option. */
+export function describeFillOptionStatus(
+  selected: boolean,
+  fill: BoundaryFillPlan | undefined,
+): string {
+  if (!selected) return 'Not selected';
+  if (fill === undefined || fill.status === BoundaryFillScanStatus.NotRequested) return 'Checking…';
+  if (fill.status === BoundaryFillScanStatus.TooManyBoundaryEdges) return 'Too many open edges';
+  return fill.admittedCount === 0
+    ? 'None eligible'
+    : `${fill.admittedCount.toLocaleString()} to fill`;
+}
+
+/** One short reason per verdict, for ⓘ panels and the preview's refused list. */
+export function describeFillVerdict(verdict: BoundaryFillVerdict): string {
+  switch (verdict) {
+    case BoundaryFillVerdict.Admitted:
+      return 'Can be filled';
+    case BoundaryFillVerdict.Filled:
+      return 'Filled and validated';
+    case BoundaryFillVerdict.NotSimple:
+      return 'Complex boundary — branches or does not close';
+    case BoundaryFillVerdict.NonManifoldBoundary:
+      return 'Touches non-manifold geometry';
+    case BoundaryFillVerdict.AmbiguousOrientation:
+      return 'The surrounding triangles disagree about direction';
+    case BoundaryFillVerdict.DegenerateBoundary:
+      return 'The rim has no usable shape';
+    case BoundaryFillVerdict.TooManyVertices:
+      return 'Too many rim points';
+    case BoundaryFillVerdict.NonPlanar:
+      return 'Not flat enough to fill';
+    case BoundaryFillVerdict.NoTriangulation:
+      return 'Could not be triangulated without adding points';
+    case BoundaryFillVerdict.DegeneratePatch:
+      return 'The fill would contain a zero-area triangle';
+    case BoundaryFillVerdict.EdgeAlreadyExists:
+      return 'The fill would reuse an existing edge';
+    case BoundaryFillVerdict.DuplicatesExistingFace:
+      return 'The fill would duplicate an existing triangle';
+    case BoundaryFillVerdict.InteractsWithAnotherOpening:
+      return 'Close to another opening — left for a later repair';
+    case BoundaryFillVerdict.BatchLimit:
+      return 'Over this repair’s limit — left for a later repair';
+    case BoundaryFillVerdict.AmbiguousIdentity:
+      return 'Could not be identified uniquely';
+    case BoundaryFillVerdict.WouldIntersect:
+      return 'The fill would pass through existing geometry';
+    case BoundaryFillVerdict.NotVerifiable:
+      return 'Could not be checked completely';
+    case BoundaryFillVerdict.RegionTooLarge:
+      return 'Too much surrounding geometry to check';
+  }
+}
+
+/** Counts of a list of loop verdicts, most frequent first. */
+export function summariseFillVerdicts(
+  loops: readonly { readonly verdict: BoundaryFillVerdict }[],
+  exclude: readonly BoundaryFillVerdict[] = [],
+): readonly { readonly verdict: BoundaryFillVerdict; readonly count: number }[] {
+  const counts = new Map<BoundaryFillVerdict, number>();
+  for (const loop of loops) {
+    if (exclude.includes(loop.verdict)) continue;
+    counts.set(loop.verdict, (counts.get(loop.verdict) ?? 0) + 1);
+  }
+  return [...counts.entries()]
+    .map(([verdict, count]) => ({ verdict, count }))
+    .sort((a, b) => b.count - a.count || (a.verdict < b.verdict ? -1 : 1));
+}
+
+/**
+ * Why a Repair model press produced nothing to preview, when the only planned
+ * work was filling and every opening was refused at the exact check.
+ */
+export function describeFillFailure(outcome: BoundaryFillOutcome | undefined): string | undefined {
+  if (outcome === undefined) return undefined;
+  switch (outcome.status) {
+    case BoundaryFillOutcomeStatus.None:
+    case BoundaryFillOutcomeStatus.Filled:
+      return undefined;
+    case BoundaryFillOutcomeStatus.NothingPassed: {
+      const reasons = summariseFillVerdicts(outcome.loops, [
+        BoundaryFillVerdict.Admitted,
+        BoundaryFillVerdict.Filled,
+      ]).filter(
+        (entry) =>
+          entry.verdict === BoundaryFillVerdict.WouldIntersect ||
+          entry.verdict === BoundaryFillVerdict.NotVerifiable ||
+          entry.verdict === BoundaryFillVerdict.RegionTooLarge,
+      );
+      const first = reasons[0];
+      return first === undefined
+        ? 'No opening passed the final check. Your model is unchanged.'
+        : `No opening passed the final check: ${describeFillVerdict(first.verdict).toLowerCase()}. Your model is unchanged.`;
+    }
+    case BoundaryFillOutcomeStatus.Rejected:
+      return 'The filled result did not match what was predicted, so nothing was filled. Your model is unchanged.';
+  }
 }
 
 /* ------------------------------------------------------ action states -- */
@@ -360,6 +508,8 @@ export interface RepairActionInput {
   readonly planState: 'unavailable' | 'planning' | 'ready' | 'failed';
   /** `plan.noOp` for the current plan; `undefined` when there is none. */
   readonly planNoOp: boolean | undefined;
+  /** Openings the current fill plan admitted, when filling is selected. */
+  readonly fillableOpenings: number;
   readonly candidateState: 'idle' | 'building' | 'cancelling' | 'ready' | 'failed' | 'cancelled';
   readonly commitState: 'idle' | 'applying' | 'undoing';
   /** Detected issue types (errors and warnings). */
@@ -383,7 +533,8 @@ export function deriveRepairAction(input: RepairActionInput): RepairActionKind {
   if (!input.reportIsCurrent) return RepairActionKind.Analyze;
   if (input.planState === 'failed') return RepairActionKind.PlanFailed;
   if (input.planState !== 'ready' || input.planNoOp === undefined) return RepairActionKind.Planning;
-  if (!input.planNoOp) return RepairActionKind.Ready;
+  // A plan with no conservative work is still work when openings qualify.
+  if (!input.planNoOp || input.fillableOpenings > 0) return RepairActionKind.Ready;
   return input.detectedIssueTypes > 0
     ? RepairActionKind.NothingSafe
     : RepairActionKind.NothingFound;
@@ -395,8 +546,12 @@ export function deriveRepairAction(input: RepairActionInput): RepairActionKind {
  * What an applied repair changed, one line per non-zero count. Counts come
  * from the validated candidate the worker committed, never from the plan.
  */
-export function describeAppliedChanges(counts: RepairChangeCounts): readonly string[] {
+export function describeAppliedChanges(
+  counts: RepairChangeCounts,
+  filledOpenings = 0,
+): readonly string[] {
   const lines: string[] = [];
+  if (filledOpenings > 0) lines.push(`${plural(filledOpenings, 'opening')} filled`);
   if (counts.removedDuplicateFaces > 0) {
     lines.push(`${plural(counts.removedDuplicateFaces, 'duplicate triangle')} removed`);
   }
@@ -467,9 +622,9 @@ export const ISSUE_INFO: Readonly<Record<RepairIssueId, InfoText>> = {
   [RepairIssueId.OpenBoundaries]: {
     meaning:
       'Edges used by only one triangle, grouped into rims where the surface stops. A simple loop is one clean closed rim; a complex boundary branches or does not close.',
-    canDo:
-      'Fill one simple, flat opening at a time, previewed and validated before you apply it. No points are added or moved.',
-    cannot: `Complex boundaries are never filled automatically, openings are never closed in bulk, and filling runs only on parts of up to ${HOLE_FILL_MAX_PART_FACES.toLocaleString()} triangles. An opening may also be intentional — a tube, a vase, a shell.`,
+    canDo: `Repair model fills simple, flat openings that qualify on their own — up to ${BOUNDARY_FILL_MAX_OPENINGS_PER_REPAIR.toLocaleString()} per repair, each of up to ${HOLE_FILL_MAX_BOUNDARY_VERTICES.toLocaleString()} rim points — and checks every fill against the geometry around it before you apply it. No points are added or moved.`,
+    cannot:
+      'Complex boundaries, curved rims, and fills that would pass through existing geometry are left open and listed with the reason. An opening may also be intentional — a tube, a vase, a shell; turn off Fill simple openings to keep them all.',
   },
   [RepairIssueId.NonManifoldEdges]: {
     meaning: 'More than two triangles meet along one edge, so which side is inside is ambiguous.',
@@ -531,11 +686,20 @@ export const SUMMARY_INFO: InfoText = {
 /** Behind the ⓘ beside Repair options. */
 export const REPAIR_OPTIONS_INFO: InfoText = {
   meaning:
-    'Four conservative operations, each decided exactly from the stored coordinates. They run together when you press Repair model.',
+    'Four conservative operations, each decided exactly from the stored coordinates, and filling of simple flat openings. The selected ones run together when you press Repair model.',
   canDo:
-    'Remove exact duplicate and degenerate triangles and make neighbouring triangles agree on winding. Every result is previewed and revalidated before you apply it, and can be undone.',
+    'Remove exact duplicate and degenerate triangles, make neighbouring triangles agree on winding, and fill openings that qualify one by one. Every result is previewed and revalidated before you apply it, and can be undone.',
   cannot:
-    'No tolerance or welding is used, nothing is moved, openings are not closed, and non-manifold geometry and self-intersections are not rewritten.',
+    'No tolerance or welding is used, no existing point is moved, complex boundaries are not closed, and non-manifold geometry and self-intersections are not rewritten.',
+};
+
+/** Behind the ⓘ beside the fill option. */
+export const FILL_OPTION_INFO: InfoText = {
+  meaning:
+    'Closes simple, flat openings with new triangles between the rim’s own points, as part of the same repair.',
+  canDo: `Each opening is admitted on its own: one closed rim, flat, triangulable without new points, and not touching another opening. Up to ${BOUNDARY_FILL_MAX_OPENINGS_PER_REPAIR.toLocaleString()} per repair. Each fill is checked against the geometry around it, and the whole result is re-analysed before you can apply it.`,
+  cannot:
+    'Branched or curved boundaries are never filled, and an opening that is meant to be there is filled too if it qualifies — turn this off to keep openings as they are.',
 };
 
 /** Behind the ⓘ beside the file-structure line. */
@@ -561,7 +725,7 @@ export function describeFileStructure(valid: boolean): string {
 
 /** The one line a part above the filling ceiling gets; the numbers are behind an ⓘ. */
 export const HOLE_FILL_SIZE_LIMIT_LINE =
-  'Automatic filling isn’t available for this part at its current size.';
+  'Choosing openings one at a time isn’t available at this part size. Repair model can still fill eligible openings.';
 
 /** The disabled-action reason when the page cannot stop a repair. */
 export const REPAIR_UNAVAILABLE_LINE = 'Repair is unavailable in this browser context.';
