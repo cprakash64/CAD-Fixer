@@ -44,7 +44,7 @@ async function openFile(page: Page, name: string, bytes: Buffer): Promise<void> 
 /** Imports a file and waits until the open-boundary inventory has been built. */
 async function importAndList(page: Page, name: string, bytes: Buffer): Promise<void> {
   await openFile(page, name, bytes);
-  await expect(page.getByTestId('topology-headline')).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByTestId('issue-list')).toBeVisible({ timeout: 60_000 });
   await expect(page.getByTestId('hole-fill-count')).toBeVisible({ timeout: 60_000 });
 }
 
@@ -438,9 +438,10 @@ test('HFUX17: a repair applied under a preview makes that preview unusable', asy
   // A conservative repair on the same model. It is available whenever the plan
   // finds something to do; where it does not, this test still proves the
   // preview survives an unrelated re-render, which is the weaker but honest
-  // claim to make about that file.
+  // claim to make about that file. Since REPAIR-UX-01 the action is always
+  // present, so "available" means enabled rather than visible.
   const previewRepair = page.getByTestId('preview-repair');
-  if (await previewRepair.isVisible()) {
+  if (await previewRepair.isEnabled()) {
     await previewRepair.click();
     await expect(page.getByTestId('repair-candidate')).toBeVisible({ timeout: 60_000 });
     await page.getByTestId('apply-repair').click();

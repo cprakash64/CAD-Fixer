@@ -84,20 +84,18 @@ export function ModelPanel(): ReactNode {
         )}
       </dl>
 
-      {/* The distinction below is the whole point of saying "structurally
-          valid" rather than "valid". */}
+      {/* "File structure valid", never "valid": the distinction below is the
+          point. REPAIR-UX-01 renamed it from "Structurally valid", which read
+          as "this mesh has no problems" beside a model full of them. */}
       <p
         className={model.validation.valid ? 'validity validity--ok' : 'validity validity--bad'}
         data-testid="validation-summary"
       >
-        {model.validation.valid ? 'Structurally valid' : 'Structurally invalid'}
+        {model.validation.valid ? 'File structure valid' : 'File structure invalid'}
       </p>
       <p className="panel__note">
-        Structurally valid means the file&rsquo;s mesh data is well formed. It is a claim about the
-        data, not about the surface. Topology &mdash; boundaries, manifoldness, winding, components
-        &mdash; is reported separately in <strong>Mesh Health</strong>. Self-intersections and wall
-        thickness are not checked at all yet, so no result here or there establishes that a model
-        will print.
+        The file parsed correctly. This does not mean the mesh is manifold or ready for a slicer:
+        mesh topology is reported separately, under <strong>Detected issues</strong> in Repair.
       </p>
 
       {model.warnings.length > 0 ? (

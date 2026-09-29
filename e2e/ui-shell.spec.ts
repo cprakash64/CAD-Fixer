@@ -31,7 +31,7 @@ async function openModel(page: Page): Promise<void> {
   // The status bar is visible at every width; the Mesh Health panel is not —
   // below 900 px it lives in a closed drawer.
   await expect(page.getByTestId('status-triangles')).toHaveText('400', { timeout: 60_000 });
-  await expect(page.getByTestId('topology-headline')).toBeAttached({ timeout: 60_000 });
+  await expect(page.getByTestId('issue-list')).toBeAttached({ timeout: 60_000 });
 }
 
 async function box(

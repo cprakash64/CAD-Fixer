@@ -105,7 +105,7 @@ test('BQ01: losing the context reports a display failure and keeps the document'
   test.setTimeout(120_000);
   await page.goto('/');
   await openFile(page, 'small.stl', binaryStl(600).bytes);
-  await expect(page.getByTestId('topology-headline')).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByTestId('issue-list')).toBeVisible({ timeout: 60_000 });
 
   const before = await health(page);
   const beforeScene = await scene(page);
@@ -137,7 +137,7 @@ test('BQ02: the authoritative revision does not move when the context is lost', 
   test.setTimeout(120_000);
   await page.goto('/');
   await openFile(page, 'small.stl', binaryStl(600).bytes);
-  await expect(page.getByTestId('topology-headline')).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByTestId('issue-list')).toBeVisible({ timeout: 60_000 });
 
   const before = await scene(page);
   expect(await installContextControl(page)).toBe(true);
@@ -156,7 +156,7 @@ test('BQ03: restoring the context leaves the document intact and exportable', as
   test.setTimeout(180_000);
   await page.goto('/');
   await openFile(page, 'small.stl', binaryStl(600).bytes);
-  await expect(page.getByTestId('topology-headline')).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByTestId('issue-list')).toBeVisible({ timeout: 60_000 });
   const before = await health(page);
 
   expect(await installContextControl(page)).toBe(true);
@@ -258,7 +258,7 @@ test('BQ08: a replacement import works after a context fault', async ({ page }) 
   test.setTimeout(180_000);
   await page.goto('/');
   await openFile(page, 'first.stl', binaryStl(400).bytes);
-  await expect(page.getByTestId('topology-headline')).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByTestId('issue-list')).toBeVisible({ timeout: 60_000 });
 
   expect(await installContextControl(page)).toBe(true);
   expect(await loseContext(page)).toBe(true);

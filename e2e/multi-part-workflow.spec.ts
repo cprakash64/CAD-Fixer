@@ -178,7 +178,7 @@ test('Mesh Health and the repair panel describe the part the user selected', asy
   await expect(page.getByTestId('health-part-scope')).toContainText('Defective');
   await expect(page.getByTestId('repair-part-scope')).toContainText('Defective');
   await expect(page.getByTestId('health-triangles')).toHaveText('5', { timeout: 30_000 });
-  await expect(page.getByTestId('topology-headline')).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId('issue-list')).toBeVisible({ timeout: 30_000 });
 
   await page.getByTestId('part-option-part-2').click();
 
@@ -194,13 +194,13 @@ test('Mesh Health and the repair panel describe the part the user selected', asy
 test('switching parts repeatedly creates and disposes no geometry', async ({ page }) => {
   await openFile(page, 'mixed.obj', objDefectAndClean().bytes);
   await expect(page.getByTestId('part-selector')).toBeVisible({ timeout: 30_000 });
-  await expect(page.getByTestId('topology-headline')).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId('issue-list')).toBeVisible({ timeout: 30_000 });
   const before = await readScene(page);
 
   for (const partId of ['part-2', 'part-1', 'part-2', 'part-1']) {
     await page.getByTestId(`part-option-${partId}`).click();
     await expect(page.getByTestId(`part-option-${partId}`)).toHaveAttribute('aria-pressed', 'true');
-    await expect(page.getByTestId('topology-headline')).toBeVisible({ timeout: 60_000 });
+    await expect(page.getByTestId('issue-list')).toBeVisible({ timeout: 60_000 });
   }
 
   const after = await readScene(page);
@@ -215,7 +215,7 @@ test('a repair changes the selected part and leaves the other one alone', async 
   test.setTimeout(180_000);
   await openFile(page, 'mixed.obj', objDefectAndClean().bytes);
 
-  await expect(page.getByTestId('topology-headline')).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByTestId('issue-list')).toBeVisible({ timeout: 60_000 });
   await expect(page.getByTestId('repair-operations')).toBeVisible({ timeout: 60_000 });
   await expect(page.getByTestId('repair-part-scope')).toContainText('Defective');
 

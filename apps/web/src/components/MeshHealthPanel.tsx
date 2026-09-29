@@ -14,8 +14,7 @@ import {
   presentVolume,
   summariseTopology,
 } from '../state/topology-presentation';
-import { AnalysisState, type OverlayId } from '../state/workspace-store';
-import { SelfIntersectionSection } from './SelfIntersectionSection';
+import type { OverlayId } from '../state/workspace-store';
 import { describeActivePart } from '../state/part-presentation';
 
 /**
@@ -37,7 +36,7 @@ import { describeActivePart } from '../state/part-presentation';
 export function MeshHealthPanel(): ReactNode {
   const { model, activePartId, analysis, overlays } = useWorkspaceState();
   const store = useWorkspaceStore();
-  const { runAnalysis, cancelAnalysis, isAnalyzing, canRetry } = useAnalysisControls();
+  const { runAnalysis, isAnalyzing, canRetry } = useAnalysisControls();
 
   if (model === undefined) {
     return (
@@ -67,7 +66,6 @@ export function MeshHealthPanel(): ReactNode {
     vertexCount: model.vertexCount,
   };
   const report = analysis.report;
-  const percent = Math.round(analysis.fraction * 100);
 
   return (
     <section className="panel" aria-labelledby="mesh-health-title" data-testid="mesh-health">
@@ -113,56 +111,19 @@ export function MeshHealthPanel(): ReactNode {
           testId="health-corners"
         />
         <Fact label="Units" value={describeUnit(model.source)} testId="health-units" />
-        {/* "Structural data" rather than "mesh": parsing checked the file's
+        {/* "File structure" rather than "mesh": parsing checked the file's
             shape, which is a narrower claim than anything about the surface. */}
         <Fact
-          label="Structural data"
-          value={model.validation.valid ? 'Valid' : 'Invalid'}
+          label="File structure"
+          value={model.validation.valid ? 'Valid (not a mesh-health verdict)' : 'Invalid'}
           testId="health-structural"
         />
       </dl>
 
-      {/* --- analysis lifecycle ------------------------------------------ */}
-      {isAnalyzing ? (
-        <div className="analysis__progress" data-testid="analysis-progress">
-          <div className="import__progress-row">
-            <span data-testid="analysis-phase">{analysis.phase ?? 'Analyzing topology'}</span>
-            <span data-testid="analysis-percent">{percent}%</span>
-          </div>
-          <progress
-            className="import__bar"
-            max={100}
-            value={percent}
-            aria-label={`Topology analysis progress: ${String(percent)}%`}
-          />
-          <button
-            type="button"
-            className="import__cancel"
-            onClick={cancelAnalysis}
-            data-testid="cancel-analysis"
-          >
-            Cancel analysis
-          </button>
-        </div>
-      ) : null}
-
-      {analysis.state === AnalysisState.Failed && analysis.error !== undefined ? (
-        <div className="analysis__error" role="alert" data-testid="analysis-error">
-          <p className="analysis__error-message">{analysis.error.message}</p>
-          <p className="panel__note">
-            The model is still loaded. You can view and export it; only the topology report is
-            missing.
-          </p>
-        </div>
-      ) : null}
-
-      {analysis.state === AnalysisState.Cancelled ? (
-        <p className="panel__note" data-testid="analysis-cancelled">
-          Topology analysis was cancelled. No partial results are shown.
-        </p>
-      ) : null}
-
-      {!isAnalyzing && canRetry ? (
+      {/* Re-running a finished analysis lives here, with the report it
+          replaces. The first run, its progress, its Cancel and its failure are
+          the workspace footer's primary action (REPAIR-UX-01). */}
+      {!isAnalyzing && canRetry && report !== undefined ? (
         <div className="panel__actions">
           <button
             type="button"
@@ -170,13 +131,13 @@ export function MeshHealthPanel(): ReactNode {
             onClick={runAnalysis}
             data-testid="rerun-analysis"
           >
-            {report === undefined ? 'Run analysis' : 'Run analysis again'}
+            Run analysis again
           </button>
         </div>
       ) : null}
 
       {report === undefined ? (
-        analysis.state === AnalysisState.Analyzing ? null : (
+        isAnalyzing ? null : (
           <p className="panel__empty" data-testid="health-no-report">
             No topology report for this model yet.
           </p>
@@ -245,9 +206,6 @@ function TopologySections({
       <p className="panel__note" data-testid="topology-qualifier">
         {summary.qualifier}
       </p>
-
-      {/* --- Self-intersection: its own diagnostic, with its own honesty --- */}
-      <SelfIntersectionSection />
 
       {/* --- B2: topology summary ---------------------------------------- */}
       <h3 className="panel__subtitle">Topology</h3>

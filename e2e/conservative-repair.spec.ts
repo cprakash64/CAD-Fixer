@@ -14,6 +14,7 @@ import {
   windingConflictStl,
 } from './stl-fixtures';
 import { objDefectAndClean, threeMfDefectiveTetrahedron } from './format-fixtures';
+import { openAdvancedDiagnostics, openPreviewDetails } from './repair-ui';
 
 /**
  * The conservative repair workflow, end to end, through the REAL worker.
@@ -39,7 +40,7 @@ async function openFile(page: Page, name: string, bytes: Buffer): Promise<void> 
 /** Waits for automatic analysis AND the repair plan derived from it. */
 async function importAndPlan(page: Page, name: string, bytes: Buffer): Promise<void> {
   await openFile(page, name, bytes);
-  await expect(page.getByTestId('topology-headline')).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId('issue-list')).toBeVisible({ timeout: 30_000 });
   await expect(page.getByTestId('repair-operations')).toBeVisible({ timeout: 30_000 });
 }
 
@@ -163,7 +164,7 @@ test('O1: a same-orientation duplicate is previewed, applied, and its expected s
 
   // The model really changed, and the diagnostics describe the new revision.
   await expect(page.getByTestId('fact-triangles')).toHaveText('1');
-  await expect(page.getByTestId('topology-headline')).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId('issue-list')).toBeVisible({ timeout: 30_000 });
   await expect(page.getByTestId('topo-duplicates')).toHaveText('0');
   await expect(page.getByTestId('topo-boundary-edges')).toHaveText('3');
   // The preview is gone, and so is everything that belonged to it.
@@ -199,8 +200,9 @@ test('O2: a reversed duplicate is reported and never offered for removal', async
   await expect(page.getByTestId('repair-op-mutations-remove-duplicate-faces')).toHaveText('0');
 
   await expect(page.getByTestId('repair-no-repairs')).toBeVisible();
-  // No hidden repair: there is nothing to preview and nothing to apply.
-  await expect(page.getByTestId('preview-repair')).toHaveCount(0);
+  // No hidden repair: the action keeps its place (REPAIR-UX-01) but cannot be
+  // pressed, and there is nothing to apply.
+  await expect(page.getByTestId('preview-repair')).toBeDisabled();
   await expect(page.getByTestId('apply-repair')).toHaveCount(0);
 
   // And the exclusion is stated, so a user knows this was a decision.
@@ -232,7 +234,7 @@ test('O3: a safely removable degenerate triangle is previewed and applied', asyn
 
   await apply(page);
   await expect(page.getByTestId('fact-triangles')).toHaveText('4');
-  await expect(page.getByTestId('topology-headline')).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId('issue-list')).toBeVisible({ timeout: 30_000 });
   await expect(page.getByTestId('topo-zero-area')).toHaveText('0');
 
   // The repeated-position variant is a SEPARATE defect and a separate counter.
@@ -244,7 +246,7 @@ test('O3: a safely removable degenerate triangle is previewed and applied', asyn
   await preview(page);
   await expect(page.getByTestId('change-count-removedRepeatedPosition')).toHaveText('1');
   await apply(page);
-  await expect(page.getByTestId('topology-headline')).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId('issue-list')).toBeVisible({ timeout: 30_000 });
   await expect(page.getByTestId('topo-repeated-position')).toHaveText('0');
 });
 
@@ -268,9 +270,9 @@ test('O4: an unsafe degenerate removal is refused, with a reason, and changes no
   await expect(zeroArea.toggle).toBeDisabled();
   await expect(page.getByTestId('repair-panel')).not.toContainText('failed');
 
-  // No candidate is produced for it at all.
+  // No candidate is produced for it at all; the action is present and disabled.
   await expect(page.getByTestId('repair-no-repairs')).toBeVisible();
-  await expect(page.getByTestId('preview-repair')).toHaveCount(0);
+  await expect(page.getByTestId('preview-repair')).toBeDisabled();
   await expect(page.getByTestId('apply-repair')).toHaveCount(0);
 
   // The model is exactly as imported.
@@ -296,10 +298,11 @@ test('O5: a winding conflict is unified relative to its neighbours, never outwar
   await expect(page.getByTestId('repair-delta-windingConflicts')).toHaveText('-1 (expected)');
   // Signed volume moves because orientation moved. That is recorded as such and
   // never presented as the model gaining or losing material.
+  await openPreviewDetails(page);
   await expect(page.getByTestId('repair-volume-status')).toBeVisible();
 
   await apply(page);
-  await expect(page.getByTestId('topology-headline')).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId('issue-list')).toBeVisible({ timeout: 30_000 });
   await expect(page.getByTestId('topo-winding')).toHaveText('0');
   await expect(page.getByTestId('topo-winding-consistent')).toHaveText('Yes');
 
@@ -318,7 +321,8 @@ test('O5: a winding conflict is unified relative to its neighbours, never outwar
   await expect(panel).not.toContainText('outward-facing');
   await expect(panel).not.toContainText('now correctly oriented');
   await expect(panel).toContainText('never decides which side is outside');
-  await expect(panel).toContainText('not turned outward');
+  // The exclusions moved to Advanced diagnostics (REPAIR-UX-01); still stated.
+  await expect(page.getByTestId('repair-exclusions')).toContainText('not turned outward');
   await expect(panel).toContainText('RELATIVE');
 });
 
@@ -340,7 +344,7 @@ test('O6: winding unification is blocked by a non-manifold vertex, with an expla
   await expect(winding.toggle).toBeDisabled();
 
   await expect(page.getByTestId('repair-no-repairs')).toBeVisible();
-  await expect(page.getByTestId('preview-repair')).toHaveCount(0);
+  await expect(page.getByTestId('preview-repair')).toBeDisabled();
   await expect(page.getByTestId('fact-triangles')).toHaveText('4');
 });
 
@@ -377,7 +381,7 @@ test('O7: a model with all three defects runs the pipeline in order and validate
 
   await apply(page);
   await expect(page.getByTestId('fact-triangles')).toHaveText('4');
-  await expect(page.getByTestId('topology-headline')).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId('issue-list')).toBeVisible({ timeout: 30_000 });
   await expect(page.getByTestId('topo-duplicates')).toHaveText('0');
   await expect(page.getByTestId('topo-zero-area')).toHaveText('0');
   await expect(page.getByTestId('topo-winding')).toHaveText('0');
@@ -466,7 +470,7 @@ test('O10: importing another model invalidates the candidate it did not belong t
   // M1 arrives while M0's candidate is live.
   await openFile(page, 'second.stl', tetrahedronStl());
   await expect(page.getByTestId('fact-triangles')).toHaveText('4', { timeout: 30_000 });
-  await expect(page.getByTestId('topology-headline')).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId('issue-list')).toBeVisible({ timeout: 30_000 });
 
   // M0's candidate is gone: no preview, no overlays, nothing to apply.
   await expect(page.getByTestId('repair-candidate')).toHaveCount(0);
@@ -513,7 +517,8 @@ test('O11: losing the worker clears the model, the preview, and every overlay', 
 
   // Policy A: the model goes, and so does everything that named it.
   await expect(page.getByTestId('model-empty')).toBeVisible({ timeout: 20_000 });
-  await expect(page.getByTestId('repair-empty')).toBeVisible();
+  await expect(page.getByTestId('repair-overview')).toHaveCount(0);
+  await expect(page.getByTestId('preview-repair')).toBeDisabled();
   await expect(page.getByTestId('repair-candidate')).toHaveCount(0);
   await expect(page.getByTestId('apply-repair')).toHaveCount(0);
   await expect(page.getByTestId('preview-banner')).toHaveCount(0);
@@ -543,7 +548,7 @@ test('O12: a repair above the memory ceiling is refused before anything is alloc
 
   const model = analysisHeavyStl(60);
   await openFile(page, 'big.stl', model.bytes);
-  await expect(page.getByTestId('topology-headline')).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByTestId('issue-list')).toBeVisible({ timeout: 60_000 });
 
   // The narrowed ceiling is visible, not hidden state.
   await expect(page.getByTestId('repair-memory-note')).toContainText('can only lower the limit');
@@ -555,12 +560,13 @@ test('O12: a repair above the memory ceiling is refused before anything is alloc
   await expect(refusal).toContainText('still loaded');
   await expect(refusal).not.toContainText('reload');
 
-  // No candidate, nothing to apply.
-  await expect(page.getByTestId('preview-repair')).toHaveCount(0);
+  // No candidate, nothing to apply: the action is present and disabled.
+  await expect(page.getByTestId('preview-repair')).toBeDisabled();
   await expect(page.getByTestId('apply-repair')).toHaveCount(0);
 
   // The model remains fully usable: visible, analysed, and exportable.
   await expect(page.getByTestId('fact-triangles')).toHaveText(model.triangles.toLocaleString());
+  await openAdvancedDiagnostics(page);
   await expect(page.getByTestId('topo-boundary-edges')).toBeVisible();
   const download = page.waitForEvent('download');
   await page.getByTestId('export-binary').click();
@@ -606,12 +612,11 @@ test('O14: repairing again after a repair finds nothing left to do', async ({ pa
   await apply(page);
 
   // The plan is recomputed against the repaired revision, automatically.
-  await expect(page.getByTestId('topology-headline')).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId('issue-list')).toBeVisible({ timeout: 30_000 });
   await expect(page.getByTestId('repair-no-repairs')).toBeVisible({ timeout: 30_000 });
-  await expect(page.getByTestId('repair-no-repairs')).toContainText(
-    'No conservative repairs are currently available.',
-  );
-  await expect(page.getByTestId('preview-repair')).toHaveCount(0);
+  // The duplicate was the only issue, so nothing is left to repair.
+  await expect(page.getByTestId('repair-no-repairs')).toHaveText('No repairable problems found.');
+  await expect(page.getByTestId('preview-repair')).toBeDisabled();
 
   // Every operation reports nothing to do, rather than disappearing.
   for (const id of [
@@ -641,7 +646,7 @@ test('O15: undo restores the pre-repair geometry as a new revision', async ({ pa
   await preview(page);
   await apply(page);
   await expect(page.getByTestId('fact-triangles')).toHaveText('4');
-  await expect(page.getByTestId('topology-headline')).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId('issue-list')).toBeVisible({ timeout: 30_000 });
 
   // M1 is exportable in its own right before the undo.
   const repaired = page.waitForEvent('download');
@@ -654,7 +659,7 @@ test('O15: undo restores the pre-repair geometry as a new revision', async ({ pa
   // bounding box. Not a hidden copy swapped back in React — the worker rebuilt
   // it from the inverse patch and revalidated it.
   await expect(page.getByTestId('fact-triangles')).toHaveText('6', { timeout: 30_000 });
-  await expect(page.getByTestId('topology-headline')).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId('issue-list')).toBeVisible({ timeout: 30_000 });
   await expect(page.getByTestId('topo-duplicates')).toHaveText('1');
   await expect(page.getByTestId('topo-zero-area')).toHaveText('1');
   await expect(page.getByTestId('topo-winding')).toHaveText('2');
@@ -694,10 +699,11 @@ test('O16: nothing leaves the browser during planning, preview, apply, undo, or 
   await preview(page);
   await page.getByTestId('preview-mode-before').check();
   await page.getByTestId('preview-mode-after').check();
+  await openPreviewDetails(page);
   await page.getByTestId('change-overlay-toggle-flippedFaces').uncheck();
   await page.getByTestId('change-overlay-toggle-flippedFaces').check();
   await apply(page);
-  await expect(page.getByTestId('topology-headline')).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId('issue-list')).toBeVisible({ timeout: 30_000 });
   await page.getByTestId('undo-repair').click();
   await expect(page.getByTestId('fact-triangles')).toHaveText('6', { timeout: 30_000 });
 
@@ -722,15 +728,14 @@ test('O17: the repair workflow is operable from the keyboard alone', async ({ pa
   await page.goto('/');
   await importAndPlan(page, 'combined.stl', combinedRepairStl());
 
-  // A named landmark with a heading, so the workflow is findable.
-  const panel = page.getByRole('region', { name: 'Conservative repair' });
-  await expect(panel).toBeVisible();
-  await expect(page.getByRole('heading', { name: 'Conservative repair' })).toBeVisible();
+  // Named sections, so the workflow is findable (REPAIR-UX-01).
+  await expect(page.getByRole('region', { name: 'Detected issues' })).toBeVisible();
+  await expect(page.getByRole('region', { name: 'Repair options' })).toBeVisible();
 
-  // The navigation item is a real control that moves attention to the panel.
+  // The navigation item is a real control that moves attention to the workspace.
   await page.getByTestId('workflow-repair').focus();
   await page.keyboard.press('Enter');
-  await expect(page.getByRole('heading', { name: 'Conservative repair' })).toBeFocused();
+  await expect(page.getByTestId('repair-heading')).toBeFocused();
 
   // Operations are native checkboxes with accessible names and an associated
   // reason, operable by keyboard rather than by click only.
@@ -741,9 +746,7 @@ test('O17: the repair workflow is operable from the keyboard alone', async ({ pa
   await expect(toggle).not.toBeChecked();
   await page.keyboard.press('Space');
   await expect(toggle).toBeChecked();
-  await expect(
-    page.getByRole('checkbox', { name: /Remove exact duplicate triangles/ }),
-  ).toHaveCount(1);
+  await expect(page.getByRole('checkbox', { name: /Remove duplicate triangles/ })).toHaveCount(1);
 
   // Preview, the view switch, the overlays, Apply and Undo are all reachable and
   // operable without a pointer.
@@ -757,6 +760,9 @@ test('O17: the repair workflow is operable from the keyboard alone', async ({ pa
   await page.keyboard.press('Space');
   await expect(before).toBeChecked();
 
+  const details = page.getByTestId('repair-preview-details-toggle');
+  await details.focus();
+  await page.keyboard.press('Enter');
   const overlay = page.getByTestId('change-overlay-toggle-removedDuplicates');
   await overlay.focus();
   await page.keyboard.press('Space');
@@ -843,7 +849,7 @@ test('CRU03: an indexed OBJ survives repair and undo, and exports as it imported
   test.setTimeout(180_000);
   await page.goto('/');
   await openFile(page, 'indexed.obj', objDefectAndClean().bytes);
-  await expect(page.getByTestId('topology-headline')).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByTestId('issue-list')).toBeVisible({ timeout: 60_000 });
   await expect(page.getByTestId('repair-operations')).toBeVisible({ timeout: 60_000 });
 
   /*
@@ -959,7 +965,7 @@ test('CRU04: an indexed 3MF survives repair and undo, and exports as it imported
   test.setTimeout(180_000);
   await page.goto('/');
   await openFile(page, 'indexed.3mf', threeMfDefectiveTetrahedron());
-  await expect(page.getByTestId('topology-headline')).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByTestId('issue-list')).toBeVisible({ timeout: 60_000 });
   await expect(page.getByTestId('repair-operations')).toBeVisible({ timeout: 60_000 });
 
   expect(await readFact(page, 'health-corners')).toBe(4);
@@ -1027,7 +1033,7 @@ test('CRP18: an indexed model draws every triangle, before and after a repair', 
    * With one part every drawn triangle belongs to the model under repair.
    */
   await openFile(page, 'indexed.3mf', threeMfDefectiveTetrahedron());
-  await expect(page.getByTestId('topology-headline')).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByTestId('issue-list')).toBeVisible({ timeout: 60_000 });
   await expect(page.getByTestId('repair-operations')).toBeVisible({ timeout: 60_000 });
 
   /*

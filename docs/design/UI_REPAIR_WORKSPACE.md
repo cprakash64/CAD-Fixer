@@ -1,5 +1,10 @@
 # UI-02 — Repair workspace
 
+> **Layout superseded by REPAIR-UX-01** (`REPAIR_UX_01.md`): the findings list,
+> selection model, occurrence navigator and overlays below are unchanged; the
+> panel order, the sticky primary action, the ⓘ explanations and the collapsed
+> Advanced diagnostics are described there.
+
 UI-02 rebuilt the Repair workspace around the PrintPrep reference's first two
 screens — a findings list with a health summary, an occurrence navigator, a
 viewport issue HUD and an inspector selection — on top of Pybrix's existing

@@ -1,5 +1,6 @@
 import { useId, useState, type ReactNode } from 'react';
 import { Icon, type IconName } from './Icon';
+import { InfoButton, InfoPanel, useInfoDisclosure, type InfoSections } from './info';
 
 /**
  * Presentation primitives for the application shell.
@@ -74,6 +75,11 @@ export interface PanelSectionProps {
   readonly meta?: ReactNode;
   readonly defaultOpen?: boolean;
   readonly testId?: string;
+  /**
+   * An explanation behind an ⓘ beside the heading. The button sits OUTSIDE the
+   * collapse toggle, so asking what a section means never opens or closes it.
+   */
+  readonly info?: InfoSections;
 }
 
 /**
@@ -91,9 +97,11 @@ export function PanelSection({
   meta,
   defaultOpen = true,
   testId,
+  info,
 }: PanelSectionProps): ReactNode {
   const [open, setOpen] = useState(defaultOpen);
   const bodyId = useId();
+  const infoDisclosure = useInfoDisclosure();
 
   return (
     <section
@@ -119,7 +127,22 @@ export function PanelSection({
           <span className="panel-section__title">{title}</span>
           {meta === undefined ? null : <span className="panel-section__meta">{meta}</span>}
         </button>
+        {info === undefined ? null : (
+          <InfoButton
+            disclosure={infoDisclosure}
+            label={title}
+            {...(testId === undefined ? {} : { testId: `${testId}-info` })}
+          />
+        )}
       </h2>
+      {info === undefined ? null : (
+        <InfoPanel
+          disclosure={infoDisclosure}
+          label={title}
+          info={info}
+          {...(testId === undefined ? {} : { testId: `${testId}-info-panel` })}
+        />
+      )}
       <div className="panel-section__body" id={bodyId} hidden={!open}>
         {children}
       </div>

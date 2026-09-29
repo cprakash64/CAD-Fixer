@@ -156,7 +156,7 @@ test('at 200% browser zoom the critical controls stay usable', async ({ browser 
       await page.getByTestId('toggle-tool-drawer').click();
     const primary = page.getByTestId(
       {
-        repair: 'analyze-mesh',
+        repair: 'preview-repair',
         convert: 'convert-export',
         split: 'split-preview',
         texture: 'texture-generate',

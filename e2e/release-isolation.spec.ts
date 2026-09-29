@@ -73,15 +73,16 @@ test('BQ25: repair refuses rather than becoming uninterruptible', async ({ page 
   test.setTimeout(120_000);
   await page.goto(`http://localhost:${String(port)}/`);
   await openFile(page, 'small.stl', binaryStl(600).bytes);
-  await expect(page.getByTestId('topology-headline')).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByTestId('issue-list')).toBeVisible({ timeout: 60_000 });
 
   /*
    * FAIL CLOSED, AND VISIBLY. The panel states the refusal instead of rendering
    * repair controls, so there is no path to a repair that could not be stopped.
+   * The primary action keeps its place (REPAIR-UX-01) but is disabled.
    */
   const refusal = page.getByTestId('repair-isolation-unavailable');
   await expect(refusal).toBeVisible();
-  await expect(page.getByTestId('preview-repair')).toHaveCount(0);
+  await expect(page.getByTestId('preview-repair')).toBeDisabled();
   await expect(page.getByTestId('apply-repair')).toHaveCount(0);
 
   const text = ((await refusal.textContent()) ?? '').toLowerCase();
@@ -104,7 +105,7 @@ test('BQ25, BQ58: the rest of the product still works without isolation', async 
    * them down with it — that is the difference between a safe refusal and a
    * self-inflicted outage.
    */
-  await expect(page.getByTestId('topology-headline')).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByTestId('issue-list')).toBeVisible({ timeout: 60_000 });
   await expect(page.getByTestId('health-triangles')).toHaveText((500).toLocaleString());
 
   const pending = page.waitForEvent('download', { timeout: 60_000 });

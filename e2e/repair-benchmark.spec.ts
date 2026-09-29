@@ -145,7 +145,7 @@ test.describe('repair browser benchmark', () => {
       // Analysis runs automatically; the plan follows it. Both are measured from
       // the moment the model became visible, because that is when a user could
       // first have asked for a repair.
-      await expect(page.getByTestId('topology-headline')).toBeVisible({ timeout: 600_000 });
+      await expect(page.getByTestId('issue-list')).toBeVisible({ timeout: 600_000 });
       const analysisMs = Date.now() - importedAt;
 
       await expect(page.getByTestId('repair-operations')).toBeVisible({ timeout: 600_000 });

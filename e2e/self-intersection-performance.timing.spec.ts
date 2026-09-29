@@ -125,7 +125,7 @@ test('auto-band latency: the automatic check at the 25,000-face boundary', async
   await openFile(page, 'auto.stl', model.bytes);
 
   // The model is usable — topology has reported — before the diagnostic lands.
-  await expect(page.getByTestId('topology-headline')).toBeVisible({ timeout: 120_000 });
+  await expect(page.getByTestId('issue-list')).toBeVisible({ timeout: 120_000 });
   const usableAt = Date.now();
 
   await expect(page.getByTestId('self-intersection-headline')).toHaveText('None found', {

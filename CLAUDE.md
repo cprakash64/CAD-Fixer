@@ -1114,6 +1114,49 @@ lost`, `printable`, `watertight`, and the rest. **"The numbers are unchanged"
   what still works and what to do; context loss says to export applied work
   BEFORE reloading, because a reload discards it.
 
+## Repair workspace invariants (REPAIR-UX-01)
+
+- **THREE QUESTIONS BY DEFAULT, NOTHING ELSE.** What is wrong (the Health line
+  and Detected issues), what Pybrix can repair (each row's fixability line and
+  Repair options), what to click (the sticky footer). Explanations go behind an
+  ⓘ; the full report — topology table, component table, surface metrics,
+  overlays, exclusions, filling limits — lives in the collapsed **Advanced
+  diagnostics**. Never put a paragraph back on the default surface; move
+  information behind a disclosure rather than deleting it.
+- **ONE PRIMARY ACTION, ONE PLACE, EVERY STATE.** `deriveRepairAction` in
+  `state/repair-workspace-presentation.ts` is the state machine and the footer
+  renders it: Analyze model → Repair model → Apply repairs, with Cancel /
+  Cancel preview beside it. When nothing safe can run the button is STILL
+  THERE, disabled, with the reason beside it — never hidden. A stale report
+  outranks any stored plan.
+- **REPAIR MODEL IS `previewRepair`, NOT A COMMIT, AND NOT "FIX ALL".** It runs
+  every SELECTED operation the current plan found APPLICABLE and shows a
+  validated preview. Apply is `repair/commit`; Undo is `repair/undo`. No
+  transaction, guard or validator changed. The supporting line counts issue
+  TYPES truthfully, and open boundaries are never counted as something it
+  repairs.
+- **FIXABILITY IS READ FROM THE PLAN'S DECISIONS, NEVER FROM A COUNT.**
+  `deriveIssueStatus` is exhaustive over `RepairIssueId`. Components are
+  "Review recommended", never repaired. Non-manifold geometry and
+  self-intersections are "Not automatically repairable".
+- **ⓘ IS A DISCLOSURE, NOT A POPOVER** (`components/shell/info.tsx`): a button
+  with `aria-expanded`/`aria-controls`, click or tap, Escape closes and returns
+  focus to the button, the panel is in flow beneath what it explains and stays
+  mounted `hidden`. Nothing floats, so nothing can leave the viewport.
+- **ONE OWNER PER HOOK THAT STARTS WORK.** `SelfIntersectionSection` is the only
+  caller of `useSelfIntersection` and now lives inside the self-intersection
+  issue row; `SelfIntersectionDetails` reads the store only. The analysis
+  lifecycle (progress, Cancel, failure) is in the footer, not in Mesh Health.
+- **"FILE STRUCTURE VALID", NEVER "STRUCTURALLY VALID" OR "VALID".** It says the
+  file parsed; its ⓘ says that is not mesh health.
+- **SPLITTING A NON-MANIFOLD VERTEX WITHOUT MOVING IT IS NOT A REPAIR** under
+  ADR 0009: two records at one coordinate are one topological vertex, so the
+  validator would reject it on every input.
+  `mesh-topology/src/vertex-split-audit.test.ts` holds the evidence; making it
+  meaningful is an identity-policy decision (REPAIR-CORE-02). Likewise the
+  250,000-face filling ceiling stays until a loop-local design is qualified —
+  see `docs/design/REPAIR_UX_01.md` §7–§8.
+
 ## Hole-fill invariants (Stage 4B-1B1 engine, 4B-1B2 workflow)
 
 - **THE ENGINE IS UNCHANGED BY THE WORKFLOW.** Stage 4B-1B2 added selection,

@@ -79,7 +79,7 @@ test.describe('browser benchmark', () => {
       );
       const firstVisibleMs = Date.now() - startedAt;
 
-      await expect(page.getByTestId('topology-headline')).toBeVisible({ timeout: 300_000 });
+      await expect(page.getByTestId('issue-list')).toBeVisible({ timeout: 300_000 });
       const healthReadyMs = Date.now() - startedAt;
 
       const gaps = await page.evaluate(

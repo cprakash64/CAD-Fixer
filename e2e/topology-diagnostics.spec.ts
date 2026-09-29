@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { openAdvancedDiagnostics } from './repair-ui';
 import {
   analysisHeavyStl,
   bowTieStl,
@@ -26,12 +27,17 @@ async function openFile(page: Page, name: string, bytes: Buffer): Promise<void> 
 
 /** Waits for automatic analysis to produce a report for the loaded model. */
 async function waitForReport(page: Page): Promise<void> {
-  await expect(page.getByTestId('topology-headline')).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId('issue-list')).toBeVisible({ timeout: 30_000 });
 }
 
+/**
+ * Imports, waits for the report, and opens the full Mesh Health report, which
+ * REPAIR-UX-01 moved into the collapsed Advanced diagnostics section.
+ */
 async function importAndAnalyse(page: Page, name: string, bytes: Buffer): Promise<void> {
   await openFile(page, name, bytes);
   await waitForReport(page);
+  await openAdvancedDiagnostics(page);
 }
 
 /**
@@ -228,8 +234,8 @@ test('H7: cancelling analysis keeps the model and installs no partial report', a
   await expect(page.getByTestId('topology-headline')).toHaveCount(0);
   await expect(page.getByTestId('export-binary')).toBeEnabled();
 
-  // And the user can run it again.
-  const rerun = page.getByTestId('rerun-analysis');
+  // And the user can run it again, from the workspace's primary action.
+  const rerun = page.getByTestId('analyze-mesh');
   await expect(rerun).toBeVisible();
   await rerun.click();
   await waitForReport(page);
@@ -296,7 +302,8 @@ test('H9: losing the worker clears the model, the report, and the overlays', asy
 
   // Policy A: the model is discarded rather than left on screen looking usable.
   await expect(page.getByTestId('model-empty')).toBeVisible({ timeout: 20_000 });
-  await expect(page.getByTestId('health-empty')).toBeVisible();
+  await expect(page.getByTestId('repair-overview')).toHaveCount(0);
+  await expect(page.getByTestId('issue-list')).toHaveCount(0);
   await expect(page.getByTestId('topology-headline')).toHaveCount(0);
   await expect
     .poll(async () => (await readSceneStats(page)).overlayObjects, { timeout: 10_000 })

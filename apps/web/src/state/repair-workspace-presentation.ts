@@ -1,0 +1,573 @@
+import {
+  HOLE_FILL_MAX_PART_FACES,
+  RepairDecision,
+  RepairOperation,
+  RepairReason,
+  type ConservativeRepairPlan,
+  type RepairChangeCounts,
+  type RepairOperationDecision,
+} from '@cadfixer/geometry-runtime';
+import { SELF_INTERSECTION_MAX_FACES } from '@cadfixer/mesh-self-intersection';
+import { IssueSeverity, RepairIssueId, type RepairIssue } from './repair-issues';
+
+/**
+ * The Repair workspace's action model and its compact wording — REPAIR-UX-01.
+ *
+ * FRAMEWORK-FREE AND PURE, like every presentation module. Scalars in, a
+ * decision and its sentences out, tested without a DOM. The workspace answers
+ * three questions by default — what is wrong, what Pybrix can repair, what to
+ * click — and every answer is decided here so the footer, the issue rows and
+ * the option rows cannot disagree about any of them.
+ *
+ * NOTHING HERE DECIDES A SAFETY QUESTION. Whether an operation can run is the
+ * worker's plan; this module only reads the decision it already made. The
+ * primary action is "Repair model" because pressing it runs every SELECTED
+ * operation the plan found APPLICABLE and previews the validated result — no
+ * more. It never means that every detected issue will go away, and nothing
+ * here may say so.
+ *
+ * THE COPY IS SHORT ON PURPOSE. The long explanations live in `ISSUE_INFO` and
+ * the other info texts, which the interface shows only when asked: an ⓘ button
+ * or the collapsed Advanced diagnostics. They are still exported and tested,
+ * because hiding information is not the same as deleting it.
+ */
+
+/**
+ * Every term the three older presentation modules forbid, plus the claims a
+ * one-button repair screen is specifically tempted to make. Enforced by test
+ * against every string this module can produce.
+ */
+export const REPAIR_WORKSPACE_FORBIDDEN_TERMS: readonly string[] = [
+  'hole',
+  'printable',
+  'watertight',
+  'valid mesh',
+  'error free',
+  'fully repaired',
+  'ready to print',
+  'all errors fixed',
+  'all issues fixed',
+  'fix everything',
+  'fix all',
+  'make printable',
+  'model repaired',
+  'model fixed',
+  'perfect',
+  'damaged',
+];
+
+/* ------------------------------------------------------- the workspace -- */
+
+export const REPAIR_WORKSPACE_TITLE = 'Repair';
+
+/** The primary action's label. Not "Fix all": see the module comment. */
+export const REPAIR_MODEL_ACTION = 'Repair model';
+export const ANALYZE_MODEL_ACTION = 'Analyze model';
+export const APPLY_REPAIRS_ACTION = 'Apply repairs';
+export const CANCEL_PREVIEW_ACTION = 'Cancel preview';
+export const UNDO_REPAIR_ACTION = 'Undo repair';
+
+/** Beneath the action while it is available. */
+export const REPAIR_MODEL_SUPPORT =
+  'Repairs every issue Pybrix can safely fix automatically. You review the result before anything changes.';
+
+/** Detected issues remain and nothing selected can change them. */
+export const NO_SAFE_REPAIRS = 'No safe automatic repairs are available for the detected issues.';
+
+/** Nothing was detected that an automatic operation acts on. */
+export const NO_REPAIRABLE_PROBLEMS = 'No repairable problems found.';
+
+/** State C, stated beside the Apply button. */
+export const PREVIEW_READY_LINE = 'Preview ready — nothing has changed until you apply it.';
+
+/** State D. Deliberately not "Repair complete": other issues may remain. */
+export const REPAIRS_APPLIED_LINE = 'Repairs applied';
+
+/* ------------------------------------------------------ fixability ---- */
+
+/**
+ * What Pybrix can do about ONE issue type, in the plainest honest words.
+ *
+ * Not severity: a warning may be repairable and an error may not. Rendered as
+ * text beneath the issue's name, never as colour alone.
+ */
+export const Fixability = {
+  /** Every occurrence is targeted by a selected, applicable operation. */
+  Repairable: 'repairable',
+  /** Some occurrences can be repaired automatically and some cannot. */
+  Partial: 'partial',
+  /** Nothing automatic acts on it. */
+  NotRepairable: 'not-repairable',
+  /** Not necessarily a problem at all; the user decides. */
+  Review: 'review',
+  /** An applicable repair exists but its operation is not selected. */
+  NotSelected: 'not-selected',
+  /** The check that finds it has not run for this version. */
+  CheckNotRun: 'check-not-run',
+  /** Automatic handling is withheld because of the part's size. */
+  ResourceLimit: 'resource-limit',
+  /** The check ran and found none. */
+  NoIssue: 'no-issue',
+  /** The plan that decides this is still being worked out. */
+  Pending: 'pending',
+} as const;
+
+export type Fixability = (typeof Fixability)[keyof typeof Fixability];
+
+export interface IssueStatus {
+  readonly fixability: Fixability;
+  /** One short line under the issue name. */
+  readonly text: string;
+  /** An optional second fact, such as the simple / complex boundary split. */
+  readonly detail?: string;
+}
+
+/**
+ * Everything `deriveIssueStatus` reads, restated structurally so this module
+ * stays free of the store.
+ */
+export interface IssueStatusContext {
+  /**
+   * The CURRENT plan for the active part, or `undefined` while it is being
+   * computed or when it is missing. A plan from another revision must not be
+   * passed: its decisions describe a different mesh.
+   */
+  readonly plan: ConservativeRepairPlan | undefined;
+  /** The topology counts the boundary split comes from. */
+  readonly boundaries: {
+    readonly simpleLoops: number;
+    readonly openChains: number;
+    readonly branched: number;
+  };
+  /** Triangles in the active part. */
+  readonly partFaceCount: number;
+  /** True when the self-intersection check will not run at this size. */
+  readonly selfIntersectionSizeLimited: boolean;
+}
+
+/**
+ * The fixability line for one issue row. EXHAUSTIVE over `RepairIssueId`, with
+ * no default, so a new row cannot reach the screen without a decision.
+ */
+export function deriveIssueStatus(issue: RepairIssue, context: IssueStatusContext): IssueStatus {
+  if (issue.count === undefined) {
+    return {
+      fixability: Fixability.CheckNotRun,
+      text:
+        issue.id === RepairIssueId.SelfIntersections && context.selfIntersectionSizeLimited
+          ? 'Not checked — model exceeds automatic check size'
+          : 'Not checked',
+    };
+  }
+  if (issue.count === 0 && issue.id !== RepairIssueId.Components) {
+    return { fixability: Fixability.NoIssue, text: 'No issue' };
+  }
+
+  switch (issue.id) {
+    case RepairIssueId.OpenBoundaries: {
+      const { simpleLoops, openChains, branched } = context.boundaries;
+      const complex = openChains + branched;
+      const detail = `${plural(simpleLoops, 'simple loop')} · ${complex.toLocaleString()} complex`;
+      if (context.partFaceCount > HOLE_FILL_MAX_PART_FACES) {
+        return {
+          fixability: Fixability.ResourceLimit,
+          text: 'Automatic filling isn’t available at this part size',
+          detail,
+        };
+      }
+      return simpleLoops === 0
+        ? { fixability: Fixability.NotRepairable, text: 'Not automatically fillable', detail }
+        : {
+            fixability: Fixability.Partial,
+            text: 'Simple loops can be filled one at a time below',
+            detail,
+          };
+    }
+    case RepairIssueId.NonManifoldEdges:
+    case RepairIssueId.NonManifoldVertices:
+      return { fixability: Fixability.NotRepairable, text: 'Not automatically repairable' };
+    case RepairIssueId.SelfIntersections:
+      return { fixability: Fixability.NotRepairable, text: 'Not automatically repairable' };
+    case RepairIssueId.Components:
+      return issue.count <= 1
+        ? { fixability: Fixability.NoIssue, text: 'One connected piece' }
+        : { fixability: Fixability.Review, text: 'Review recommended — may be intentional' };
+    case RepairIssueId.WindingConflicts:
+      return fromDecisions(context.plan, [RepairOperation.UnifyWinding], false);
+    case RepairIssueId.DegenerateFaces:
+      return fromDecisions(
+        context.plan,
+        [RepairOperation.RemoveRepeatedPositionFaces, RepairOperation.RemoveZeroAreaFaces],
+        false,
+      );
+    case RepairIssueId.DuplicateFaces: {
+      const reversedOnly =
+        context.plan !== undefined &&
+        (decisionFor(context.plan, RepairOperation.RemoveDuplicateFaces)?.targetedCount ?? 0) === 0;
+      if (reversedOnly) {
+        return {
+          fixability: Fixability.NotRepairable,
+          text: 'Reversed copies are kept — they may be intentional',
+        };
+      }
+      return fromDecisions(context.plan, [RepairOperation.RemoveDuplicateFaces], true);
+    }
+  }
+}
+
+/**
+ * Status from the plan's decisions for the operations that act on one issue.
+ *
+ * `partialByNature` is for duplicates: reversed copies are counted in the row
+ * and never removed, so even an applicable removal repairs only part of it
+ * when any reversed copies exist. The caller cannot see that split, so it is
+ * stated as "some" only when the source count exceeds what is targeted.
+ */
+function fromDecisions(
+  plan: ConservativeRepairPlan | undefined,
+  operations: readonly RepairOperation[],
+  partialByNature: boolean,
+): IssueStatus {
+  if (plan === undefined) return { fixability: Fixability.Pending, text: 'Checking…' };
+  const decisions = operations
+    .map((operation) => decisionFor(plan, operation))
+    .filter((entry): entry is RepairOperationDecision => entry !== undefined)
+    // An operation with nothing to target says nothing about this issue.
+    .filter((entry) => entry.targetedCount > 0);
+  if (decisions.length === 0) {
+    return { fixability: Fixability.NotRepairable, text: 'Not automatically repairable' };
+  }
+  const repairable = decisions.filter(isRepairableDecision);
+  const notSelected = decisions.filter((entry) => entry.reason === RepairReason.NotRequested);
+  if (repairable.length === decisions.length) {
+    return partialByNature
+      ? {
+          fixability: Fixability.Partial,
+          text: 'Exact copies can be removed; reversed copies are kept',
+        }
+      : { fixability: Fixability.Repairable, text: 'Repair available' };
+  }
+  if (repairable.length > 0) {
+    return { fixability: Fixability.Partial, text: 'Partly repairable' };
+  }
+  if (notSelected.length > 0) {
+    return { fixability: Fixability.NotSelected, text: 'Repair available — option not selected' };
+  }
+  return { fixability: Fixability.NotRepairable, text: 'Blocked by the model’s topology' };
+}
+
+/**
+ * True when the plan will act on (or already resolves) this operation's
+ * targets. `NOT_NEEDED` with targets and any reason other than "not requested"
+ * is the "an earlier operation in this plan resolves it" case — which is a
+ * repair, not an absence.
+ */
+function isRepairableDecision(entry: RepairOperationDecision): boolean {
+  if (entry.decision === RepairDecision.Applicable) return true;
+  return (
+    entry.decision === RepairDecision.NotNeeded &&
+    entry.targetedCount > 0 &&
+    entry.reason !== RepairReason.NotRequested
+  );
+}
+
+function decisionFor(
+  plan: ConservativeRepairPlan,
+  operation: RepairOperation,
+): RepairOperationDecision | undefined {
+  return plan.decisions.find((entry) => entry.operation === operation);
+}
+
+/* ------------------------------------------------------ repair scope -- */
+
+/** Issue types a Repair model press would act on, and how many were detected. */
+export interface RepairScope {
+  /** Detected issue types (count > 0, excluding a single component). */
+  readonly detected: number;
+  /** Of those, how many the current plan repairs fully or in part. */
+  readonly repairable: number;
+}
+
+export function deriveRepairScope(
+  issues: readonly RepairIssue[],
+  statuses: ReadonlyMap<RepairIssueId, IssueStatus>,
+): RepairScope {
+  let detected = 0;
+  let repairable = 0;
+  for (const issue of issues) {
+    if (issue.severity !== IssueSeverity.Error && issue.severity !== IssueSeverity.Warning)
+      continue;
+    detected += 1;
+    const status = statuses.get(issue.id);
+    if (status === undefined) continue;
+    // Open boundaries are filled one at a time in their own section, never by
+    // Repair model, so they are not counted as something this button repairs.
+    if (issue.id === RepairIssueId.OpenBoundaries) continue;
+    if (status.fixability === Fixability.Repairable || status.fixability === Fixability.Partial) {
+      repairable += 1;
+    }
+  }
+  return { detected, repairable };
+}
+
+/** The supporting line under an enabled Repair model. */
+export function describeRepairScope(scope: RepairScope): string {
+  if (scope.detected === 0) return REPAIR_MODEL_SUPPORT;
+  const remaining = scope.detected - scope.repairable;
+  const head = `${plural(scope.repairable, 'repairable issue type')} of ${scope.detected.toLocaleString()} detected.`;
+  return remaining === 0
+    ? `${head} You review the result before anything changes.`
+    : `${head} ${plural(remaining, 'type')} will need other attention.`;
+}
+
+/* ------------------------------------------------------ action states -- */
+
+/**
+ * The footer's state. One primary control lives in one place in every state,
+ * so a user always knows where the next step is.
+ */
+export const RepairActionKind = {
+  NoModel: 'no-model',
+  /** The deployment cannot stop a repair, so none is offered. */
+  Unavailable: 'unavailable',
+  /** State A. */
+  Analyze: 'analyze',
+  Analyzing: 'analyzing',
+  /** A report exists; the plan is being derived. Repair model is disabled. */
+  Planning: 'planning',
+  PlanFailed: 'plan-failed',
+  /** State B. */
+  Ready: 'ready',
+  /** State E, with detected issues. */
+  NothingSafe: 'nothing-safe',
+  /** State E, with nothing detected an operation acts on. */
+  NothingFound: 'nothing-found',
+  Building: 'building',
+  /** State C. */
+  Preview: 'preview',
+  Applying: 'applying',
+  Undoing: 'undoing',
+} as const;
+
+export type RepairActionKind = (typeof RepairActionKind)[keyof typeof RepairActionKind];
+
+export interface RepairActionInput {
+  readonly hasModel: boolean;
+  readonly isolationSupported: boolean;
+  /** A topology report exists for the CURRENT revision and active part. */
+  readonly reportIsCurrent: boolean;
+  readonly isAnalyzing: boolean;
+  readonly planState: 'unavailable' | 'planning' | 'ready' | 'failed';
+  /** `plan.noOp` for the current plan; `undefined` when there is none. */
+  readonly planNoOp: boolean | undefined;
+  readonly candidateState: 'idle' | 'building' | 'cancelling' | 'ready' | 'failed' | 'cancelled';
+  readonly commitState: 'idle' | 'applying' | 'undoing';
+  /** Detected issue types (errors and warnings). */
+  readonly detectedIssueTypes: number;
+}
+
+/**
+ * THE CTA STATE MACHINE. Order matters: work in flight outranks everything,
+ * a preview outranks planning, and a missing report outranks the plan.
+ */
+export function deriveRepairAction(input: RepairActionInput): RepairActionKind {
+  if (!input.hasModel) return RepairActionKind.NoModel;
+  if (!input.isolationSupported) return RepairActionKind.Unavailable;
+  if (input.commitState === 'applying') return RepairActionKind.Applying;
+  if (input.commitState === 'undoing') return RepairActionKind.Undoing;
+  if (input.candidateState === 'building' || input.candidateState === 'cancelling') {
+    return RepairActionKind.Building;
+  }
+  if (input.candidateState === 'ready') return RepairActionKind.Preview;
+  if (input.isAnalyzing) return RepairActionKind.Analyzing;
+  if (!input.reportIsCurrent) return RepairActionKind.Analyze;
+  if (input.planState === 'failed') return RepairActionKind.PlanFailed;
+  if (input.planState !== 'ready' || input.planNoOp === undefined) return RepairActionKind.Planning;
+  if (!input.planNoOp) return RepairActionKind.Ready;
+  return input.detectedIssueTypes > 0
+    ? RepairActionKind.NothingSafe
+    : RepairActionKind.NothingFound;
+}
+
+/* ---------------------------------------------------- applied result -- */
+
+/**
+ * What an applied repair changed, one line per non-zero count. Counts come
+ * from the validated candidate the worker committed, never from the plan.
+ */
+export function describeAppliedChanges(counts: RepairChangeCounts): readonly string[] {
+  const lines: string[] = [];
+  if (counts.removedDuplicateFaces > 0) {
+    lines.push(`${plural(counts.removedDuplicateFaces, 'duplicate triangle')} removed`);
+  }
+  const degenerate = counts.removedRepeatedPositionFaces + counts.removedZeroAreaFaces;
+  if (degenerate > 0) lines.push(`${plural(degenerate, 'degenerate triangle')} removed`);
+  if (counts.flippedFaces > 0) {
+    lines.push(`${plural(counts.flippedFaces, 'triangle')} reversed to match neighbours`);
+  }
+  return lines;
+}
+
+/**
+ * Issue types still detected after the repair, from the NEW analysis. Empty
+ * while that analysis has not reported, which the caller must not present as
+ * "nothing remains".
+ */
+export function describeRemaining(issues: readonly RepairIssue[]): readonly string[] {
+  return issues
+    .filter(
+      (issue) =>
+        (issue.severity === IssueSeverity.Error || issue.severity === IssueSeverity.Warning) &&
+        issue.count !== undefined,
+    )
+    .map((issue) => `${(issue.count ?? 0).toLocaleString()} ${issue.label.toLowerCase()}`);
+}
+
+/* ------------------------------------------------------ repair options -- */
+
+/** Short labels for the four conservative operations, in the compact list. */
+export const REPAIR_OPTION_LABELS: Readonly<Record<RepairOperation, string>> = {
+  [RepairOperation.RemoveDuplicateFaces]: 'Remove duplicate triangles',
+  [RepairOperation.RemoveRepeatedPositionFaces]: 'Remove collapsed triangles',
+  [RepairOperation.RemoveZeroAreaFaces]: 'Remove zero-area triangles',
+  [RepairOperation.UnifyWinding]: 'Unify winding',
+};
+
+/** The trailing status beside one option: what the plan found for it. */
+export function describeOptionStatus(entry: RepairOperationDecision): string {
+  switch (entry.decision) {
+    case RepairDecision.Applicable:
+      return entry.operation === RepairOperation.UnifyWinding
+        ? `${entry.expectedFaceMutations.toLocaleString()} to reverse`
+        : `${entry.expectedFaceMutations.toLocaleString()} to remove`;
+    case RepairDecision.NotNeeded:
+      if (entry.reason === RepairReason.NotRequested) {
+        return entry.targetedCount > 0 ? 'Not selected' : 'No matches';
+      }
+      return entry.targetedCount > 0 ? 'Resolved by plan' : 'No matches';
+    case RepairDecision.RefusedUnsafe:
+      return 'Refused';
+    case RepairDecision.BlockedByPrecondition:
+      return 'Blocked';
+    case RepairDecision.Unsupported:
+      return 'Unavailable';
+  }
+}
+
+/* ------------------------------------------------------------ info -- */
+
+/** The three-part explanation behind an ⓘ. */
+export interface InfoText {
+  readonly meaning: string;
+  readonly canDo: string;
+  readonly cannot: string;
+}
+
+export const ISSUE_INFO: Readonly<Record<RepairIssueId, InfoText>> = {
+  [RepairIssueId.OpenBoundaries]: {
+    meaning:
+      'Edges used by only one triangle, grouped into rims where the surface stops. A simple loop is one clean closed rim; a complex boundary branches or does not close.',
+    canDo:
+      'Fill one simple, flat opening at a time, previewed and validated before you apply it. No points are added or moved.',
+    cannot: `Complex boundaries are never filled automatically, openings are never closed in bulk, and filling runs only on parts of up to ${HOLE_FILL_MAX_PART_FACES.toLocaleString()} triangles. An opening may also be intentional — a tube, a vase, a shell.`,
+  },
+  [RepairIssueId.NonManifoldEdges]: {
+    meaning: 'More than two triangles meet along one edge, so which side is inside is ambiguous.',
+    canDo: 'Show where they are so they can be fixed in the source model.',
+    cannot:
+      'Rewriting them means choosing which triangles belong together, which cannot be decided from the stored coordinates alone.',
+  },
+  [RepairIssueId.NonManifoldVertices]: {
+    meaning:
+      'Triangles around one point do not form a single continuous fan — for example two shells touching at a corner.',
+    canDo: 'Report them. They can also block winding repair in the affected piece.',
+    cannot:
+      'Separating them without moving a point leaves every point exactly where it is, so exact-coordinate analysis — and any tool that joins triangles by position — would still see them joined. Pybrix does not offer it; they are fixed in the source model.',
+  },
+  [RepairIssueId.WindingConflicts]: {
+    meaning: 'Neighbouring triangles disagree about which way their shared edge runs.',
+    canDo:
+      'Reverse triangles so neighbours agree. Agreement is relative to neighbours; it does not decide which side is outside.',
+    cannot:
+      'A piece with non-manifold edges or vertices, or one that cannot be oriented consistently, is left unchanged.',
+  },
+  [RepairIssueId.SelfIntersections]: {
+    meaning:
+      'Triangles of this part that pass through other triangles of the same part. Other parts are not compared.',
+    canDo: `Check parts of up to ${SELF_INTERSECTION_MAX_FACES.toLocaleString()} triangles and show where crossings are.`,
+    cannot: 'Resolving a crossing changes the shape, so no automatic repair is offered.',
+  },
+  [RepairIssueId.DegenerateFaces]: {
+    meaning:
+      'Triangles with no usable area: two corners at the same point, or three corners exactly in a line.',
+    canDo: 'Remove them, keeping every other triangle and every coordinate exactly as stored.',
+    cannot:
+      'A removal that would open the surface, split a piece or create a new conflict is refused.',
+  },
+  [RepairIssueId.DuplicateFaces]: {
+    meaning: 'Extra triangles occupying the same three points as another triangle.',
+    canDo: 'Remove exact copies that run the same way, keeping the first.',
+    cannot:
+      'Reversed copies are always kept — they may describe a deliberate zero-thickness feature. Copies in different mesh groups are kept too.',
+  },
+  [RepairIssueId.Components]: {
+    meaning:
+      'Groups of triangles not connected to each other by a shared edge. An assembly of separate pieces is normal; a stray fragment may not be.',
+    canDo: 'Count them. Advanced diagnostics lists each one.',
+    cannot: 'Pieces are never joined, welded or deleted automatically.',
+  },
+};
+
+/** Behind the ⓘ beside the health summary. Explains the arithmetic. */
+export const SUMMARY_INFO: InfoText = {
+  meaning:
+    'The summary counts issue TYPES, not individual occurrences: "1 error · 2 warnings" means three kinds of issue, however many edges or triangles each involves.',
+  canDo:
+    'Errors are structurally ambiguous surfaces — non-manifold edges or vertices and self-intersections. Warnings may be intended or are recoverable — open boundaries, winding conflicts, degenerate or duplicate triangles, and more than one piece.',
+  cannot:
+    'A check that has not run is not counted as passing. Wall thickness is not measured, so no summary here says whether a model will print.',
+};
+
+/** Behind the ⓘ beside Repair options. */
+export const REPAIR_OPTIONS_INFO: InfoText = {
+  meaning:
+    'Four conservative operations, each decided exactly from the stored coordinates. They run together when you press Repair model.',
+  canDo:
+    'Remove exact duplicate and degenerate triangles and make neighbouring triangles agree on winding. Every result is previewed and revalidated before you apply it, and can be undone.',
+  cannot:
+    'No tolerance or welding is used, nothing is moved, openings are not closed, and non-manifold geometry and self-intersections are not rewritten.',
+};
+
+/** Behind the ⓘ beside the file-structure line. */
+export const FILE_STRUCTURE_INFO: InfoText = {
+  meaning: 'The file parsed correctly and describes well-formed triangles.',
+  canDo: 'Pybrix could read every triangle the file contains, exactly as stored.',
+  cannot:
+    'This does not mean the mesh is manifold or ready for a slicer. Mesh topology is reported separately, in Detected issues.',
+};
+
+/** Behind the ⓘ beside Advanced diagnostics. */
+export const ADVANCED_INFO: InfoText = {
+  meaning:
+    'The full report every row above is derived from: topology counts, boundaries, surface metrics, pieces, overlays and the checks that were not performed.',
+  canDo: 'Show the exact numbers and toggle viewport overlays for each category.',
+  cannot: 'Nothing here changes the model.',
+};
+
+/** The one-line file-structure label. Never "Valid" alone. */
+export function describeFileStructure(valid: boolean): string {
+  return valid ? 'File structure valid' : 'File structure invalid';
+}
+
+/** The one line a part above the filling ceiling gets; the numbers are behind an ⓘ. */
+export const HOLE_FILL_SIZE_LIMIT_LINE =
+  'Automatic filling isn’t available for this part at its current size.';
+
+/** The disabled-action reason when the page cannot stop a repair. */
+export const REPAIR_UNAVAILABLE_LINE = 'Repair is unavailable in this browser context.';
+
+/* ----------------------------------------------------------- utilities -- */
+
+function plural(count: number, singular: string, pluralForm = `${singular}s`): string {
+  return `${count.toLocaleString()} ${count === 1 ? singular : pluralForm}`;
+}

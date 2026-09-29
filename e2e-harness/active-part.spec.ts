@@ -27,7 +27,7 @@ test('Mesh Health describes the active part, and follows a switch', async ({ pag
     .poll(async () => (await readState(page)).analysisState, { timeout: 60_000 })
     .toBe('ready');
   expect((await readState(page)).analysisPartId).toBe('a');
-  await expect(page.getByTestId('topology-headline')).toBeVisible();
+  await expect(page.getByTestId('issue-list')).toBeVisible();
 
   await page.getByTestId('part-option-b').click();
 
@@ -176,7 +176,7 @@ test('the size band follows the active part, not the document total', async ({ p
   // says which part the panel is describing, so "this model size" is read in
   // the context of one named part.
   await expect(page.getByTestId('self-intersection-headline')).toHaveText(
-    'Not checked for this model size',
+    'Not checked — model exceeds automatic check size',
   );
 
   // Switching back restores the small part's policy: the band is derived, not

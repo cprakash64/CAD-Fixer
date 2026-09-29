@@ -39,7 +39,7 @@ test('imports a binary STL and displays it', async ({ page }) => {
   });
   await expect(page.getByTestId('fact-encoding')).toHaveText('binary');
   await expect(page.getByTestId('fact-vertices')).toHaveText((triangles * 3).toLocaleString());
-  await expect(page.getByTestId('validation-summary')).toHaveText('Structurally valid');
+  await expect(page.getByTestId('validation-summary')).toHaveText('File structure valid');
 
   // The empty-workspace notice must be gone and the fit control available,
   // which only happens once a model is actually in the scene.

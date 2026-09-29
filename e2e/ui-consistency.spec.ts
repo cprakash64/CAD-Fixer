@@ -152,7 +152,7 @@ test('the four workspaces share one control family', async ({ page }) => {
   expect(distinct(titles, 'white-space')).toEqual(['nowrap']);
 
   // One primary action: 36 px, the control radius, one weight and size.
-  // Repair offers none for a model with nothing to repair.
+  // Repair keeps its action even with nothing to repair (disabled, REPAIR-UX-01).
   expect(primaries.length).toBeGreaterThanOrEqual(3);
   expect(distinct(primaries, 'height')).toEqual(['36']);
   for (const property of shape) expect(distinct(primaries, property), property).toHaveLength(1);
@@ -269,7 +269,7 @@ test('on a phone every workspace’s drawer fits, and its primary action is reac
   await page.goto('/');
   await openBox(page);
   const primaryFor = {
-    repair: 'analyze-mesh',
+    repair: 'preview-repair',
     convert: 'convert-export',
     split: 'split-preview',
     texture: 'texture-generate',

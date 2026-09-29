@@ -54,7 +54,7 @@ export function IssueInspector(): ReactNode {
   if (selection === undefined) {
     return (
       <p className="panel__empty" data-testid="issue-inspector-empty">
-        Select a finding in Mesh analysis to see where it is and what can be done about it.
+        Select a detected issue in Repair to see where it is and what can be done about it.
       </p>
     );
   }

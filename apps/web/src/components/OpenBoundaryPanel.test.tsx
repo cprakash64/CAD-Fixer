@@ -8,7 +8,7 @@ import type {
   HoleFillCandidateHandle,
   PartDescriptor,
 } from '@cadfixer/geometry-runtime';
-import { OpenBoundaryPanel } from './OpenBoundaryPanel';
+import { OpenBoundaryLimits, OpenBoundaryPanel } from './OpenBoundaryPanel';
 import { WorkspaceProvider } from '../state/store-context';
 import { HoleFillControlsProvider } from '../state/workflow-controllers';
 import { WorkspaceStore, type HoleBoundaryRow } from '../state/workspace-store';
@@ -602,10 +602,9 @@ describe('HA09: after a fill is applied', () => {
 
 describe('the panel is honest about what it does not do', () => {
   it('states the limits on screen, not only in a document', () => {
-    renderPanel((store) => {
-      const handle = loadModel(store);
-      listOpenings(store, handle);
-    });
+    // REPAIR-UX-01: the limits live in Advanced diagnostics, not beneath the
+    // openings list, and are rendered by their own component there.
+    render(<OpenBoundaryLimits />);
 
     const limits = screen.getByTestId('hole-fill-limits');
     for (const entry of HOLE_FILL_LIMITS) expect(limits).toHaveTextContent(entry);

@@ -100,7 +100,7 @@ test('I-04: phone touch targets meet the tier’s 40 px', async ({ page }) => {
   const clear = await page.getByTestId('clear-status').boundingBox();
   expect(clear?.height).toBeGreaterThanOrEqual(40);
   const row = await page
-    .locator('.repair__operation-label')
+    .locator('.repair-option__label')
     .filter({ has: page.getByTestId('repair-op-toggle-unify-winding') })
     .boundingBox();
   expect(row?.height).toBeGreaterThanOrEqual(40);
@@ -182,7 +182,10 @@ test('I-08: legacy and workspace secondary buttons are one control', async ({ pa
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto('/');
   await openDefects(page);
-  const legacy = page.getByTestId('analyze-mesh');
+  // The Repair workspace's secondary action: Cancel preview, beside Apply.
+  await page.getByTestId('preview-repair').click();
+  const legacy = page.getByTestId('discard-preview');
+  await expect(legacy).toBeVisible({ timeout: 60_000 });
   const inspector = page.getByTestId('open-convert');
   for (const property of ['border-radius', 'font-weight', 'background-color', 'border-top-color']) {
     const value = await legacy.evaluate(

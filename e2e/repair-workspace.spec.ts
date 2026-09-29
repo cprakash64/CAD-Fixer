@@ -80,7 +80,8 @@ test('A: the overview lists every real check, with counts and a health summary',
   const problems: string[] = [];
   page.on('pageerror', (error) => problems.push(error.message));
   await page.goto('/');
-  await expect(page.getByTestId('mesh-analysis-empty')).toBeVisible();
+  // With no model the primary action is already in its place, disabled.
+  await expect(page.getByTestId('preview-repair')).toBeDisabled();
 
   await openModel(page, 'defects.stl', defects());
 

@@ -38,6 +38,10 @@ async function openModel(page: Page, name: string, triangles: Triangle[]): Promi
   const chooser = page.waitForEvent('filechooser');
   await page.getByTestId('browse-button').click();
   await (await chooser).setFiles({ name, mimeType: 'model/stl', buffer });
+  // The FILE NAME, not only the triangle count: a second model with the same
+  // count would satisfy the count before it replaced the first one, and the
+  // assertions after it would then run against the previous model.
+  await expect(page.getByTestId('fact-filename')).toHaveText(name, { timeout: 60_000 });
   await expect(page.getByTestId('fact-triangles')).toHaveText(String(triangles.length), {
     timeout: 60_000,
   });

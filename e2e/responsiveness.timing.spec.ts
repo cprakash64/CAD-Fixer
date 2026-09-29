@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { openAdvancedDiagnostics } from './repair-ui';
 import { analysisHeavyStl, cleanGridStl } from './stl-fixtures';
 
 /**
@@ -69,16 +70,18 @@ test('J1: topology analysis does not block the UI thread', async ({ page }) => {
    */
   const heavy = analysisHeavyStl(300);
   await openFile(page, 'heavy.stl', heavy.bytes);
-  await expect(page.getByTestId('topology-headline')).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId('issue-list')).toBeVisible({ timeout: 30_000 });
 
   const idleGap = await measureWorstGap(page, 1500);
 
+  // Re-running a finished analysis is in Advanced diagnostics (REPAIR-UX-01).
+  await openAdvancedDiagnostics(page);
   const rerun = page.getByTestId('rerun-analysis');
   await expect(rerun).toBeVisible();
   await rerun.click();
 
   const busyGap = await measureWorstGap(page, 2500);
-  await expect(page.getByTestId('topology-headline')).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId('issue-list')).toBeVisible({ timeout: 30_000 });
 
   const ceiling = Math.max(idleGap * 10, 250);
   expect(

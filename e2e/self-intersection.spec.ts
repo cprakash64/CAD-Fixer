@@ -162,7 +162,7 @@ test('SI-P05: above the ceiling nothing diagnostic is created at all', async ({ 
   await openFile(page, 'huge.stl', huge.bytes);
 
   await expect(page.getByTestId('self-intersection-headline')).toHaveText(
-    'Not checked for this model size',
+    'Not checked — model exceeds automatic check size',
     { timeout: 240_000 },
   );
   await expect(page.getByTestId('self-intersection-detail')).toContainText('250,000');
@@ -290,6 +290,8 @@ test('SI-P09: applying a repair invalidates the previous revision’s verdict', 
   await expect(page.getByTestId('self-intersection-headline')).toHaveText('None found', {
     timeout: 60_000,
   });
+  // The work summary is behind the self-intersection row's ⓘ (REPAIR-UX-01).
+  await openSelfIntersectionInfo(page);
   await expect(page.getByTestId('self-intersection-work-summary')).toBeVisible();
 
   // The applied repair is real: the model changed.
@@ -328,6 +330,8 @@ test('SI-P10: undoing a repair re-derives the diagnostic for the restored revisi
   await expect(page.getByTestId('self-intersection-headline')).toHaveText('None found', {
     timeout: 60_000,
   });
+  // The work summary is behind the self-intersection row's ⓘ (REPAIR-UX-01).
+  await openSelfIntersectionInfo(page);
   await expect(page.getByTestId('self-intersection-work-summary')).toBeVisible();
 });
 
@@ -443,7 +447,7 @@ test('SI-P12: a diagnostic worker that fails to load is reported, released and r
 
   // The authoritative model is untouched and the app is still usable.
   await expect(page.getByTestId('fact-triangles')).toHaveText('2');
-  await expect(page.getByTestId('topology-headline')).toBeVisible();
+  await expect(page.getByTestId('issue-list')).toBeVisible();
 
   // RETRY on a fresh worker succeeds: only the first construction was sabotaged.
   await page.getByTestId('run-self-intersection').click();
@@ -451,3 +455,9 @@ test('SI-P12: a diagnostic worker that fails to load is reported, released and r
     timeout: 60_000,
   });
 });
+
+/** Opens the self-intersection row's explanation, where its details live. */
+async function openSelfIntersectionInfo(page: Page): Promise<void> {
+  const info = page.getByTestId('issue-info-self-intersections');
+  if ((await info.getAttribute('aria-expanded')) !== 'true') await info.click();
+}

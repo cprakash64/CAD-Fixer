@@ -1064,8 +1064,22 @@
 }
 
 .panel-section__heading {
+  display: flex;
+  align-items: center;
   margin: 0;
+  padding-right: 10px;
   font: inherit;
+}
+
+/* The toggle takes the row; an ⓘ beside it (REPAIR-UX-01) is its own button. */
+.panel-section__heading > .panel-section__toggle {
+  flex: 1;
+  min-width: 0;
+}
+
+/* An explanation opened from a section heading sits between it and the body. */
+.panel-section > .info-panel {
+  margin: 0 14px 10px;
 }
 
 .panel-section__toggle {
@@ -2019,11 +2033,12 @@
 
 .issue-row {
   display: flex;
-  align-items: center;
+  flex: 1;
+  align-items: flex-start;
   gap: 8px;
-  width: 100%;
-  height: 28px;
-  padding: 0 8px;
+  min-width: 0;
+  min-height: 28px;
+  padding: 6px 8px;
   border: 0;
   border-radius: 7px;
   background: transparent;
@@ -2043,8 +2058,20 @@
   box-shadow: inset 0 0 0 1px var(--cad-info);
 }
 
-.issue-row__label {
+.issue-row__icon {
+  flex: none;
+  margin-top: 1px;
+}
+
+.issue-row__text {
+  display: flex;
   flex: 1;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.issue-row__label {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2326,17 +2353,6 @@
 
 .issue-inspector__actions .secondary-action {
   width: auto;
-}
-
-/* The conservative repair's primary action, at the reference's prominence. */
-[data-testid='preview-repair'] {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  width: 100%;
-  height: 40px;
-  font-size: 14px;
 }
 
 /* --------------------------------------------------------- focus rings -- */
@@ -3399,11 +3415,11 @@
     min-height: 40px;
   }
 
-  .repair__operation-label {
+  .repair-option__label {
     min-height: 40px;
   }
 
-  .repair__operation-label input {
+  .repair-option__label input {
     width: 20px;
     height: 20px;
   }
@@ -3505,6 +3521,476 @@
     max-height: 96px;
     padding-top: 8px;
     padding-bottom: 8px;
+  }
+}
+
+/* ------------------------------------------ repair workspace (REPAIR-UX-01) -- */
+
+/*
+ * The Repair workspace reuses the Convert workspace's column and sticky
+ * footer: the primary action stays in reach however long the sections above
+ * it run, and never overlays them — it is the last block of the scroll area,
+ * pinned to its bottom edge.
+ */
+
+.info-btn {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--cad-text-subtle);
+  cursor: pointer;
+}
+
+.info-btn:hover {
+  background: var(--cad-control-raised);
+  color: var(--cad-text-strong);
+}
+
+.info-btn[aria-expanded='true'] {
+  color: var(--cad-info);
+}
+
+.info-btn:focus-visible,
+.info-panel__close:focus-visible,
+.repair-preview__details-toggle:focus-visible,
+.issue-check__action:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.info-panel {
+  position: relative;
+  margin: 4px 0 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--cad-border);
+  border-left: 3px solid var(--cad-info);
+  border-radius: var(--radius-card);
+  background: var(--cad-well);
+  color: var(--cad-text);
+  font-size: var(--fs-secondary);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.info-panel__sections {
+  display: grid;
+  gap: 2px;
+  margin: 0 0 8px;
+}
+
+.info-panel__sections dt {
+  margin-top: 4px;
+  color: var(--cad-text-muted);
+  font: 600 var(--fs-meta) var(--font-body);
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.info-panel__sections dt:first-child {
+  margin-top: 0;
+}
+
+.info-panel__sections dd {
+  margin: 0;
+}
+
+.info-panel__lead {
+  margin: 0 0 6px;
+  color: var(--cad-text-strong);
+  font-weight: 600;
+}
+
+.info-panel__text {
+  margin: 0 0 6px;
+}
+
+.info-panel__label {
+  color: var(--cad-text-strong);
+  font-weight: 600;
+}
+
+.info-panel__close {
+  padding: 2px 8px;
+  border: 1px solid var(--cad-border-control);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--cad-text);
+  font: 500 var(--fs-meta) var(--font-body);
+  cursor: pointer;
+}
+
+.repair-overview {
+  padding: 12px 14px 10px;
+  border-bottom: 1px solid var(--cad-border-subtle);
+}
+
+.repair-overview__line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.repair-overview__label {
+  flex: none;
+  margin: 0;
+  white-space: nowrap;
+  color: var(--cad-text-strong);
+  font: 600 var(--fs-ui) var(--font-display);
+}
+
+.repair-overview__label:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.repair-overview__line > .health-summary {
+  flex: 1;
+  min-width: 0;
+  text-align: right;
+  /* Never an ellipsis: a clipped count is a wrong count. */
+  white-space: normal;
+}
+
+.repair-overview__qualifier {
+  margin: 2px 0 6px;
+  color: var(--cad-text-muted);
+  font-size: var(--fs-meta);
+  line-height: 1.4;
+}
+
+.repair-overview__file {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  color: var(--cad-text-muted);
+  font-size: var(--fs-secondary);
+}
+
+.issue-item {
+  display: flex;
+  flex-direction: column;
+}
+
+.issue-item__row {
+  display: flex;
+  align-items: flex-start;
+  gap: 2px;
+}
+
+.issue-item__row > .info-btn {
+  margin-top: 4px;
+}
+
+.issue-item > .info-panel {
+  margin: 2px 4px 6px;
+}
+
+.issue-row__status,
+.issue-row__detail {
+  overflow: hidden;
+  color: var(--cad-text-muted);
+  font: 400 var(--fs-meta) / 1.35 var(--font-body);
+  white-space: normal;
+}
+
+.issue-row__status--repairable,
+.issue-row__status--partial {
+  color: var(--cad-success);
+}
+
+.issue-row__status--resource-limit,
+.issue-row__status--not-repairable {
+  color: var(--cad-text);
+}
+
+.issue-row__status--no-issue,
+.issue-row__status--check-not-run,
+.issue-row__status--pending {
+  color: var(--cad-text-subtle);
+}
+
+.issue-check {
+  margin: 0 4px 6px 30px;
+}
+
+.issue-check__line {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.issue-check__headline {
+  flex: 1;
+  margin: 0;
+  color: var(--cad-text-muted);
+  font-size: var(--fs-meta);
+  line-height: 1.35;
+}
+
+.issue-check__headline.validity--ok {
+  color: var(--cad-success);
+}
+
+.issue-check__action {
+  flex: none;
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid var(--cad-border-control);
+  border-radius: var(--radius-sm);
+  background: var(--cad-control);
+  color: var(--cad-text-strong);
+  font: 500 var(--fs-meta) var(--font-body);
+  cursor: pointer;
+}
+
+.issue-check__action:disabled {
+  color: var(--cad-text-muted);
+  cursor: not-allowed;
+}
+
+.issue-check__work {
+  margin: 4px 0 0;
+  color: var(--cad-text-muted);
+  font-size: var(--fs-meta);
+}
+
+.repair-options__list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0 0 8px;
+  padding: 0;
+  list-style: none;
+}
+
+.repair-option__row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 2px 0;
+}
+
+.repair-option__label {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  color: var(--cad-text-strong);
+  font-size: var(--fs-secondary);
+  cursor: pointer;
+}
+
+.repair-option__name {
+  min-width: 0;
+  line-height: 1.3;
+}
+
+.repair-option__status {
+  flex: none;
+  color: var(--cad-text-muted);
+  font: 500 var(--fs-meta) var(--font-mono);
+  white-space: nowrap;
+}
+
+.repair-option--available .repair-option__status {
+  color: var(--cad-success);
+}
+
+.repair-option--withheld .repair-option__name {
+  color: var(--cad-text-muted);
+}
+
+.repair-preview,
+.repair-result {
+  margin: 4px 0 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--cad-border);
+  border-radius: var(--radius-card);
+  background: var(--cad-control-raised);
+}
+
+.repair-preview {
+  border-left: 3px solid var(--cad-info);
+}
+
+.repair-result {
+  border-left: 3px solid var(--cad-success);
+}
+
+.repair-preview__headline,
+.repair-result__headline {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 2px;
+  color: var(--cad-text-strong);
+  font: 600 var(--fs-secondary) var(--font-body);
+}
+
+.repair-result__headline svg {
+  color: var(--cad-success);
+}
+
+.repair-preview__qualifier,
+.repair-result__qualifier {
+  margin: 0 0 8px;
+  color: var(--cad-text-muted);
+  font-size: var(--fs-meta);
+  line-height: 1.4;
+}
+
+.repair-preview__view {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin: 0 0 8px;
+  padding: 0;
+  border: 0;
+}
+
+.repair-preview__view-option {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--cad-text);
+  font-size: var(--fs-secondary);
+  cursor: pointer;
+}
+
+.repair-preview__changes {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 2px 12px;
+  margin: 0 0 8px;
+  font-size: var(--fs-secondary);
+}
+
+.repair-preview__changes .facts__row {
+  display: contents;
+}
+
+.repair-preview__changes .facts__label {
+  color: var(--cad-text-muted);
+}
+
+.repair-preview__changes .facts__value {
+  margin: 0;
+  color: var(--cad-text-strong);
+  font-family: var(--font-mono);
+  text-align: right;
+}
+
+.repair-preview__details-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 0;
+  border: 0;
+  background: transparent;
+  color: var(--cad-accent);
+  font: 500 var(--fs-secondary) var(--font-body);
+  cursor: pointer;
+}
+
+.repair-preview__details {
+  margin-top: 8px;
+}
+
+.repair-result__columns {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin: 6px 0;
+}
+
+.repair-result__label {
+  margin: 0 0 2px;
+  color: var(--cad-text-muted);
+  font: 600 var(--fs-meta) var(--font-body);
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.repair-result__list {
+  margin: 0;
+  padding-left: 16px;
+  color: var(--cad-text);
+  font-size: var(--fs-secondary);
+  line-height: 1.4;
+}
+
+.repair-result__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.repair-result__actions .secondary-action {
+  width: auto;
+}
+
+.repair-result__note {
+  color: var(--cad-text-muted);
+  font-size: var(--fs-meta);
+}
+
+.repair-footer__line {
+  margin: 0;
+  color: var(--cad-text);
+  font-size: var(--fs-secondary);
+  line-height: 1.4;
+}
+
+.repair-footer__reason {
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+.repair-footer__reason > .convert-footer__hint {
+  flex: 1;
+  padding-top: 3px;
+}
+
+.repair-footer > .info-panel {
+  max-height: 30vh;
+  margin: 0;
+  overflow-y: auto;
+}
+
+.holefill__limit {
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+  margin: 0 0 8px;
+}
+
+.holefill__limit-line {
+  flex: 1;
+  margin: 0;
+  padding-top: 3px;
+  color: var(--cad-text);
+  font-size: var(--fs-secondary);
+  line-height: 1.4;
+}
+
+/* In a short or narrow panel the result's two lists stack. */
+@media (width < 480px) {
+  .repair-result__columns {
+    grid-template-columns: 1fr;
   }
 }
 

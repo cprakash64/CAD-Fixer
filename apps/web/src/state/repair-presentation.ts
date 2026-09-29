@@ -114,7 +114,7 @@ export const REPAIR_QUALIFIER = 'Self-intersections and wall thickness have not 
 export const REPAIR_ISOLATION_HEADLINE = 'Conservative repair is unavailable in this context';
 
 export const REPAIR_ISOLATION_DETAIL =
-  'Repair needs a cancellation signal it can act on while the work is running, which requires a cross-origin isolated page (COOP and COEP). This page is not cross-origin isolated, so Pybrix will not offer a repair it could not stop. Import, Mesh Health analysis and export are unaffected.';
+  'Repair needs a cancellation signal it can act on while the work is running, which requires a cross-origin isolated page (COOP and COEP). This page is not cross-origin isolated, so Pybrix will not offer a repair it could not stop. Import, mesh analysis and export are unaffected.';
 
 /* ------------------------------------------------------------- operations -- */
 
@@ -260,7 +260,7 @@ function presentNotNeeded(entry: RepairOperationDecision): RepairDecisionPresent
       tone: RepairDecisionTone.Inactive,
       reason:
         entry.targetedCount > 0
-          ? `Mesh Health reports ${formatCount(entry.targetedCount, 'instance')} of this in your model, but the earlier operations in this plan resolve all of them — the triangles that survive leave nothing for this operation to do.`
+          ? `Analysis reports ${formatCount(entry.targetedCount, 'instance')} of this in your model, but the earlier operations in this plan resolve all of them — the triangles that survive leave nothing for this operation to do.`
           : 'Pybrix checked for this and found none.',
       selectable: true,
     };
@@ -649,9 +649,7 @@ export function describeApplied(operations: readonly RepairOperation[]): string 
 
 export const REPAIR_APPLIED_HEADLINE = 'Conservative repair applied';
 
-export const REPAIR_APPLIED_DETAIL =
-  'Selected topological issues were repaired and revalidated. The model below is the repaired ' +
-  'version, and Mesh Health now describes it.';
+export const REPAIR_APPLIED_DETAIL = 'Selected topological issues were repaired and revalidated.';
 
 export const NO_REPAIRS_AVAILABLE_HEADLINE = 'No conservative repairs are currently available.';
 

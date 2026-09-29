@@ -309,9 +309,11 @@ describe('workflow navigation', () => {
     expect(screen.getByTestId('texture-generate')).toBeDisabled();
 
     fireEvent.click(screen.getByTestId('workflow-repair'));
-    expect(screen.getByTestId('mesh-analysis-empty')).toBeInTheDocument();
-    expect(screen.queryByTestId('repair-run-analysis')).toBeNull();
-    expect(screen.queryByTestId('preview-repair')).toBeNull();
+    // REPAIR-UX-01: the primary action keeps its place, disabled, like the
+    // other workspaces' actions; nothing that could start work is enabled.
+    expect(screen.getByTestId('preview-repair')).toBeDisabled();
+    expect(screen.queryByTestId('analyze-mesh')).toBeNull();
+    expect(screen.queryByTestId('apply-repair')).toBeNull();
     expect(screen.getByTestId('topbar-export')).toBeDisabled();
   });
 

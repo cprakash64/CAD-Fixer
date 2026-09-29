@@ -1,4 +1,8 @@
 import { useEffect, useRef, type ReactNode } from 'react';
+import { ISSUE_INFO, HOLE_FILL_SIZE_LIMIT_LINE } from '../state/repair-workspace-presentation';
+import { RepairIssueId } from '../state/repair-issues';
+import { InfoButton, InfoPanel, useInfoDisclosure } from './shell/info';
+import { PanelSection } from './shell/primitives';
 import { HOLE_FILL_MAX_PART_FACES } from '@cadfixer/geometry-runtime';
 import { useWorkspaceState } from '../state/store-context';
 import { useHoleFillControls } from '../state/workflow-controllers';
@@ -11,7 +15,6 @@ import {
   HOLE_FILL_PREVIEW_ACTION,
   HOLE_FILL_PREVIEW_NOT_APPLIED,
   HOLE_FILL_PREVIEW_READY,
-  HOLE_FILL_SECTION_SUMMARY,
   HOLE_FILL_SECTION_TITLE,
   HOLE_FILL_UNDO_ACTION,
   OPENING_ELIGIBLE,
@@ -61,7 +64,6 @@ import { describeActivePart } from '../state/part-presentation';
 export function OpenBoundaryPanel(): ReactNode {
   const { model, activePartId, holeFill } = useWorkspaceState();
   const controls = useHoleFillControls();
-  const headingRef = useRef<HTMLHeadingElement>(null);
   const statusRef = useRef<HTMLDivElement>(null);
 
   const { inventory, selectedLoopId, candidate, workState, commitState, lastApplied } = holeFill;
@@ -112,144 +114,138 @@ export function OpenBoundaryPanel(): ReactNode {
   const partTooLarge = controls.partTooLarge;
 
   return (
-    <section
-      className="panel"
-      aria-labelledby="open-boundaries-title"
-      data-testid="open-boundaries"
+    <PanelSection
+      title={HOLE_FILL_SECTION_TITLE}
+      testId="open-boundaries"
+      info={ISSUE_INFO[RepairIssueId.OpenBoundaries]}
+      {...(inventory.state === HoleFillInventoryState.Ready
+        ? { meta: inventory.loopCount.toLocaleString() }
+        : {})}
     >
-      <h2 className="panel__title" id="open-boundaries-title" tabIndex={-1} ref={headingRef}>
-        {HOLE_FILL_SECTION_TITLE}
-      </h2>
-
-      <p className="panel__note" data-testid="hole-fill-summary">
-        {HOLE_FILL_SECTION_SUMMARY}
-      </p>
-
-      {/* THE SCOPE OF EVERY NUMBER BELOW, stated where the numbers are. Openings
+      <div className="holefill" data-testid="hole-fill-body">
+        {/* THE SCOPE OF EVERY NUMBER BELOW, stated where the numbers are. Openings
           belong to one mesh, so on a multi-part document this list describes ONE
-          part. Leaving that implicit would let "no open boundaries" read as a
-          statement about the whole model, which nothing here checked. */}
-      {model.parts.length > 1 ? (
-        <p className="panel__note" data-testid="hole-fill-part-scope">
-          These openings belong to <strong>{describeActivePart(model.parts, activePartId)}</strong>{' '}
-          only, of {model.parts.length.toLocaleString()} parts. Filling one changes that part and
-          nothing else in the model.
-        </p>
-      ) : null}
-
-      {/* --- inventory lifecycle ----------------------------------------- */}
-      {inventory.state === HoleFillInventoryState.Listing ? (
-        <p className="panel__note" role="status" data-testid="hole-fill-listing">
-          Finding open boundaries…
-        </p>
-      ) : null}
-
-      {inventory.state === HoleFillInventoryState.Failed && inventory.error !== undefined ? (
-        <div className="repair__blocked" role="alert" data-testid="hole-fill-listing-error">
-          <p className="repair__error-message">{inventory.error.message}</p>
-          {inventory.error.retryable ? (
-            <div className="panel__actions">
-              <button
-                type="button"
-                className="action"
-                onClick={controls.refreshOpenings}
-                data-testid="hole-fill-retry-listing"
-              >
-                Look again
-              </button>
-            </div>
-          ) : null}
-        </div>
-      ) : null}
-
-      {/* THE WALK WAS NOT PERFORMED, and that is what this says — Stage 6D-R3.
-          Deliberately NOT "no openings found": nothing looked. The listing is the
-          largest allocation an import can trigger on its own and its cost scales
-          with boundary components, so it is skipped for a part no opening could
-          be filled in. */}
-      {inventory.state === HoleFillInventoryState.NotInventoried ? (
-        <p className="repair__error-message" data-testid="hole-fill-not-inventoried">
-          {describeUninventoriedPart(inventory.partFaceCount)}
-        </p>
-      ) : null}
-
-      {inventory.state === HoleFillInventoryState.Ready ? (
-        <>
-          <p className="panel__note" data-testid="hole-fill-count">
-            {describeOpeningCount(inventory.loopCount)}
+          part. */}
+        {model.parts.length > 1 ? (
+          <p className="panel__note" data-testid="hole-fill-part-scope">
+            Openings of <strong>{describeActivePart(model.parts, activePartId)}</strong> only, of{' '}
+            {model.parts.length.toLocaleString()} parts. Filling one changes that part and nothing
+            else.
           </p>
+        ) : null}
 
-          {/* A RESOURCE REFUSAL, STATED BEFORE ANYTHING IS STARTED. The part's
-              triangle count already decides this, so spinning up a worker and
-              copying tens of megabytes to be told the same thing would be work
-              nobody needs done. */}
-          {partTooLarge ? (
-            <p className="repair__error-message" data-testid="hole-fill-part-too-large">
-              {describePartSizeRefusal(inventory.partFaceCount)}
-            </p>
-          ) : null}
-
-          {inventory.truncated ? (
-            <p className="panel__note" data-testid="hole-fill-truncated">
-              {describeTruncatedInventory(inventory.rows.length, inventory.loopCount)}
-            </p>
-          ) : null}
-
-          {inventory.rows.length > 0 ? (
-            <OpeningList
-              rows={inventory.rows}
-              selectedLoopId={selectedLoopId}
-              disabled={generating || committing || partTooLarge}
-              onSelect={controls.selectOpening}
-            />
-          ) : null}
-        </>
-      ) : null}
-
-      {/* --- the selected opening ---------------------------------------- */}
-      {selectedRow !== undefined ? (
-        <div className="holefill__selection" data-testid="hole-fill-selection">
-          <h3 className="panel__subtitle">{describeOpening(selectedRow.displayIndex)}</h3>
-          <p className="panel__note" data-testid="hole-fill-selected-size">
-            {describeOpeningSize(selectedRow.vertexCount)}
+        {/* --- inventory lifecycle ----------------------------------------- */}
+        {inventory.state === HoleFillInventoryState.Listing ? (
+          <p className="panel__note" role="status" data-testid="hole-fill-listing">
+            Finding open boundaries…
           </p>
+        ) : null}
 
-          {selectedRow.fillable ? (
-            /* WHAT IS STILL UNKNOWN, stated before the button is pressed. §7:
+        {inventory.state === HoleFillInventoryState.Failed && inventory.error !== undefined ? (
+          <div className="repair__blocked" role="alert" data-testid="hole-fill-listing-error">
+            <p className="repair__error-message">{inventory.error.message}</p>
+            {inventory.error.retryable ? (
+              <div className="panel__actions">
+                <button
+                  type="button"
+                  className="action"
+                  onClick={controls.refreshOpenings}
+                  data-testid="hole-fill-retry-listing"
+                >
+                  Look again
+                </button>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+
+        {/* THE WALK WAS NOT PERFORMED, and that is what this says — Stage 6D-R3.
+          Deliberately NOT "no openings found": nothing looked. One short line;
+          the numbers and the reason are behind the ⓘ. */}
+        {inventory.state === HoleFillInventoryState.NotInventoried ? (
+          <SizeLimitNotice
+            detail={describeUninventoriedPart(inventory.partFaceCount)}
+            detailTestId="hole-fill-not-inventoried"
+          />
+        ) : null}
+
+        {inventory.state === HoleFillInventoryState.Ready ? (
+          <>
+            <p className="panel__note" data-testid="hole-fill-count">
+              {describeOpeningCount(inventory.loopCount)}
+            </p>
+
+            {/* A RESOURCE REFUSAL, STATED BEFORE ANYTHING IS STARTED. The part's
+              triangle count already decides this, so spinning up a worker to be
+              told the same thing would be work nobody needs done. */}
+            {partTooLarge ? (
+              <SizeLimitNotice
+                detail={describePartSizeRefusal(inventory.partFaceCount)}
+                detailTestId="hole-fill-part-too-large"
+              />
+            ) : null}
+
+            {inventory.truncated ? (
+              <p className="panel__note" data-testid="hole-fill-truncated">
+                {describeTruncatedInventory(inventory.rows.length, inventory.loopCount)}
+              </p>
+            ) : null}
+
+            {inventory.rows.length > 0 ? (
+              <OpeningList
+                rows={inventory.rows}
+                selectedLoopId={selectedLoopId}
+                disabled={generating || committing || partTooLarge}
+                onSelect={controls.selectOpening}
+              />
+            ) : null}
+          </>
+        ) : null}
+
+        {/* --- the selected opening ---------------------------------------- */}
+        {selectedRow !== undefined ? (
+          <div className="holefill__selection" data-testid="hole-fill-selection">
+            <h3 className="panel__subtitle">{describeOpening(selectedRow.displayIndex)}</h3>
+            <p className="panel__note" data-testid="hole-fill-selected-size">
+              {describeOpeningSize(selectedRow.vertexCount)}
+            </p>
+
+            {selectedRow.fillable ? (
+              /* WHAT IS STILL UNKNOWN, stated before the button is pressed. §7:
                the listing answers a topological question exactly and a
                geometric one not at all, and the interface must not blur the
                two into a promise. */
-            <p className="panel__note" data-testid="hole-fill-selected-eligible">
-              {OPENING_ELIGIBLE_DETAIL}
-            </p>
-          ) : (
-            <p className="repair__operation-reason" data-testid="hole-fill-selected-refusal">
-              {selectedRow.refusal === undefined
-                ? OPENING_INELIGIBLE
-                : describeBoundaryRefusal(selectedRow.refusal)}
-            </p>
-          )}
+              <p className="panel__note" data-testid="hole-fill-selected-eligible">
+                {OPENING_ELIGIBLE_DETAIL}
+              </p>
+            ) : (
+              <p className="repair__operation-reason" data-testid="hole-fill-selected-refusal">
+                {selectedRow.refusal === undefined
+                  ? OPENING_INELIGIBLE
+                  : describeBoundaryRefusal(selectedRow.refusal)}
+              </p>
+            )}
 
-          {selectedRow.fillable && !previewReady && !generating && !partTooLarge ? (
-            <div className="panel__actions">
-              <button
-                type="button"
-                className="action action--primary"
-                onClick={controls.previewFill}
-                disabled={committing}
-                data-testid="preview-fill"
-              >
-                {HOLE_FILL_PREVIEW_ACTION}
-              </button>
-            </div>
-          ) : null}
-        </div>
-      ) : null}
+            {selectedRow.fillable && !previewReady && !generating && !partTooLarge ? (
+              <div className="panel__actions">
+                <button
+                  type="button"
+                  className="action action--primary"
+                  onClick={controls.previewFill}
+                  disabled={committing}
+                  data-testid="preview-fill"
+                >
+                  {HOLE_FILL_PREVIEW_ACTION}
+                </button>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
 
-      {/* --- generation --------------------------------------------------- */}
-      {generating ? (
-        <div className="holefill__progress" data-testid="hole-fill-progress">
-          {/*
+        {/* --- generation --------------------------------------------------- */}
+        {generating ? (
+          <div className="holefill__progress" data-testid="hole-fill-progress">
+            {/*
             INDETERMINATE, DELIBERATELY. The fill is one synchronous pass in a
             worker that cannot report from inside itself, so a bar filling to a
             measured percentage does not exist to be shown. A `progress` element
@@ -257,137 +253,176 @@ export function OpenBoundaryPanel(): ReactNode {
             far" the platform already has a control for — and it beats inventing
             a number.
           */}
-          <p role="status" data-testid="hole-fill-phase">
-            {holeFill.phase ?? 'Preparing'}…
-          </p>
-          <progress className="import__bar" aria-label="Preparing a fill preview" />
-          <button
-            type="button"
-            className="import__cancel"
-            onClick={controls.cancelPreview}
-            disabled={workState === HoleFillWorkState.Cancelling}
-            data-testid="cancel-fill"
-          >
-            {HOLE_FILL_CANCEL_ACTION}
-          </button>
-          {workState === HoleFillWorkState.Cancelling ? (
-            <p className="panel__note" role="status" data-testid="hole-fill-cancelling">
-              Stopping…
+            <p role="status" data-testid="hole-fill-phase">
+              {holeFill.phase ?? 'Preparing'}…
             </p>
-          ) : null}
-        </div>
-      ) : null}
-
-      {/*
-        THE OUTCOME REGION. A live region so a screen-reader user learns what
-        happened without hunting for it, and focusable so a keyboard user is not
-        dropped on the document body when the button they pressed disappears.
-      */}
-      <div
-        className="holefill__status"
-        role="status"
-        aria-live="polite"
-        tabIndex={-1}
-        ref={statusRef}
-        data-testid="hole-fill-status"
-      >
-        {workState === HoleFillWorkState.Cancelled ? (
-          <p className="panel__note" data-testid="hole-fill-cancelled">
-            Fill cancelled. Your model is unchanged, and you can try this opening again.
-          </p>
-        ) : null}
-
-        {workState === HoleFillWorkState.Failed && holeFill.candidateError !== undefined ? (
-          <div className="repair__blocked" data-testid="hole-fill-refusal">
-            <p className="repair__error-message">{holeFill.candidateError.message}</p>
-            <p className="panel__note" data-testid="hole-fill-refusal-qualifier">
-              Your model was not changed.
-            </p>
-          </div>
-        ) : null}
-
-        {previewReady ? (
-          <div className="holefill__candidate" data-testid="hole-fill-candidate">
-            <p className="repair__headline" data-testid="hole-fill-preview-headline">
-              {HOLE_FILL_PREVIEW_READY}
-            </p>
-            <p className="panel__note" data-testid="hole-fill-preview-not-applied">
-              {HOLE_FILL_PREVIEW_NOT_APPLIED}
-            </p>
-            <p className="panel__note" data-testid="hole-fill-patch-size">
-              The new surface is{' '}
-              {candidate.patchTriangleCount === 1
-                ? '1 triangle'
-                : `${candidate.patchTriangleCount.toLocaleString()} triangles`}
-              . No points were added, and none of yours were moved.
-            </p>
-
-            <div className="panel__actions">
-              <button
-                type="button"
-                className="action action--primary"
-                onClick={controls.applyFill}
-                disabled={committing}
-                data-testid="apply-fill"
-              >
-                {commitState === HoleFillCommitState.Applying
-                  ? 'Applying…'
-                  : HOLE_FILL_APPLY_ACTION}
-              </button>
-              <button
-                type="button"
-                className="action"
-                onClick={controls.discardPreview}
-                disabled={committing}
-                data-testid="discard-fill"
-              >
-                {HOLE_FILL_DISCARD_ACTION}
-              </button>
-            </div>
-          </div>
-        ) : null}
-
-        {lastApplied !== undefined ? (
-          <div className="holefill__applied" data-testid="hole-fill-applied">
-            <p className="repair__headline" data-testid="hole-fill-applied-headline">
-              Selected opening filled and validated
-            </p>
-            {/* THE QUALIFIER TRAVELS WITH THE CLAIM, always. A success line on
-                its own is exactly where an unearned statement about the whole
-                model would take hold. */}
-            <p className="panel__note" data-testid="hole-fill-applied-qualifier">
-              {HOLE_FILL_APPLIED_QUALIFIER}
-            </p>
-            {lastApplied.undoable ? (
-              <div className="panel__actions">
-                <button
-                  type="button"
-                  className="action"
-                  onClick={controls.undoLastFill}
-                  disabled={committing}
-                  data-testid="undo-fill"
-                >
-                  {commitState === HoleFillCommitState.Undoing ? 'Undoing…' : HOLE_FILL_UNDO_ACTION}
-                </button>
-              </div>
+            <progress className="import__bar" aria-label="Preparing a fill preview" />
+            <button
+              type="button"
+              className="import__cancel"
+              onClick={controls.cancelPreview}
+              disabled={workState === HoleFillWorkState.Cancelling}
+              data-testid="cancel-fill"
+            >
+              {HOLE_FILL_CANCEL_ACTION}
+            </button>
+            {workState === HoleFillWorkState.Cancelling ? (
+              <p className="panel__note" role="status" data-testid="hole-fill-cancelling">
+                Stopping…
+              </p>
             ) : null}
           </div>
         ) : null}
 
-        {holeFill.commitError !== undefined ? (
-          <p className="repair__error-message" role="alert" data-testid="hole-fill-commit-error">
-            {holeFill.commitError.message}
-          </p>
-        ) : null}
-      </div>
+        {/*
+        THE OUTCOME REGION. A live region so a screen-reader user learns what
+        happened without hunting for it, and focusable so a keyboard user is not
+        dropped on the document body when the button they pressed disappears.
+      */}
+        <div
+          className="holefill__status"
+          role="status"
+          aria-live="polite"
+          tabIndex={-1}
+          ref={statusRef}
+          data-testid="hole-fill-status"
+        >
+          {workState === HoleFillWorkState.Cancelled ? (
+            <p className="panel__note" data-testid="hole-fill-cancelled">
+              Fill cancelled. Your model is unchanged, and you can try this opening again.
+            </p>
+          ) : null}
 
+          {workState === HoleFillWorkState.Failed && holeFill.candidateError !== undefined ? (
+            <div className="repair__blocked" data-testid="hole-fill-refusal">
+              <p className="repair__error-message">{holeFill.candidateError.message}</p>
+              <p className="panel__note" data-testid="hole-fill-refusal-qualifier">
+                Your model was not changed.
+              </p>
+            </div>
+          ) : null}
+
+          {previewReady ? (
+            <div className="holefill__candidate" data-testid="hole-fill-candidate">
+              <p className="repair__headline" data-testid="hole-fill-preview-headline">
+                {HOLE_FILL_PREVIEW_READY}
+              </p>
+              <p className="panel__note" data-testid="hole-fill-preview-not-applied">
+                {HOLE_FILL_PREVIEW_NOT_APPLIED}
+              </p>
+              <p className="panel__note" data-testid="hole-fill-patch-size">
+                The new surface is{' '}
+                {candidate.patchTriangleCount === 1
+                  ? '1 triangle'
+                  : `${candidate.patchTriangleCount.toLocaleString()} triangles`}
+                . No points were added, and none of yours were moved.
+              </p>
+
+              <div className="panel__actions">
+                <button
+                  type="button"
+                  className="action action--primary"
+                  onClick={controls.applyFill}
+                  disabled={committing}
+                  data-testid="apply-fill"
+                >
+                  {commitState === HoleFillCommitState.Applying
+                    ? 'Applying…'
+                    : HOLE_FILL_APPLY_ACTION}
+                </button>
+                <button
+                  type="button"
+                  className="action"
+                  onClick={controls.discardPreview}
+                  disabled={committing}
+                  data-testid="discard-fill"
+                >
+                  {HOLE_FILL_DISCARD_ACTION}
+                </button>
+              </div>
+            </div>
+          ) : null}
+
+          {lastApplied !== undefined ? (
+            <div className="holefill__applied" data-testid="hole-fill-applied">
+              <p className="repair__headline" data-testid="hole-fill-applied-headline">
+                Selected opening filled and validated
+              </p>
+              {/* THE QUALIFIER TRAVELS WITH THE CLAIM, always. A success line on
+                its own is exactly where an unearned statement about the whole
+                model would take hold. */}
+              <p className="panel__note" data-testid="hole-fill-applied-qualifier">
+                {HOLE_FILL_APPLIED_QUALIFIER}
+              </p>
+              {lastApplied.undoable ? (
+                <div className="panel__actions">
+                  <button
+                    type="button"
+                    className="action"
+                    onClick={controls.undoLastFill}
+                    disabled={committing}
+                    data-testid="undo-fill"
+                  >
+                    {commitState === HoleFillCommitState.Undoing
+                      ? 'Undoing…'
+                      : HOLE_FILL_UNDO_ACTION}
+                  </button>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+
+          {holeFill.commitError !== undefined ? (
+            <p className="repair__error-message" role="alert" data-testid="hole-fill-commit-error">
+              {holeFill.commitError.message}
+            </p>
+          ) : null}
+        </div>
+      </div>
+    </PanelSection>
+  );
+}
+
+/**
+ * The part-size refusal, as one short line with the numbers behind an ⓘ.
+ * REPAIR-UX-01: the limit is a fact the user needs; the policy is not.
+ */
+function SizeLimitNotice({
+  detail,
+  detailTestId,
+}: {
+  readonly detail: string;
+  readonly detailTestId: string;
+}): ReactNode {
+  const info = useInfoDisclosure();
+  return (
+    <>
+      <div className="holefill__limit">
+        <p className="holefill__limit-line" data-testid="hole-fill-size-limit">
+          {HOLE_FILL_SIZE_LIMIT_LINE}
+        </p>
+        <InfoButton disclosure={info} label="the size limit" testId="hole-fill-size-limit-info" />
+      </div>
+      <InfoPanel disclosure={info} label="the size limit">
+        <p className="info-panel__text" data-testid={detailTestId}>
+          {detail}
+        </p>
+      </InfoPanel>
+    </>
+  );
+}
+
+/** What automatic filling does and does not do. Shown in Advanced diagnostics. */
+export function OpenBoundaryLimits(): ReactNode {
+  return (
+    <>
       <h3 className="panel__subtitle">What automatic filling does and does not do</h3>
       <ul className="repair__exclusions" data-testid="hole-fill-limits">
         {HOLE_FILL_LIMITS.map((entry) => (
           <li key={entry}>{entry}</li>
         ))}
       </ul>
-    </section>
+    </>
   );
 }
 
