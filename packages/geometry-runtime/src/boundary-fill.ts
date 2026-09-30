@@ -77,6 +77,16 @@ export interface BoundaryFillPlan {
   readonly admittedPatchFaces: number;
   readonly loops: readonly BoundaryFillLoopSummary[];
   readonly loopsTruncated: boolean;
+  /**
+   * TRUE ONLY WHEN EVERY ADMITTED OPENING HAS PASSED THE EXACT CHECK — REPAIR-RC-03.
+   * Admission alone is topology and planarity; the exact intersection check
+   * refused four of the six simple openings on the model that motivated
+   * REPAIR-CORE-02, all of them backed by existing faces. So `admittedCount`
+   * is a promise ("N openings can be filled") ONLY when this is true; an
+   * unverified count is never presented as fillable. Vacuously true when
+   * nothing is admitted.
+   */
+  readonly verified: boolean;
   /** Binds a candidate request to the admitted set the user saw. */
   readonly planHash: string;
 }
@@ -108,6 +118,15 @@ export interface BoundaryFillOutcome {
 }
 
 /** An empty plan: filling not requested or nothing to report. */
+/**
+ * HOW MANY OPENINGS A PLAN MAY PROMISE TO FILL — REPAIR-RC-03. The one reading
+ * of a plan the interface uses: an unverified admitted count is not a promise,
+ * so it is zero here, and every "N openings can be filled" is derived from it.
+ */
+export function fillableOpeningCount(plan: BoundaryFillPlan | undefined): number {
+  return plan?.verified === true ? plan.admittedCount : 0;
+}
+
 export const NO_BOUNDARY_FILL_PLAN: BoundaryFillPlan = Object.freeze({
   status: BoundaryFillScanStatus.NotRequested,
   boundaryEdgeCount: 0,
@@ -117,5 +136,6 @@ export const NO_BOUNDARY_FILL_PLAN: BoundaryFillPlan = Object.freeze({
   admittedPatchFaces: 0,
   loops: [],
   loopsTruncated: false,
+  verified: true,
   planHash: 'none',
 });

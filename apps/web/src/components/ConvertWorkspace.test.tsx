@@ -6,7 +6,7 @@ import type {
   DocumentRenderSnapshot,
   PartDescriptor,
 } from '@cadfixer/geometry-runtime';
-import { ConversionVerdict } from '@cadfixer/file-formats';
+import { ConversionVerdict, ExportFormat } from '@cadfixer/file-formats';
 import { LengthUnit } from '@cadfixer/shared';
 import { ConvertWorkspace } from './ConvertWorkspace';
 import { ExportSummary } from './ExportSummary';
@@ -19,6 +19,7 @@ import { WorkspaceProvider } from '../state/store-context';
 import { WorkspaceStore } from '../state/workspace-store';
 import { CONVERSION_FORBIDDEN_TERMS, UNIT_CHOICES } from '../state/conversion-presentation';
 import type { LoadedModel } from '../state/model';
+import { measurementUnitKey } from '../state/output-size';
 
 /**
  * THE CONVERT WORKSPACE, at component level. (Ported from the Stage 4A-2B3
@@ -677,10 +678,59 @@ describe('progress, cancellation and retry', () => {
       s.failConversion(token, { status: 'RESOURCE_LIMIT', reason: 'EXPORT_OUTPUT_TOO_LARGE' });
     });
 
-    expect(screen.getByTestId('convert-failure')).toHaveTextContent('nothing was saved');
+    // ONE LINE in the footer (Convert P1); the sentence is behind ⓘ.
+    expect(screen.getByTestId('convert-failure')).toHaveTextContent('3MF export unavailable');
+    expect(screen.getByTestId('convert-outcome-details')).toHaveTextContent('nothing was saved');
     // The chosen target and unit survive, so a retry does not start from scratch.
     expect(store.getSnapshot().conversion.target).toBe('3mf');
     expect(store.getSnapshot().conversion.unitAssertion).toBe(LengthUnit.Millimeter);
+    // No size refusal was recorded for this attempt, so nothing is disabled.
+    expect(screen.getByTestId('convert-export')).toBeEnabled();
+  });
+
+  it('a size refusal disables exactly that revision, format and unit, with the reason beside it (Convert P1)', () => {
+    const store = renderWorkspace((s) => {
+      loadModel(s);
+      s.openConversion('3mf');
+      s.setConversionUnit(LengthUnit.Millimeter);
+      const model = s.getSnapshot().model;
+      if (model === undefined) throw new Error('expected a model');
+      const token = s.beginConversion();
+      s.failConversion(
+        token,
+        { status: 'RESOURCE_LIMIT', reason: 'EXPORT_SERIALISED_TOO_LARGE' },
+        {
+          source: model.handle,
+          target: '3mf',
+          unitAssertion: measurementUnitKey(model, ExportFormat.ThreeMf, LengthUnit.Millimeter),
+        },
+      );
+    });
+
+    expect(screen.getByTestId('convert-failure')).toHaveTextContent('3MF export unavailable');
+    expect(screen.getByTestId('convert-export')).toBeDisabled();
+    expect(screen.getByTestId('convert-unavailable')).toHaveTextContent(
+      'This model exceeds the safe browser export limit for 3MF.',
+    );
+    expect(screen.getByTestId('convert-outcome-details')).toHaveTextContent('saved nothing');
+    fireEvent.click(screen.getByTestId('convert-refusal-info'));
+    expect(screen.getByTestId('convert-outcome-details')).toBeVisible();
+
+    // Another format is offered; the refused one stays refused without a retry.
+    act(() => {
+      store.setConversionTarget('stl');
+    });
+    expect(screen.getByTestId('convert-export')).toBeEnabled();
+    expect(screen.queryByTestId('convert-unavailable')).toBeNull();
+    act(() => {
+      store.setConversionTarget('3mf');
+      store.setConversionUnit(LengthUnit.Millimeter);
+    });
+    expect(screen.getByTestId('convert-export')).toBeDisabled();
+    // A different unit is a different file, so it is offered again.
+    act(() => {
+      store.setConversionUnit(LengthUnit.Inch);
+    });
     expect(screen.getByTestId('convert-export')).toBeEnabled();
   });
 

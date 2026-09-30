@@ -995,6 +995,43 @@ lost`, `printable`, `watertight`, and the rest. **"The numbers are unchanged"
   type-dead. The lookup uses `hasOwnProperty`, so `constructor` and `__proto__`
   are not formats.
 
+## Convert action and export-refusal invariants (Convert P1, REPAIR-RC-03)
+
+- **THE STICKY FOOTER HOLDS ONLY BOUNDED CONTENT.** Progress, a ONE-LINE
+  outcome (`describeExportFailureHeadline`), the button, and one hint line.
+  The sentence from `describeExportFailure` — or the size-refusal explanation —
+  lives behind ⓘ in `OutcomeDetails`, in the SCROLLING content above the
+  footer. The reported defect: the refusal paragraph lived inside the footer,
+  and a sticky element taller than its scrollport is pinned by its TOP, so on
+  a squeezed window the button slid under the Activity log with only its top
+  edge visible (reproduced at 1440×380 on v0.5.0 and the unfixed tree). Never
+  put a paragraph in a sticky action footer.
+- **`.tool-panel__body` HAS A FLOOR (140 px) AND THE ACTIVITY LOG YIELDS FIRST**
+  (`flex: 0 1 auto; min-height: 0`). The floor must stay at least the tallest
+  compact footer (131 px measured, refused state) and no taller than the space
+  a 300 px window leaves, or the status bar covers the button instead. It is
+  shared by every workspace; Repair's action was re-measured with it.
+  `e2e/convert-workspace.spec.ts` "I:" fails against v0.5.0 at 300 px.
+- **OPENING ⓘ SCROLLS THE PANEL'S OWN SCROLLER**, set directly. Never
+  `scrollIntoView`: it also scrolls clipped ancestors and moves the shell.
+- **A SIZE REFUSAL IS REMEMBERED AND DISABLES EXACTLY THAT EXPORT.**
+  `ResourceLimit` comes only from `EXPORT_SERIALISED_TOO_LARGE` and
+  `EXPORT_OUTPUT_TOO_LARGE`, ceilings on bytes fixed by (revision, target,
+  unit key). `useDocumentConversion` states the attempt; the store records it
+  in `conversion.refused` (same lifecycle and keys as `measured`) and never
+  judges which statuses qualify. Another format, another unit or a new
+  revision is offered again. Cancellation, staleness and internal failures are
+  NOT remembered — retrying them can succeed.
+- **3MF HAS NO SIZE PREFLIGHT, AND THAT IS MEASURED, NOT OMITTED.** The
+  smallest possible model XML for the 1,988,877-triangle motivating STL
+  (5,966,631 soup vertices) is ~260 MiB, under the 320 MiB entry ceiling; only
+  formatting the real coordinates shows it exceeds it. The refusal lands in
+  ~2–4 s at "Writing 2%", identically on v0.5.0, and is then remembered. A
+  count-based estimate would lie in one direction or the other.
+- **THE EXPORT PEAK IS THE ARTIFACT'S, AND IT PREDATES REPAIR-CORE-02.** OBJ
+  export of that model (267,988,767 bytes, just under `maxOutputBytes`) peaks
+  the renderer at ~2 GiB on v0.5.0 (2,048 MiB) and now (1,964 MiB).
+
 ## Convert workspace invariants (UI-03)
 
 - **THE CONVERT WORKSPACE IS THE ONE CONVERSION SURFACE.** The Stage 4A-2B3
@@ -1184,7 +1221,10 @@ lost`, `printable`, `watertight`, and the rest. **"The numbers are unchanged"
 - **THE EXACT CHECK STAYS IN THE DISPOSABLE WORKER.** The geometry worker imports
   ONLY `@cadfixer/mesh-hole-fill/admission`; the engine entry, the BVH, the
   local classifier and the kernel never reach it (boundary test + bundle).
-  Cancel terminates the verifier and cancels the repair operation.
+  Cancel terminates the verifier and cancels the repair operation. The verifier
+  is opened for a plan that admitted openings — which happens automatically
+  after analysis, for the ACTIVE part only — and for each preview, and closed
+  when that operation settles. Never for a part with nothing admitted.
 - **FAIL CLOSED.** No verifier port → nothing filled. An incomplete or budget-
   stopped check → `NOT_VERIFIABLE`. A re-analysis that misses ANY predicted count
   (`judgeFilledCandidate`) → nothing filled. Filling never rescues a rejected
@@ -1194,16 +1234,44 @@ lost`, `printable`, `watertight`, and the rest. **"The numbers are unchanged"
   path, no partial apply.
 - **A FILL-ONLY PREVIEW SENDS THE PATCH, NOT THE PART.** Never ship a full render
   snapshot for a change that only appends faces.
-- **THE UI READS THE WORKER'S FILL PLAN.** "N fillable" is `admittedCount`; the
-  preview's "N filled" and "M left open" are the candidate's outcome. Never
-  derive either from a count, and never say more openings were repaired than
-  the outcome states.
+- **THE UI READS THE WORKER'S FILL PLAN.** "N fillable" is
+  `fillableOpeningCount(plan)`; the preview's "N filled" and "M left open" are
+  the candidate's outcome. Never derive either from a count, and never say more
+  openings were repaired than the outcome states.
+- **AN ADMITTED OPENING IS NOT A FILLABLE ONE — REPAIR-RC-03.** Admission is
+  topology and planarity; only the exact check says a patch does not pass
+  through the part. On the model that motivated REPAIR-CORE-02 admission passed
+  six openings and the check refused four (every invalid pair an exact coplanar
+  overlap with an opposite-facing face), yet the panel said "6 openings can be
+  filled" — and after Apply, "4 openings can be filled", with a second Repair
+  model that filled nothing. So the plan is VERIFIED before it is shown: when
+  admission passes any opening, `planConservativeRepair` opens the disposable
+  verifier for that plan alone and the worker re-plans with it, caching the
+  verified plan per revision. `BoundaryFillPlan.verified` records it, and
+  `fillableOpeningCount` returns ZERO for an unverified plan — which is what a
+  dead verifier leaves, shown as "Openings could not be checked", never as
+  fillable. The candidate re-runs the same check (`checkAdmitted`, ONE
+  implementation for both), so no fill ever depends on a cached verdict. No
+  verifier is opened for a part with no admitted opening.
 - **HEADLESS FRAME GAPS AT MILLIONS OF TRIANGLES MEASURE SWIFTSHADER.** Headless
   Chromium rasterises WebGL on the CPU: one redraw of a 2M-triangle part takes
   1.3–1.7 s with no page script at all. Main-thread responsiveness for large
   parts is measured with `qualify:boundary-fill -- <size> --hardware-gl`
   (34 ms at 2M), and a CPU profile decides before any "the page is blocked"
   claim. Memory numbers from headless runs remain valid.
+- **GEOGRAM'S "Argument is multiply defined" CONSOLE LINES ARE PRE-EXISTING AND
+  BENIGN — REPAIR-RC-03, and they are technical debt, not noise to silence
+  elsewhere.** `binding.cpp`'s `ensure_init` imports the `"standard"` argument
+  group, which already declares `sys`, then imports `"sys"` by name; Geogram's
+  import guard is by NAME, so the `sys` group and its ten arguments are
+  declared twice, and `declare_arg_group` / `declare_arg` log and RETURN
+  without changing anything (Geogram `c8529bb`, `command_line.cpp`). The log
+  precedes `set_quiet(true)`. Byte-identical kernel to v0.5.0 (WASM SHA-256
+  `507ea5e7…`), identical 11 lines at `log` level, once per kernel instance —
+  and there are more instances now, because plan-time verification opens a
+  disposable verifier. Removing the redundant `import_arg_group("sys")` means
+  rebuilding the qualified kernel; do it in a kernel stage, with the integrity
+  tests, not as a drive-by.
 - **NON-MANIFOLD VERTICES ARE NOT REPAIRED** and ADR 0009 is not amended; see
   `docs/design/REPAIR_CORE_02.md` §11.
 
@@ -1428,8 +1496,13 @@ validated`, and the qualifier naming what was NOT examined travels with it.
   `HoleFillInventoryState.NotInventoried` and the panel says CAD Fixer did not
   LOOK, because reporting "no open boundaries" on the strength of a check that
   never ran is exactly the class of claim this interface forbids.
-- **THE FILL WORKER IS BUILT ONLY WHEN PREVIEW IS PRESSED.** Opening the app, the
-  panel, the listing and a selection construct no `Worker` at all.
+- **THE FILL WORKER IS BUILT ONLY FOR A PREVIEW, OR FOR A PLAN VERIFYING AN
+  ADMITTED OPENING — and is terminated when that operation settles.** Opening
+  the app, the panel, the listing and a selection construct none. Since
+  REPAIR-RC-03 Repair model's plan verifies the openings it admits (see the
+  automatic boundary filling invariants), so a part with an admissible opening
+  costs one disposable verifier per revision; §85 counts every construction
+  and termination.
 - **ALL HOLE-FILL COPY LIVES IN `apps/web/src/state/hole-fill-presentation.ts`**,
   all of it, with exhaustive switches and no `default`. Banned by test:
   `watertight`, `printable`, `model repaired`, `hole`, `defect`, `damage`,

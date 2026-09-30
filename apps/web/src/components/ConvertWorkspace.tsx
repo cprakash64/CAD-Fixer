@@ -1,4 +1,4 @@
-import { useEffect, useId, type ReactNode } from 'react';
+import { useEffect, useId, useRef, type ReactNode } from 'react';
 import {
   CompatibilityDisposition,
   CompatibilityFeature,
@@ -26,12 +26,14 @@ import {
   describeConvertAction,
   describeConvertUnavailable,
   describeExportFailure,
+  describeExportFailureHeadline,
   describeOutput,
   describeOutputSizeKind,
   describeOutputUnit,
   describePartCount,
   describePhase,
   describeSaved,
+  describeSizeRefusalDetails,
   describeSourceKind,
   describeSourceUnit,
   describeStatedUnit,
@@ -41,7 +43,7 @@ import {
   type OutputVariant,
 } from '../state/conversion-presentation';
 import { describeSourceFormat, type LoadedModel } from '../state/model';
-import { outputSize, type OutputSize } from '../state/output-size';
+import { measurementUnitKey, outputSize, type OutputSize } from '../state/output-size';
 import { useWorkspaceState, useWorkspaceStore } from '../state/store-context';
 import { useDocumentConversion } from '../state/use-document-conversion';
 import { WorkflowId } from '../state/workflows';
@@ -49,10 +51,12 @@ import {
   ConversionState,
   HoleFillWorkState,
   RepairCandidateState,
+  refusedExportFor,
   type MeasuredExport,
 } from '../state/workspace-store';
 import { ConversionReport } from './ConversionReport';
 import { Icon } from './shell/Icon';
+import { InfoButton, InfoPanel, useInfoDisclosure, type InfoDisclosure } from './shell/info';
 import { PanelSection } from './shell/primitives';
 
 /**
@@ -103,6 +107,23 @@ export function ConvertWorkspace({ active }: { readonly active: boolean }): Reac
   const pendingPreview =
     repair.candidateState === RepairCandidateState.Ready ||
     holeFill.workState === HoleFillWorkState.Ready;
+  /*
+   * REFUSED FOR SIZE AT THIS REVISION, TARGET AND UNIT — Convert P1. The same
+   * three can only be refused again, so the action is disabled with the reason
+   * beside it rather than offered for another four-second wait.
+   */
+  const refusedForSize =
+    model !== undefined &&
+    target !== undefined &&
+    refusedExportFor(
+      conversion.refused,
+      model.handle,
+      target,
+      measurementUnitKey(model, target, conversion.unitAssertion),
+    ) !== undefined
+      ? target
+      : undefined;
+  const outcomeInfo = useInfoDisclosure();
 
   return (
     <div className="convert-workspace" data-testid="convert-workspace">
@@ -166,6 +187,8 @@ export function ConvertWorkspace({ active }: { readonly active: boolean }): Reac
             {REVIEW_IN_REPAIR}
           </button>
         </PanelSection>
+
+        <OutcomeDetails disclosure={outcomeInfo} target={target} refusedForSize={refusedForSize} />
       </div>
 
       <ConvertFooter
@@ -173,6 +196,8 @@ export function ConvertWorkspace({ active }: { readonly active: boolean }): Reac
         sourceFormat={model?.source.formatId}
         target={target}
         exportable={exportable}
+        refusedForSize={refusedForSize}
+        outcomeInfo={outcomeInfo}
         onConvert={convert}
         onCancel={cancel}
       />
@@ -513,6 +538,8 @@ function ConvertFooter({
   sourceFormat,
   target,
   exportable,
+  refusedForSize,
+  outcomeInfo,
   onConvert,
   onCancel,
 }: {
@@ -520,13 +547,21 @@ function ConvertFooter({
   readonly sourceFormat: string | undefined;
   readonly target: ExportFormat | undefined;
   readonly exportable: boolean;
+  readonly refusedForSize: ExportFormat | undefined;
+  readonly outcomeInfo: InfoDisclosure;
   readonly onConvert: () => void;
   readonly onCancel: () => void;
 }): ReactNode {
   const { conversion } = useWorkspaceState();
   const hintId = useId();
   const working = conversion.state === ConversionState.Working;
-  const unavailable = describeConvertUnavailable(hasModel, target !== undefined, exportable);
+  const unavailable = describeConvertUnavailable(
+    hasModel,
+    target !== undefined,
+    exportable,
+    refusedForSize,
+  );
+  const failure = conversion.state === ConversionState.Failed ? conversion.failure : undefined;
   const percent = Math.round(conversion.fraction * 100);
 
   return (
@@ -565,10 +600,22 @@ function ConvertFooter({
           </p>
         ) : null}
       </div>
-      {conversion.state === ConversionState.Failed && conversion.failure !== undefined ? (
-        <p className="convert-footer__failure" role="alert" data-testid="convert-failure">
-          {describeExportFailure(conversion.failure.status, conversion.failure.reason)}
-        </p>
+      {/* ONE LINE, NEVER A PARAGRAPH — Convert P1. The full sentence is behind
+          ⓘ, in the scrolling content: a paragraph here grew the sticky footer
+          until the button left the panel on a short window. */}
+      {failure !== undefined ? (
+        <div className="convert-footer__failure" role="alert" data-testid="convert-failure">
+          <span className="convert-footer__failure-text">
+            {describeExportFailureHeadline(failure.status, target)}
+          </span>
+          {refusedForSize === undefined ? (
+            <InfoButton
+              disclosure={outcomeInfo}
+              label="this export"
+              testId="convert-failure-info"
+            />
+          ) : null}
+        </div>
       ) : null}
 
       <div className="convert-footer__actions">
@@ -596,10 +643,77 @@ function ConvertFooter({
         </button>
       </div>
       {unavailable === undefined || working ? null : (
-        <p className="convert-footer__hint" id={hintId} data-testid="convert-unavailable">
-          {unavailable}
-        </p>
+        <div className="convert-footer__hint-row">
+          <p className="convert-footer__hint" id={hintId} data-testid="convert-unavailable">
+            {unavailable}
+          </p>
+          {refusedForSize === undefined ? null : (
+            <InfoButton
+              disclosure={outcomeInfo}
+              label="this export limit"
+              testId="convert-refusal-info"
+            />
+          )}
+        </div>
       )}
+    </div>
+  );
+}
+
+/* ------------------------------------------------------ outcome details -- */
+
+/**
+ * WHAT THE LAST EXPORT MEANT, in full, behind the footer's ⓘ — Convert P1.
+ *
+ * IN THE SCROLLING CONTENT, directly above the sticky footer, never inside it:
+ * the footer holds only bounded content so the action cannot be pushed out of
+ * the panel, while this can be as long as the explanation needs. Opening it
+ * scrolls the panel's own scroll area to the end so it lands beside the button
+ * — the panel's scroller, set directly, never `scrollIntoView`, which would
+ * also scroll every clipped ancestor and move the whole application shell.
+ */
+function OutcomeDetails({
+  disclosure,
+  target,
+  refusedForSize,
+}: {
+  readonly disclosure: InfoDisclosure;
+  readonly target: ExportFormat | undefined;
+  readonly refusedForSize: ExportFormat | undefined;
+}): ReactNode {
+  const { conversion } = useWorkspaceState();
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!disclosure.open) return;
+    const scroller = ref.current?.closest('.tool-panel__body');
+    if (scroller instanceof HTMLElement) scroller.scrollTop = scroller.scrollHeight;
+  }, [disclosure.open]);
+
+  const failure = conversion.state === ConversionState.Failed ? conversion.failure : undefined;
+  const paragraphs =
+    refusedForSize !== undefined
+      ? describeSizeRefusalDetails(refusedForSize)
+      : failure !== undefined
+        ? [describeExportFailure(failure.status, failure.reason)]
+        : [];
+  // Nothing left to explain — the outcome was replaced — so nothing stays open.
+  const empty = paragraphs.length === 0;
+  const { open, close } = disclosure;
+  useEffect(() => {
+    if (open && empty) close();
+  }, [open, empty, close]);
+  const label =
+    failure === undefined ? 'this export' : describeExportFailureHeadline(failure.status, target);
+
+  return (
+    <div ref={ref} className="convert-outcome-details">
+      <InfoPanel disclosure={disclosure} label={label} testId="convert-outcome-details">
+        {paragraphs.map((text) => (
+          <p key={text} className="info-panel__text">
+            {text}
+          </p>
+        ))}
+      </InfoPanel>
     </div>
   );
 }

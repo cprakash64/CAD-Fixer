@@ -5,6 +5,7 @@ import {
   SelfTestState,
   StatusSeverity,
   WorkspaceStore,
+  refusedExportFor,
 } from './workspace-store';
 import { WorkflowId } from './workflows';
 import type { LoadedModel } from './model';
@@ -503,6 +504,50 @@ describe('WorkspaceStore conversion measurements', () => {
     expect(measured).toHaveLength(12);
     expect(measured[0]?.byteLength).toBe(1008);
     expect(measured[11]?.byteLength).toBe(1019);
+  });
+
+  it('remembers a size refusal only when the caller states the attempt, and only for it (Convert P1)', () => {
+    const store = loaded();
+    const handle = store.getSnapshot().model?.handle;
+    if (handle === undefined) throw new Error('fixture');
+    store.setConversionTarget('3mf');
+    store.setConversionUnit('millimeter');
+
+    // A failure with no stated attempt records nothing: the store never judges.
+    let token = store.beginConversion();
+    store.failConversion(token, { status: 'RESOURCE_LIMIT', reason: undefined });
+    expect(store.getSnapshot().conversion.refused).toEqual([]);
+
+    token = store.beginConversion();
+    store.failConversion(
+      token,
+      { status: 'RESOURCE_LIMIT', reason: 'EXPORT_SERIALISED_TOO_LARGE' },
+      { source: handle, target: '3mf', unitAssertion: 'millimeter' },
+    );
+    const refused = store.getSnapshot().conversion.refused;
+    expect(refusedExportFor(refused, handle, '3mf', 'millimeter')).toBeDefined();
+    expect(refusedExportFor(refused, handle, '3mf', 'inch')).toBeUndefined();
+    expect(refusedExportFor(refused, handle, 'stl', undefined)).toBeUndefined();
+    // A new revision of the same model is a different file.
+    expect(
+      refusedExportFor(refused, { ...handle, revision: handle.revision + 1 }, '3mf', 'millimeter'),
+    ).toBeUndefined();
+
+    // Kept across a target change, like a measurement, and not duplicated.
+    store.setConversionTarget('obj');
+    store.setConversionTarget('3mf');
+    token = store.beginConversion();
+    store.failConversion(
+      token,
+      { status: 'RESOURCE_LIMIT', reason: 'EXPORT_SERIALISED_TOO_LARGE' },
+      { source: handle, target: '3mf', unitAssertion: 'millimeter' },
+    );
+    expect(store.getSnapshot().conversion.refused).toHaveLength(1);
+
+    // Forgotten with the model.
+    const next = store.beginImport('b.stl');
+    store.commitImport(next, sampleModel('b.stl'));
+    expect(store.getSnapshot().conversion.refused).toEqual([]);
   });
 
   it('forgets every measurement when another file is opened', () => {

@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import {
+  fillableOpeningCount,
   BoundaryFillVerdict,
   type BoundaryFillOutcome,
   type BoundaryFillPlan,
@@ -310,7 +311,7 @@ function FillOptionRow({
   return (
     <li
       className={`repair-option repair-option--${
-        fill.selected && (fill.plan?.admittedCount ?? 0) > 0 ? 'available' : 'inactive'
+        fill.selected && fillableOpeningCount(fill.plan) > 0 ? 'available' : 'inactive'
       }`}
       data-testid="repair-op-fill-openings"
     >

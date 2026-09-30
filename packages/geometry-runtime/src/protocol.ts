@@ -569,6 +569,13 @@ export interface RepairPlanPayload {
    * REPAIR-CORE-02. Absent or false: nothing is scanned.
    */
   readonly fillOpenings?: boolean;
+  /**
+   * A channel to a disposable verifier — REPAIR-RC-03. When present and the
+   * plan admits openings, the exact intersection check runs NOW, so the plan
+   * the user sees counts only openings that passed it. Absent: the plan is
+   * returned unverified (`verified: false`) and says nothing is fillable yet.
+   */
+  readonly verifierPort?: ProtocolPort;
 }
 
 export interface RepairPlanOperationResult {

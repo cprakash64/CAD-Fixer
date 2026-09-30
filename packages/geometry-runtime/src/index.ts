@@ -286,6 +286,7 @@ export {
   BoundaryFillOutcomeStatus,
   BoundaryFillScanStatus,
   BoundaryFillVerdict,
+  fillableOpeningCount,
   NO_BOUNDARY_FILL_PLAN,
 } from './boundary-fill';
 export type {

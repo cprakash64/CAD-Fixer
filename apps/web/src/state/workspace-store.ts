@@ -20,6 +20,7 @@ import type {
   HoleFillValidationSummary,
   BoundaryLoopRefusal,
 } from '@cadfixer/geometry-runtime';
+import { fillableOpeningCount } from '@cadfixer/geometry-runtime';
 import type { ExportStatus } from '@cadfixer/file-formats';
 import type { WorkflowId } from './workflows';
 import {
@@ -150,6 +151,17 @@ declare const conversionTokenBrand: unique symbol;
 /** Identifies one conversion attempt, for the same reason imports have tokens. */
 export type ConversionToken = number & { readonly [conversionTokenBrand]: true };
 
+/**
+ * WHICH EXPORT FAILED — Convert P1 (REPAIR-RC-03). The document revision, the
+ * target and the unit key the attempt was made with, stated by the caller that
+ * captured them when Export was pressed.
+ */
+export interface ConversionAttempt {
+  readonly source: DocumentHandle;
+  readonly target: string;
+  readonly unitAssertion: string | undefined;
+}
+
 export interface ConversionFailure {
   /**
    * The machine-readable outcome. The sentence is presentation's.
@@ -160,6 +172,43 @@ export interface ConversionFailure {
    */
   readonly status: ExportStatus;
   readonly reason: string | undefined;
+}
+
+/**
+ * AN EXPORT THAT CANNOT BE WRITTEN, REMEMBERED — Convert P1 (REPAIR-RC-03).
+ *
+ * A `ResourceLimit` refusal comes from exactly two writer ceilings
+ * (`EXPORT_SERIALISED_TOO_LARGE`, `EXPORT_OUTPUT_TOO_LARGE`) on bytes that are a
+ * pure function of the document revision, the target and the unit, so the same
+ * three can only be refused again. Offering the same press again made a
+ * 94.8 MiB STL cost four seconds per retry for an answer already known. The
+ * record lives exactly as long as `measured`: cleared with the model, kept
+ * across a target or unit change, and matched by all three keys, so a repair
+ * (a new revision) or another format is offered again.
+ */
+export interface RefusedExport {
+  readonly documentId: string;
+  readonly revision: number;
+  readonly target: string;
+  readonly unitAssertion: string | undefined;
+}
+
+export const MAX_REFUSED_EXPORTS = 12;
+
+/** Whether exactly this revision, target and unit was refused for size. */
+export function refusedExportFor(
+  refused: readonly RefusedExport[],
+  handle: DocumentHandle,
+  target: string,
+  unitAssertion: string | undefined,
+): RefusedExport | undefined {
+  return refused.find(
+    (entry) =>
+      entry.documentId === handle.documentId &&
+      entry.revision === handle.revision &&
+      entry.target === target &&
+      entry.unitAssertion === unitAssertion,
+  );
 }
 
 export interface ConversionResult {
@@ -245,6 +294,8 @@ export interface ConversionSnapshot {
    * unit change — it is keyed by both — and is cleared with the model.
    */
   readonly measured: readonly MeasuredExport[];
+  /** Exports refused for size at a revision, target and unit — see `RefusedExport`. */
+  readonly refused: readonly RefusedExport[];
 }
 
 const CONVERSION_CLOSED: ConversionSnapshot = Object.freeze({
@@ -256,6 +307,7 @@ const CONVERSION_CLOSED: ConversionSnapshot = Object.freeze({
   failure: undefined,
   result: undefined,
   measured: Object.freeze([]),
+  refused: Object.freeze([]),
 });
 
 export interface TextureSelectionState {
@@ -1922,7 +1974,7 @@ export class WorkspaceStore {
     if (repair.planState !== RepairPlanState.Ready || repair.plan === undefined) return undefined;
     // REPAIR-CORE-02: a plan with no conservative work is still work when
     // filling is selected and the fill plan admitted at least one opening.
-    const fills = repair.fillOpenings && (repair.fillPlan?.admittedCount ?? 0) > 0;
+    const fills = repair.fillOpenings && fillableOpeningCount(repair.fillPlan) > 0;
     if (repair.plan.noOp && !fills) return undefined;
 
     const token = this.nextRepairToken as RepairToken;
@@ -3281,9 +3333,39 @@ export class WorkspaceStore {
    * session would take the explanation away with it. The chosen target and
    * unit are kept for exactly that reason.
    */
-  public failConversion(token: ConversionToken, failure: ConversionFailure): boolean {
+  /**
+   * `sizeRefusal`, when given, is the attempt the CALLER judged deterministic —
+   * a size ceiling on bytes fixed by revision, target and unit. The store does
+   * not judge it: which statuses qualify is export policy, not state.
+   */
+  public failConversion(
+    token: ConversionToken,
+    failure: ConversionFailure,
+    sizeRefusal?: ConversionAttempt,
+  ): boolean {
     if (!this.isCurrentConversion(token)) return false;
     this.currentConversionToken = undefined;
+    const attempt = sizeRefusal;
+    const refused =
+      attempt !== undefined
+        ? [
+            ...this.state.conversion.refused.filter(
+              (existing) =>
+                refusedExportFor(
+                  [existing],
+                  attempt.source,
+                  attempt.target,
+                  attempt.unitAssertion,
+                ) === undefined,
+            ),
+            {
+              documentId: attempt.source.documentId,
+              revision: attempt.source.revision,
+              target: attempt.target,
+              unitAssertion: attempt.unitAssertion,
+            },
+          ].slice(-MAX_REFUSED_EXPORTS)
+        : this.state.conversion.refused;
     this.update({
       conversion: {
         ...this.state.conversion,
@@ -3292,6 +3374,7 @@ export class WorkspaceStore {
         phase: undefined,
         failure,
         result: undefined,
+        refused,
       },
     });
     return true;

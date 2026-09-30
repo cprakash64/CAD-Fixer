@@ -260,7 +260,7 @@ function commitPlan(
   });
 }
 
-function fillPlan(admitted: number): BoundaryFillPlan {
+function fillPlan(admitted: number, verified = true): BoundaryFillPlan {
   return {
     status: BoundaryFillScanStatus.Scanned,
     boundaryEdgeCount: 400,
@@ -268,6 +268,7 @@ function fillPlan(admitted: number): BoundaryFillPlan {
     complexBoundaryCount: 7,
     admittedCount: admitted,
     admittedPatchFaces: admitted * 4,
+    verified,
     loops: [],
     loopsTruncated: false,
     planHash: `bf-${String(admitted)}`,

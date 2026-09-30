@@ -84,6 +84,7 @@ export interface RepairCapableClient {
     onProgress: (update: ProgressUpdate) => void,
     memoryBudgetBytes?: number,
     fillOpenings?: boolean,
+    verifierPort?: MessagePort,
   ): OperationHandle<RepairPlanOperationResult>;
   createRepairCandidate(
     handle: DocumentHandle,
@@ -196,6 +197,8 @@ export interface RepairPlanRequest {
   readonly memoryBudgetBytes?: number;
   /** Also plan automatic filling of eligible openings. */
   readonly fillOpenings?: boolean;
+  /** Injectable for tests; the application uses the real verifier. */
+  readonly openVerifier?: (onFailure: () => void) => FillVerifier;
   /**
    * Declared as a property rather than a method so it can be PASSED to the
    * shared session builder without `this` ambiguity — a method shorthand read
@@ -219,10 +222,64 @@ export function planConservativeRepair(
     );
     register(operation);
 
-    const result = await operation.promise;
+    let result = await operation.promise;
     if (isCancelled()) throw operationCancelled('Repair planning was cancelled.');
     assertSameModel(result.handle, request.handle, 'repair plan');
     assertSamePart(result.partId, request.partId, 'repair plan');
+
+    /*
+     * VERIFY WHAT WILL BE PROMISED — REPAIR-RC-03. Admission is topology and
+     * planarity; only the exact check can say an opening fills. When the plan
+     * admits any, the disposable verifier is opened for this plan alone and
+     * the worker plans again, now counting only openings that passed. Nothing
+     * is opened for a part with no admitted opening. If the verifier dies the
+     * plan stays unverified, which the interface never presents as fillable.
+     */
+    if (
+      request.fillOpenings === true &&
+      result.boundaryFill.admittedCount > 0 &&
+      !result.boundaryFill.verified
+    ) {
+      const verifierState = { failed: false };
+      let cancelVerify: (() => void) | undefined;
+      const verifier = (request.openVerifier ?? openFillVerifier)(() => {
+        verifierState.failed = true;
+        cancelVerify?.();
+      });
+      try {
+        const verify = request.client.planRepair(
+          request.handle,
+          request.partId,
+          request.requested,
+          report,
+          request.memoryBudgetBytes,
+          true,
+          verifier.port,
+        );
+        cancelVerify = (): void => {
+          verify.cancel();
+        };
+        register({
+          cancel: (): void => {
+            verifier.dispose();
+            verify.cancel();
+          },
+        });
+        try {
+          const verified = await verify.promise;
+          if (isCancelled()) throw operationCancelled('Repair planning was cancelled.');
+          assertSameModel(verified.handle, request.handle, 'repair plan');
+          assertSamePart(verified.partId, request.partId, 'repair plan');
+          result = verified;
+        } catch (cause) {
+          if (!verifierState.failed || isCancelled()) throw cause;
+          // The verifier died. Keep the UNVERIFIED plan: it is truthful as long
+          // as nothing presents its admitted count as fillable, and nothing does.
+        }
+      } finally {
+        verifier.dispose();
+      }
+    }
 
     return {
       handle: result.handle,

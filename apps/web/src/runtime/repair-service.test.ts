@@ -12,7 +12,11 @@ import {
   type RepairPlanOperationResult,
   type RepairUndoResult,
 } from '@cadfixer/geometry-runtime';
-import { NO_BOUNDARY_FILL_PLAN } from '@cadfixer/geometry-runtime';
+import {
+  BoundaryFillScanStatus,
+  NO_BOUNDARY_FILL_PLAN,
+  type BoundaryFillPlan,
+} from '@cadfixer/geometry-runtime';
 import {
   createRepairCandidate,
   describeRepairPhase,
@@ -22,6 +26,7 @@ import {
   undoRepair,
   type RepairCapableClient,
 } from './repair-service';
+import type { FillVerifier } from './hole-fill-service';
 
 /**
  * The transport, tested against a stand-in client rather than a real `Worker`.
@@ -253,6 +258,124 @@ describe('planning', () => {
     await expect(session.promise).rejects.toMatchObject({
       code: AppErrorCode.OperationCancelled,
     });
+  });
+});
+
+describe('verifying what the plan will promise (REPAIR-RC-03)', () => {
+  function fillPlan(admitted: number, verified: boolean): BoundaryFillPlan {
+    return {
+      ...NO_BOUNDARY_FILL_PLAN,
+      status: BoundaryFillScanStatus.Scanned,
+      simpleLoopCount: 6,
+      complexBoundaryCount: 7,
+      admittedCount: admitted,
+      verified,
+      planHash: verified ? 'verified' : 'admitted',
+    };
+  }
+
+  interface Harness {
+    readonly ports: (MessagePort | undefined)[];
+    readonly opened: { count: number; disposed: number; onFailure?: () => void };
+    readonly session: ReturnType<typeof planConservativeRepair>;
+    readonly first: ReturnType<typeof deferred<RepairPlanOperationResult>>;
+    readonly second: ReturnType<typeof deferred<RepairPlanOperationResult>>;
+  }
+
+  function start(): Harness {
+    const first = deferred<RepairPlanOperationResult>();
+    const second = deferred<RepairPlanOperationResult>();
+    const ports: (MessagePort | undefined)[] = [];
+    const opened: Harness['opened'] = { count: 0, disposed: 0 };
+    const planRepair: RepairCapableClient['planRepair'] = (
+      _handle,
+      _partId,
+      _requested,
+      _onProgress,
+      _memory,
+      _fill,
+      verifierPort,
+    ) => {
+      ports.push(verifierPort);
+      return ports.length === 1 ? first.handle : second.handle;
+    };
+    const openVerifier = (onFailure: () => void): FillVerifier => {
+      opened.count += 1;
+      opened.onFailure = onFailure;
+      return {
+        port: new MessageChannel().port1,
+        dispose: (): void => {
+          opened.disposed += 1;
+        },
+      };
+    };
+    const session = planConservativeRepair({
+      handle: HANDLE,
+      partId: PART,
+      client: stubClient({ planRepair }),
+      requested: [],
+      fillOpenings: true,
+      openVerifier,
+    });
+    return { ports, opened, session, first, second };
+  }
+
+  const result = (fill: BoundaryFillPlan): RepairPlanOperationResult => ({
+    handle: HANDLE,
+    partId: PART,
+    plan: plan(),
+    boundaryFill: fill,
+  });
+
+  it('re-plans with a verifier when openings are admitted, and returns the VERIFIED plan', async () => {
+    const run = start();
+    run.first.resolve(result(fillPlan(6, false)));
+    await Promise.resolve();
+    await Promise.resolve();
+    run.second.resolve(result(fillPlan(2, true)));
+    const outcome = await run.session.promise;
+    expect(run.ports).toHaveLength(2);
+    expect(run.ports[0]).toBeUndefined();
+    expect(run.ports[1]).toBeDefined();
+    expect(outcome.boundaryFill).toMatchObject({ admittedCount: 2, verified: true });
+    expect(run.opened).toMatchObject({ count: 1, disposed: 1 });
+  });
+
+  it('opens nothing when nothing is admitted', async () => {
+    const run = start();
+    run.first.resolve(result(fillPlan(0, true)));
+    const outcome = await run.session.promise;
+    expect(run.ports).toHaveLength(1);
+    expect(run.opened.count).toBe(0);
+    expect(outcome.boundaryFill.admittedCount).toBe(0);
+  });
+
+  it('keeps the UNVERIFIED plan when the verifier dies, rather than failing the plan', async () => {
+    const run = start();
+    run.first.resolve(result(fillPlan(6, false)));
+    await Promise.resolve();
+    await Promise.resolve();
+    run.opened.onFailure?.();
+    run.second.reject(new Error('verifier gone'));
+    const outcome = await run.session.promise;
+    // Unverified: the interface presents it as not checked, never as fillable.
+    expect(outcome.boundaryFill).toMatchObject({ admittedCount: 6, verified: false });
+    expect(run.second.cancelled()).toBe(true);
+    expect(run.opened.disposed).toBe(1);
+  });
+
+  it('cancelling during verification terminates the verifier and cancels the plan', async () => {
+    const run = start();
+    run.first.resolve(result(fillPlan(6, false)));
+    await Promise.resolve();
+    await Promise.resolve();
+    run.session.cancel();
+    run.second.resolve(result(fillPlan(2, true)));
+    await expect(run.session.promise).rejects.toMatchObject({
+      code: AppErrorCode.OperationCancelled,
+    });
+    expect(run.second.cancelled()).toBe(true);
+    expect(run.opened.disposed).toBeGreaterThanOrEqual(1);
   });
 });
 

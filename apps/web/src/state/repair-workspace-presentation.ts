@@ -1,4 +1,5 @@
 import {
+  fillableOpeningCount,
   BOUNDARY_FILL_MAX_OPENINGS_PER_REPAIR,
   HOLE_FILL_MAX_BOUNDARY_VERTICES,
   BoundaryFillOutcomeStatus,
@@ -237,7 +238,12 @@ function openBoundaryStatus(
       detail,
     };
   }
-  const fillable = fill.admittedCount;
+  // An opening admission passed but the exact check never saw is not fillable
+  // and not refused either — REPAIR-RC-03. Say it was not checked.
+  if (!fill.verified && fill.admittedCount > 0) {
+    return { fixability: Fixability.NotRepairable, text: 'Openings could not be checked', detail };
+  }
+  const fillable = fillableOpeningCount(fill);
   if (fillable === 0) {
     return { fixability: Fixability.NotRepairable, text: 'Not automatically fillable', detail };
   }
@@ -376,9 +382,9 @@ export function describeFillOptionStatus(
   if (!selected) return 'Not selected';
   if (fill === undefined || fill.status === BoundaryFillScanStatus.NotRequested) return 'Checking…';
   if (fill.status === BoundaryFillScanStatus.TooManyBoundaryEdges) return 'Too many open edges';
-  return fill.admittedCount === 0
-    ? 'None eligible'
-    : `${fill.admittedCount.toLocaleString()} to fill`;
+  if (!fill.verified && fill.admittedCount > 0) return 'Could not check';
+  const fillable = fillableOpeningCount(fill);
+  return fillable === 0 ? 'None eligible' : `${fillable.toLocaleString()} to fill`;
 }
 
 /** One short reason per verdict, for ⓘ panels and the preview's refused list. */

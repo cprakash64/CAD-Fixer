@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   BoundaryFillScanStatus,
+  fillableOpeningCount,
   RepairDecision,
   RepairOperation,
   RepairReason,
@@ -32,6 +33,7 @@ import {
   deriveRepairScope,
   describeAppliedChanges,
   describeFileStructure,
+  describeFillOptionStatus,
   describeOptionStatus,
   describeRemaining,
   describeRepairScope,
@@ -123,7 +125,7 @@ function context(overrides: Partial<IssueStatusContext> = {}): IssueStatusContex
   };
 }
 
-function fillPlan(admitted: number): BoundaryFillPlan {
+function fillPlan(admitted: number, verified = true): BoundaryFillPlan {
   return {
     status: BoundaryFillScanStatus.Scanned,
     boundaryEdgeCount: 40,
@@ -133,6 +135,7 @@ function fillPlan(admitted: number): BoundaryFillPlan {
     admittedPatchFaces: admitted * 2,
     loops: [],
     loopsTruncated: false,
+    verified,
     planHash: 'bf-test',
   };
 }
@@ -250,6 +253,29 @@ describe('issue fixability', () => {
         Fixability.NotRepairable,
       );
     }
+  });
+
+  it('never presents an UNVERIFIED admitted count as fillable (REPAIR-RC-03)', () => {
+    // The real model: six admitted, two passed the exact check.
+    const open = issue(RepairIssueId.OpenBoundaries, 13);
+    const detail = '6 simple loops · 7 complex';
+    const boundaries = { simpleLoops: 6, openChains: 0, branched: 7 };
+    expect(deriveIssueStatus(open, context({ boundaries, fill: fillPlan(6, false) }))).toEqual({
+      fixability: Fixability.NotRepairable,
+      text: 'Openings could not be checked',
+      detail,
+    });
+    expect(describeFillOptionStatus(true, fillPlan(6, false))).toBe('Could not check');
+    expect(fillableOpeningCount(fillPlan(6, false))).toBe(0);
+    // The same plan once verified: only what passed is promised.
+    expect(deriveIssueStatus(open, context({ boundaries, fill: fillPlan(2) })).text).toBe(
+      '2 fillable · 11 need attention',
+    );
+    expect(describeFillOptionStatus(true, fillPlan(2))).toBe('2 to fill');
+    // Repair model is not enabled by an unverified count alone.
+    expect(
+      action({ planNoOp: true, fillableOpenings: fillableOpeningCount(fillPlan(6, false)) }),
+    ).not.toBe(RepairActionKind.Ready);
   });
 
   it('reads open boundaries from the worker’s fill plan, never from a count (REPAIR-CORE-02)', () => {

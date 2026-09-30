@@ -370,11 +370,62 @@ export function describeConvertUnavailable(
   hasModel: boolean,
   hasTarget: boolean,
   exportable: boolean,
+  refusedForSize?: ExportFormat,
 ): string | undefined {
   if (!hasModel) return NO_MODEL_NOTE;
   if (!hasTarget) return 'Choose an output format.';
   if (!exportable) return 'Resolve what is needed under Format options first.';
+  if (refusedForSize !== undefined) return describeSizeRefusal(refusedForSize);
   return undefined;
+}
+
+/* ------------------------------------------- export refusals (Convert P1) -- */
+
+/**
+ * ONE LINE BESIDE A DISABLED BUTTON. A size refusal is a standing fact about
+ * this model, this format and this unit, so it is said where the action is,
+ * once, and the explanation lives behind ⓘ — never a paragraph inside the
+ * sticky footer, which is how the paragraph pushed the button out of reach.
+ */
+export function describeSizeRefusal(target: ExportFormat): string {
+  return `This model exceeds the safe browser export limit for ${outputVariantFor(target).name}.`;
+}
+
+/** Behind ⓘ: what happened, what did not, and what is still possible. */
+export function describeSizeRefusalDetails(target: ExportFormat): readonly string[] {
+  const name = outputVariantFor(target).name;
+  return [
+    `Pybrix checks every file it writes by reading it back before saving it. The ${name} it would write for this model is larger than it can check safely in a browser, so it stopped and saved nothing.`,
+    'Your model is unchanged.',
+    'Other formats are written differently and may still fit. This format is offered again when the model or the chosen unit changes.',
+  ];
+}
+
+/**
+ * THE FOOTER'S ONE LINE AFTER A FAILED EXPORT. Short on purpose: the sentence
+ * from `describeExportFailure` is shown behind ⓘ, in the scrolling content,
+ * where its length can never push the action out of the panel.
+ */
+export function describeExportFailureHeadline(
+  status: ExportStatus,
+  target: ExportFormat | undefined,
+): string {
+  switch (status) {
+    case ExportStatus.BlockedUnitRequired:
+      return 'Choose a unit, then export';
+    case ExportStatus.ResourceLimit:
+      return target === undefined
+        ? 'Export unavailable'
+        : `${outputVariantFor(target).name} export unavailable`;
+    case ExportStatus.Cancelled:
+      return 'Export cancelled — nothing saved';
+    case ExportStatus.StaleRevision:
+      return 'Model changed — nothing saved';
+    case ExportStatus.ValidationFailed:
+    case ExportStatus.InternalFailure:
+    case ExportStatus.Success:
+      return 'Export failed — nothing saved';
+  }
 }
 
 /** What a finished export says. Only ever shown after validation succeeded. */
@@ -725,7 +776,7 @@ export function describeExportFailure(status: ExportStatus, reason: string | und
     case ExportStatus.BlockedUnitRequired:
       return 'A 3MF file has to state what its measurements mean, and this model does not say. Choose a unit and try again.';
     case ExportStatus.ResourceLimit:
-      return 'This model is too large to write as this format in a browser, so nothing was saved. A format that stores repeated shapes once may fit where this one does not.';
+      return 'This model is too large to write as this format in a browser, so nothing was saved. Your model is unchanged, and other formats may still fit.';
     case ExportStatus.Cancelled:
       return 'Export cancelled. No file was saved, and the model is unchanged.';
     case ExportStatus.StaleRevision:

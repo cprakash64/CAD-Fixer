@@ -49,7 +49,13 @@ import type { LocalVerdictWire, LocalVerifyMessage, LocalVerifyReply } from './h
 
 export interface FillPlanRecord {
   readonly plan: BoundaryFillPlan;
+  /**
+   * Once verified, `admitted` holds ONLY the openings that passed the exact
+   * check; `decisions` still lists every opening the scan found.
+   */
   readonly admission: BoundaryFillAdmission;
+  /** Verdicts the exact check reached for openings it refused. */
+  readonly checked: ReadonlyMap<string, BoundaryFillVerdict>;
   /** The exact mesh object the admission was computed for. */
   readonly mesh: CanonicalMesh;
 }
@@ -81,13 +87,56 @@ export function planBoundaryFill(
   const cached = planCache.get(key);
   if (cached?.mesh === mesh) return cached;
   const record = computeFillPlan(key, mesh, poll);
+  remember(key, record);
+  return record;
+}
+
+function remember(key: string, record: FillPlanRecord): void {
+  planCache.delete(key);
   planCache.set(key, record);
   while (planCache.size > PLAN_CACHE_ENTRIES) {
     const oldest = planCache.keys().next().value;
     if (oldest === undefined) break;
     planCache.delete(oldest);
   }
-  return record;
+}
+
+export interface FillCheckContext {
+  readonly verifierPort: ProtocolPort;
+  readonly operationId: string;
+  readonly cancellation: CancellationToken;
+  readonly throwIfCancelled: () => void;
+}
+
+/**
+ * VERIFIES A PLAN BEFORE THE USER SEES IT — REPAIR-RC-03.
+ *
+ * Runs the exact local intersection check over every admitted opening and
+ * returns a record whose `admitted` set is only the openings that passed, with
+ * the others' verdicts in `checked`. The verified record replaces the
+ * unverified one in the cache, so the candidate that follows binds to exactly
+ * what the user was told. The check is deterministic over immutable geometry,
+ * which is what makes a cached verdict for a revision safe to reuse.
+ */
+export async function verifyFillPlan(
+  key: string,
+  record: FillPlanRecord,
+  context: FillCheckContext,
+): Promise<FillPlanRecord> {
+  if (record.plan.verified) return record;
+  const check = await checkAdmitted(record.mesh, record.admission.admitted, context);
+  const admission: BoundaryFillAdmission = {
+    admitted: check.passing,
+    decisions: record.admission.decisions,
+  };
+  const verified: FillPlanRecord = {
+    mesh: record.mesh,
+    admission,
+    checked: check.refused,
+    plan: planOf(key, record.plan, admission, check.refused, true),
+  };
+  if (planCache.get(key)?.mesh === record.mesh) remember(key, verified);
+  return verified;
 }
 
 function computeFillPlan(key: string, mesh: CanonicalMesh, poll: () => void): FillPlanRecord {
@@ -102,6 +151,7 @@ function computeFillPlan(key: string, mesh: CanonicalMesh, poll: () => void): Fi
     return {
       mesh,
       admission: { admitted: [], decisions: [] },
+      checked: new Map(),
       plan: {
         status: BoundaryFillScanStatus.TooManyBoundaryEdges,
         boundaryEdgeCount: scan.boundaryEdgeCount,
@@ -111,34 +161,58 @@ function computeFillPlan(key: string, mesh: CanonicalMesh, poll: () => void): Fi
         admittedPatchFaces: 0,
         loops: [],
         loopsTruncated: false,
+        verified: true,
         planHash: hashOf(`${key}|too-many|${String(scan.boundaryEdgeCount)}`),
       },
     };
   }
   const admission = admitBoundaryLoops(mesh, scan);
+  const checked = new Map<string, BoundaryFillVerdict>();
+  const base: BoundaryFillPlan = {
+    status: BoundaryFillScanStatus.Scanned,
+    boundaryEdgeCount: scan.boundaryEdgeCount,
+    simpleLoopCount: scan.simpleLoopCount,
+    complexBoundaryCount: scan.complexBoundaryCount,
+    admittedCount: 0,
+    admittedPatchFaces: 0,
+    loops: [],
+    loopsTruncated: false,
+    verified: false,
+    planHash: '',
+  };
+  return {
+    mesh,
+    admission,
+    checked,
+    plan: planOf(key, base, admission, checked, admission.admitted.length === 0),
+  };
+}
+
+function planOf(
+  key: string,
+  base: BoundaryFillPlan,
+  admission: BoundaryFillAdmission,
+  checked: ReadonlyMap<string, BoundaryFillVerdict>,
+  verified: boolean,
+): BoundaryFillPlan {
   let patchFaces = 0;
   for (const loop of admission.admitted) patchFaces += loop.patchFaceCount;
   const loops = capped(
     admission.decisions.map((decision) => ({
       id: decision.id,
       vertexCount: decision.vertexCount,
-      verdict: decision.verdict,
+      verdict: checked.get(decision.id) ?? decision.verdict,
     })),
   );
+  const ids = admission.admitted.map((loop) => loop.id).join(',');
   return {
-    mesh,
-    admission,
-    plan: {
-      status: BoundaryFillScanStatus.Scanned,
-      boundaryEdgeCount: scan.boundaryEdgeCount,
-      simpleLoopCount: scan.simpleLoopCount,
-      complexBoundaryCount: scan.complexBoundaryCount,
-      admittedCount: admission.admitted.length,
-      admittedPatchFaces: patchFaces,
-      loops: loops.rows,
-      loopsTruncated: loops.truncated,
-      planHash: hashOf(`${key}|${admission.admitted.map((loop) => loop.id).join(',')}`),
-    },
+    ...base,
+    admittedCount: admission.admitted.length,
+    admittedPatchFaces: patchFaces,
+    loops: loops.rows,
+    loopsTruncated: loops.truncated,
+    verified,
+    planHash: hashOf(`${key}|${verified ? 'verified' : 'admitted'}|${ids}`),
   };
 }
 
@@ -175,7 +249,7 @@ export async function runFillStage(input: FillStageInput): Promise<FillStageResu
 
   const verdicts = new Map<string, BoundaryFillVerdict>();
   for (const decision of record.admission.decisions) {
-    verdicts.set(decision.id, decision.verdict);
+    verdicts.set(decision.id, record.checked.get(decision.id) ?? decision.verdict);
   }
   const summary = (): BoundaryFillLoopSummary[] =>
     record.admission.decisions.map((decision) => ({
@@ -206,7 +280,12 @@ export async function runFillStage(input: FillStageInput): Promise<FillStageResu
     return {
       candidate: undefined,
       after: undefined,
-      outcome: finish(BoundaryFillOutcomeStatus.None, []),
+      outcome: finish(
+        record.checked.size > 0
+          ? BoundaryFillOutcomeStatus.NothingPassed
+          : BoundaryFillOutcomeStatus.None,
+        [],
+      ),
     };
   }
 
@@ -220,52 +299,21 @@ export async function runFillStage(input: FillStageInput): Promise<FillStageResu
     };
   }
 
+  /*
+   * THE EXACT CHECK RUNS AGAIN, EVEN FOR A VERIFIED PLAN. It is deterministic,
+   * so a verified opening passes again; running it is what keeps "no candidate
+   * without a check in this operation" a structural fact rather than a cache
+   * property.
+   */
   input.onProgress(0.8, 'checking openings');
-  const problem = buildLocalPatchProblem(input.mesh, admitted, {
-    maxFaces: DEFAULT_BOUNDARY_FILL_LIMITS.maxLocalFaces,
-    poll: input.throwIfCancelled,
+  const check = await checkAdmitted(input.mesh, admitted, {
+    verifierPort: input.verifierPort,
+    operationId: input.operationId,
+    cancellation: input.cancellation,
+    throwIfCancelled: input.throwIfCancelled,
   });
-  for (const id of problem.excluded) verdicts.set(id, BoundaryFillVerdict.RegionTooLarge);
-
-  let wire: readonly LocalVerdictWire[] = [];
-  if (problem.loopIds.length > 0) {
-    const message: LocalVerifyMessage = {
-      kind: 'verify-local',
-      operationId: input.operationId,
-      positions: problem.positions,
-      triangles: problem.triangles,
-      sourceFaceCount: problem.sourceFaceCount,
-      loopRanges: problem.loopRanges,
-    };
-    const reply = await exchange(input.verifierPort, input.cancellation, (port) => {
-      port.postMessage(message, [
-        problem.positions.buffer,
-        problem.triangles.buffer,
-        problem.loopRanges.buffer,
-      ]);
-    });
-    if (reply.kind === 'failed') {
-      throw internalError('The opening check failed.', { details: { reason: reply.reason } });
-    }
-    if (reply.verdicts.length !== problem.loopIds.length) {
-      throw internalError('The opening check answered for a different set of openings.');
-    }
-    wire = reply.verdicts;
-  }
-
-  const filled: AdmittedLoop[] = [];
-  for (const [index, id] of problem.loopIds.entries()) {
-    const verdict = wire[index];
-    const loop = admitted.find((candidate) => candidate.id === id);
-    if (verdict === undefined || loop === undefined) continue;
-    if (!verdict.complete) {
-      verdicts.set(id, BoundaryFillVerdict.NotVerifiable);
-    } else if (verdict.invalidPatchSourcePairs > 0 || verdict.invalidPatchPatchPairs > 0) {
-      verdicts.set(id, BoundaryFillVerdict.WouldIntersect);
-    } else {
-      filled.push(loop);
-    }
-  }
+  for (const [id, verdict] of check.refused) verdicts.set(id, verdict);
+  const filled = check.passing;
   if (filled.length === 0) {
     return {
       candidate: undefined,
@@ -306,6 +354,71 @@ export async function runFillStage(input: FillStageInput): Promise<FillStageResu
 }
 
 /* ------------------------------------------------------------ internals -- */
+
+interface AdmittedCheck {
+  readonly passing: AdmittedLoop[];
+  readonly refused: Map<string, BoundaryFillVerdict>;
+}
+
+/**
+ * The exact local check over `admitted`, in the disposable verifier. The ONE
+ * implementation both the plan and the candidate use, so the two cannot
+ * disagree about what passes.
+ */
+async function checkAdmitted(
+  mesh: CanonicalMesh,
+  admitted: readonly AdmittedLoop[],
+  context: FillCheckContext,
+): Promise<AdmittedCheck> {
+  const refused = new Map<string, BoundaryFillVerdict>();
+  if (admitted.length === 0) return { passing: [], refused };
+  const problem = buildLocalPatchProblem(mesh, admitted, {
+    maxFaces: DEFAULT_BOUNDARY_FILL_LIMITS.maxLocalFaces,
+    poll: context.throwIfCancelled,
+  });
+  for (const id of problem.excluded) refused.set(id, BoundaryFillVerdict.RegionTooLarge);
+
+  let wire: readonly LocalVerdictWire[] = [];
+  if (problem.loopIds.length > 0) {
+    const message: LocalVerifyMessage = {
+      kind: 'verify-local',
+      operationId: context.operationId,
+      positions: problem.positions,
+      triangles: problem.triangles,
+      sourceFaceCount: problem.sourceFaceCount,
+      loopRanges: problem.loopRanges,
+    };
+    const reply = await exchange(context.verifierPort, context.cancellation, (port) => {
+      port.postMessage(message, [
+        problem.positions.buffer,
+        problem.triangles.buffer,
+        problem.loopRanges.buffer,
+      ]);
+    });
+    if (reply.kind === 'failed') {
+      throw internalError('The opening check failed.', { details: { reason: reply.reason } });
+    }
+    if (reply.verdicts.length !== problem.loopIds.length) {
+      throw internalError('The opening check answered for a different set of openings.');
+    }
+    wire = reply.verdicts;
+  }
+
+  const passing: AdmittedLoop[] = [];
+  for (const [index, id] of problem.loopIds.entries()) {
+    const verdict = wire[index];
+    const loop = admitted.find((candidate) => candidate.id === id);
+    if (verdict === undefined || loop === undefined) continue;
+    if (!verdict.complete) {
+      refused.set(id, BoundaryFillVerdict.NotVerifiable);
+    } else if (verdict.invalidPatchSourcePairs > 0 || verdict.invalidPatchPatchPairs > 0) {
+      refused.set(id, BoundaryFillVerdict.WouldIntersect);
+    } else {
+      passing.push(loop);
+    }
+  }
+  return { passing, refused };
+}
 
 function capped(rows: BoundaryFillLoopSummary[]): {
   rows: BoundaryFillLoopSummary[];

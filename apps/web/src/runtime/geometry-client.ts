@@ -576,16 +576,26 @@ export class GeometryClient {
     onProgress: (update: ProgressUpdate) => void,
     memoryBudgetBytes?: number,
     fillOpenings = false,
+    verifierPort?: MessagePort,
   ): OperationHandle<RepairPlanOperationResult> {
     return this.coordinator.dispatch(
       'repair/plan',
-      memoryBudgetBytes === undefined
-        ? { handle, partId, requested, fillOpenings }
-        : { handle, partId, requested, memoryBudgetBytes, fillOpenings },
+      {
+        handle,
+        partId,
+        requested,
+        fillOpenings,
+        ...(memoryBudgetBytes === undefined ? {} : { memoryBudgetBytes }),
+        ...(verifierPort === undefined ? {} : { verifierPort }),
+      },
       // Planning builds connectivity and can be seconds on a large model, so it
       // gets a signal that can interrupt it rather than one that waits for the
-      // event loop.
-      { onProgress, interruptible: true },
+      // event loop. A verifier port, when present, is TRANSFERRED — REPAIR-RC-03.
+      {
+        onProgress,
+        interruptible: true,
+        ...(verifierPort === undefined ? {} : { transfer: [verifierPort] }),
+      },
     );
   }
 

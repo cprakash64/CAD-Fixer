@@ -935,7 +935,14 @@
 
 .tool-panel__body {
   flex: 1;
-  min-height: 0;
+  /*
+   * A FLOOR TALLER THAN ANY WORKSPACE'S STICKY ACTION FOOTER — Convert P1.
+   * A sticky footer taller than its scrollport is pinned by its TOP, so its
+   * button slides under whatever sits below; on a squeezed window that was the
+   * Activity log, with only the button's top edge left in view. The log yields
+   * first (below), and the workspace keeps room for its action.
+   */
+  min-height: 140px;
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
@@ -944,7 +951,9 @@
 /* The activity log. It scrolls inside a cap so it can never crowd out the
    workspace above it; on a short window the cap tightens (UI-06, I-09). */
 .tool-panel__footer {
-  flex: none;
+  /* Shrinks before the workspace does — see `.tool-panel__body`. */
+  flex: 0 1 auto;
+  min-height: 0;
   max-height: 148px;
   padding: 10px 14px 12px;
   overflow-y: auto;
@@ -2729,7 +2738,9 @@
 }
 
 .convert-footer__failure {
-  padding: 6px 8px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 4px 4px 8px;
   border-left: 3px solid var(--cad-error);
   border-radius: var(--radius-sm);
   background: var(--cad-error-soft);
@@ -2762,6 +2773,27 @@
   color: var(--cad-text-muted);
   font-size: var(--fs-meta);
   line-height: 1.4;
+}
+
+/* The refusal line and its ⓘ, side by side; the line stays clamped. */
+.convert-footer__hint-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+.convert-footer__hint-row > .convert-footer__hint {
+  flex: 1;
+  min-width: 0;
+}
+
+.convert-footer__failure-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.convert-outcome-details > .info-panel {
+  margin: 0 14px 12px;
 }
 
 /* Viewport output-size card: top-left, compact, and only as wide as it is. */

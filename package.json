@@ -53,6 +53,8 @@
     "bench:boundary-listing": "vitest run --config vitest.bench.config.ts scripts/boundary-listing.bench-suite.ts",
     "bench:boundary-fill": "vitest run --config vitest.bench.config.ts scripts/boundary-fill.bench-suite.ts",
     "qualify:boundary-fill": "node scripts/boundary-fill.qualify.mjs",
+    "qualify:real-model-fill": "vitest run --config vitest.bench.config.ts scripts/real-model-fill.bench-suite.ts",
+    "qualify:real-model": "node scripts/real-model.qualify.mjs",
     "qualify:threemf-corpus": "vitest run --config vitest.bench.config.ts scripts/threemf-corpus.suite.ts",
     "qualify:interop-corpus": "vitest run --config vitest.bench.config.ts scripts/interop-corpus.suite.ts",
     "qualify:streaming-corpus": "vitest run --config vitest.bench.config.ts scripts/streaming-corpus.suite.ts"

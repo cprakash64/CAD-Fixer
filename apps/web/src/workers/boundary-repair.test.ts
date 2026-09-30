@@ -10,6 +10,7 @@ import {
   BoundaryFillOutcomeStatus,
   BoundaryFillScanStatus,
   BoundaryFillVerdict,
+  fillableOpeningCount,
   RepairAcceptance,
   type DocumentHandle,
   type OperationContext,
@@ -119,13 +120,36 @@ function boundaryEdges(mesh: CanonicalMesh): number {
     .boundaryEdgeCount;
 }
 
-async function plan(handle: DocumentHandle): Promise<RepairPlanOperationResult> {
+/** Plans WITHOUT a verifier: admission only, `verified: false`. */
+async function planUnverified(handle: DocumentHandle): Promise<RepairPlanOperationResult> {
   return (
     await repairPlanHandler(
       { handle, partId: PART, requested: REQUESTED, fillOpenings: true },
       context(),
     )
   ).value;
+}
+
+/** Plans as the application does — REPAIR-RC-03: with a verifier, so the plan is verified. */
+async function plan(handle: DocumentHandle): Promise<RepairPlanOperationResult> {
+  await planUnverified(handle);
+  const check = verifier();
+  try {
+    return (
+      await repairPlanHandler(
+        {
+          handle,
+          partId: PART,
+          requested: REQUESTED,
+          fillOpenings: true,
+          verifierPort: check.port,
+        },
+        context(),
+      )
+    ).value;
+  } finally {
+    check.close();
+  }
 }
 
 afterEach(() => {
@@ -344,6 +368,75 @@ describe('candidate, commit and undo', () => {
     const first = await build();
     const second = await build();
     expect(new Uint8Array(second.indices.buffer)).toEqual(new Uint8Array(first.indices.buffer));
+  });
+});
+
+describe('the plan promises only what the exact check passes (REPAIR-RC-03)', () => {
+  /*
+   * THE REAL-MODEL DEFECT. On the model that motivated REPAIR-CORE-02 the plan
+   * admitted six openings and the interface said "6 openings can be filled";
+   * the exact check at preview filled two. After Apply it said "4 openings can
+   * be filled" and a second Repair model filled nothing. HP23 has the same
+   * shape: admission passes an opening whose patch pierces the part.
+   */
+  it('an unverified plan says so, and its admitted count includes the opening that fails', async () => {
+    const handle = residentDocuments.commit(singlePartDocument(fx.hp23PatchPiercesOppositeShell()));
+    const unverified = await planUnverified(handle);
+    expect(unverified.boundaryFill.verified).toBe(false);
+    expect(fillableOpeningCount(unverified.boundaryFill)).toBe(0);
+    const verified = await plan(handle);
+    expect(verified.boundaryFill.verified).toBe(true);
+    // The pierce is counted by admission and refused by the check.
+    expect(verified.boundaryFill.admittedCount).toBe(unverified.boundaryFill.admittedCount - 1);
+    expect(verified.boundaryFill.loops.map((loop) => loop.verdict)).toContain(
+      BoundaryFillVerdict.WouldIntersect,
+    );
+  });
+
+  it('the preview fills exactly the verified count, and the next plan promises nothing refused', async () => {
+    const handle = residentDocuments.commit(singlePartDocument(fx.hp23PatchPiercesOppositeShell()));
+    const planned = await plan(handle);
+    const promised = fillableOpeningCount(planned.boundaryFill);
+    expect(promised).toBeGreaterThan(0);
+
+    const check = verifier();
+    const built = await repairCreateCandidateHandler(
+      {
+        handle,
+        partId: PART,
+        requested: REQUESTED,
+        planHash: planned.plan.planHash,
+        fillOpenings: true,
+        fillPlanHash: planned.boundaryFill.planHash,
+        verifierPort: check.port,
+      },
+      context(),
+    );
+    check.close();
+    expect(built.value.boundaryFill?.filledCount).toBe(promised);
+    const candidate = built.value.candidate;
+    if (candidate === undefined) throw new Error('expected a candidate');
+
+    const committed = await repairCommitHandler(
+      { candidate, expectedSource: handle, expectedPart: PART, planHash: planned.plan.planHash },
+      context(),
+    );
+    // A SECOND Repair model: the opening that would pierce is still open, and
+    // it is not promised again.
+    const next = await plan(committed.value.handle);
+    expect(next.boundaryFill.verified).toBe(true);
+    expect(fillableOpeningCount(next.boundaryFill)).toBe(0);
+    expect(next.boundaryFill.loops.map((loop) => loop.verdict)).toContain(
+      BoundaryFillVerdict.WouldIntersect,
+    );
+  });
+
+  it('opens no verifier channel for the plan when nothing is admitted', async () => {
+    const handle = residentDocuments.commit(singlePartDocument(fx.tetrahedron([0, 0, 0], 1)));
+    const unverified = await planUnverified(handle);
+    expect(unverified.boundaryFill.admittedCount).toBe(0);
+    // Vacuously verified: there is nothing to promise and nothing to check.
+    expect(unverified.boundaryFill.verified).toBe(true);
   });
 });
 

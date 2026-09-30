@@ -159,8 +159,10 @@ changed existing triangles the full snapshot is sent, as before.
   and holds that; the built geometry-worker bundle contains exactly those five
   modules and no WASM.
 - The fill worker is still constructed in exactly one place
-  (`runtime/hole-fill-service.ts`, now also `openFillVerifier`), only when a
-  preview needs it.
+  (`runtime/hole-fill-service.ts`, now also `openFillVerifier`) — for a
+  preview, and (REPAIR-RC-03, §12) for a plan that admitted at least one
+  opening, so the plan the user sees is already verified. Never for a part
+  with nothing admitted.
 - The "no batch fill" rule is superseded by the stage brief's explicit decision:
   Repair model fills openings that each qualify independently, bounded per
   repair, with a user option to turn it off. The banned wording (`Fill All`,
@@ -292,3 +294,52 @@ ADR 0009's exact-coordinate identity and cannot survive STL. ADR 0009 is not
 amended here. A future stage (REPAIR-CORE-03 / TOPOLOGY-IDENTITY) would have to
 introduce format-aware indexed identity first; boundary filling does not need
 it.
+
+## 12. REPAIR-RC-03 — the motivating model, and what it changed
+
+Real-model acceptance on the exact file that exposed the problem
+(`Hitem3d-1785766060812.stl`, 99,443,934 bytes, 1,988,877 triangles,
+5,966,631 soup vertices) in a headed Chromium 151 on the Apple M1 GPU
+(`npm run qualify:real-model`, engine evidence `npm run qualify:real-model-fill`;
+both take the path from `CADFIXER_REAL_MODEL` and ship no data).
+
+**The defect it found.** Admission passed all 6 simple openings; the exact
+check refused 4 (`WOULD_INTERSECT`). The plan said "6 openings can be filled",
+the preview filled 2, and after Apply the panel said "4 openings can be filled"
+while a second Repair model filled nothing. Every invalid pair is an exact
+coplanar overlap (off-plane 0) with an opposite-facing face (normal cosine
+−1.0000): the openings are backed by existing surface, and a patch would
+double-cover it. The qualified per-opening engine (ADR 0018) agrees opening
+for opening, with identical invalid-pair counts (1; 4 + 2; 11; 1), over
+submeshes of 671–208,356 faces that strictly contain each local region.
+
+**The fix.** The plan is verified before it is shown: when admission passes
+any opening, `planConservativeRepair` opens the disposable verifier for that
+plan and the worker re-plans with it (`verifyFillPlan`, one `checkAdmitted`
+shared with the candidate stage). `BoundaryFillPlan.verified` records it and
+`fillableOpeningCount` returns zero for an unverified plan, which is what a dead
+verifier leaves ("Openings could not be checked"). The candidate still re-runs
+the check. Regression tests fail against both halves of the old behaviour
+(`boundary-repair.test.ts`, mutation-checked).
+
+**Result on the real model**
+
+| Gate              | Result                                                                                                                                                                  |
+| ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Plan              | "2 openings can be filled. Other detected issues will remain." 3.45 s after analysis, 19 ms gap                                                                         |
+| Preview           | 4.0 s, 50 ms gap, renderer peak 992 MiB; 2 filled; 11 left open (7 complex, 4 would pass through existing geometry)                                                     |
+| Apply             | 2.6 s; +6 triangles; 11 open boundaries, 155 non-manifold vertices, 39 components, 0 non-manifold edges; next plan "None eligible", Repair model disabled               |
+| Undo              | 3.2 s; back to 13 / 155 / 39                                                                                                                                            |
+| Retry             | identical plan, preview and result                                                                                                                                      |
+| STL round trip    | 1,988,877 input facets byte-identical and in order, 6 appended; re-import 11 / 155 / 39                                                                                 |
+| OBJ round trip    | same topology on re-import                                                                                                                                              |
+| 3MF               | refused by the writer's 320 MiB model-entry ceiling in 2–4 s, identically on v0.5.0; now remembered and disabled                                                        |
+| Cancellation      | 126 ms, model unchanged, next Repair model fills 2                                                                                                                      |
+| Stale replacement | during planning and during preview: replacement authoritative, no stale Apply                                                                                           |
+| Predictions       | faces +6, boundary edges −10, boundary components −2, everything else unchanged; area A = 259.453551620, P = 7.29 × 10⁻¹⁰, candidate = A + P (relative error 9 × 10⁻¹⁷) |
+
+The surface-area rule is `candidate = source + Σ predicted patch area`
+(relative 1 × 10⁻⁹), never "unchanged"; `local-fill.test.ts` proves it on a
+10 × 6 × 4 open box (source 188, patch 60, candidate 248) and shows a
+judge that expected no change, or a prediction off by one part in a million,
+is rejected.

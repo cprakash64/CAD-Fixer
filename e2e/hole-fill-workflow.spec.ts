@@ -576,7 +576,9 @@ test('nothing in the workflow claims the model is watertight or printable', asyn
   await expect(page.getByTestId('hole-fill-applied-qualifier')).toContainText('were not examined');
 });
 
-test('§85: the fill worker is constructed only when Preview is pressed', async ({ page }) => {
+test('§85: the fill worker is constructed only by a Preview or a plan verifying an admitted opening, and never left running', async ({
+  page,
+}) => {
   /*
    * LAZY, AND MEASURED RATHER THAN ASSERTED. The hole-fill worker carries the
    * triangulator, the broadphase and every validator; constructing one on page
@@ -623,33 +625,50 @@ test('§85: the fill worker is constructed only when Preview is pressed', async 
   expect(fillWorkers((await workers()).created)).toBe(0);
 
   await importAndList(page, 'open-box.stl', boxWithOneOpeningStl());
-  // Import, analysis and the whole listing: still none. Listing openings is a
-  // read in the AUTHORITATIVE worker; it does not touch the fill worker.
-  expect(fillWorkers((await workers()).created)).toBe(0);
+  /*
+   * REPAIR-RC-03: Repair model's plan VERIFIES the opening it admits, so the
+   * count it shows is one the exact check has passed — which takes exactly one
+   * disposable verifier, closed as soon as the plan settles. Listing openings
+   * is still a read in the AUTHORITATIVE worker and touches no fill worker.
+   */
+  await expect
+    .poll(async () => fillWorkers((await workers()).created), { timeout: 30_000 })
+    .toBe(1);
+  await expect
+    .poll(async () => fillWorkers((await workers()).terminated), { timeout: 30_000 })
+    .toBe(1);
 
   await selectOpening(page, 1);
   await expect(page.getByTestId('hole-fill-selection')).toBeVisible();
-  // Selecting one, and drawing its rim: still none.
-  expect(fillWorkers((await workers()).created)).toBe(0);
+  // Selecting one, and drawing its rim: none more.
+  expect(fillWorkers((await workers()).created)).toBe(1);
 
   await requestPreview(page);
   const afterPreview = await workers();
-  expect(fillWorkers(afterPreview.created)).toBe(1);
+  expect(fillWorkers(afterPreview.created)).toBe(2);
 
   // AND IT IS DISPOSABLE. The service terminates it on every terminal outcome,
   // so nothing is left running after the candidate exists.
   await expect
     .poll(async () => fillWorkers((await workers()).terminated), { timeout: 30_000 })
-    .toBe(1);
+    .toBe(2);
 
-  // Apply builds NONE: it consumes the stored candidate.
+  // Apply builds NONE: it consumes the stored candidate, and the new revision
+  // has no opening left for a plan to verify.
   await applyFill(page);
-  expect(fillWorkers((await workers()).created)).toBe(1);
+  await page.waitForTimeout(2_000);
+  expect(fillWorkers((await workers()).created)).toBe(2);
 
-  // And so does Undo.
+  // Undo builds none either — but it brings the opening back at a NEW
+  // revision, whose plan verifies it once, and closes that verifier.
   await page.getByTestId('undo-fill').click();
   await expect.poll(async () => openingCount(page), { timeout: 60_000 }).toBe(1);
-  expect(fillWorkers((await workers()).created)).toBe(1);
+  await expect
+    .poll(async () => fillWorkers((await workers()).created), { timeout: 30_000 })
+    .toBe(3);
+  await expect
+    .poll(async () => fillWorkers((await workers()).terminated), { timeout: 30_000 })
+    .toBe(3);
 });
 
 test('the workflow issues no network request at any point', async ({ page }) => {

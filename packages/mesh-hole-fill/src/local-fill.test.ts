@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { CanonicalMesh } from '@cadfixer/mesh-core';
+import { createIndexArray, createPositionArray, type CanonicalMesh } from '@cadfixer/mesh-core';
 import { analyseTopology, scanBoundaries, type TopologyReport } from '@cadfixer/mesh-topology';
 import { uncancellable } from '@cadfixer/shared';
 import { runHoleFill } from './engine';
@@ -11,7 +11,12 @@ import {
   DEFAULT_BOUNDARY_FILL_LIMITS,
   type AdmittedLoop,
 } from './admission';
-import { appendPatches, judgeFilledCandidate, sourcePreserved } from './fill-candidate';
+import {
+  appendPatches,
+  FillRegression,
+  judgeFilledCandidate,
+  sourcePreserved,
+} from './fill-candidate';
 import { buildLocalPatchProblem } from './local-region';
 import { classifyLocalPatches } from './local-intersection';
 import * as fx from './fixtures';
@@ -226,6 +231,106 @@ describe('J: openings whose bounds touch', () => {
     const counts = verdictCounts(result);
     expect(counts[BoundaryFillVerdict.InteractsWithAnotherOpening]).toBeGreaterThan(0);
     expectValid(result, mesh);
+  });
+});
+
+/**
+ * An INDEXED 10 × 6 × 4 box with its top face missing, wound outward. The
+ * opening is the 10 × 6 top rim, so the patch has a known, clearly non-zero
+ * area: 60. The source is 60 (bottom) + 2·40 (front, back) + 2·24 (left,
+ * right) = 188.
+ */
+function openTopBox(): CanonicalMesh {
+  const corners = [
+    [0, 0, 0],
+    [10, 0, 0],
+    [0, 6, 0],
+    [10, 6, 0],
+    [0, 0, 4],
+    [10, 0, 4],
+    [0, 6, 4],
+    [10, 6, 4],
+  ] as const;
+  const quads = [
+    [0, 2, 3, 1], // bottom, −z
+    [0, 1, 5, 4], // front, −y
+    [2, 6, 7, 3], // back, +y
+    [0, 4, 6, 2], // left, −x
+    [1, 3, 7, 5], // right, +x
+  ] as const;
+  const positions = createPositionArray(corners.length * 3);
+  for (const [index, corner] of corners.entries()) positions.set(corner, index * 3);
+  const indices = createIndexArray(quads.length * 6);
+  for (const [index, [a, b, c, d]] of quads.entries()) {
+    indices.set([a, b, c, a, c, d], index * 6);
+  }
+  return { positions, indices, metadata: {} };
+}
+
+/** Shoelace area of the admitted rim, independent of ear clipping and Stage 2. */
+function rimAreaInPlaneZ(mesh: CanonicalMesh, loop: AdmittedLoop): number {
+  const rim: [number, number][] = [];
+  for (const vertex of loop.patch) {
+    const point: [number, number] = [
+      mesh.positions[vertex * 3] ?? Number.NaN,
+      mesh.positions[vertex * 3 + 1] ?? Number.NaN,
+    ];
+    if (!rim.some(([x, y]) => x === point[0] && y === point[1])) rim.push(point);
+  }
+  // Order the (convex) rim around its centroid before the shoelace sum.
+  const cx = rim.reduce((sum, [x]) => sum + x, 0) / rim.length;
+  const cy = rim.reduce((sum, [, y]) => sum + y, 0) / rim.length;
+  rim.sort((p, q) => Math.atan2(p[1] - cy, p[0] - cx) - Math.atan2(q[1] - cy, q[0] - cx));
+  let twice = 0;
+  for (const [index, [x, y]] of rim.entries()) {
+    const [nx, ny] = rim[(index + 1) % rim.length] ?? [Number.NaN, Number.NaN];
+    twice += x * ny - nx * y;
+  }
+  return Math.abs(twice) / 2;
+}
+
+describe('surface area: the filled candidate gains exactly the patch area (REPAIR-RC-03)', () => {
+  it('source A = 188, patch P = 60, candidate = A + P — never "area unchanged"', () => {
+    const mesh = openTopBox();
+    const result = localFill(mesh);
+    expect(result.filled).toHaveLength(1);
+    const loop = result.filled[0];
+    if (loop === undefined) throw new Error('expected one filled opening');
+
+    const sourceArea = result.before.totalSurfaceArea;
+    const patchArea = loop.patchArea;
+    expect(sourceArea).toBeCloseTo(188, 12);
+    expect(patchArea).toBeCloseTo(60, 12);
+    // The prediction agrees with an independent polygon area of the rim.
+    expect(patchArea).toBeCloseTo(rimAreaInPlaneZ(mesh, loop), 12);
+    // Stage 2's own re-analysis of the whole candidate.
+    expect(result.after.totalSurfaceArea).toBeCloseTo(sourceArea + patchArea, 9);
+    expect(result.after.totalSurfaceArea).toBeCloseTo(248, 9);
+    expect(result.after.boundaryEdgeCount).toBe(0);
+    expectValid(result, mesh);
+  });
+
+  it('rejects a candidate judged as though filling left the area unchanged', () => {
+    const mesh = openTopBox();
+    const result = localFill(mesh);
+    const [loop] = result.filled;
+    if (loop === undefined) throw new Error('expected one filled opening');
+    const unchanged: AdmittedLoop = { ...loop, patchArea: 0 };
+    expect(judgeFilledCandidate(result.before, result.after, [unchanged])).toEqual([
+      FillRegression.SurfaceArea,
+    ]);
+  });
+
+  it('rejects a patch-area prediction that is wrong by far less than the patch', () => {
+    const mesh = openTopBox();
+    const result = localFill(mesh);
+    const [loop] = result.filled;
+    if (loop === undefined) throw new Error('expected one filled opening');
+    // One part in a million of the total: far inside any "looks about right".
+    const drift: AdmittedLoop = { ...loop, patchArea: loop.patchArea + 248e-6 };
+    expect(judgeFilledCandidate(result.before, result.after, [drift])).toEqual([
+      FillRegression.SurfaceArea,
+    ]);
   });
 });
 

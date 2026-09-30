@@ -1,5 +1,9 @@
 import { useMemo } from 'react';
-import type { BoundaryFillPlan, ConservativeRepairPlan } from '@cadfixer/geometry-runtime';
+import {
+  fillableOpeningCount,
+  type BoundaryFillPlan,
+  type ConservativeRepairPlan,
+} from '@cadfixer/geometry-runtime';
 import { SelfIntersectionBand } from '@cadfixer/mesh-self-intersection';
 import { isInterruptibleRepairSupported } from '../runtime/cancellation-support';
 import { IssueSeverity, type RepairIssue, type RepairIssueId } from './repair-issues';
@@ -67,7 +71,7 @@ export function useRepairWorkspace(): RepairWorkspaceView {
       : undefined;
 
   const currentFill = currentPlan === undefined ? undefined : repair.fillPlan;
-  const fillableOpenings = repair.fillOpenings ? (currentFill?.admittedCount ?? 0) : 0;
+  const fillableOpenings = repair.fillOpenings ? fillableOpeningCount(currentFill) : 0;
 
   const report = reportIsCurrent ? analysis.report : undefined;
   const partFaceCount =

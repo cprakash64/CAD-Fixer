@@ -253,7 +253,9 @@ test('F: a failed export keeps the settings and the model, says so, and can be r
   const failure = page.getByTestId('convert-failure');
   await expect(failure).toBeVisible({ timeout: 30_000 });
   await expect(failure).toHaveAttribute('role', 'alert');
-  await expect(failure).toContainText('Nothing was saved');
+  // One line in the footer; the sentence is behind ⓘ (Convert P1).
+  await expect(failure).toHaveText('Export failed — nothing saved');
+  await expect(page.getByTestId('convert-outcome-details')).toContainText('Nothing was saved');
   expect(downloads).toBe(0);
 
   // Settings survive, the model is untouched, and Convert is available again.
@@ -362,3 +364,95 @@ test('H: the same renderer keeps the same view through format choice and export'
   await page.mouse.up();
   await expect.poll(async () => (await page.screenshot({ clip })).equals(before)).toBe(false);
 });
+
+/*
+ * CONVERT P1 — THE PRIMARY ACTION STAYS IN REACH AFTER A FAILED EXPORT.
+ *
+ * Reported on the real 94.8 MiB STL: the refusal paragraph lived INSIDE the
+ * sticky footer, and on a squeezed window the workspace's scroll area became
+ * shorter than that footer. A sticky element taller than its scrollport is
+ * pinned by its TOP, so the button slid under the Activity log with only its
+ * top edge showing. Reproduced at 1440×380 with the real refusal on v0.5.0 and
+ * on the unfixed tree; with this fixture's shorter failure line the old footer
+ * leaves the panel at 300 px, and this test fails there against v0.5.0.
+ *
+ * A real failure (the export worker cannot load, as in F) on a model whose 3MF
+ * report carries the unit notes, then every size below. The button must be
+ * inside the viewport AND inside the workspace's own scroll area, and the point
+ * at its centre and near its bottom edge must hit the button itself — not the
+ * Activity log or the status bar drawn over it.
+ */
+for (const [width, height] of [
+  [1440, 900],
+  [1280, 800],
+  [1280, 640],
+  [1024, 768],
+  [1440, 380],
+  [1440, 340],
+  [1280, 360],
+  // Where v0.5.0's footer, with this shorter failure line, leaves the panel.
+  [1440, 300],
+  [1280, 300],
+] as const) {
+  test(`I: after a failed export the Convert action is fully reachable at ${String(width)}×${String(height)}`, async ({
+    page,
+  }) => {
+    await page.goto('/');
+    // Two files opened, as a session does: the Activity log fills to its cap,
+    // which is what squeezed the workspace in the reported window.
+    await openModel(page, 'first.stl', ASYMMETRIC.slice(0, 3));
+    await openModel(page, 'bracket.stl', ASYMMETRIC);
+    await expect
+      .poll(() => page.getByTestId('status-list').locator('li.status__entry').count(), {
+        timeout: 30_000,
+      })
+      .toBeGreaterThanOrEqual(4);
+    await enterConvert(page);
+    await page.getByTestId('convert-target-3mf').check();
+    await page.getByTestId('convert-unit-millimeter').check();
+    await page.route('**/export.worker-*', (route) => route.abort());
+    await page.getByTestId('convert-export').click();
+    await expect(page.getByTestId('convert-failure')).toBeVisible({ timeout: 30_000 });
+
+    await page.setViewportSize({ width, height });
+    await page.waitForTimeout(300);
+
+    const geometry = await page.evaluate(() => {
+      const rect = (element: Element | null): DOMRect | undefined =>
+        element?.getBoundingClientRect();
+      const button = rect(document.querySelector('[data-testid="convert-export"]'));
+      const body = rect(document.querySelector('.tool-panel__body'));
+      if (button === undefined || body === undefined) return undefined;
+      const hits = (y: number): boolean =>
+        document
+          .elementFromPoint(button.left + button.width / 2, y)
+          ?.closest('[data-testid="convert-export"]') !== null;
+      const scroller = document.querySelector('.tool-panel__body');
+      return {
+        button: { top: button.top, bottom: button.bottom },
+        body: { top: body.top, bottom: body.bottom },
+        viewport: window.innerHeight,
+        centreHits: hits(button.top + button.height / 2),
+        bottomHits: hits(button.bottom - 3),
+        scrollable: scroller !== null && scroller.scrollHeight > scroller.clientHeight,
+      };
+    });
+    expect(geometry).toBeDefined();
+    if (geometry === undefined) return;
+    expect(geometry.button.top).toBeGreaterThanOrEqual(geometry.body.top);
+    expect(geometry.button.bottom).toBeLessThanOrEqual(
+      Math.min(geometry.body.bottom, geometry.viewport),
+    );
+    expect(geometry.centreHits).toBe(true);
+    expect(geometry.bottomHits).toBe(true);
+    // The content above the footer scrolls on its own, and the explanation is
+    // reachable in it.
+    expect(geometry.scrollable).toBe(true);
+    await page.getByTestId('convert-failure-info').click();
+    await expect(page.getByTestId('convert-outcome-details')).toBeVisible();
+    await expect(page.getByTestId('convert-outcome-details')).toBeInViewport({ ratio: 0.1 });
+    // And the action still works: with the worker restored, the retry saves.
+    await page.unroute('**/export.worker-*');
+    await convertAndCapture(page);
+  });
+}

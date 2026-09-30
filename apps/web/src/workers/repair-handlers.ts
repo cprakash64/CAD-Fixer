@@ -53,7 +53,13 @@ import {
   topologyReports,
   yieldToEventLoop,
 } from './stl-handlers';
-import { fillPlanKey, planBoundaryFill, releaseFillPlans, runFillStage } from './boundary-fill';
+import {
+  fillPlanKey,
+  planBoundaryFill,
+  releaseFillPlans,
+  runFillStage,
+  verifyFillPlan,
+} from './boundary-fill';
 
 /**
  * WORKER HANDLERS FOR CONSERVATIVE REPAIR.
@@ -327,16 +333,30 @@ const runRepairPlan: OperationHandler<'repair/plan'> = async (payload, context) 
    * compact scan. Cached per revision, so replanning after an option toggle
    * does not rescan a part that has not changed.
    */
-  const boundaryFill =
-    payload.fillOpenings === true
-      ? planBoundaryFill(
-          fillPlanKey(payload.handle.documentId, payload.handle.revision, part.id),
-          resolved,
-          () => {
-            context.throwIfCancelled();
-          },
-        ).plan
-      : NO_BOUNDARY_FILL_PLAN;
+  let boundaryFill = NO_BOUNDARY_FILL_PLAN;
+  if (payload.fillOpenings === true) {
+    const fillKey = fillPlanKey(payload.handle.documentId, payload.handle.revision, part.id);
+    const throwIfCancelled = (): void => {
+      context.throwIfCancelled();
+    };
+    let record = planBoundaryFill(fillKey, resolved, throwIfCancelled);
+    /*
+     * REPAIR-RC-03: an admitted opening is not yet a fillable one. With a
+     * verifier channel the exact check runs here, so the count the user is
+     * shown is the count that will fill. Without one the plan says so
+     * (`verified: false`) and nothing is presented as fillable.
+     */
+    if (!record.plan.verified && payload.verifierPort !== undefined) {
+      context.reportProgress(0.95, 'checking openings');
+      record = await verifyFillPlan(fillKey, record, {
+        verifierPort: payload.verifierPort,
+        operationId: `${fillKey}/plan`,
+        cancellation: context.cancellation,
+        throwIfCancelled,
+      });
+    }
+    boundaryFill = record.plan;
+  }
   context.reportProgress(1, 'planned');
 
   return { value: { handle: payload.handle, partId: part.id, plan, boundaryFill } };
@@ -428,11 +448,23 @@ const runRepairCreateCandidate: OperationHandler<'repair/create-candidate'> = as
    */
   const fillRequested = payload.fillOpenings === true;
   const fillKey = fillPlanKey(payload.handle.documentId, payload.handle.revision, part.id);
-  const sourceFill = fillRequested
+  let sourceFill = fillRequested
     ? planBoundaryFill(fillKey, resolved, () => {
         context.throwIfCancelled();
       })
     : undefined;
+  // A verified plan evicted from the cache is re-verified before comparison:
+  // the check is deterministic, so the same geometry reaches the same hash.
+  if (sourceFill !== undefined && !sourceFill.plan.verified && payload.verifierPort !== undefined) {
+    sourceFill = await verifyFillPlan(fillKey, sourceFill, {
+      verifierPort: payload.verifierPort,
+      operationId: `${fillKey}/plan`,
+      cancellation: context.cancellation,
+      throwIfCancelled: () => {
+        context.throwIfCancelled();
+      },
+    });
+  }
   if (sourceFill !== undefined && sourceFill.plan.planHash !== payload.fillPlanHash) {
     throw invalidState('The model changed since this repair was planned.', {
       expected: payload.fillPlanHash ?? 'none',

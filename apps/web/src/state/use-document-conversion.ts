@@ -223,7 +223,23 @@ export function useDocumentConversion(): DocumentConversionControls {
     session.promise.then(
       (outcome) => {
         if (outcome.status !== ExportStatus.Success) {
-          if (!store.failConversion(token, { status: outcome.status, reason: outcome.reason })) {
+          /*
+           * A SIZE CEILING IS REMEMBERED — Convert P1. `ResourceLimit` is only
+           * ever the writer's serialised or output ceiling, on bytes fixed by
+           * this revision, target and unit; pressing Export again could only
+           * spend the same seconds reaching the same refusal.
+           */
+          const sizeRefusal =
+            outcome.status === ExportStatus.ResourceLimit
+              ? { source: handle, target, unitAssertion: measuredUnit }
+              : undefined;
+          if (
+            !store.failConversion(
+              token,
+              { status: outcome.status, reason: outcome.reason },
+              sizeRefusal,
+            )
+          ) {
             return;
           }
           sessionRef.current = undefined;

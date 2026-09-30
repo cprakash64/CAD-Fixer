@@ -640,7 +640,8 @@ test('cancelling a large export saves nothing and leaves the workspace usable', 
     // NO PARTIAL FILE. A truncated artifact with no indication it is truncated
     // is worse than no file at all.
     await expect(page.getByTestId('convert-failure')).toContainText('Export cancelled');
-    await expect(page.getByTestId('convert-failure')).toContainText('model is unchanged');
+    // The full sentence is behind ⓘ (Convert P1).
+    await expect(page.getByTestId('convert-outcome-details')).toContainText('model is unchanged');
     expect(downloaded, `${target} produced a download despite being cancelled`).toBe(0);
 
     // THE WORKSPACE STAYS USABLE, and the chosen target survives.

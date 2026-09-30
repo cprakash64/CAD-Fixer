@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { AppErrorCode, toAppError } from '@cadfixer/shared';
 import {
+  fillableOpeningCount,
   RepairAcceptance,
   type DocumentHandle,
   type RepairCandidateHandle,
@@ -273,7 +274,9 @@ export function useConservativeRepair(): ConservativeRepairControls {
     const plan = repair.plan;
     // REPAIR-CORE-02: a plan with no conservative work may still fill openings.
     const fill =
-      repair.fillOpenings && repair.fillPlan !== undefined && repair.fillPlan.admittedCount > 0
+      repair.fillOpenings &&
+      repair.fillPlan !== undefined &&
+      fillableOpeningCount(repair.fillPlan) > 0
         ? { planHash: repair.fillPlan.planHash }
         : undefined;
     if (plan === undefined || (plan.noOp && fill === undefined)) return;
