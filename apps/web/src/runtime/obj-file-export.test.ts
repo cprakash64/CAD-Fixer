@@ -54,6 +54,60 @@ describe('direct OBJ stream validation and transferable ownership', () => {
     expect(result.outputBytes).toBe(output.byteLength);
     expect(phases).toEqual([...phases].sort((a, b) => a - b));
   });
+  it('bounds transferred outstanding bytes while a slow sink blocks each ACK', async () => {
+    const large = {
+      ...snapshot,
+      meshes: snapshot.meshes.map((mesh) => ({
+        ...mesh,
+        indices: new Uint32Array(Array.from({ length: 120_000 }, (_, i) => i % 3)),
+      })),
+    };
+    const chunkBytes = 256 * 1024;
+    let writes = 0;
+    let outstanding = 0;
+    let maximum = 0;
+    let total = 0;
+    let release: (() => void) | undefined;
+    const state = { complete: false };
+    const run = exportObjToFile(
+      large,
+      async (bytes) => {
+        const buffer = transferableExportChunk(bytes);
+        const delivered = structuredClone(buffer, { transfer: [buffer] });
+        expect(buffer.byteLength).toBe(0);
+        writes += 1;
+        outstanding += delivered.byteLength;
+        maximum = Math.max(maximum, outstanding);
+        expect(outstanding).toBeLessThanOrEqual(chunkBytes);
+        total += delivered.byteLength;
+        await new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        outstanding -= delivered.byteLength;
+      },
+      () => undefined,
+      () => Promise.resolve(),
+      chunkBytes,
+    ).then((metadata) => {
+      state.complete = true;
+      return metadata;
+    });
+    while (!state.complete) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      const count = writes;
+      await new Promise<void>((resolve) => setTimeout(resolve, 5));
+      expect(writes).toBe(count);
+      const ack = release;
+      release = undefined;
+      ack?.();
+    }
+    const metadata = await run;
+    expect(writes).toBeGreaterThan(1);
+    expect(total).toBeGreaterThan(chunkBytes);
+    expect(metadata.outputBytes).toBe(total);
+    expect(maximum).toBeLessThanOrEqual(chunkBytes);
+    expect(outstanding).toBe(0);
+  });
   it('rejects a malformed serialized coordinate and never reports an artifact', async () => {
     const bad = {
       ...snapshot,

@@ -1,7 +1,8 @@
 # 0019 — Bounded transactional OBJ export
 
-Status: **Implemented on export-core-01; automated qualification complete,
-remaining acceptance gates recorded as PARTIAL.**
+Status: **Implemented on export-core-01. EXPORT-CORE-01 recorded remaining
+acceptance gates as PARTIAL; EXPORT-RC-01 is BLOCKED by native save-picker
+truncation of existing destinations. Bounded serialization is retained.**
 
 Date: 2026-09-30
 
@@ -83,7 +84,9 @@ It cannot detach authoritative geometry. Replacement or another authoritative
 revision cancels the session; a live conversion-token check also guards each
 write and commit. Repair commit and undo are blocked while export is working.
 
-Until `close()` is submitted, cancellation leaves an existing target unchanged.
+The writable stream preserves the target state present when it opens until
+`close()` is submitted. This does **not** preserve bytes that a save picker
+truncated before returning its handle; see the native acceptance addendum below.
 The picker may create an empty placeholder for a new file. Once atomic close is
 submitted, publication is the transaction's linearization point: that short native
 commit completes as success or failure, rather than falsely claiming cancellation
@@ -103,3 +106,27 @@ change accompanies this decision. Future formats can reuse the sink lifecycle
 without migrating STL or 3MF now.
 
 Measurement and test evidence: [EXPORT_CORE_01](../design/EXPORT_CORE_01.md).
+
+## EXPORT-RC-01 native acceptance addendum
+
+The formal memory criterion is bounded live serialized-output residency,
+independent of total output bytes. A fixed overhead need not be a uniformly small
+percentage of output size. The source snapshot and allocator/GC variance are
+reported separately. This supersedes the earlier percentage qualification gate.
+
+Actual native acceptance on macOS 27.0 / hardware Apple M1 Chromium 151 found a
+blocking destination-selection defect: selecting an existing file in
+`showSaveFilePicker` truncates it before the promise returns. A picker-only
+sentinel reproduction used zero export workers, zero writes and no
+`createWritable`; its returned handle already reported zero bytes. Aborting a
+later writable cannot restore the pre-picker file. The OPFS picker substitute in
+EXPORT-CORE-01 did not exercise this behavior.
+
+[Chromium's save-picker implementation](https://chromium.googlesource.com/chromium/src/+/main/content/browser/file_system_access/file_system_access_manager_impl.cc)
+explicitly creates/truncates the target before returning a handle. Therefore the
+current picker flow cannot satisfy existing-destination atomic replacement and
+cancel-preservation requirements. No merge or release is authorized by this
+qualification. A follow-up must qualify destination acquisition that preserves
+existing bytes before serialization, while retaining the bounded serializer and
+mandatory semantic validation. Changing `keepExistingData` after the picker
+returns cannot fix pre-picker truncation. See `../design/EXPORT_RC_01.md`.

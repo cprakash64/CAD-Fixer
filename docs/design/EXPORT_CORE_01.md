@@ -332,3 +332,12 @@ its headful Metal browser is deliberately isolated from personal profiles.
 The runner makes no model network request. Run hardware measurements serially,
 without competing browser/test jobs. Evidence includes native write sizes,
 backpressure checks, process footprints, frame gaps and Chromium GC traces.
+
+## EXPORT-RC-01 follow-up
+
+The percentage-of-output memory criterion in this historical qualification is
+superseded by bounded live serialized-output residency, independent of total
+output bytes. Actual OS picker acceptance is now exercised and is blocked by
+pre-return truncation of an existing destination in Chromium's save picker.
+The prior OPFS picker substitute did not test that behavior. See
+[EXPORT-RC-01](EXPORT_RC_01.md) and the native acceptance addendum to ADR 0019.

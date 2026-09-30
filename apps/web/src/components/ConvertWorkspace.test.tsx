@@ -1055,6 +1055,17 @@ describe('the inspector export summary', () => {
     expect(screen.getByTestId('export-summary')).not.toHaveTextContent('~/');
   });
 
+  it('names the native destination for large OBJ without inventing its path', () => {
+    const store = new WorkspaceStore();
+    loadModel(store, {
+      parts: [{ ...partDescriptor(), vertexCount: 750_000, triangleCount: 250_000 }],
+    });
+    store.openConversion('obj');
+    mountSurface(store, 'summary');
+    expect(screen.getByTestId('export-summary-destination')).toHaveTextContent('File you choose');
+    expect(screen.getByTestId('export-summary')).not.toHaveTextContent('/Users/');
+  });
+
   it('shows the last file only for the revision on screen', () => {
     const store = new WorkspaceStore();
     loadModel(store);

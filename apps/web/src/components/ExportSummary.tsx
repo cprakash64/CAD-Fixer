@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { isExportFormat } from '@cadfixer/file-formats';
+import { isExportFormat, objNeedsFileSink } from '@cadfixer/file-formats';
 import {
   DOWNLOAD_DESTINATION,
   EXPORT_SUMMARY_COPY,
@@ -18,9 +18,8 @@ import { PropertyRow } from './shell/primitives';
  * The inspector's Convert selection: what the next file will be.
  *
  * ONLY REAL STATE. Every row is the store's conversion session or a pure
- * description of it; the destination is "Browser downloads" because the browser
- * chooses the folder and CAD Fixer cannot see it, so naming a path would be
- * inventing one. The last file is shown only for the revision on screen — a
+ * description of it; the destination follows the same routing estimate as the
+ * Export click. No filesystem path is inferred. The last file is shown only for the revision on screen — a
  * file written before a repair describes geometry the user has moved off.
  */
 export function ExportSummary(): ReactNode {
@@ -79,7 +78,11 @@ export function ExportSummary(): ReactNode {
         <PropertyRow
           label={EXPORT_SUMMARY_COPY.destination}
           mono={false}
-          value={DOWNLOAD_DESTINATION}
+          value={
+            target === 'obj' && objNeedsFileSink(model.parts)
+              ? 'File you choose'
+              : DOWNLOAD_DESTINATION
+          }
           testId="export-summary-destination"
         />
         {lastFile === undefined ? null : (

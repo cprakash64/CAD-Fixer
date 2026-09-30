@@ -4,7 +4,7 @@ import { IDENTITY_PART_TRANSFORM, partId, type GeometryDocument } from '@cadfixe
 import { MeshFormatId } from '../formats';
 import { exportSnapshotOf } from './export-contract';
 import { createChunkTextWriter } from './stream-sink';
-import { objNeedsFileSink } from './obj-routing';
+import { estimateObjBytes, objNeedsFileSink, SMALL_OBJ_MAX_BYTES } from './obj-routing';
 import { serializeObjDocument, writeObjDocument } from './obj-writer';
 import { validateObjRecordStream } from './obj-stream-validation';
 import { testWriteContext, testExportReadContext, encodeUtf8 } from './test-context';
@@ -167,6 +167,16 @@ describe('bounded OBJ storage and production-record validation', () => {
     );
     await writer.write('🧱');
     await expect(writer.finish()).rejects.toThrow();
+  });
+  it('routes the closest one-part integer-count estimates around the 32 MiB boundary', () => {
+    // The fixed header and per-part cost make exact equality unreachable for
+    // integer counts. These bracket the threshold by 4 and 36 bytes.
+    const below = [{ vertexCount: 3, triangleCount: 838_774, groupCount: 0 }];
+    const above = [{ vertexCount: 3, triangleCount: 838_775, groupCount: 0 }];
+    expect(estimateObjBytes(below)).toBe(SMALL_OBJ_MAX_BYTES - 4);
+    expect(estimateObjBytes(above)).toBe(SMALL_OBJ_MAX_BYTES + 36);
+    expect(objNeedsFileSink(below)).toBe(false);
+    expect(objNeedsFileSink(above)).toBe(true);
   });
   it('routes 10k/100k soups to memory and 250k+ to file storage', () => {
     for (const triangles of [10_000, 100_000, 250_000, 500_000, 1_000_000, 1_988_877]) {
