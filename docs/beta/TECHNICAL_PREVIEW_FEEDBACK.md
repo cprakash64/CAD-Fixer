@@ -1,6 +1,6 @@
 # Sending feedback on the Pybrix Technical Preview
 
-**<https://fixcad.thelunai.com>**
+**<https://pybrix.com>**
 
 Thank you for testing. This guide is for everyone — you do not need to be a
 programmer to file useful feedback.
@@ -39,8 +39,8 @@ A screenshot of the panel is just as good.
 **Your setup** — browser and version, operating system, and roughly how much
 memory the machine has if you know.
 
-**The file** — STL, OBJ or 3MF; roughly how big; and the triangle count if CAD
-Fixer displayed one. Not the file itself.
+**The file** — STL, OBJ or 3MF; roughly how big; and the triangle count if Pybrix
+displayed one. Not the file itself.
 
 **What you were doing** — one of: import · mesh health · repair preview ·
 repair Apply · repair Undo · opening inventory · planar fill preview · fill

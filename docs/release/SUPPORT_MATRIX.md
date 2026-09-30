@@ -1,8 +1,11 @@
 # Format support matrix and known limitations
 
-Released capability reference for the **Pybrix v0.5.0 Technical Preview**. The 3MF
+Released capability reference for the **Pybrix v0.6.0 Technical Preview**. The 3MF
 per-entry ceiling remains 320 MiB; model entries from 128 MiB up are read by
-streaming.
+streaming. The live product is <https://pybrix.com>. Large 3MF export can be
+refused when serialized XML exceeds the 320 MiB validation/write policy; this
+does not reduce streamed import capability. See the [v0.6.0 release notes](V0_6_0_TECHNICAL_PREVIEW_RELEASE.md)
+for the qualified Repair scope and safety boundaries.
 
 Written in Stage 6D-A4 from **measured behaviour** — the production import pipeline run over
 2,130 real and reference files and a deterministic mutation campaign — not from intent. Every "yes" below is
@@ -53,10 +56,14 @@ before it is offered; there is no way to skip that.
 
 ## Known limitations of the Technical Preview
 
-- **Conservative repair only** — exact duplicates, safely removable degenerate
-  triangles, and relative winding. No welding, no tolerance, no remeshing.
-- **Bounded planar hole fill** — one selected flat opening at a time, up to 512
-  rim points on a part of up to 250,000 triangles. No batch fill, no curved rims.
+- **Conservative repair and eligible simple flat opening fills** share Repair
+  model preview, atomic Apply and Undo, including large meshes. No welding,
+  tolerance or remeshing. Branched/complex boundaries, non-planar reconstruction
+  and non-manifold vertex repair are not supported. Intersecting or overlapping
+  patches are refused; interacting openings may require another pass.
+- **Selected-opening tool** retains its separate limits: up to 512 rim points
+  on a part of up to 250,000 triangles. Large-mesh Repair model uses its own
+  resource policy; this tool limit is not a general Repair model ceiling.
 - **Split** — one selected part and one plane at a time, on an eligible closed
   manifold solid. Connector choices are None, round Pin/Socket, and Dovetail.
   Connector dimensions require an explicit-millimetre document. Preview,

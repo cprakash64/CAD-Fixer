@@ -141,7 +141,7 @@ describe('brand identity', () => {
     expect(lockup).toHaveAttribute('width', '188');
     expect(lockup).toHaveAttribute('height', '63');
     expect(within(about).getByTestId('about-status')).toHaveTextContent(
-      'Technical Preview · v0.5.0',
+      'Technical Preview · v0.6.0',
     );
     expect(about).toHaveTextContent('Models are processed locally in your browser.');
     expect(screen.getByTestId('third-party-notices')).toHaveAttribute(

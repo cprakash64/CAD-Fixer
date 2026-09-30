@@ -223,6 +223,7 @@ describe('HV-C21 — the Pybrix identity in the artifact (BRAND-01)', () => {
       const shell = readFileSync(join(SITE_DIR, 'index.html'), 'utf8');
       expect(shell).toMatch(/<title>Pybrix — /);
       expect(shell).toContain('<meta name="application-name" content="Pybrix" />');
+      expect(shell).toContain('<link rel="canonical" href="https://pybrix.com/" />');
       expect(shell).not.toMatch(/cad[\s_-]*fixer/i);
     },
   );

@@ -1,5 +1,18 @@
 # CAD Fixer — Hostinger VPS deployment runbook
 
+## Current application releases
+
+The live product is <https://pybrix.com>. The legacy origin
+<https://fixcad.thelunai.com> remains a permanent HTTPS-capable redirect,
+preserving paths and queries. It is not the application origin.
+
+For v0.6.0, use only the existing release root and atomic application symlink
+switch. No nginx, DNS, TLS or Certbot changes and no nginx reload are required.
+The initial-host provisioning steps below are historical setup instructions,
+not application-upgrade steps. Before any production mutation, obtain explicit
+confirmation that a fresh Hostinger hPanel snapshot has completed. Retain both
+the new release and v0.5.0 (`302721e27a5013e40a28852a0267a0eec88162bc`) for rollback.
+
 Operator steps for deploying a reviewed commit to the VPS. Provider-neutral and
 sanitized: substitute the placeholders from your own records.
 

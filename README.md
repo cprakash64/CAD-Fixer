@@ -14,10 +14,10 @@ and no analytics.
 
 ## Technical Preview
 
-**Try it: <https://fixcad.thelunai.com>**
+**Try it: <https://pybrix.com>**
 
-This repository carries the **Pybrix v0.5.0 Technical Preview** feature set —
-see the [v0.5.0 release notes](docs/release/V0_5_0_TECHNICAL_PREVIEW_RELEASE.md).
+This repository carries the **Pybrix v0.6.0 Technical Preview** feature set —
+see the [v0.6.0 release notes](docs/release/V0_6_0_TECHNICAL_PREVIEW_RELEASE.md).
 
 - Qualified on **Chromium-based desktop browsers** (Chrome, Edge). The critical
   flow also runs in Playwright's WebKit build; Safari, Firefox and real mobile
@@ -33,11 +33,11 @@ observed unless you report it. See
 [Beta feedback issue](https://github.com/cprakash64/CAD-Fixer/issues/new/choose).
 Please do not attach models you are not authorised to share.
 
-> **Current status: v0.5.0 Technical Preview.**
+> **Current status: v0.6.0 Technical Preview.**
 > You can open an **STL, OBJ or 3MF** file, inspect it in a real 3D viewport,
 > read a full topology report about it, highlight its defects in 3D, **run a
-> conservative repair with a before/after preview, apply it, undo it**, fill one
-> planar opening at a time, run a read-only self-intersection check, **split a
+> combined conservative repair and eligible simple flat opening fills with a
+> before/after preview, apply it, undo it**, run a read-only self-intersection check, **split a
 > closed part with one flat cut** (optionally with pin or dovetail connectors),
 > **add a Dots, Lines or Diamond texture to one flat region**, and convert or
 > export to any of the three formats — entirely on your own machine.
@@ -45,11 +45,11 @@ Please do not attach models you are not authorised to share.
 > **"Conservative" is the operative word and it is not marketing.** The Repair
 > workflow removes exact duplicate triangles, removes safely-removable degenerate
 > triangles, and makes neighbouring triangles agree on their winding. It does
-> **not** weld nearby vertices, close openings in a surface, resolve non-manifold
+> **not** weld nearby vertices, reconstruct non-planar openings, resolve non-manifold
 > topology, or decide which side of a surface is outside — and it refuses, with a
 > stated reason, anything it cannot decide from the stored coordinates alone.
-> Self-intersections and wall thickness are still not checked at all, so nothing
-> in Pybrix tells you a model will print.
+> Self-intersections have a bounded read-only diagnostic; wall thickness is not
+> measured, so Pybrix does not establish that a model will print.
 >
 > **Hollow is not implemented**, and Split and Texture do exactly the bounded
 > things described above and nothing more. See
@@ -75,35 +75,25 @@ Please do not attach models you are not authorised to share.
 | Remove exact zero-area triangles       | Yes         | Exactly collinear corners. No "nearly flat" judgement, no tolerance. |
 | Unify relative face winding            | Yes         | RELATIVE to neighbours. Pybrix never decides which side is outside.  |
 | Weld nearby vertices                   | No          | Would need a tolerance. See the policy document.                     |
-| Close openings in a surface            | Partly      | ONE flat opening at a time, chosen by you. See below.                |
+| Close openings in a surface            | Partly      | Eligible simple flat openings in Repair model. See below.            |
 | Resolve non-manifold edges or vertices | No          | Reported, and they can block winding unification. Never rewritten.   |
-| Detect or resolve self-intersections   | No          | Not checked at all.                                                  |
+| Detect or resolve self-intersections   | Diagnostic  | Bounded read-only check; no automatic correction.                    |
 | Determine printability                 | No          | Wall thickness is not measured.                                      |
 
 ### What "automatic filling" covers
 
-Pybrix can close ONE open boundary you select, and validates the result
-against the part it came from before offering it. What it will not do is as
-important as what it will:
+Repair model can fill multiple independently safe, simple flat openings even
+on large meshes. Fill simple openings is enabled by default. Planning and
+preview each verify patches before they can be applied. Conservative changes
+and fills share one atomic Apply and Undo; original coordinate identity and
+source triangles are preserved according to the qualified repair policy.
 
-| Capability                                  | Supported | Note                                                                        |
-| ------------------------------------------- | --------- | --------------------------------------------------------------------------- |
-| Close one selected flat opening             | Yes       | You choose it. Nothing is ever closed automatically.                        |
-| Preview before applying                     | Yes       | The exact surface that Apply commits, drawn beside your model.              |
-| Undo                                        | Yes       | Restores the part's triangles exactly, byte for byte.                       |
-| Close a rim that curves out of a plane      | No        | Refused with a reason. A curved rim needs a shaped surface.                 |
-| Close every opening at once                 | No        | There is no fill-all, and there is not going to be one by accident.         |
-| Openings above 512 rim points               | No        | The proven ceiling. Stated before anything runs.                            |
-| Parts above 250,000 triangles               | No        | So filling stays responsive in a browser tab. Nothing else is affected.     |
-| Add or move any of your existing points     | No        | The new surface reuses your rim points and adds none. Your triangles stand. |
-| Check whether parts collide with each other | No        | Filling is intra-part, exactly as the self-intersection check is.           |
-| Establish that the model is printable       | No        | Filling one opening establishes nothing about the rest of the model.        |
-
-Some flat openings are still refused — a rim where more than two surfaces meet,
-or where the surrounding triangles disagree about which way they face, has no
-single side for a new surface to join, and Pybrix will not guess. When the
-generated surface would pass through the model, it is discarded rather than
-applied, and the panel says so.
+Branched boundaries, non-planar rims and patches that would intersect or
+double-cover existing geometry are refused. Interacting openings may require
+another pass. Non-manifold vertex repair is not implemented. Existing resource
+limits remain safety boundaries; filling does not establish printability.
+The selected-opening tool remains available within its own bounded policy.
+See the [v0.6.0 notes](docs/release/V0_6_0_TECHNICAL_PREVIEW_RELEASE.md).
 
 Target formats: **STL, OBJ, 3MF**.
 

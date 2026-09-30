@@ -39,7 +39,7 @@ import { request } from 'node:https';
 import { request as httpRequest } from 'node:http';
 
 /** The public Technical Preview. Overridable for testing. */
-export const DEFAULT_MONITOR_URL = 'https://fixcad.thelunai.com';
+export const DEFAULT_MONITOR_URL = 'https://pybrix.com';
 
 export const PASS = 'PASS';
 export const FAIL = 'FAIL';

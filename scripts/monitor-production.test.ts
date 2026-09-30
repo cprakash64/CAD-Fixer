@@ -1,6 +1,7 @@
 import { createServer, type Server } from 'node:http';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
+  DEFAULT_MONITOR_URL,
   IDENTITY_PATTERN,
   CERT_FAIL_DAYS,
   CERT_WARN_DAYS,
@@ -286,6 +287,10 @@ describe('MON-T01–MON-T12 — monitor semantics', () => {
     expect(combine([{ state: PASS }, { state: UNKNOWN }] as never)).toBe(UNKNOWN);
     expect(combine([{ state: PASS }] as never)).toBe(PASS);
   }, 60_000);
+
+  it('the default application origin is canonical', () => {
+    expect(DEFAULT_MONITOR_URL).toBe('https://pybrix.com');
+  });
 
   it('exit codes are distinct and stable', () => {
     expect(EXIT_CODE[PASS]).toBe(0);
