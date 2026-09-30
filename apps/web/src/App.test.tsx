@@ -50,7 +50,7 @@ describe('application shell', () => {
 
     // BRAND-01: the header carries the status, the status bar the version.
     expect(screen.getByTestId('release-stage')).toHaveTextContent(/^Technical Preview$/);
-    expect(screen.getByTestId('release-version')).toHaveTextContent(/^v0\.5\.0$/);
+    expect(screen.getByTestId('release-version')).toHaveTextContent(/^v0\.6\.0$/);
     expect(document.body.textContent).not.toMatch(/Stage \d|foundation/i);
   });
 

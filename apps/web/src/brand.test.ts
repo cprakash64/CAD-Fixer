@@ -44,7 +44,10 @@ describe('index.html metadata', () => {
     );
     // The old inline SVG favicon is gone, and nothing points off-origin.
     expect(html).not.toContain('data:image/svg+xml');
-    expect(html).not.toMatch(/href="https?:/);
+    expect(html).toContain('<link rel="canonical" href="https://pybrix.com/" />');
+    const icons = html.match(/<link rel="(?:icon|apple-touch-icon)"[^>]*>/g) ?? [];
+    expect(icons).toHaveLength(2);
+    for (const icon of icons) expect(icon).not.toMatch(/href="https?:/);
   });
 
   it('keeps the browser chrome on the top bar colour and says no legacy name', () => {
