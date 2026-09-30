@@ -135,7 +135,9 @@ for (const target of ['stl', 'obj', '3mf'] as const) {
         link.href = url;
         link.download = file.name;
         link.click();
-        setTimeout(() => URL.revokeObjectURL(url), 0);
+        setTimeout(() => {
+          URL.revokeObjectURL(url);
+        }, 0);
       });
     }
     const bytes = await bytesOf(await pending);

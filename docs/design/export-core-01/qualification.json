@@ -1,0 +1,556 @@
+{
+  "stage": "EXPORT-CORE-01",
+  "startingSha": "5e7b19290d582102a4407be535e5cbc8b69d44c5",
+  "hardware": "Apple M1, 8 GiB; headful Chromium ANGLE Metal; regular persistent profile",
+  "sinkAbstraction": "OS picker substituted with native OPFS file handle; production FileSystemWritableFileStream, worker and validator intact",
+  "nativeOsPicker": "Unverified: Mac locked",
+  "matrix": [
+    {
+      "label": "10000",
+      "triangles": 10000,
+      "outputBytes": 484325,
+      "path": "blob",
+      "elapsedMs": 346,
+      "rendererBaselineMiB": 123,
+      "rendererSampledPeakMiB": 127,
+      "rendererLifetimePeakMiB": 142,
+      "browserPeakMiB": 69,
+      "extraMiB": 4,
+      "afterFiveMiB": 109,
+      "longestFrameGapMs": 18.355000000000473,
+      "frames": 33,
+      "writes": 0,
+      "maxChunkBytes": 0,
+      "stagingFiles": 0,
+      "sha256": "16180ce661bed019052e6e70f17c71e9483b807daabe16030f516e153b4cea51"
+    },
+    {
+      "label": "100000",
+      "triangles": 100000,
+      "outputBytes": 5278847,
+      "path": "blob",
+      "elapsedMs": 827,
+      "rendererBaselineMiB": 251,
+      "rendererSampledPeakMiB": 333,
+      "rendererLifetimePeakMiB": 344,
+      "browserPeakMiB": 73,
+      "extraMiB": 82,
+      "afterFiveMiB": 268,
+      "longestFrameGapMs": 18,
+      "frames": 69,
+      "writes": 0,
+      "maxChunkBytes": 0,
+      "stagingFiles": 0,
+      "sha256": "95d98b766e5cbe131f66b0a226b2951f0d006df8b1ef27f49c3c16cdd1d11486"
+    },
+    {
+      "label": "100000-cancel",
+      "triangles": 100000,
+      "cancelled": true,
+      "cancelLatencyMs": 29,
+      "destinationBytes": 0,
+      "stagingFiles": 0
+    },
+    {
+      "label": "250000",
+      "triangles": 250000,
+      "outputBytes": 14263022,
+      "path": "file",
+      "elapsedMs": 1320,
+      "rendererBaselineMiB": 306,
+      "rendererSampledPeakMiB": 337,
+      "rendererLifetimePeakMiB": 362,
+      "browserPeakMiB": 68,
+      "extraMiB": 31,
+      "afterFiveMiB": 294,
+      "longestFrameGapMs": 18.585000000000036,
+      "frames": 100,
+      "writes": 55,
+      "maxChunkBytes": 262144,
+      "stagingFiles": 0,
+      "sha256": "f35e77a518fb0df22f384e759cbf7939a3c5f99f4426bf9acaa882ec922c4d42"
+    },
+    {
+      "label": "250000-cancel",
+      "triangles": 250000,
+      "cancelled": true,
+      "cancelLatencyMs": 34,
+      "destinationBytes": 14263022,
+      "stagingFiles": 0
+    },
+    {
+      "label": "500000",
+      "triangles": 500000,
+      "outputBytes": 29799568,
+      "path": "file",
+      "elapsedMs": 2335,
+      "rendererBaselineMiB": 398,
+      "rendererSampledPeakMiB": 501,
+      "rendererLifetimePeakMiB": 501,
+      "browserPeakMiB": 72,
+      "extraMiB": 103,
+      "afterFiveMiB": 463,
+      "longestFrameGapMs": 18.535000000001673,
+      "frames": 151,
+      "writes": 114,
+      "maxChunkBytes": 262144,
+      "stagingFiles": 0,
+      "sha256": "7d8f5e479eac3fb7e51e8bc383eec51dadf2059d69185625901aa5d830431184"
+    },
+    {
+      "label": "500000-cancel",
+      "triangles": 500000,
+      "cancelled": true,
+      "cancelLatencyMs": 30,
+      "destinationBytes": 29799568,
+      "stagingFiles": 0
+    },
+    {
+      "label": "1000000",
+      "triangles": 1000000,
+      "outputBytes": 61630031,
+      "path": "file",
+      "elapsedMs": 4873,
+      "rendererBaselineMiB": 493,
+      "rendererSampledPeakMiB": 555,
+      "rendererLifetimePeakMiB": 624,
+      "browserPeakMiB": 70,
+      "extraMiB": 62,
+      "afterFiveMiB": 500,
+      "longestFrameGapMs": 18.664999999999054,
+      "frames": 305,
+      "writes": 236,
+      "maxChunkBytes": 262144,
+      "stagingFiles": 0,
+      "sha256": "4d6e7387b0834b5a67daf617150ede5709861f4426d1347d885f44ed9b90f3a2"
+    },
+    {
+      "label": "1000000-cancel",
+      "triangles": 1000000,
+      "cancelled": true,
+      "cancelLatencyMs": 44,
+      "destinationBytes": 61630031,
+      "stagingFiles": 0
+    },
+    {
+      "label": "real-1",
+      "triangles": 1988877,
+      "outputBytes": 267988767,
+      "path": "file",
+      "elapsedMs": 7447,
+      "rendererBaselineMiB": 641,
+      "rendererSampledPeakMiB": 641,
+      "rendererLifetimePeakMiB": 732,
+      "browserPeakMiB": 73,
+      "extraMiB": 0,
+      "afterFiveMiB": 496,
+      "afterThirtyMiB": 488,
+      "longestFrameGapMs": 33.32499999999709,
+      "frames": 461,
+      "writes": 1023,
+      "maxChunkBytes": 262144,
+      "stagingFiles": 0,
+      "sha256": "0496d4853c9fd7528ed76af4add3eb64a3d95e28ef3faf5ed8349ec9e3756bbc"
+    },
+    {
+      "label": "real-2",
+      "triangles": 1988877,
+      "outputBytes": 267988767,
+      "path": "file",
+      "elapsedMs": 7402,
+      "rendererBaselineMiB": 488,
+      "rendererSampledPeakMiB": 596,
+      "rendererLifetimePeakMiB": 732,
+      "browserPeakMiB": 78,
+      "extraMiB": 108,
+      "afterFiveMiB": 430,
+      "afterThirtyMiB": 414,
+      "longestFrameGapMs": 18.660000000003492,
+      "frames": 457,
+      "writes": 1023,
+      "maxChunkBytes": 262144,
+      "stagingFiles": 0,
+      "sha256": "0496d4853c9fd7528ed76af4add3eb64a3d95e28ef3faf5ed8349ec9e3756bbc"
+    },
+    {
+      "label": "real-3",
+      "triangles": 1988877,
+      "outputBytes": 267988767,
+      "path": "file",
+      "elapsedMs": 7440,
+      "rendererBaselineMiB": 414,
+      "rendererSampledPeakMiB": 583,
+      "rendererLifetimePeakMiB": 732,
+      "browserPeakMiB": 82,
+      "extraMiB": 169,
+      "afterFiveMiB": 355,
+      "afterThirtyMiB": 355,
+      "longestFrameGapMs": 18.645000000004075,
+      "frames": 466,
+      "writes": 1023,
+      "maxChunkBytes": 262144,
+      "stagingFiles": 0,
+      "sha256": "0496d4853c9fd7528ed76af4add3eb64a3d95e28ef3faf5ed8349ec9e3756bbc"
+    },
+    {
+      "label": "real-cancel",
+      "triangles": 1988877,
+      "cancelled": true,
+      "cancelLatencyMs": 46,
+      "destinationBytes": 267988767,
+      "stagingFiles": 0
+    },
+    {
+      "label": "real-repaired",
+      "triangles": 1988883,
+      "outputBytes": 267988923,
+      "path": "file",
+      "elapsedMs": 7393,
+      "rendererBaselineMiB": 549,
+      "rendererSampledPeakMiB": 751,
+      "rendererLifetimePeakMiB": 939,
+      "browserPeakMiB": 82,
+      "extraMiB": 202,
+      "afterFiveMiB": 605,
+      "afterThirtyMiB": 572,
+      "longestFrameGapMs": 35.03500000000349,
+      "frames": 459,
+      "writes": 1023,
+      "maxChunkBytes": 262144,
+      "stagingFiles": 0,
+      "sha256": "2703b61892ee17b0add2ede213dae1a3a21b9f22e50baff197bf3206ba055b96"
+    }
+  ],
+  "chunkComparison": [
+    {
+      "chunkBytes": 65536,
+      "status": "SUCCESS",
+      "outputBytes": 267988767,
+      "durationMs": 6899,
+      "writes": 4091,
+      "maxChunk": 65536,
+      "rendererBaselineMiB": 639,
+      "rendererSampledPeakMiB": 839,
+      "rendererLifetimePeakMiB": 839,
+      "longestFrameGapMs": 18.645000000000437,
+      "gcEvents": 401,
+      "gcMs": 134.12399999999997,
+      "cancelStatus": "CANCELLED",
+      "cancelLatencyMs": 0.6749999970197678
+    },
+    {
+      "chunkBytes": 262144,
+      "status": "SUCCESS",
+      "outputBytes": 267988767,
+      "durationMs": 5992,
+      "writes": 1023,
+      "maxChunk": 262144,
+      "rendererBaselineMiB": 475,
+      "rendererSampledPeakMiB": 629,
+      "rendererLifetimePeakMiB": 839,
+      "longestFrameGapMs": 18.424999999999272,
+      "gcEvents": 326,
+      "gcMs": 189.74800000000008,
+      "cancelStatus": "CANCELLED",
+      "cancelLatencyMs": 0.07999999821186066
+    },
+    {
+      "chunkBytes": 1048576,
+      "status": "SUCCESS",
+      "outputBytes": 267988767,
+      "durationMs": 6244,
+      "writes": 256,
+      "maxChunk": 1048576,
+      "rendererBaselineMiB": 522,
+      "rendererSampledPeakMiB": 751,
+      "rendererLifetimePeakMiB": 839,
+      "longestFrameGapMs": 18.68499999999767,
+      "gcEvents": 309,
+      "gcMs": 434.85599999999994,
+      "cancelStatus": "CANCELLED",
+      "cancelLatencyMs": 0.11499999463558197
+    },
+    {
+      "chunkBytes": 4194304,
+      "status": "SUCCESS",
+      "outputBytes": 267988767,
+      "durationMs": 7250,
+      "writes": 64,
+      "maxChunk": 4194304,
+      "rendererBaselineMiB": 600,
+      "rendererSampledPeakMiB": 858,
+      "rendererLifetimePeakMiB": 872,
+      "longestFrameGapMs": 18.56999999999971,
+      "gcEvents": 317,
+      "gcMs": 1369.4119999999994,
+      "cancelStatus": "CANCELLED",
+      "cancelLatencyMs": 0.13500000536441803
+    }
+  ],
+  "baselineTimeline": [
+    {
+      "phase": "before-export",
+      "atMs": 1790766906938,
+      "currentMiB": 644,
+      "peakMiB": 732
+    },
+    {
+      "phase": "serializer-start",
+      "positionsBytes": 71599572,
+      "indicesBytes": 23866524,
+      "atMs": 1790766907357,
+      "currentMiB": 480,
+      "peakMiB": 732
+    },
+    {
+      "phase": "serialization-25%",
+      "atMs": 1790766908432,
+      "currentMiB": 578,
+      "peakMiB": 732
+    },
+    {
+      "phase": "serialization-50%",
+      "atMs": 1790766909505,
+      "currentMiB": 686,
+      "peakMiB": 732
+    },
+    {
+      "phase": "serialization-75%",
+      "atMs": 1790766910563,
+      "currentMiB": 774,
+      "peakMiB": 774
+    },
+    {
+      "phase": "serialization-complete-before-concatenate",
+      "encodedChunkBytes": 267988767,
+      "atMs": 1790766911256,
+      "currentMiB": 838,
+      "peakMiB": 838
+    },
+    {
+      "phase": "serialization-complete",
+      "outputBytes": 267988767,
+      "atMs": 1790766911809,
+      "currentMiB": 930,
+      "peakMiB": 1094
+    },
+    {
+      "phase": "decoded-text",
+      "characters": 267988767,
+      "utf16UpperBytes": 535977534,
+      "atMs": 1790766912397,
+      "currentMiB": 1186,
+      "peakMiB": 1186
+    },
+    {
+      "phase": "parsed-number-arrays",
+      "positionNumbers": 17899893,
+      "indexNumbers": 5966631,
+      "atMs": 1790766915895,
+      "currentMiB": 1595,
+      "peakMiB": 1595
+    },
+    {
+      "phase": "rebuilt-document",
+      "positionsBytes": 71599572,
+      "indicesBytes": 23866524,
+      "atMs": 1790766917273,
+      "currentMiB": 1735,
+      "peakMiB": 1816
+    },
+    {
+      "phase": "before-expected-geometry",
+      "atMs": 1790766917675,
+      "currentMiB": 1735,
+      "peakMiB": 1816
+    },
+    {
+      "phase": "expected-geometry",
+      "atMs": 1790766918201,
+      "currentMiB": 1826,
+      "peakMiB": 1826
+    },
+    {
+      "phase": "validation-complete",
+      "atMs": 1790766918875,
+      "currentMiB": 1963,
+      "peakMiB": 1963
+    },
+    {
+      "phase": "before-worker-transfer",
+      "bytes": 267988767,
+      "atMs": 1790766919273,
+      "currentMiB": 1962,
+      "peakMiB": 1963
+    },
+    {
+      "phase": "before-blob",
+      "bytes": 267988767,
+      "atMs": 1790766919725,
+      "currentMiB": 1699,
+      "peakMiB": 1977
+    },
+    {
+      "phase": "blob-created",
+      "bytes": 267988767,
+      "atMs": 1790766919941,
+      "currentMiB": 1293,
+      "peakMiB": 1977
+    },
+    {
+      "phase": "download-triggered",
+      "atMs": 1790766920070,
+      "currentMiB": 1293,
+      "peakMiB": 1977
+    },
+    {
+      "phase": "url-revoked",
+      "atMs": 1790766920224,
+      "currentMiB": 1293,
+      "peakMiB": 1977
+    },
+    {
+      "phase": "five-seconds-after",
+      "atMs": 1790766927394,
+      "currentMiB": 1293,
+      "peakMiB": 1977
+    }
+  ],
+  "lifecycleMatrix": [
+    {
+      "label": "real-1",
+      "triangles": 1988877,
+      "outputBytes": 267988767,
+      "path": "file",
+      "elapsedMs": 6877,
+      "rendererBaselineMiB": 641,
+      "rendererSampledPeakMiB": 663,
+      "rendererLifetimePeakMiB": 732,
+      "browserPeakMiB": 73,
+      "extraMiB": 22,
+      "afterFiveMiB": 499,
+      "afterThirtyMiB": 488,
+      "longestFrameGapMs": 18.625,
+      "frames": 433,
+      "writes": 1023,
+      "maxChunkBytes": 262144,
+      "stagingFiles": 0,
+      "sha256": "0496d4853c9fd7528ed76af4add3eb64a3d95e28ef3faf5ed8349ec9e3756bbc"
+    },
+    {
+      "label": "real-cancel",
+      "triangles": 1988877,
+      "cancelled": true,
+      "cancelLatencyMs": 47,
+      "destinationBytes": 267988767,
+      "stagingFiles": 0
+    },
+    {
+      "label": "real-repaired",
+      "triangles": 1988883,
+      "outputBytes": 267988923,
+      "path": "file",
+      "elapsedMs": 6918,
+      "rendererBaselineMiB": 521,
+      "rendererSampledPeakMiB": 732,
+      "rendererLifetimePeakMiB": 1020,
+      "browserPeakMiB": 78,
+      "extraMiB": 211,
+      "afterFiveMiB": 584,
+      "afterThirtyMiB": 499,
+      "longestFrameGapMs": 50.145000000004075,
+      "frames": 428,
+      "writes": 1023,
+      "maxChunkBytes": 262144,
+      "stagingFiles": 0,
+      "sha256": "2703b61892ee17b0add2ede213dae1a3a21b9f22e50baff197bf3206ba055b96"
+    }
+  ],
+  "reimport": {
+    "triangles": "1,988,883",
+    "issues": {
+      "issue-count-open-boundaries": "11",
+      "issue-count-non-manifold-edges": "0",
+      "issue-count-non-manifold-vertices": "155",
+      "issue-count-winding-conflicts": "0",
+      "issue-count-self-intersections": "\u2014",
+      "issue-count-degenerate-faces": "0",
+      "issue-count-duplicate-faces": "0",
+      "issue-count-components": "39"
+    }
+  },
+  "postExportReplacement": {
+    "triangles": "10,000",
+    "immediate": {
+      "current": 537,
+      "peak": 1020
+    },
+    "five": {
+      "current": 504,
+      "peak": 1020
+    },
+    "thirty": {
+      "current": 501,
+      "peak": 1020
+    },
+    "issues": {
+      "issue-count-open-boundaries": "1",
+      "issue-count-non-manifold-edges": "0",
+      "issue-count-non-manifold-vertices": "0",
+      "issue-count-winding-conflicts": "0",
+      "issue-count-self-intersections": "0",
+      "issue-count-degenerate-faces": "0",
+      "issue-count-duplicate-faces": "0",
+      "issue-count-components": "1"
+    }
+  },
+  "postObjImportReplacement": {
+    "triangles": "10,000",
+    "immediate": {
+      "current": 2173,
+      "peak": 2175
+    },
+    "five": {
+      "current": 2140,
+      "peak": 2175
+    },
+    "thirty": {
+      "current": 906,
+      "peak": 2175
+    },
+    "stagingFiles": 0
+  },
+  "limitations": [
+    "Process additional memory includes source snapshot copies and allocator/GC costs; it is not universally a small fraction of output size.",
+    "Atomic close cannot honestly be cancelled after submission.",
+    "Buffered OBJ import assembly remains allocation-heavy."
+  ],
+  "deployment": "NO DEPLOYMENT PERFORMED",
+  "decision": "EXPORT-CORE-01 PARTIAL",
+  "regressions": {
+    "unit": {
+      "filesPassed": 148,
+      "passed": 3374,
+      "existingSkipped": 10
+    },
+    "applicationE2E": {
+      "passed": 317,
+      "existingSkipped": 2
+    },
+    "newObjE2E": {
+      "passed": 9
+    },
+    "harness": {
+      "passed": 130
+    },
+    "timing": {
+      "passed": 15
+    },
+    "thresholdsRelaxed": false
+  },
+  "remainingGates": [
+    "Native OS save picker and a user-selected disk pathname (Mac locked).",
+    "Strict small-fraction total additional process memory: measured source snapshots and GC remain material."
+  ],
+  "branchPublication": "Deferred: push was requested after qualification."
+}

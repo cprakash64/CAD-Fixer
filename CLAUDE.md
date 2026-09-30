@@ -1700,6 +1700,11 @@ validated`, and the qualifier naming what was NOT examined travels with it.
   adjusting for pending removals made repair non-idempotent: a duplicate's
   non-manifold vertices blocked a repair the same pipeline had already made
   safe. Removals are materialised first, then connectivity is rebuilt.
+- **Large textual exports must never materialize the complete serialized output
+  in multiple browser representations.** Route large OBJ to the transactional
+  file sink; retain at most one bounded delivery chunk. Mandatory production
+  record parsing and source-semantic validation finish before commit. Export
+  output memory is bounded by the sink/chunk architecture (ADR 0019).
 - **The worker owns authoritative geometry.** The main thread holds a
   `DocumentHandle`, scalar part descriptors and render snapshots — never a
   `CanonicalMesh` and never a `GeometryDocument`. Operations name a document by
