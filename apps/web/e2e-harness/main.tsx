@@ -14,6 +14,8 @@ import { deriveDocumentExportName, downloadBytes } from '../src/runtime/download
 import { HoleFillService } from '../src/runtime/hole-fill-service';
 import { HarnessBar } from './harness-bar';
 import type { GeometryEditCandidateHandle } from '@cadfixer/geometry-runtime';
+import { objNeedsFileSink } from '@cadfixer/file-formats';
+import type { ExportFileDestination } from '../src/runtime/export-file-sink';
 import { SharedCancellationSource } from '@cadfixer/shared';
 import '../src/styles/tokens.css';
 import '../src/styles/app.css';
@@ -198,6 +200,82 @@ interface PendingExport {
   readonly cancelAt: { requestedAt?: number };
 }
 
+interface ChunkBenchmarkResult {
+  readonly status: string;
+  readonly outputBytes: number;
+  readonly durationMs: number;
+  readonly writes: number;
+  readonly maxChunk: number;
+  readonly cancelLatencyMs?: number;
+}
+async function chunkBenchmark(
+  chunkBytes: number,
+  cancelAfterMs?: number,
+): Promise<ChunkBenchmarkResult> {
+  const model = store.getSnapshot().model;
+  if (model === undefined) throw new Error('No benchmark model is loaded');
+  const root = await navigator.storage.getDirectory();
+  const name = `benchmark-${crypto.randomUUID()}.obj`;
+  const handle = await root.getFileHandle(name, { create: true });
+  const writable = await handle.createWritable();
+  let writes = 0;
+  let maxChunk = 0;
+  let cancellationAt: number | undefined;
+  let abort: Promise<void> | undefined;
+  const controller = new DocumentExportService(geometryClient, () => {
+    const worker = new Worker(new URL('./worker/export-chunk-bench.worker.ts', import.meta.url), {
+      type: 'module',
+      name: 'cadfixer-export-chunk-bench',
+    });
+    worker.postMessage({ kind: 'chunk-size', value: chunkBytes });
+    return worker;
+  });
+  const session = controller.run({
+    handle: model.handle,
+    target: 'obj',
+    destination: Promise.resolve({
+      name,
+      write: async (bytes): Promise<void> => {
+        writes += 1;
+        maxChunk = Math.max(maxChunk, bytes.byteLength);
+        await writable.write(bytes as Uint8Array<ArrayBuffer>);
+      },
+      close: async (): Promise<void> => {
+        await writable.close();
+      },
+      abort: (): Promise<void> => {
+        abort = writable.abort();
+        return abort;
+      },
+    }),
+  });
+  const timer =
+    cancelAfterMs === undefined
+      ? undefined
+      : setTimeout(() => {
+          cancellationAt = performance.now();
+          session.cancel();
+        }, cancelAfterMs);
+  try {
+    const outcome = await session.promise;
+    return {
+      status: outcome.status,
+      outputBytes: outcome.status === 'SUCCESS' ? outcome.metadata.outputBytes : 0,
+      durationMs: outcome.durationMs,
+      writes,
+      maxChunk,
+      ...(cancellationAt === undefined
+        ? {}
+        : { cancelLatencyMs: performance.now() - cancellationAt }),
+    };
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+    controller.dispose();
+    await abort?.catch(() => undefined);
+    await root.removeEntry(name);
+  }
+}
+
 let activeExport: PendingExport | undefined;
 
 function beginExport(
@@ -211,7 +289,33 @@ function beginExport(
   const phases: HarnessExportPhase[] = [];
   let progressUpdates = 0;
 
+  let outputHandle: FileSystemFileHandle | undefined;
+  let outputDirectory: FileSystemDirectoryHandle | undefined;
+  const outputName = `${crypto.randomUUID()}.obj`;
+  const model = store.getSnapshot().model;
+  const fileBacked = target === 'obj' && model !== undefined && objNeedsFileSink(model.parts);
+  const destination = fileBacked
+    ? (async (): Promise<ExportFileDestination> => {
+        outputDirectory = await navigator.storage.getDirectory();
+        outputHandle = await outputDirectory.getFileHandle(outputName, { create: true });
+        const stream = await outputHandle.createWritable();
+        return {
+          name: deriveDocumentExportName(sourceName, target),
+          write: async (bytes): Promise<void> => {
+            await stream.write(bytes as Uint8Array<ArrayBuffer>);
+          },
+          close: async (): Promise<void> => {
+            await stream.close();
+          },
+          abort: async (): Promise<void> => {
+            await stream.abort();
+            await outputDirectory?.removeEntry(outputName);
+          },
+        };
+      })()
+    : undefined;
   const session = exportService.run({
+    ...(destination === undefined ? {} : { destination }),
     handle: { documentId, revision } as never,
     target,
     onProgress: (fraction, note) => {
@@ -261,14 +365,30 @@ function beginExport(
       }
 
       const fileName = deriveDocumentExportName(sourceName, target);
+      const file = outputHandle === undefined ? undefined : await outputHandle.getFile();
       if (options.download === true) {
-        downloadBytes(outcome.bytes, fileName, 'application/octet-stream');
+        if (file !== undefined) {
+          const url = URL.createObjectURL(file);
+          const link = document.createElement('a');
+          link.href = url;
+          link.download = fileName;
+          link.click();
+          setTimeout(() => {
+            URL.revokeObjectURL(url);
+          }, 0);
+        } else if (outcome.bytes !== undefined)
+          downloadBytes(outcome.bytes, fileName, 'application/octet-stream');
       }
-
-      const head = new TextDecoder('utf-8', { fatal: false }).decode(outcome.bytes.subarray(0, 24));
+      const headBytes =
+        file === undefined
+          ? outcome.bytes?.subarray(0, 24)
+          : new Uint8Array(await file.slice(0, 24).arrayBuffer());
+      if (headBytes === undefined) throw new Error('Export artifact is missing');
+      const head = new TextDecoder('utf-8', { fatal: false }).decode(headBytes);
+      await outputDirectory?.removeEntry(outputName);
       return {
         status: outcome.status,
-        byteLength: outcome.bytes.byteLength,
+        byteLength: outcome.metadata.outputBytes,
         fileName,
         observations: outcome.metadata.observations,
         triangleCount: outcome.metadata.triangleCount,
@@ -621,6 +741,7 @@ declare global {
       awaitExport(): Promise<HarnessExportResult>;
       cancelExport(): void;
       exportActiveOperation(): string | undefined;
+      chunkBenchmark(chunkBytes: number, cancelAfterMs?: number): Promise<ChunkBenchmarkResult>;
       exportLiveWorkers(): number;
       exportLiveChannels(): number;
       listBoundaryLoops(documentId: string, revision: number, partId: string): Promise<unknown>;
@@ -674,6 +795,7 @@ function setIngestion(
 
 window.cadfixerHarness = {
   digest: requestDigest,
+  chunkBenchmark,
   beginTestEdit,
   previewTestEdit: async (candidate): Promise<{ vertexCount: number }> => {
     const result = await geometryClient.previewGeometryEdit(candidate).promise;
