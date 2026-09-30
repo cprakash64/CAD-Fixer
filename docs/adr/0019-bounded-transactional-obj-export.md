@@ -1,8 +1,8 @@
 # 0019 — Bounded transactional OBJ export
 
-Status: **Implemented on export-core-01. EXPORT-CORE-01 recorded remaining
-acceptance gates as PARTIAL; EXPORT-RC-01 is BLOCKED by native save-picker
-truncation of existing destinations. Bounded serialization is retained.**
+Status: **Bounded serialization retained; EXPORT-CORE-02 directory-based
+preservation qualified (see EXPORT_CORE_02.md). Historical EXPORT-RC-01 save-picker
+acceptance remains a documented blocker for that old acquisition primitive.**
 
 Date: 2026-09-30
 
@@ -40,7 +40,8 @@ The bound counts every placement's vertices and faces and includes worst-case
 UTF-8 metadata. Existing output and import ceilings are unchanged. The scalar
 estimate routes storage; exact encoded byte accounting enforces the output ceiling.
 
-The save picker is invoked under the Export click's user activation. No export
+The directory picker is invoked directly under Choose folder or the first
+Export click's user activation. Filename selection is separate. No export
 worker or geometry snapshot starts before selection and writable creation succeed.
 Picker cancellation is neutral. A missing qualified file API produces an honest
 capability failure; it never falls back to a large Blob.
@@ -130,3 +131,18 @@ qualification. A follow-up must qualify destination acquisition that preserves
 existing bytes before serialization, while retaining the bounded serializer and
 mandatory semantic validation. Changing `keepExistingData` after the picker
 returns cannot fix pre-picker truncation. See `../design/EXPORT_RC_01.md`.
+
+## Preservation-safe destination rule (EXPORT-CORE-02)
+
+Never acquire an export destination through a primitive that destroys existing
+data before the native transaction commits. Large OBJ obtains a readwrite
+directory, looks up the separately selected filename without creation, confirms
+existing targets, and rechecks metadata/entry identity. The writer is exclusive
+with keepExistingData false; existing data survives cancellation and failure
+until successful close. Owned new placeholders undergo guarded removal after
+abort, before UI cancellation settlement. Non-atomic creation/removal and
+external OS-writer races are explicitly documented in EXPORT_CORE_02.md.
+
+The old save-picker acceptance below is historical evidence, not the production
+acquisition design. Native qualification uses directory handles; automated
+OPFS-backed providers are tests only.

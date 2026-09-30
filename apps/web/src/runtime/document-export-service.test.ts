@@ -154,40 +154,30 @@ describe('a completed export', () => {
 });
 
 describe('one active export at a time', () => {
-  it('disposes the first export when a second starts, and settles it', async () => {
-    /*
-     * TWO CONCURRENT FIFTY-MEGABYTE SERIALISATIONS would compete for exactly the
-     * memory the output ceilings were sized against, and both would publish into
-     * the same slot with no way to tell which artifact was which. Superseding is
-     * deterministic, and the superseded promise SETTLES rather than hanging.
-     */
+  it('refuses a second export while preserving the active transaction', async () => {
     const { service, workers } = harness();
     const first = service.run({ handle, target: ExportTarget.Obj });
     const second = service.run({ handle, target: ExportTarget.ThreeMf });
-
-    const outcome = await first.promise;
-    expect(outcome.status).toBe(ExportStatus.Cancelled);
-    expect(workers[0]?.terminated).toBe(1);
-    expect(service.activeOperation).toBe(second.operationId);
-    expect(service.liveWorkerCount).toBe(1);
+    expect((await second.promise).status).toBe(ExportStatus.InternalFailure);
+    expect(service.activeOperation).toBe(first.operationId);
+    expect(workers).toHaveLength(1);
+    expect(workers[0]?.terminated).toBe(0);
+    workers[0]?.written(first.operationId);
+    expect((await first.promise).status).toBe(ExportStatus.Success);
   });
 
-  it('ignores a message from a superseded operation', async () => {
+  it('ignores messages from a cancelled operation after recovery', async () => {
     const { service, workers } = harness();
     const first = service.run({ handle, target: ExportTarget.Obj });
-    // Starting the second supersedes the first and settles it as cancelled.
-    const second = service.run({ handle, target: ExportTarget.Obj });
+    first.cancel();
     expect((await first.promise).status).toBe(ExportStatus.Cancelled);
-
-    // The first worker answering late must not publish into the second's slot.
+    const second = service.run({ handle, target: ExportTarget.Obj });
     workers[0]?.written(first.operationId);
     workers[1]?.written(second.operationId);
-
     const outcome = await second.promise;
     expect(outcome.status).toBe(ExportStatus.Success);
-    if (outcome.status !== ExportStatus.Success) return;
-    // The bytes are the SECOND worker's, and the first's arrived nowhere.
-    if (outcome.bytes === undefined) throw new Error('Expected in-memory export');
+    if (outcome.status !== ExportStatus.Success || outcome.bytes === undefined)
+      throw new Error('Expected bytes');
     expect([...outcome.bytes]).toEqual([1, 2, 3, 4]);
   });
 });
@@ -246,7 +236,9 @@ describe('cancellation', () => {
 
   it('allows a retry that succeeds', async () => {
     const { service, workers } = harness();
-    service.run({ handle, target: ExportTarget.Obj }).cancel();
+    const cancelled = service.run({ handle, target: ExportTarget.Obj });
+    cancelled.cancel();
+    await cancelled.promise;
 
     const retry = service.run({ handle, target: ExportTarget.Obj });
     workers[1]?.written(retry.operationId);
@@ -573,6 +565,35 @@ describe('transactional file delivery', () => {
       h.worker.posted.some((message) => (message as { kind: string }).kind === 'chunk-ack'),
     ).toBe(false);
   });
+  it('waits for abort and cleanup before resolving cancellation', async () => {
+    const h = fileHarness();
+    const selected = await h.destination;
+    let release: (() => void) | undefined;
+    const session = h.service.run({
+      handle,
+      target: ExportTarget.Obj,
+      destination: Promise.resolve({
+        ...selected,
+        abort: () =>
+          new Promise<void>((resolve) => {
+            release = resolve;
+          }),
+      }),
+    });
+    await started(h.worker);
+    let settled = false;
+    void session.promise.then(() => {
+      settled = true;
+    });
+    session.cancel();
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    expect(h.service.liveWorkerCount).toBe(0);
+    expect(h.service.activeOperation).toBe(session.operationId);
+    release?.();
+    expect((await session.promise).status).toBe(ExportStatus.Cancelled);
+  });
+
   it('reports an already-submitted atomic close as success rather than cancellation', async () => {
     const h = fileHarness();
     const selected = await h.destination;

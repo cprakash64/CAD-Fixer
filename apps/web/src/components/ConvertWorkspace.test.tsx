@@ -1062,7 +1062,9 @@ describe('the inspector export summary', () => {
     });
     store.openConversion('obj');
     mountSurface(store, 'summary');
-    expect(screen.getByTestId('export-summary-destination')).toHaveTextContent('File you choose');
+    expect(screen.getByTestId('export-summary-destination')).toHaveTextContent(
+      'Folder and filename you choose',
+    );
     expect(screen.getByTestId('export-summary')).not.toHaveTextContent('/Users/');
   });
 

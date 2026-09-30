@@ -80,7 +80,7 @@ export function ExportSummary(): ReactNode {
           mono={false}
           value={
             target === 'obj' && objNeedsFileSink(model.parts)
-              ? 'File you choose'
+              ? 'Folder and filename you choose'
               : DOWNLOAD_DESTINATION
           }
           testId="export-summary-destination"

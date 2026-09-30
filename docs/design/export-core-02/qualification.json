@@ -1,0 +1,250 @@
+{
+  "stage": "EXPORT-CORE-02",
+  "result": "EXPORT-CORE-02 PASS — PRESERVATION-SAFE LARGE OBJ DESTINATION QUALIFIED",
+  "branch": "export-core-02",
+  "base": "f75bde15d596b0ef55c878d01b7f0df691778074",
+  "mainUnchanged": "5e7b19290d582102a4407be535e5cbc8b69d44c5",
+  "deployment": "NO DEPLOYMENT PERFORMED",
+  "environment": {
+    "os": "macOS 27.0",
+    "hardware": "MacBookPro17,1 / Apple M1 / 8 GiB",
+    "chromium": "151.0.7922.34",
+    "gpu": "ANGLE Metal Apple M1",
+    "secureContext": true,
+    "nativeDirectoryPicker": true,
+    "filesystemFlags": false,
+    "forcedGC": false
+  },
+  "source": {
+    "name": "Hitem3d-1785766060812.stl",
+    "bytes": 99443934,
+    "triangles": 1988877,
+    "sha256": "3b9d3aaa3523f75c8e1a079e3aa3e50086d0f2cf9c5abbf78b8790df0a143e73",
+    "preservedAfterCleanup": true
+  },
+  "output": {
+    "originalBytes": 267988767,
+    "originalSha256": "0496d4853c9fd7528ed76af4add3eb64a3d95e28ef3faf5ed8349ec9e3756bbc",
+    "repairedBytes": 267988923,
+    "repairedSha256": "2703b61892ee17b0add2ede213dae1a3a21b9f22e50baff197bf3206ba055b96",
+    "repairOpenings": 2,
+    "addedTriangles": 6,
+    "reimport": {
+      "triangles": 1988883,
+      "boundaries": 11,
+      "nonManifoldVertices": 155,
+      "components": 39,
+      "selfIntersections": "unchecked"
+    }
+  },
+  "nativeAcceptance": {
+    "directoryCancel": {
+      "workers": 0,
+      "writes": 0,
+      "filesCreated": 0
+    },
+    "existingCancel": {
+      "sentinelBytes": 250000,
+      "sha256": "7acde79810d6b081d3149e9d7942ddbd3e082632017759ca3b733e312ef736f2",
+      "preserved": true,
+      "acknowledgementMs": 44,
+      "unchangedWatchSamples": 82
+    },
+    "existingWriteAndCloseFailures": {
+      "sentinelBytes": 310000,
+      "sha256": "18407d9c01e3e8c940194defe9ab5f57abcbdb95b727609cc4f9ff041894dd95",
+      "preserved": true,
+      "successes": 0,
+      "method": "Real native stream; adapter rejects before write or close. No OS damage or actual process crash claimed."
+    },
+    "oversizedExistingSuccess": {
+      "beforeBytes": 314572800,
+      "afterBytes": 267988767,
+      "statSamples": 569,
+      "observedSizes": [314572800, 267988767],
+      "observedZeroBytes": false,
+      "trailingOldBytes": false
+    },
+    "newSave": {
+      "bytes": 267988767,
+      "sha256": "0496d4853c9fd7528ed76af4add3eb64a3d95e28ef3faf5ed8349ec9e3756bbc"
+    },
+    "newCancel": {
+      "acknowledgementMs": 65,
+      "remainingFile": false
+    },
+    "newFailures": {
+      "write": "removed",
+      "close": "removed",
+      "worker": "removed",
+      "serialization": "removed",
+      "staleRevision": "removed",
+      "permission": "no partial file",
+      "restrictedDirectory": "refused"
+    },
+    "faultMethod": "Native writes plus controlled adapter errors / Worker message or error events; deterministic unit tests separately cover serializer failure.",
+    "exclusiveWriter": "Actual second writer refused with NoModificationAllowedError; two real Pybrix tabs tested; second tab started no export worker.",
+    "userActivation": true,
+    "ui300px": {
+      "replaceVisible": true,
+      "keepVisible": true,
+      "exportVisible": true,
+      "cancelMs": 63,
+      "sentinelPreserved": true
+    },
+    "repeatExportsWithoutReload": 3,
+    "repeatExactHashes": true,
+    "cancelRangeMs": [40, 65],
+    "privacy": {
+      "offOriginRequests": 0,
+      "nonGetRequests": 0,
+      "modelUploads": 0
+    },
+    "cleanup": {
+      "exactOutputsDeletedAfterHashCheck": 7,
+      "remainingDestinationEntries": 0,
+      "unrelatedFilesDeleted": false
+    }
+  },
+  "memory": {
+    "rows": [
+      {
+        "label": "native-repeat-1",
+        "exists": true,
+        "bytes": 267988767,
+        "sha256": "0496d4853c9fd7528ed76af4add3eb64a3d95e28ef3faf5ed8349ec9e3756bbc",
+        "baselineRendererMiB": 769,
+        "sampledPeakRendererMiB": 893,
+        "lifetimePeakBeforeReimportMiB": 1505,
+        "settled30RendererMiB": 647,
+        "maxFrameGapMs": 17.669999999983702,
+        "maxChunkBytes": 262144,
+        "maxOutstandingBytes": 262144,
+        "writes": 1023,
+        "closes": 1,
+        "liveWorkers": 1
+      },
+      {
+        "label": "native-repeat-2",
+        "exists": true,
+        "bytes": 267988767,
+        "sha256": "0496d4853c9fd7528ed76af4add3eb64a3d95e28ef3faf5ed8349ec9e3756bbc",
+        "baselineRendererMiB": 647,
+        "sampledPeakRendererMiB": 803,
+        "lifetimePeakBeforeReimportMiB": 1505,
+        "settled30RendererMiB": 642,
+        "maxFrameGapMs": 17.614999999990687,
+        "maxChunkBytes": 262144,
+        "maxOutstandingBytes": 262144,
+        "writes": 1023,
+        "closes": 1,
+        "liveWorkers": 1
+      },
+      {
+        "label": "native-repeat-3",
+        "exists": true,
+        "bytes": 267988767,
+        "sha256": "0496d4853c9fd7528ed76af4add3eb64a3d95e28ef3faf5ed8349ec9e3756bbc",
+        "baselineRendererMiB": 643,
+        "sampledPeakRendererMiB": 803,
+        "lifetimePeakBeforeReimportMiB": 1505,
+        "settled30RendererMiB": 648,
+        "maxFrameGapMs": 83.33500000002095,
+        "maxChunkBytes": 262144,
+        "maxOutstandingBytes": 262144,
+        "writes": 1023,
+        "closes": 1,
+        "liveWorkers": 1
+      },
+      {
+        "label": "native-final-new-success",
+        "exists": true,
+        "bytes": 267988767,
+        "sha256": "0496d4853c9fd7528ed76af4add3eb64a3d95e28ef3faf5ed8349ec9e3756bbc",
+        "baselineRendererMiB": 649,
+        "sampledPeakRendererMiB": 790,
+        "lifetimePeakBeforeReimportMiB": 1505,
+        "settled30RendererMiB": 651,
+        "maxFrameGapMs": 33.42000000004191,
+        "maxChunkBytes": 262144,
+        "maxOutstandingBytes": 262144,
+        "writes": 1023,
+        "closes": 1,
+        "liveWorkers": 1
+      },
+      {
+        "label": "native-repaired-save",
+        "exists": true,
+        "bytes": 267988923,
+        "sha256": "2703b61892ee17b0add2ede213dae1a3a21b9f22e50baff197bf3206ba055b96",
+        "baselineRendererMiB": 790,
+        "sampledPeakRendererMiB": 962,
+        "lifetimePeakBeforeReimportMiB": 1505,
+        "settled30RendererMiB": 796,
+        "maxFrameGapMs": 49.56000000005588,
+        "maxChunkBytes": 262144,
+        "maxOutstandingBytes": 262144,
+        "writes": 1023,
+        "closes": 1,
+        "liveWorkers": 1
+      }
+    ],
+    "lifetimePeakBeforeLargeObjReimportMiB": 1505,
+    "limitMiB": 1536,
+    "repeatSettledMiB": [647, 642, 648],
+    "scope": "Export qualification before buffered OBJ re-import. Re-import memory remains IMPORT-CORE-01 debt; no claim of post-reimport lifetime under 1.5 GiB.",
+    "supplementalOversizedRendererSample": "Excluded: sampled spare renderer. Primary process matrix above is the acceptance evidence.",
+    "comparison": "RC-01 reported ~734 MiB in a shorter run. This longer fault/repair/import sequence peaked at 1505 MiB; individual original export peaks 790–893 MiB. No output-sized retention or repeated-export growth observed."
+  },
+  "backpressure": {
+    "chunkBytes": 262144,
+    "maxOutstandingBytes": 262144,
+    "inflightChunks": 1,
+    "writesPerOriginalExport": 1023,
+    "closePerSuccess": 1,
+    "serializedRetention": "O(C + L)",
+    "sourceSnapshotBytes": 95466096
+  },
+  "routing": {
+    "blobEstimateMaxBytes": 33554432,
+    "smallBlobUnchanged": true,
+    "serializerUnchanged": true,
+    "productionOPFS": false,
+    "savePickerInLargePath": false
+  },
+  "races": {
+    "absent": "Immediate recheck; unexpected existing metadata requires confirmation; guarded owned-new cleanup.",
+    "existing": "Identity/size/mtime rechecked after confirmation and after lock; changed file requires renewed confirmation.",
+    "residual": "API lacks atomic exclusive-create and conditional delete. Same-interval empty-file races, metadata-preserving edits and external OS writers cannot be completely excluded. Uncertain changed entries are preserved; permission loss can prevent cleanup."
+  },
+  "verification": {
+    "node": "22.22.2",
+    "verify": {
+      "files": 149,
+      "tests": 3409,
+      "result": "PASS"
+    },
+    "unitInitialAttempt": "3408 passed; existing XML-retention auto ASCII test exceeded its unchanged 5000 ms timeout. Isolated diagnostic (9 tests) and complete unchanged rerun (3409 tests) passed.",
+    "applicationE2E": {
+      "passed": 320,
+      "preexistingOptInSkipped": 2
+    },
+    "destinationE2E": 12,
+    "harness": {
+      "passed": 130,
+      "initialAttempt": "129 passed, dense-texture frame-gap failure 415.845 ms against unchanged 250 ms limit",
+      "isolatedDiagnostic": "passed 116.7 ms",
+      "fullRetry": "130 passed; same assertions/configuration/timeouts, 116.7 ms"
+    },
+    "timing": {
+      "passed": 15
+    },
+    "releaseMechanism": {
+      "passed": 28,
+      "precommit": "Supported --allow-dirty mechanism only; not a deployable release approval.",
+      "postcommit": "Clean-tree normal release:build and release:verify required before branch push."
+    }
+  },
+  "evidenceArchive": "/Users/cprakash/.codex/visualizations/2026/09/30/01a0f19f-aa61-78d3-8ed8-dfc5864441d4/pybrix-export-core-02-evidence/index.json",
+  "nextStage": "Short EXPORT-RC-02 merge acceptance; only after approval merge into main and restart RELEASE-06 from a new frozen SHA."
+}

@@ -132,7 +132,7 @@ export class DocumentExportService {
   private activeOperationId: string | undefined;
   private settleCurrent: ((outcome: DocumentExportOutcome) => void) | undefined;
   private cancelCurrent: (() => void) | undefined;
-  private cleanupOutput: (() => void) | undefined;
+  private cleanupOutput: (() => Promise<void>) | undefined;
   private readonly client: GeometryClient;
   private readonly createWorker: ExportWorkerFactory;
 
@@ -161,24 +161,44 @@ export class DocumentExportService {
   /**
    * Starts an export.
    *
-   * ONE AT A TIME, deterministically. Starting a second export disposes the
-   * first: two concurrent fifty-megabyte serialisations on one workspace would
+   * ONE AT A TIME, deterministically. A second export is refused while the
+   * first owns its destination, including abort/cleanup and submitted close.
+   * Two concurrent fifty-megabyte serialisations on one workspace would
    * compete for the memory the ceilings were sized against, and both would
    * publish into the same slot with no way to tell which artifact was which.
    */
   public run(request: DocumentExportRequest): DocumentExportSession {
-    this.dispose();
+    if (this.activeOperationId !== undefined) {
+      return {
+        operationId: 'export-busy',
+        cancel: (): void => undefined,
+        promise: (async (): Promise<DocumentExportOutcome> => {
+          try {
+            await (await request.destination)?.abort();
+          } catch (cause) {
+            return outcomeFrom(toAppError(cause), undefined, 0);
+          }
+          return outcomeFrom(toAppError(new Error('An export is already running.')), undefined, 0);
+        })(),
+      };
+    }
     const operationId = `export-${String(nextOperation++)}`;
     const startedAt = Date.now();
     this.activeOperationId = operationId;
     let destination: ExportFileDestination | undefined;
     let completed = false;
+    let stopping = false;
     let writing = false;
     let committing = false;
-    const active = (): boolean => this.activeOperationId === operationId;
+    const active = (): boolean => this.activeOperationId === operationId && !stopping;
     const current = (): boolean => active() && (request.isCurrent?.() ?? true);
-    const clean = (): void => {
-      if (!completed) void destination?.abort().catch(() => undefined);
+    const clean = async (): Promise<void> => {
+      stopping = true;
+      if (!completed) {
+        // A rejected acquisition already cleaned any placeholder it owned; there is no sink to abort.
+        const selected = destination ?? (await request.destination?.catch(() => undefined));
+        await selected?.abort();
+      }
     };
     this.cleanupOutput = clean;
     const failed = (cause: unknown): void => {
@@ -368,12 +388,22 @@ export class DocumentExportService {
   }
 
   private settle(operationId: string, outcome: DocumentExportOutcome): void {
-    if (this.activeOperationId !== operationId) return;
+    if (this.activeOperationId !== operationId || this.settleCurrent === undefined) return;
     const resolve = this.settleCurrent;
     this.settleCurrent = undefined;
+    const cleanup = this.cleanupOutput;
+    this.cleanupOutput = undefined;
     this.teardown();
-    this.activeOperationId = undefined;
-    resolve?.(outcome);
+    void (cleanup?.() ?? Promise.resolve()).then(
+      () => {
+        this.activeOperationId = undefined;
+        resolve(outcome);
+      },
+      (cause: unknown) => {
+        this.activeOperationId = undefined;
+        resolve(outcomeFrom(toAppError(cause), undefined, outcome.durationMs));
+      },
+    );
   }
 
   private teardown(): void {
@@ -383,8 +413,6 @@ export class DocumentExportService {
     this.channel?.port2.close();
     this.channel = undefined;
     this.cancelCurrent = undefined;
-    this.cleanupOutput?.();
-    this.cleanupOutput = undefined;
   }
 
   /**
@@ -396,15 +424,6 @@ export class DocumentExportService {
    * happens to await it" is not a defence against.
    */
   public dispose(): void {
-    const abandoned = this.settleCurrent;
-    this.settleCurrent = undefined;
-    this.teardown();
-    this.activeOperationId = undefined;
-    abandoned?.({
-      status: ExportStatus.Cancelled,
-      reason: undefined,
-      message: 'Export was cancelled.',
-      durationMs: 0,
-    });
+    this.cancelCurrent?.();
   }
 }

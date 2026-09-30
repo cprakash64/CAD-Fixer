@@ -1702,7 +1702,10 @@ validated`, and the qualifier naming what was NOT examined travels with it.
   safe. Removals are materialised first, then connectivity is rebuilt.
 - **Large textual exports must never materialize the complete serialized output
   in multiple browser representations.** Route large OBJ to the transactional
-  file sink; retain at most one bounded delivery chunk. Mandatory production
+  file sink; retain at most one bounded delivery chunk. Acquire the large native
+  destination through a directory and filename separately. Existing files must
+  survive cancellation/failure until successful close; abort and guarded cleanup
+  of owned new targets complete before cancellation settles. Mandatory production
   record parsing and source-semantic validation finish before commit. Export
   output memory is bounded by the sink/chunk architecture (ADR 0019).
 - **The worker owns authoritative geometry.** The main thread holds a

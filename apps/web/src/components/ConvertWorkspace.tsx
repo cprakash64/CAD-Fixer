@@ -4,6 +4,7 @@ import {
   CompatibilityFeature,
   ExportFormat,
   isExportFormat,
+  objNeedsFileSink,
   type ConversionCompatibilityReport,
 } from '@cadfixer/file-formats';
 import {
@@ -45,7 +46,7 @@ import {
 import { describeSourceFormat, type LoadedModel } from '../state/model';
 import { measurementUnitKey, outputSize, type OutputSize } from '../state/output-size';
 import { useWorkspaceState, useWorkspaceStore } from '../state/store-context';
-import { useDocumentConversion } from '../state/use-document-conversion';
+import { useDocumentConversion, type ObjOverwritePrompt } from '../state/use-document-conversion';
 import { WorkflowId } from '../state/workflows';
 import {
   ConversionState,
@@ -85,7 +86,21 @@ import { PanelSection } from './shell/primitives';
 export function ConvertWorkspace({ active }: { readonly active: boolean }): ReactNode {
   const { model, conversion, repair, holeFill } = useWorkspaceState();
   const store = useWorkspaceStore();
-  const { report, start, chooseTarget, chooseUnit, convert, cancel } = useDocumentConversion();
+  const {
+    report,
+    start,
+    chooseTarget,
+    chooseUnit,
+    convert,
+    cancel,
+    destinationName,
+    setDestinationName,
+    folderName,
+    chooseFolder,
+    destinationNote,
+    overwrite,
+    confirmOverwrite,
+  } = useDocumentConversion();
 
   /*
    * A SESSION STARTS WHEN THE WORKSPACE IS SHOWN FOR A MODEL, preselecting the
@@ -167,6 +182,50 @@ export function ConvertWorkspace({ active }: { readonly active: boolean }): Reac
           )}
         </PanelSection>
 
+        {target === 'obj' && model !== undefined && objNeedsFileSink(model.parts) ? (
+          <PanelSection title="Save destination" testId="convert-destination">
+            <label className="format-options__field">
+              Filename
+              <input
+                type="text"
+                aria-label="OBJ filename"
+                value={destinationName}
+                disabled={working}
+                onChange={(event) => {
+                  setDestinationName(event.target.value);
+                }}
+                data-testid="convert-filename"
+              />
+            </label>
+            <button
+              type="button"
+              className="secondary-action"
+              disabled={working}
+              onClick={chooseFolder}
+              data-testid="convert-folder"
+            >
+              {folderName === undefined ? 'Choose folder' : `Folder: ${folderName}`}
+            </button>
+            <p className="convert-workspace__note" data-testid="convert-destination-note">
+              {destinationNote}
+            </p>
+          </PanelSection>
+        ) : null}
+        {overwrite === undefined ? null : (
+          <PanelSection
+            title={
+              overwrite.changed
+                ? 'File changed — confirm replacement again'
+                : 'Replace existing file?'
+            }
+            testId="convert-overwrite"
+          >
+            <p className="convert-workspace__note">
+              {overwrite.name} · {String(overwrite.size)} bytes. The existing file stays unchanged
+              until saving finishes.
+            </p>
+          </PanelSection>
+        )}
         <PanelSection title={CONVERT_WORKSPACE_COPY.beforeSection} testId="convert-before">
           <p className="convert-workspace__note">{BEFORE_CONVERTING_NOTE}</p>
           {pendingPreview ? (
@@ -200,6 +259,8 @@ export function ConvertWorkspace({ active }: { readonly active: boolean }): Reac
         outcomeInfo={outcomeInfo}
         onConvert={convert}
         onCancel={cancel}
+        overwrite={overwrite}
+        onConfirmOverwrite={confirmOverwrite}
       />
     </div>
   );
@@ -542,6 +603,8 @@ function ConvertFooter({
   outcomeInfo,
   onConvert,
   onCancel,
+  overwrite,
+  onConfirmOverwrite,
 }: {
   readonly hasModel: boolean;
   readonly sourceFormat: string | undefined;
@@ -551,6 +614,8 @@ function ConvertFooter({
   readonly outcomeInfo: InfoDisclosure;
   readonly onConvert: () => void;
   readonly onCancel: () => void;
+  readonly overwrite: ObjOverwritePrompt | undefined;
+  readonly onConfirmOverwrite: () => void;
 }): ReactNode {
   const { conversion } = useWorkspaceState();
   const hintId = useId();
@@ -570,7 +635,11 @@ function ConvertFooter({
           are polite, and only the PHASE is announced — a percentage read out
           on every update would drown everything else. */}
       <div className="convert-footer__status" aria-live="polite">
-        {working ? (
+        {overwrite !== undefined ? (
+          <p className="convert-footer__failure-text">
+            {overwrite.changed ? 'File changed. ' : ''}Replace {overwrite.name}?
+          </p>
+        ) : working ? (
           <div className="convert-footer__progress" data-testid="convert-progress">
             <div className="convert-footer__progress-row">
               {/* THE PHASE IS THE WRITER'S OWN, not a fabricated animation. */}
@@ -626,20 +695,24 @@ function ConvertFooter({
             onClick={onCancel}
             data-testid="convert-cancel"
           >
-            {CONVERT_WORKSPACE_COPY.cancel}
+            {overwrite === undefined ? CONVERT_WORKSPACE_COPY.cancel : 'Keep existing file'}
           </button>
         ) : null}
         <button
           type="button"
           className="primary-action convert-footer__primary"
-          onClick={onConvert}
-          disabled={working || unavailable !== undefined}
+          onClick={overwrite === undefined ? onConvert : onConfirmOverwrite}
+          disabled={(working && overwrite === undefined) || unavailable !== undefined}
           aria-busy={working}
           {...(unavailable === undefined ? {} : { 'aria-describedby': hintId })}
-          data-testid="convert-export"
+          data-testid={overwrite === undefined ? 'convert-export' : 'convert-overwrite-confirm'}
         >
           <Icon name="convert" size={16} />
-          <span>{describeConvertAction(sourceFormat, target, working)}</span>
+          <span>
+            {overwrite === undefined
+              ? describeConvertAction(sourceFormat, target, working)
+              : 'Replace file'}
+          </span>
         </button>
       </div>
       {unavailable === undefined || working ? null : (

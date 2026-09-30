@@ -57,32 +57,36 @@ async function open() {
       writes: 0,
       maxChunk: 0,
     };
-    globalThis.showSaveFilePicker = async (options) => {
+    globalThis.showDirectoryPicker = async () => {
       const state = globalThis.__exportEvidence;
       state.picks += 1;
       const root = await navigator.storage.getDirectory();
       const directory = await root.getDirectoryHandle('qualification-output', { create: true });
-      const handle = await directory.getFileHandle(options.suggestedName, { create: true });
-      state.handle = handle;
-      // Keep native destination behavior; observe bounded writes and backpressure.
-      const create = handle.createWritable.bind(handle);
-      handle.createWritable = async (options) => {
-        const stream = await create(options);
-        const write = stream.write.bind(stream);
-        stream.write = async (chunk) => {
-          state.writes += 1;
-          state.maxChunk = Math.max(state.maxChunk, chunk.byteLength);
-          if (state.inFlight) throw new Error('More than one chunk in flight');
-          state.inFlight = true;
-          try {
-            await write(chunk);
-          } finally {
-            state.inFlight = false;
-          }
+      const getFileHandle = directory.getFileHandle.bind(directory);
+      directory.getFileHandle = async (name, flags) => {
+        const handle = await getFileHandle(name, flags);
+        state.handle = handle;
+        // Keep native destination behavior; observe bounded writes and backpressure.
+        const create = handle.createWritable.bind(handle);
+        handle.createWritable = async (options) => {
+          const stream = await create(options);
+          const write = stream.write.bind(stream);
+          stream.write = async (chunk) => {
+            state.writes += 1;
+            state.maxChunk = Math.max(state.maxChunk, chunk.byteLength);
+            if (state.inFlight) throw new Error('More than one chunk in flight');
+            state.inFlight = true;
+            try {
+              await write(chunk);
+            } finally {
+              state.inFlight = false;
+            }
+          };
+          return stream;
         };
-        return stream;
+        return handle;
       };
-      return handle;
+      return directory;
     };
     const frame = (time) => {
       const state = globalThis.__exportEvidence;
@@ -176,6 +180,7 @@ async function exportOne(host, label, triangles, capture, cancel = false) {
   };
   page.on('download', listener);
   const started = Date.now();
+  await page.getByTestId('convert-filename').fill(`${label}.obj`);
   await page.getByTestId('convert-export').click();
   if (cancel) {
     await page.getByTestId('convert-progress').waitFor();
@@ -186,14 +191,21 @@ async function exportOne(host, label, triangles, capture, cancel = false) {
     const latency = Date.now() - at;
     await page.waitForTimeout(1500);
     const state = await page.evaluate(async () => ({
-      size: (await globalThis.__exportEvidence.handle?.getFile())?.size ?? 0,
+      exists:
+        (await globalThis.__exportEvidence.handle?.getFile().then(
+          () => true,
+          (error) => {
+            if (error.name === 'NotFoundError') return false;
+            throw error;
+          },
+        )) ?? false,
     }));
     const result = {
       label,
       triangles,
       cancelled: true,
       cancelLatencyMs: latency,
-      destinationBytes: state.size,
+      destinationExists: state.exists,
       stagingFiles: await cleanupCount(page),
     };
     page.off('download', listener);

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   analyseConversion,
   ExportStatus,
@@ -13,7 +13,14 @@ import {
 } from '../runtime/document-export-service';
 import type { GeometryClient } from '../runtime/geometry-client';
 import { deriveDocumentExportName, downloadBytes } from '../runtime/download';
-import { selectObjDestination } from '../runtime/export-file-sink';
+import {
+  chooseObjDirectory,
+  lookupObjTarget,
+  selectObjDestination,
+  type ObjTarget,
+  type ExportFileDestination,
+  objFileName,
+} from '../runtime/export-file-sink';
 import { useGeometryClient } from '../runtime/client-context';
 import { documentFeatureProfile } from './document-profile';
 import { measurementUnitKey } from './output-size';
@@ -81,6 +88,10 @@ function serviceFor(client: GeometryClient): DocumentExportService {
   return created;
 }
 
+export interface ObjOverwritePrompt extends ObjTarget {
+  readonly changed: boolean;
+}
+
 export interface DocumentConversionControls {
   readonly conversion: ConversionSnapshot;
   /**
@@ -99,12 +110,65 @@ export interface DocumentConversionControls {
   readonly chooseUnit: (unit: string | undefined) => void;
   readonly convert: () => void;
   readonly cancel: () => void;
+  readonly destinationName: string;
+  readonly setDestinationName: (value: string) => void;
+  readonly folderName: string | undefined;
+  readonly chooseFolder: () => void;
+  readonly destinationNote: string;
+  readonly overwrite: ObjOverwritePrompt | undefined;
+  readonly confirmOverwrite: () => void;
 }
 
 export function useDocumentConversion(): DocumentConversionControls {
   const store = useWorkspaceStore();
   const client = useGeometryClient();
   const { model, conversion } = useWorkspaceState();
+  const [filename, setFilename] = useState<{ documentId: string; value: string } | undefined>(
+    undefined,
+  );
+  const [directory, setDirectory] = useState<FileSystemDirectoryHandle | undefined>(undefined);
+  const [destinationNote, setDestinationNote] = useState('Choose a folder for large OBJ files.');
+  const [overwrite, setOverwrite] = useState<ObjOverwritePrompt | undefined>(undefined);
+  const confirmation = useRef<((accepted: boolean) => void) | undefined>(undefined);
+  const acquisition = useRef<AbortController | undefined>(undefined);
+  const destinationName =
+    filename?.documentId === model?.handle.documentId && filename !== undefined
+      ? filename.value
+      : deriveDocumentExportName(model?.source.fileName ?? 'model', 'obj');
+  const chooseFolder = useCallback((): void => {
+    void chooseObjDirectory().then(setDirectory, (cause: unknown) => {
+      setDestinationNote(
+        cause instanceof DOMException && cause.name === 'AbortError'
+          ? 'Folder selection cancelled.'
+          : cause instanceof Error
+            ? cause.message
+            : 'The folder could not be selected.',
+      );
+    });
+  }, []);
+  useEffect(() => {
+    let current = true;
+    if (directory === undefined) return;
+    void lookupObjTarget(directory, destinationName).then(
+      (target) => {
+        if (current)
+          setDestinationNote(
+            target === undefined
+              ? 'New file'
+              : `Existing file · ${String(target.size)} bytes · confirmation required`,
+          );
+      },
+      (cause: unknown) => {
+        if (current)
+          setDestinationNote(
+            cause instanceof Error ? cause.message : 'Unable to inspect the destination.',
+          );
+      },
+    );
+    return (): void => {
+      current = false;
+    };
+  }, [directory, destinationName]);
   const sessionRef = useRef<DocumentExportSession | undefined>(undefined);
 
   /*
@@ -123,6 +187,8 @@ export function useDocumentConversion(): DocumentConversionControls {
        * component that started an export and then went away leaves nothing
        * behind, because `cancel` terminates the worker.
        */
+      acquisition.current?.abort();
+      confirmation.current?.(false);
       sessionRef.current?.cancel();
       sessionRef.current = undefined;
     };
@@ -130,6 +196,8 @@ export function useDocumentConversion(): DocumentConversionControls {
 
   // Replacement or another authoritative revision invalidates the snapshot.
   useEffect(() => {
+    acquisition.current?.abort();
+    confirmation.current?.(false);
     sessionRef.current?.cancel();
     sessionRef.current = undefined;
   }, [model?.handle.documentId, model?.handle.revision]);
@@ -181,6 +249,9 @@ export function useDocumentConversion(): DocumentConversionControls {
   );
 
   const cancel = useCallback((): void => {
+    acquisition.current?.abort();
+    confirmation.current?.(false);
+    setOverwrite(undefined);
     sessionRef.current?.cancel();
   }, []);
 
@@ -202,7 +273,9 @@ export function useDocumentConversion(): DocumentConversionControls {
      */
     if (report?.exportable !== true) return;
 
-    sessionRef.current?.cancel();
+    if (service.activeOperation !== undefined) return;
+    const controller = new AbortController();
+    acquisition.current = controller;
     const token: ConversionToken = store.beginConversion();
     /*
      * THE HANDLE IS CAPTURED HERE, at the moment the user pressed Export.
@@ -216,13 +289,44 @@ export function useDocumentConversion(): DocumentConversionControls {
     const fileName = deriveDocumentExportName(model.source.fileName, target);
     const measuredUnit = measurementUnitKey(model, target, conversion.unitAssertion);
 
+    let confirmations = 0;
+    const destination = (): Promise<ExportFileDestination> => {
+      try {
+        return selectObjDestination({
+          operationId: `conversion-${String(token)}`,
+          name: objFileName(destinationName),
+          directory:
+            directory === undefined
+              ? chooseObjDirectory().then((selected) => {
+                  setDirectory(selected);
+                  return selected;
+                })
+              : Promise.resolve(directory),
+          signal: controller.signal,
+          confirm: (target) =>
+            new Promise<boolean>((resolve) => {
+              setOverwrite({ ...target, changed: confirmations++ > 0 });
+              setDestinationNote(
+                `Existing file · ${String(target.size)} bytes · confirmation required`,
+              );
+              confirmation.current = (accepted): void => {
+                setOverwrite(undefined);
+                resolve(accepted);
+              };
+              if (controller.signal.aborted) confirmation.current(false);
+            }),
+        });
+      } catch (cause) {
+        return Promise.reject(
+          cause instanceof Error ? cause : new Error('Unable to select the export destination.'),
+        );
+      }
+    };
     const session = service.run({
       handle,
       target,
       isCurrent: () => store.isCurrentConversion(token),
-      ...(target === 'obj' && objNeedsFileSink(model.parts)
-        ? { destination: selectObjDestination(fileName) }
-        : {}),
+      ...(target === 'obj' && objNeedsFileSink(model.parts) ? { destination: destination() } : {}),
       ...(conversion.unitAssertion === undefined
         ? {}
         : { unitAssertion: conversion.unitAssertion }),
@@ -298,7 +402,16 @@ export function useDocumentConversion(): DocumentConversionControls {
         sessionRef.current = undefined;
       },
     );
-  }, [conversion.target, conversion.unitAssertion, model, report, service, store]);
+  }, [
+    conversion.target,
+    conversion.unitAssertion,
+    model,
+    report,
+    service,
+    store,
+    destinationName,
+    directory,
+  ]);
 
   /*
    * A SESSION OVER NO MODEL ENDS ITSELF. Reachable when the geometry worker
@@ -311,5 +424,24 @@ export function useDocumentConversion(): DocumentConversionControls {
     }
   }, [conversion.state, model, store]);
 
-  return { conversion, report, start, chooseTarget, chooseUnit, convert, cancel };
+  return {
+    conversion,
+    report,
+    start,
+    chooseTarget,
+    chooseUnit,
+    convert,
+    cancel,
+    destinationName,
+    setDestinationName: (value): void => {
+      if (model !== undefined) setFilename({ documentId: model.handle.documentId, value });
+    },
+    folderName: directory?.name,
+    chooseFolder,
+    destinationNote,
+    overwrite,
+    confirmOverwrite: (): void => {
+      confirmation.current?.(true);
+    },
+  };
 }

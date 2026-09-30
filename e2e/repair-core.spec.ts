@@ -104,13 +104,18 @@ for (const target of ['stl', 'obj', '3mf'] as const) {
     if (target === 'obj') {
       await page.addInitScript(() => {
         const host = window as unknown as {
-          showSaveFilePicker: () => Promise<FileSystemFileHandle>;
+          showDirectoryPicker: () => Promise<FileSystemDirectoryHandle>;
           savedObj?: FileSystemFileHandle;
         };
-        host.showSaveFilePicker = async (): Promise<FileSystemFileHandle> => {
+        host.showDirectoryPicker = async (): Promise<FileSystemDirectoryHandle> => {
           const root = await navigator.storage.getDirectory();
-          host.savedObj = await root.getFileHandle('holed-cube.obj', { create: true });
-          return host.savedObj;
+          const get = root.getFileHandle.bind(root);
+          root.getFileHandle = async (name, options): Promise<FileSystemFileHandle> => {
+            const handle = await get(name, options);
+            host.savedObj = handle;
+            return handle;
+          };
+          return root;
         };
       });
     }
