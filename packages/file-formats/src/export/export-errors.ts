@@ -23,6 +23,8 @@ export const ExportRefusal = {
   DuplicatePartId: 'EXPORT_DUPLICATE_PART_ID',
   NonFiniteTransform: 'EXPORT_NON_FINITE_TRANSFORM',
   NoParts: 'EXPORT_NO_PARTS',
+  FileSinkRequired: 'EXPORT_FILE_SINK_REQUIRED',
+  FileAccessUnavailable: 'EXPORT_FILE_ACCESS_UNAVAILABLE',
 
   /* ------------------------------------------------------------ the unit -- */
   /**

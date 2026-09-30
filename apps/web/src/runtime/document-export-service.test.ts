@@ -3,6 +3,7 @@ import { ExportStatus, MeshFormatId, type ExportMetadata } from '@cadfixer/file-
 import { AppErrorCode, AppError } from '@cadfixer/shared';
 import type { DocumentHandle } from '@cadfixer/geometry-runtime';
 import { DocumentExportService, ExportTarget } from './document-export-service';
+import type { ExportFileDestination } from './export-file-sink';
 import type { GeometryClient } from './geometry-client';
 
 /**
@@ -138,6 +139,7 @@ describe('a completed export', () => {
     const outcome = await session.promise;
     expect(outcome.status).toBe(ExportStatus.Success);
     if (outcome.status !== ExportStatus.Success) return;
+    if (outcome.bytes === undefined) throw new Error('Expected in-memory export');
     expect([...outcome.bytes]).toEqual([1, 2, 3, 4]);
     expect(outcome.metadata.triangleCount).toBe(4);
 
@@ -185,6 +187,7 @@ describe('one active export at a time', () => {
     expect(outcome.status).toBe(ExportStatus.Success);
     if (outcome.status !== ExportStatus.Success) return;
     // The bytes are the SECOND worker's, and the first's arrived nowhere.
+    if (outcome.bytes === undefined) throw new Error('Expected in-memory export');
     expect([...outcome.bytes]).toEqual([1, 2, 3, 4]);
   });
 });
@@ -375,5 +378,264 @@ describe('repeated lifecycle', () => {
     expect((await session.promise).status).toBe(ExportStatus.Cancelled);
     expect(workers[0]?.terminated).toBe(1);
     expect(service.liveWorkerCount).toBe(0);
+  });
+});
+
+describe('transactional file delivery', () => {
+  function fileHarness(): {
+    service: DocumentExportService;
+    worker: FakeWorker;
+    writes: Uint8Array[];
+    closed: () => number;
+    aborted: () => number;
+    destination: Promise<ExportFileDestination>;
+  } {
+    const worker = new FakeWorker();
+    const writes: Uint8Array[] = [];
+    let closes = 0;
+    let aborts = 0;
+    const client = {
+      sendForExport: (): Promise<unknown> => Promise.resolve({}),
+    } as unknown as GeometryClient;
+    const service = new DocumentExportService(client, () => worker as unknown as Worker);
+
+    return {
+      service,
+      worker,
+      writes,
+      closed: () => closes,
+      aborted: () => aborts,
+      destination: Promise.resolve({
+        name: 'model.obj',
+        write: (bytes): Promise<void> => {
+          writes.push(bytes.slice());
+          return Promise.resolve();
+        },
+        close: (): Promise<void> => {
+          closes += 1;
+          return Promise.resolve();
+        },
+        abort: (): Promise<void> => {
+          aborts += 1;
+          return Promise.resolve();
+        },
+      }),
+    };
+  }
+  async function started(worker: FakeWorker): Promise<void> {
+    await vi.waitFor(() => {
+      expect(worker.posted.length).toBeGreaterThan(0);
+    });
+  }
+  it('starts no worker or geometry for a cancelled save picker', async () => {
+    const { service, workers, sends } = harness();
+    const session = service.run({
+      handle,
+      target: ExportTarget.Obj,
+      destination: Promise.reject(new DOMException('cancelled', 'AbortError')),
+    });
+    expect((await session.promise).status).toBe(ExportStatus.Cancelled);
+    expect(workers).toHaveLength(0);
+    expect(sends).toBe(0);
+  });
+  it('acknowledges one disk write, commits only validated output, without staging', async () => {
+    const h = fileHarness();
+    const session = h.service.run({ handle, target: ExportTarget.Obj, destination: h.destination });
+    expect(h.service.liveWorkerCount).toBe(0);
+    await started(h.worker);
+    h.worker.dispatchEvent(
+      new MessageEvent('message', {
+        data: {
+          kind: 'chunk',
+          operationId: session.operationId,
+          bytes: new Uint8Array([1, 2, 3]).buffer,
+        },
+      }),
+    );
+    await vi.waitFor(() => {
+      expect(h.worker.posted).toContainEqual({
+        kind: 'chunk-ack',
+        operationId: session.operationId,
+      });
+    });
+    expect(h.writes).toEqual([new Uint8Array([1, 2, 3])]);
+    expect(h.closed()).toBe(0);
+    h.worker.dispatchEvent(
+      new MessageEvent('message', {
+        data: {
+          kind: 'file-ready',
+          operationId: session.operationId,
+          documentId: handle.documentId,
+          documentRevision: handle.revision,
+          metadata: METADATA,
+        },
+      }),
+    );
+    const result = await session.promise;
+    expect(result.status).toBe(ExportStatus.Success);
+    if (result.status !== ExportStatus.Success) throw new Error('Expected file success');
+    expect(result.bytes).toBeUndefined();
+    expect(result.savedFileName).toBe('model.obj');
+    expect(h.closed()).toBe(1);
+    expect(h.aborted()).toBe(0);
+    expect(h.service.liveWorkerCount).toBe(0);
+  });
+  it('aborts stale output before the destination commits', async () => {
+    const h = fileHarness();
+    let current = true;
+    const session = h.service.run({
+      handle,
+      target: ExportTarget.Obj,
+      destination: h.destination,
+      isCurrent: () => current,
+    });
+    await started(h.worker);
+    current = false;
+    h.worker.dispatchEvent(
+      new MessageEvent('message', {
+        data: {
+          kind: 'file-ready',
+          operationId: session.operationId,
+          documentId: handle.documentId,
+          documentRevision: handle.revision,
+          metadata: METADATA,
+        },
+      }),
+    );
+    expect((await session.promise).status).toBe(ExportStatus.StaleRevision);
+    expect(h.closed()).toBe(0);
+    expect(h.aborted()).toBe(1);
+  });
+  it.each(['disk full', 'permission revoked', 'closed sink'])(
+    'recovers from %s without success',
+    async (message) => {
+      const h = fileHarness();
+      const selected = await h.destination;
+      const session = h.service.run({
+        handle,
+        target: ExportTarget.Obj,
+        destination: Promise.resolve({
+          ...selected,
+          write: (): Promise<void> => Promise.reject(new Error(message)),
+        }),
+      });
+      await started(h.worker);
+      h.worker.dispatchEvent(
+        new MessageEvent('message', {
+          data: {
+            kind: 'chunk',
+            operationId: session.operationId,
+            bytes: new Uint8Array([4]).buffer,
+          },
+        }),
+      );
+      expect((await session.promise).status).toBe(ExportStatus.InternalFailure);
+      expect(h.closed()).toBe(0);
+      expect(h.aborted()).toBe(1);
+      expect(h.service.liveWorkerCount).toBe(0);
+      const next = h.service.run({ handle, target: ExportTarget.Obj });
+      h.worker.written(next.operationId);
+      expect((await next.promise).status).toBe(ExportStatus.Success);
+    },
+  );
+  it('terminates and aborts a blocked write immediately without acknowledging it', async () => {
+    const h = fileHarness();
+    const selected = await h.destination;
+    let resolveWrite: (() => void) | undefined;
+    const session = h.service.run({
+      handle,
+      target: ExportTarget.Obj,
+      destination: Promise.resolve({
+        ...selected,
+        write: (): Promise<void> =>
+          new Promise((resolve) => {
+            resolveWrite = resolve;
+          }),
+      }),
+    });
+    await started(h.worker);
+    h.worker.dispatchEvent(
+      new MessageEvent('message', {
+        data: {
+          kind: 'chunk',
+          operationId: session.operationId,
+          bytes: new Uint8Array([4]).buffer,
+        },
+      }),
+    );
+    session.cancel();
+    expect((await session.promise).status).toBe(ExportStatus.Cancelled);
+    expect(h.aborted()).toBe(1);
+    expect(h.worker.terminated).toBe(1);
+    resolveWrite?.();
+    await Promise.resolve();
+    expect(
+      h.worker.posted.some((message) => (message as { kind: string }).kind === 'chunk-ack'),
+    ).toBe(false);
+  });
+  it('reports an already-submitted atomic close as success rather than cancellation', async () => {
+    const h = fileHarness();
+    const selected = await h.destination;
+    let publish: (() => void) | undefined;
+    const session = h.service.run({
+      handle,
+      target: ExportTarget.Obj,
+      destination: Promise.resolve({
+        ...selected,
+        close: (): Promise<void> =>
+          new Promise((resolve) => {
+            publish = resolve;
+          }),
+      }),
+    });
+    await started(h.worker);
+    h.worker.dispatchEvent(
+      new MessageEvent('message', {
+        data: {
+          kind: 'file-ready',
+          operationId: session.operationId,
+          documentId: handle.documentId,
+          documentRevision: handle.revision,
+          metadata: METADATA,
+        },
+      }),
+    );
+    session.cancel();
+    expect(h.aborted()).toBe(0);
+    expect(h.service.liveWorkerCount).toBe(1);
+    publish?.();
+    expect((await session.promise).status).toBe(ExportStatus.Success);
+    expect(h.aborted()).toBe(0);
+    expect(h.service.liveWorkerCount).toBe(0);
+  });
+
+  it('aborts a rejected final commit and remains usable for the next export', async () => {
+    const h = fileHarness();
+    const selected = await h.destination;
+    const session = h.service.run({
+      handle,
+      target: ExportTarget.Obj,
+      destination: Promise.resolve({
+        ...selected,
+        close: (): Promise<void> => Promise.reject(new Error('disk commit failed')),
+      }),
+    });
+    await started(h.worker);
+    h.worker.dispatchEvent(
+      new MessageEvent('message', {
+        data: {
+          kind: 'file-ready',
+          operationId: session.operationId,
+          documentId: handle.documentId,
+          documentRevision: handle.revision,
+          metadata: METADATA,
+        },
+      }),
+    );
+    expect((await session.promise).status).toBe(ExportStatus.InternalFailure);
+    expect(h.aborted()).toBe(1);
+    const next = h.service.run({ handle, target: ExportTarget.Obj });
+    h.worker.written(next.operationId);
+    expect((await next.promise).status).toBe(ExportStatus.Success);
   });
 });

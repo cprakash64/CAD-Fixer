@@ -3,6 +3,7 @@ import {
   analyseConversion,
   ExportStatus,
   isExportFormat,
+  objNeedsFileSink,
   type ConversionCompatibilityReport,
   type ExportFormat,
 } from '@cadfixer/file-formats';
@@ -12,6 +13,7 @@ import {
 } from '../runtime/document-export-service';
 import type { GeometryClient } from '../runtime/geometry-client';
 import { deriveDocumentExportName, downloadBytes } from '../runtime/download';
+import { selectObjDestination } from '../runtime/export-file-sink';
 import { useGeometryClient } from '../runtime/client-context';
 import { documentFeatureProfile } from './document-profile';
 import { measurementUnitKey } from './output-size';
@@ -126,6 +128,12 @@ export function useDocumentConversion(): DocumentConversionControls {
     };
   }, []);
 
+  // Replacement or another authoritative revision invalidates the snapshot.
+  useEffect(() => {
+    sessionRef.current?.cancel();
+    sessionRef.current = undefined;
+  }, [model?.handle.documentId, model?.handle.revision]);
+
   /*
    * DERIVED, NOT STORED. This is the whole staleness answer: `model` is the
    * current model by construction, so a report computed from it describes the
@@ -211,6 +219,10 @@ export function useDocumentConversion(): DocumentConversionControls {
     const session = service.run({
       handle,
       target,
+      isCurrent: () => store.isCurrentConversion(token),
+      ...(target === 'obj' && objNeedsFileSink(model.parts)
+        ? { destination: selectObjDestination(fileName) }
+        : {}),
       ...(conversion.unitAssertion === undefined
         ? {}
         : { unitAssertion: conversion.unitAssertion }),
@@ -252,11 +264,14 @@ export function useDocumentConversion(): DocumentConversionControls {
          * with the document they were written from; anything less and "Saved"
          * would be a claim about a serialiser rather than about a file.
          */
-        downloadBytes(outcome.bytes, fileName, MIME_TYPES[target] ?? 'application/octet-stream');
+        if (!store.isCurrentConversion(token)) return;
+        if (outcome.bytes !== undefined) {
+          downloadBytes(outcome.bytes, fileName, MIME_TYPES[target] ?? 'application/octet-stream');
+        }
 
         if (
           !store.completeConversion(token, {
-            fileName,
+            fileName: outcome.savedFileName ?? fileName,
             byteLength: outcome.metadata.outputBytes,
             target,
             triangleCount: outcome.metadata.triangleCount,

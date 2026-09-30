@@ -101,6 +101,19 @@ for (const target of ['stl', 'obj', '3mf'] as const) {
   test(`RCF3-${target}: the filled openings stay filled through ${target.toUpperCase()} export and re-import`, async ({
     page,
   }) => {
+    if (target === 'obj') {
+      await page.addInitScript(() => {
+        const host = window as unknown as {
+          showSaveFilePicker: () => Promise<FileSystemFileHandle>;
+          savedObj?: FileSystemFileHandle;
+        };
+        host.showSaveFilePicker = async (): Promise<FileSystemFileHandle> => {
+          const root = await navigator.storage.getDirectory();
+          host.savedObj = await root.getFileHandle('holed-cube.obj', { create: true });
+          return host.savedObj;
+        };
+      });
+    }
     await openCube(page);
     await previewAndApply(page);
 
@@ -109,6 +122,22 @@ for (const target of ['stl', 'obj', '3mf'] as const) {
     if (target === '3mf') await page.getByTestId('convert-unit-millimeter').check();
     const pending = page.waitForEvent('download', { timeout: 120_000 });
     await page.getByTestId('convert-export').click();
+    if (target === 'obj') {
+      await expect(page.getByTestId('convert-saved')).toBeVisible({ timeout: 120_000 });
+      // Test-only capture of the closed native file for the unchanged round-trip
+      // assertions. Large production export does not create a browser download.
+      await page.evaluate(async () => {
+        const host = window as unknown as { savedObj?: FileSystemFileHandle };
+        if (host.savedObj === undefined) throw new Error('No native OBJ destination');
+        const file = await host.savedObj.getFile();
+        const url = URL.createObjectURL(file);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = file.name;
+        link.click();
+        setTimeout(() => URL.revokeObjectURL(url), 0);
+      });
+    }
     const bytes = await bytesOf(await pending);
 
     await page.getByTestId('workflow-repair').click();

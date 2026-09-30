@@ -245,3 +245,12 @@ export {
   validateStlRoundTrip,
 } from './export/validate';
 export { escapeXml } from './threemf/xml-scan';
+
+export { createChunkTextWriter, OBJ_CHUNK_BYTES } from './export/stream-sink';
+export type { ExportSink, ChunkTextWriter } from './export/stream-sink';
+export { serializeObjDocument } from './export/obj-writer';
+export { validateObjRecordStream } from './export/obj-stream-validation';
+export { estimateObjBytes, objNeedsFileSink, SMALL_OBJ_MAX_BYTES } from './export/obj-routing';
+export { createBoundedChannel } from './export/stream-channel';
+export { exportObjDocumentStream } from './export/obj-stream';
+export type { ExportObjStreamOptions } from './export/obj-stream';

@@ -4,28 +4,16 @@ import {
   type ExportMetadata,
 } from '@cadfixer/file-formats';
 
-/**
- * THE EXPORT CHANNEL PROTOCOL.
- *
- * Three participants and two hops, the same shape the diagnostic channel uses
- * and for the same reason — the page stays out of the middle:
- *
- *   controller  --('port')-->  authoritative worker
- *   controller  --('port')-->  export worker
- *   authoritative worker  ==(document snapshot)==>  export worker
- *   export worker  --(finished bytes)-->  controller
- *
- * GEOMETRY ONLY EVER TRAVELS WORKER TO WORKER. What comes back to the page is
- * the finished artifact — which is the one thing the page legitimately needs,
- * because it is what the user asked to save. It is a serialised file, not the
- * authoritative document: it cannot be edited back into the model, and holding
- * it is exactly as risky as holding the file the user already had.
- */
+/** Geometry travels only from the authoritative worker to a disposable export
+ * worker. Small artifacts return one transferred buffer. Large OBJ returns one
+ * bounded transferable chunk and waits for a disk-write ACK before sending the
+ * next; file-ready authorizes commit only after mandatory EOF validation. */
 
 /** Sent by the controller to either worker: here is your end of the channel. */
 export interface ExportPortMessage {
   readonly kind: 'port';
   readonly port: MessagePort;
+  readonly fileBacked?: boolean;
 }
 
 /**
@@ -44,9 +32,17 @@ export interface ExportSnapshotMessage {
   readonly snapshot: ExportDocumentSnapshot;
 }
 
-/** Export worker to controller. Progress scalars, then the artifact. */
+/** Export worker to controller: progress, bounded delivery, then validated completion. */
 export type ExportWorkerOutbound =
   | { readonly kind: 'ready' }
+  | { readonly kind: 'chunk'; readonly operationId: string; readonly bytes: ArrayBuffer }
+  | {
+      readonly kind: 'file-ready';
+      readonly operationId: string;
+      readonly documentId: string;
+      readonly documentRevision: number;
+      readonly metadata: ExportMetadata;
+    }
   | {
       readonly kind: 'progress';
       readonly operationId: string;
@@ -95,4 +91,9 @@ export function resolveExportTarget(target: string): MeshFormatId | undefined {
   return Object.prototype.hasOwnProperty.call(EXPORT_TARGETS, target)
     ? EXPORT_TARGETS[target]
     : undefined;
+}
+
+export interface ExportChunkAck {
+  readonly kind: 'chunk-ack';
+  readonly operationId: string;
 }

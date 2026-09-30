@@ -790,9 +790,9 @@ export function describeExportFailure(status: ExportStatus, reason: string | und
       return 'Pybrix wrote a file it could not read back as the same model, so it was not saved. This is a problem with Pybrix, not with your model.';
     case ExportStatus.InternalFailure:
     case ExportStatus.Success:
-      return reason === undefined
-        ? 'The export did not finish. Nothing was saved.'
-        : 'The export did not finish. Nothing was saved.';
+      if (reason === 'EXPORT_FILE_ACCESS_UNAVAILABLE' || reason === 'EXPORT_FILE_SINK_REQUIRED')
+        return 'Large OBJ saving requires desktop Chromium file access. Open this model in a supported browser and try again.';
+      return 'The export did not finish. Nothing was saved.';
   }
 }
 
@@ -811,6 +811,7 @@ export const ExportPhaseLabel: Readonly<Record<string, string>> = Object.freeze(
   compressing: 'Compressing',
   validating: 'Checking the file reads back correctly',
   complete: 'Ready',
+  saving: 'Saving',
 });
 
 export function describePhase(note: string | undefined): string {

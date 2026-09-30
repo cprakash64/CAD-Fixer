@@ -415,7 +415,7 @@ function isIdentityTransform(transform: PartTransform): boolean {
  * writer that emitted too few records — the defect this replaced — is then a
  * refusal, and a writer that emitted wrong ones is too.
  */
-function expectedObjGroups(
+export function expectedObjGroups(
   groups: readonly MeshGroup[] | undefined,
   faceCount: number,
   runs: { started: boolean },

@@ -1,3 +1,4 @@
+import { readObjRecordStream } from './obj-records';
 import {
   createIndexArray,
   DEFAULT_DOCUMENT_LIMITS,
@@ -18,23 +19,8 @@ import {
   type DocumentReadResult,
   type ImportCompatibility,
 } from '../document-reader';
-import {
-  ImportRefusal,
-  importMalformed,
-  importTooLarge,
-  importUnsupported,
-} from '../import-errors';
+import { ImportRefusal, importMalformed, importTooLarge } from '../import-errors';
 import { DEFAULT_OBJ_LIMITS, type ObjLimits } from './limits';
-
-/**
- * One face corner: a position index, then optionally a texture index and a
- * normal index, each an optionally signed decimal integer, either of the
- * latter possibly empty. Bounded by the token length the tokeniser already
- * enforces, and linear — no nested quantifier can backtrack.
- */
-const OBJ_CORNER = /^[+-]?\d+(?:\/[+-]?\d*){0,2}$/;
-/** A decimal number, optionally signed and with an exponent — what OBJ writes. */
-const OBJ_DECIMAL = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/;
 
 /**
  * THE PRODUCTION OBJ READER.
@@ -55,9 +41,6 @@ const OBJ_DECIMAL = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/;
  * NO SILENT REPAIR, unchanged from research and from every codec here: a
  * malformed index is refused, not clamped; a polygon is refused, not fanned.
  */
-
-/** Corners handled between cancellation polls and event-loop yields. */
-const FACES_PER_BATCH = 32_768;
 
 interface ObjObjectRecord {
   readonly name: string | undefined;
@@ -96,82 +79,7 @@ function decodeText(
   return decode(bytes);
 }
 
-/**
- * "an x value", "a y value", "a normal x value": the article the value's name
- * takes when read aloud. Of the names this reader uses, only a bare "x" does.
- */
-function article(word: string): string {
-  return word === 'x' ? 'an' : 'a';
-}
-
-/** A finite number, or a refusal naming the token that was not one. */
-function readFinite(token: string | undefined, line: number, what: string): number {
-  if (token === undefined || token === '') {
-    throw importMalformed(
-      ImportRefusal.ObjMalformedNumber,
-      `This OBJ file has ${article(what)} ${what} value missing on line ${String(line)}.`,
-      { line, what },
-    );
-  }
-  const value = Number(token);
-  /*
-   * `Number` rather than `parseFloat`, deliberately. `parseFloat('1abc')` is 1,
-   * which would silently accept a corrupt token; `Number('1abc')` is NaN. Both
-   * accept 'Infinity' and 'NaN' as words, and neither has a bounding box or an
-   * exact predicate, so both are refused below.
-   */
-  if (!Number.isFinite(value)) {
-    throw importMalformed(
-      ImportRefusal.ObjNonFinite,
-      `This OBJ file has ${article(what)} ${what} value Pybrix cannot use on line ${String(line)}.`,
-      { line, what, token: token.slice(0, 64) },
-    );
-  }
-  /*
-   * LEXICAL, AS FACE CORNERS ARE (PR-01). `Number` also reads `0x10` as sixteen,
-   * `0b11` as three and `0o7` as seven; OBJ numbers are decimal, so those are
-   * malformed tokens, and reading them imported coordinates the file never
-   * stated.
-   */
-  if (!OBJ_DECIMAL.test(token)) {
-    throw importMalformed(
-      ImportRefusal.ObjMalformedNumber,
-      `This OBJ file has ${article(what)} ${what} value that is not a decimal number on line ${String(line)}.`,
-      { line, what, token: token.slice(0, 64) },
-    );
-  }
-  return value;
-}
-
-/**
- * Splits a whitespace-separated record without allocating for the whole line.
- *
- * `line.split(/\s+/)` on a 65,536-character line allocates an array of every
- * token whether the caller wants them or not. This yields them.
- */
-function* tokens(line: string, from: number): Generator<string, undefined, undefined> {
-  let index = from;
-  const length = line.length;
-  while (index < length) {
-    while (index < length && isSpace(line.charCodeAt(index))) index += 1;
-    if (index >= length) return;
-    const start = index;
-    while (index < length && !isSpace(line.charCodeAt(index))) index += 1;
-    yield line.slice(start, index);
-  }
-}
-
-function isSpace(code: number): boolean {
-  return code === 32 || code === 9 || code === 13;
-}
-
-/**
- * Parses the records, resolving face indices as it goes.
- *
- * NEGATIVE INDICES ARE RELATIVE to the vertices seen SO FAR, which is why they
- * cannot be resolved in a second pass: `-1` means a different vertex on every
- * line it appears.
- */
+/** Import collects the shared production records into its document builder. */
 async function parseRecords(
   text: string,
   limits: ObjLimits,
@@ -184,297 +92,42 @@ async function parseRecords(
   const objects: ObjObjectRecord[] = [];
   const groups: ObjGroupRecord[] = [];
   let mtllib: string | undefined;
-  let currentMaterial: string | undefined;
   let sawMaterialUse = false;
-  let faceCount = 0;
-
-  let lineNumber = 0;
-  let cursor = 0;
-  const length = text.length;
-
-  while (cursor <= length) {
-    let end = text.indexOf('\n', cursor);
-    if (end === -1) end = length;
-    // A trailing '\r' belongs to the separator, not to the record.
-    const stop = end > cursor && text.charCodeAt(end - 1) === 13 ? end - 1 : end;
-    const lineLength = stop - cursor;
-    lineNumber += 1;
-
-    if (lineLength > limits.maxLineLength) {
-      throw importTooLarge(
-        ImportRefusal.ObjLineTooLong,
-        `This OBJ file has a line longer than Pybrix will read (line ${String(lineNumber)}).`,
-        { line: lineNumber, length: lineLength, limit: limits.maxLineLength },
-      );
-    }
-
-    if (lineLength > 0) {
-      const line = text.slice(cursor, stop);
-      let at = 0;
-      while (at < line.length && isSpace(line.charCodeAt(at))) at += 1;
-      const first = line.charCodeAt(at);
-
-      // Blank lines and comments, cheapest checks first.
-      if (at < line.length && first !== 35 /* # */) {
-        const iterator = tokens(line, at);
-        const keyword: string | undefined = iterator.next().value;
-
-        switch (keyword) {
-          case 'v': {
-            positions.push(
-              readFinite(nextToken(iterator), lineNumber, 'x'),
-              readFinite(nextToken(iterator), lineNumber, 'y'),
-              readFinite(nextToken(iterator), lineNumber, 'z'),
-            );
-            if (positions.length / 3 > limits.maxVertices) {
-              throw importTooLarge(
-                ImportRefusal.ObjTooManyVertices,
-                'This OBJ file contains more vertices than Pybrix will hold.',
-                { limit: limits.maxVertices },
-              );
-            }
-            break;
-          }
-
-          /*
-           * `vn` and `vt` are PARSED FOR VALIDITY AND DISCARDED.
-           *
-           * ADR 0013 froze normals and UVs as "parsed, not authoritative;
-           * recomputed as today". Stored normals frequently disagree with
-           * winding order — the same reason STL's facet normals are dropped —
-           * and a UV has no bearing on topology, repair or export at this
-           * stage. Retaining them would mean carrying buffers no code reads and
-           * claiming a fidelity the product does not have. They are still
-           * validated, so a file with a NaN normal is refused rather than
-           * quietly accepted.
-           */
-          case 'vn': {
-            readFinite(nextToken(iterator), lineNumber, 'normal x');
-            readFinite(nextToken(iterator), lineNumber, 'normal y');
-            readFinite(nextToken(iterator), lineNumber, 'normal z');
-            break;
-          }
-          case 'vt': {
-            readFinite(nextToken(iterator), lineNumber, 'texture u');
-            const v = nextToken(iterator);
-            // `vt` legally carries one, two or three values.
-            if (v !== undefined) readFinite(v, lineNumber, 'texture v');
-            break;
-          }
-
-          case 'o': {
-            const name = readName(iterator, limits);
-            objects.push({ name, firstFace: faceCount });
-            if (objects.length > limits.maxObjects) {
-              throw importTooLarge(
-                ImportRefusal.ObjTooManyObjects,
-                'This OBJ file declares more objects than Pybrix will hold.',
-                { limit: limits.maxObjects },
-              );
-            }
-            break;
-          }
-
-          case 'g': {
-            const name = readName(iterator, limits) ?? '';
-            groups.push({ name, firstFace: faceCount, material: currentMaterial });
-            if (groups.length > limits.maxGroups) {
-              throw importTooLarge(
-                ImportRefusal.ObjTooManyGroups,
-                'This OBJ file declares more groups than Pybrix will hold.',
-                { limit: limits.maxGroups },
-              );
-            }
-            break;
-          }
-
-          case 'usemtl': {
-            currentMaterial = readName(iterator, limits);
-            sawMaterialUse = true;
-            // A material change starts a new run of faces, which is what a
-            // `MeshGroup` records. Without this a file that never says `g`
-            // would lose its material boundaries entirely.
-            groups.push({
-              name: currentMaterial ?? '',
-              firstFace: faceCount,
-              material: currentMaterial,
-            });
-            break;
-          }
-
-          case 'mtllib': {
-            /*
-             * RECORDED AS TEXT. NEVER OPENED.
-             *
-             * No file is read, no path is resolved, no picker is raised and no
-             * request is made. A standalone OBJ therefore cannot cause any file
-             * or network access, which is the property that made a single-file
-             * picker sufficient for this stage — see ADR 0013.
-             */
-            mtllib = readName(iterator, limits);
-            break;
-          }
-
-          case 'f': {
-            faceCount += 1;
-            readFace(iterator, faceIndices, positions.length / 3, lineNumber, limits);
-            if (faceCount > limits.maxFaces) {
-              throw importTooLarge(
-                ImportRefusal.ObjTooManyFaces,
-                'This OBJ file contains more faces than Pybrix will hold.',
-                { limit: limits.maxFaces },
-              );
-            }
-            if (faceCount % FACES_PER_BATCH === 0) {
-              /*
-               * THE CANCELLATION POINT, and it is a real one. The token is
-               * polled AND the event loop is released, so a cancel that arrived
-               * as a message can actually be read. Polling a flag without
-               * yielding would be cancellation that cannot happen — see
-               * docs/ARCHITECTURE.md.
-               */
-              throwIfCancelled(context.cancellation);
-              await context.yieldToEventLoop();
-              throwIfCancelled(context.cancellation);
-              context.progress.report(
-                progressFrom + ((progressTo - progressFrom) * cursor) / Math.max(1, length),
-                'parsing',
-              );
-            }
-            break;
-          }
-
-          default:
-            // Unknown records are SKIPPED, not refused. OBJ is an extensible
-            // text format and files in the wild carry `s`, `l`, `p`, `mg` and
-            // vendor records; refusing a file for a line that says nothing
-            // about geometry would reject valid models for no benefit.
-            break;
-        }
-      }
-    }
-
-    cursor = end + 1;
-    if (end >= length) break;
+  async function* pieces(): AsyncIterable<string> {
+    yield await Promise.resolve(text);
   }
-
+  await readObjRecordStream(
+    pieces(),
+    limits,
+    context,
+    {
+      vertex: (x, y, z) => {
+        positions.push(x, y, z);
+      },
+      face: (a, b, c) => {
+        faceIndices.push(a, b, c);
+      },
+      object: (name, firstFace) => {
+        objects.push({ name, firstFace });
+      },
+      group: (name, material, firstFace) => {
+        groups.push({ name, material, firstFace });
+      },
+      materialUse: () => {
+        sawMaterialUse = true;
+      },
+      materialLibrary: (name) => {
+        mtllib = name;
+      },
+    },
+    (characters) => {
+      context.progress.report(
+        progressFrom + ((progressTo - progressFrom) * characters) / Math.max(1, text.length),
+        'parsing',
+      );
+    },
+  );
   return { positions, faceIndices, objects, groups, mtllib, sawMaterialUse };
-}
-
-/** The next token, typed. `Generator.next().value` is `any` without this. */
-function nextToken(iterator: Generator<string, undefined, undefined>): string | undefined {
-  const next = iterator.next();
-  return next.done === true ? undefined : next.value;
-}
-
-function readName(
-  iterator: Generator<string, undefined, undefined>,
-  limits: ObjLimits,
-): string | undefined {
-  const parts: string[] = [];
-  for (const token of iterator) {
-    parts.push(token);
-    if (parts.join(' ').length >= limits.maxNameLength) break;
-  }
-  if (parts.length === 0) return undefined;
-  // TRUNCATED, not refused. A long name is a display nuisance, not a
-  // structural fault, and refusing a whole model over one would be the wrong
-  // trade. It is text throughout and is never treated as markup or as a path.
-  return parts.join(' ').slice(0, limits.maxNameLength);
-}
-
-/** Reads one `f` record, refusing anything that is not exactly a triangle. */
-function readFace(
-  iterator: Generator<string, undefined, undefined>,
-  out: number[],
-  vertexCount: number,
-  line: number,
-  limits: ObjLimits,
-): void {
-  const corners: string[] = [];
-  for (const token of iterator) {
-    corners.push(token);
-    if (corners.length > limits.maxFaceVertices) {
-      /*
-       * THE POLYGON DECISION, enforced rather than worked around. Reading stops
-       * at the first corner past the limit: a hostile `f` with a million
-       * corners costs four tokens, not a million.
-       */
-      throw importUnsupported(
-        ImportRefusal.ObjPolygonUnsupported,
-        'Pybrix currently supports triangle faces in OBJ files. This file contains a face with more than three corners, and Pybrix will not split it into triangles, because doing so would invent geometry the file does not describe.',
-        { line },
-      );
-    }
-  }
-  if (corners.length < 3) {
-    throw importMalformed(
-      ImportRefusal.ObjTooFewFaceVertices,
-      `This OBJ file has a face with fewer than three corners on line ${String(line)}.`,
-      { line, corners: corners.length },
-    );
-  }
-
-  for (const corner of corners) {
-    // v, v/vt, v//vn and v/vt/vn all begin with the position index.
-    const slash = corner.indexOf('/');
-    const token = slash === -1 ? corner : corner.slice(0, slash);
-    /*
-     * THE CORNER IS CHECKED LEXICALLY BEFORE ANY PART OF IT IS COERCED — Stage
-     * 6D-A4, the reasoning A3 applied to 3MF transform tokens. `Number` reads
-     * `0x2` as two, `1e0` as one and `1.0` as one, none of which is an OBJ
-     * index; and the texture and normal components were never looked at, so
-     * `f 1/x 2 3` imported. Those components are still not IMPORTED — CAD
-     * Fixer reads positions only — but a corner that is not one of OBJ's four
-     * shapes is not a corner. An EMPTY component (`1/`, `1//`) is tolerated,
-     * as it always was, because writers emit it.
-     */
-    if (token.length > 0 && !OBJ_CORNER.test(corner)) {
-      throw importMalformed(
-        ImportRefusal.ObjBadIndex,
-        `This OBJ file has a face index Pybrix cannot read on line ${String(line)}.`,
-        { line, token: corner.slice(0, 64) },
-      );
-    }
-    if (token.length === 0) {
-      /*
-       * `f /1/1` — a corner that gives a texture and a normal and no position.
-       * Reported as what it is. `Number('')` is 0, so without this the refusal
-       * came out as "uses vertex index 0", which describes a file that says
-       * something different from the one the user actually has.
-       */
-      throw importMalformed(
-        ImportRefusal.ObjMissingPositionIndex,
-        `This OBJ file has a face corner with no vertex position on line ${String(line)}.`,
-        { line, corner: corner.slice(0, 64) },
-      );
-    }
-    const parsed = Number(token);
-    if (!Number.isInteger(parsed)) {
-      throw importMalformed(
-        ImportRefusal.ObjBadIndex,
-        `This OBJ file has a face index Pybrix cannot read on line ${String(line)}.`,
-        { line, token: token.slice(0, 64) },
-      );
-    }
-    if (parsed === 0) {
-      // OBJ indices are one-based; zero is not a vertex, it is a malformed file.
-      throw importMalformed(
-        ImportRefusal.ObjZeroIndex,
-        `This OBJ file uses vertex index 0 on line ${String(line)}. OBJ indices start at 1.`,
-        { line },
-      );
-    }
-    const index = parsed > 0 ? parsed - 1 : vertexCount + parsed;
-    if (index < 0 || index >= vertexCount) {
-      throw importMalformed(
-        ImportRefusal.ObjBadIndex,
-        `This OBJ file references vertex ${String(parsed)} on line ${String(line)}, which does not exist.`,
-        { line, index: parsed, vertexCount },
-      );
-    }
-    out.push(index);
-  }
 }
 
 /* ------------------------------------------------------------- assembly -- */

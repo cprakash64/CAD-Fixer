@@ -5,7 +5,8 @@ import {
 } from '@cadfixer/mesh-core';
 import { throwIfCancelled } from '@cadfixer/shared';
 import { MeshFormatId } from '../formats';
-import { createByteSink } from './byte-sink';
+import { createByteSink, type ByteSink } from './byte-sink';
+import type { ChunkTextWriter } from './stream-sink';
 import {
   ExportObservation,
   objRoundTripName,
@@ -13,6 +14,7 @@ import {
   type ExportDocumentSnapshot,
   type FormatWriteDocumentContext,
   type WrittenDocument,
+  type ExportMetadata,
 } from './export-contract';
 import { ExportRefusal, exportBlocked, exportTooLarge } from './export-errors';
 import { writeFloat32Text } from './numeric';
@@ -101,6 +103,22 @@ export async function writeObjDocument(
   snapshot: ExportDocumentSnapshot,
   context: FormatWriteDocumentContext,
 ): Promise<WrittenDocument> {
+  const sink = createByteSink(
+    context.encodeText,
+    context.limits.maxOutputBytes,
+    ExportRefusal.OutputTooLarge,
+  );
+  const metadata = await serializeObjDocument(snapshot, context, sink);
+  const bytes = sink.finish();
+  return { bytes, metadata: { ...metadata, outputBytes: bytes.byteLength } };
+}
+
+/** Same production formatting for both memory and file-backed storage. */
+export async function serializeObjDocument(
+  snapshot: ExportDocumentSnapshot,
+  context: FormatWriteDocumentContext,
+  sink: Pick<ByteSink, 'byteLength'> & Pick<ChunkTextWriter, 'write'>,
+): Promise<ExportMetadata> {
   if (snapshot.parts.length === 0) {
     throw exportBlocked(
       ExportRefusal.NoParts,
@@ -112,15 +130,13 @@ export async function writeObjDocument(
   /*
    * A PREFLIGHT, AND ONLY A PREFLIGHT.
    *
-   * A triangle costs at least three vertex lines and one face line, and even
-   * the shortest possible spelling of those — single-digit coordinates and
-   * indices — is about thirty bytes. That makes this a genuine LOWER bound, so
-   * an obvious impossibility is refused before anything is built. It is not a
-   * prediction: the real length depends on how long each number's decimal
-   * spelling turns out to be, and the running count in the sink stays
-   * authoritative.
+   * Count shared vertices separately from faces. Even the shortest vertex or
+   * face record needs eight bytes. Actual encoded accounting remains authoritative.
    */
-  const floorBytes = totalTriangles * 30;
+  const floorBytes = snapshot.parts.reduce(
+    (sum, part) => sum + ((snapshot.meshes[part.meshResourceIndex]?.positions.length ?? 0) / 3) * 8,
+    totalTriangles * 8,
+  );
   if (floorBytes > context.limits.maxOutputBytes) {
     throw exportTooLarge(
       ExportRefusal.OutputTooLarge,
@@ -129,12 +145,6 @@ export async function writeObjDocument(
     );
   }
 
-  const sink = createByteSink(
-    context.encodeText,
-    context.limits.maxOutputBytes,
-    ExportRefusal.OutputTooLarge,
-  );
-
   /*
    * A FIXED HEADER. It contains no document string and never will: a newline
    * inside a comment ends it, and the next characters become records — so
@@ -142,7 +152,12 @@ export async function writeObjDocument(
    * file. Every string that DOES come from the document goes through
    * `objRoundTripName`, which strips exactly that.
    */
-  sink.write('# Written by Pybrix. Geometry only: no materials, no textures.\n');
+  {
+    const pendingWrite = sink.write(
+      '# Written by Pybrix. Geometry only: no materials, no textures.\n',
+    );
+    if (pendingWrite !== undefined) await pendingWrite;
+  }
 
   let anyBaked = false;
   let anyGroups = false;
@@ -160,7 +175,19 @@ export async function writeObjDocument(
    * currently is has no benefit here and one more way to be wrong.
    */
   let vertexBase = 1;
-  let written = 0;
+  let work = 0;
+  const totalWork =
+    totalTriangles +
+    snapshot.parts.reduce(
+      (sum, part) => sum + (snapshot.meshes[part.meshResourceIndex]?.positions.length ?? 0) / 3,
+      0,
+    );
+  const advance = async (): Promise<void> => {
+    throwIfCancelled(context.cancellation);
+    await context.yieldToEventLoop();
+    throwIfCancelled(context.cancellation);
+    context.progress.report(totalWork === 0 ? 1 : work / totalWork, 'writing');
+  };
   /*
    * THE READER'S GROUPING STATE, which is FILE-GLOBAL: `usemtl` and `g` stay in
    * force across `o`, so a part's first faces would otherwise run on in the
@@ -192,7 +219,12 @@ export async function writeObjDocument(
     else anyGeneratedName = true;
     // A part with no usable name still gets an `o`: without one, two parts'
     // faces would merge into a single object on the way back in.
-    sink.write(`o ${name.length > 0 ? name : `part-${String(partIndex + 1)}`}\n`);
+    {
+      const pendingWrite = sink.write(
+        `o ${name.length > 0 ? name : `part-${String(partIndex + 1)}`}\n`,
+      );
+      if (pendingWrite !== undefined) await pendingWrite;
+    }
 
     const identity = isIdentity(part.transform);
     if (!identity) anyBaked = true;
@@ -204,7 +236,14 @@ export async function writeObjDocument(
       const z = positions[at + 2] ?? 0;
 
       if (identity) {
-        sink.write(`v ${writeFloat32Text(x)} ${writeFloat32Text(y)} ${writeFloat32Text(z)}\n`);
+        {
+          const pendingWrite = sink.write(
+            `v ${writeFloat32Text(x)} ${writeFloat32Text(y)} ${writeFloat32Text(z)}\n`,
+          );
+          if (pendingWrite !== undefined) await pendingWrite;
+        }
+        work += 1;
+        if (work % TRIANGLES_PER_BATCH === 0) await advance();
         continue;
       }
 
@@ -222,9 +261,14 @@ export async function writeObjDocument(
        * OUTPUT, and the authoritative mesh is not even in this worker.
        */
       const [wx, wy, wz] = applyPartTransform(part.transform, x, y, z);
-      sink.write(
-        `v ${writeFloat32Text(Math.fround(wx))} ${writeFloat32Text(Math.fround(wy))} ${writeFloat32Text(Math.fround(wz))}\n`,
-      );
+      {
+        const pendingWrite = sink.write(
+          `v ${writeFloat32Text(Math.fround(wx))} ${writeFloat32Text(Math.fround(wy))} ${writeFloat32Text(Math.fround(wz))}\n`,
+        );
+        if (pendingWrite !== undefined) await pendingWrite;
+      }
+      work += 1;
+      if (work % TRIANGLES_PER_BATCH === 0) await advance();
     }
 
     const starts = runStarts(mesh.groups ?? [], indices.length / 3);
@@ -256,13 +300,21 @@ export async function writeObjDocument(
         const wantMaterial = run?.materialRef;
         let readsBackAs: string | undefined;
         if (wantMaterial !== readerMaterial) {
-          sink.write(wantMaterial === undefined ? 'usemtl\n' : `usemtl ${wantMaterial}\n`);
+          {
+            const pendingWrite = sink.write(
+              wantMaterial === undefined ? 'usemtl\n' : `usemtl ${wantMaterial}\n`,
+            );
+            if (pendingWrite !== undefined) await pendingWrite;
+          }
           readerMaterial = wantMaterial;
           readsBackAs = wantMaterial ?? '';
           if (wantMaterial !== undefined) anyMaterial = true;
         }
         if (readsBackAs !== wantName) {
-          sink.write(wantName.length > 0 ? `g ${wantName}\n` : 'g\n');
+          {
+            const pendingWrite = sink.write(wantName.length > 0 ? `g ${wantName}\n` : 'g\n');
+            if (pendingWrite !== undefined) await pendingWrite;
+          }
         }
         if (run !== null) anyGroups = true;
         runStarted = true;
@@ -271,22 +323,18 @@ export async function writeObjDocument(
       const a = vertexBase + (indices[at] ?? 0);
       const b = vertexBase + (indices[at + 1] ?? 0);
       const c = vertexBase + (indices[at + 2] ?? 0);
-      sink.write(`f ${String(a)} ${String(b)} ${String(c)}\n`);
-
-      written += 1;
-      if (written % TRIANGLES_PER_BATCH === 0) {
-        throwIfCancelled(context.cancellation);
-        await context.yieldToEventLoop();
-        throwIfCancelled(context.cancellation);
-        context.progress.report(totalTriangles === 0 ? 1 : written / totalTriangles, 'writing');
+      {
+        const pendingWrite = sink.write(`f ${String(a)} ${String(b)} ${String(c)}\n`);
+        if (pendingWrite !== undefined) await pendingWrite;
       }
+
+      work += 1;
+      if (work % TRIANGLES_PER_BATCH === 0) await advance();
     }
 
     vertexBase += positions.length / 3;
     throwIfCancelled(context.cancellation);
   }
-
-  const bytes = sink.finish();
 
   const observations: ExportObservation[] = [
     ExportObservation.NormalsOmitted,
@@ -304,14 +352,11 @@ export async function writeObjDocument(
   if (partMaterialDropped) observations.push(ExportObservation.MaterialReferencesOmitted);
 
   return {
-    bytes,
-    metadata: {
-      formatId: MeshFormatId.Obj,
-      outputBytes: bytes.byteLength,
-      triangleCount: totalTriangles,
-      partCount: snapshot.parts.length,
-      meshResourceCount: snapshot.meshes.length,
-      observations,
-    },
+    formatId: MeshFormatId.Obj,
+    outputBytes: sink.byteLength,
+    triangleCount: totalTriangles,
+    partCount: snapshot.parts.length,
+    meshResourceCount: snapshot.meshes.length,
+    observations,
   };
 }

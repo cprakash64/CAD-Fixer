@@ -31,6 +31,7 @@ import {
 } from './export-contract';
 import { ExportRefusal, exportRefusalOf } from './export-errors';
 import { exportDocument } from './export-document';
+import { validateObjRecordStream } from './obj-stream-validation';
 import { writeObjDocument } from './obj-writer';
 import {
   testExportReadContext,
@@ -99,12 +100,23 @@ async function exportObj(
   document: GeometryDocument,
   limits = DEFAULT_EXPORT_LIMITS,
 ): Promise<WrittenDocument> {
-  return exportDocument({
+  const artifact = await exportDocument({
     snapshot: exportSnapshotOf(document, 'doc-1', 1),
     target: MeshFormatId.Obj,
     write: testWriteContext({ limits }),
     read: testExportReadContext(),
   });
+  async function* records(): AsyncIterable<string> {
+    const text = new TextDecoder().decode(artifact.bytes);
+    for (let at = 0; at < text.length; at += 4093)
+      yield await Promise.resolve(text.slice(at, at + 4093));
+  }
+  await validateObjRecordStream(
+    exportSnapshotOf(document, 'doc-1', 1),
+    records(),
+    testExportReadContext(),
+  );
+  return artifact;
 }
 
 async function readBack(bytes: Uint8Array): Promise<DocumentReadResult> {
@@ -584,9 +596,8 @@ describe('OBJ-W13/W14/W15: size and placement counts', () => {
     /*
      * OBJ CANNOT SHARE, so a thousand placements is a thousand copies. With a
      * narrow ceiling that is refused BEFORE anything is serialised, from a
-     * lower bound on the text a triangle needs — thirty bytes is shorter than
-     * any triangle can actually be written, so the estimate can only
-     * under-count and can never refuse something that would have fitted.
+     * lower bound counting vertex and face records separately. Indexed faces
+     * share vertices, so a per-triangle vertex estimate would over-count.
      */
     const shared = grid(40);
     const parts = Array.from({ length: 1_000 }, (_part, index) => ({
@@ -603,6 +614,17 @@ describe('OBJ-W13/W14/W15: size and placement counts', () => {
       AppErrorCode.ResourceLimitExceeded,
       ExportRefusal.OutputTooLarge,
     );
+  });
+
+  it('does not refuse shared indexed vertices when the actual OBJ fits the ceiling', async () => {
+    const document = documentOf([{ mesh: grid(10) }]);
+    const expected = await exportObj(document);
+    expect(expected.bytes.byteLength).toBeLessThan(200 * 30);
+    const written = await exportObj(document, {
+      maxOutputBytes: expected.bytes.byteLength,
+      maxSerialisedBytes: DEFAULT_EXPORT_LIMITS.maxSerialisedBytes,
+    });
+    expect(written.bytes).toEqual(expected.bytes);
   });
 
   it('refuses while writing when the preflight could not tell', async () => {

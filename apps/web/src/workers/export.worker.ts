@@ -5,9 +5,14 @@ import {
   DEFAULT_IMPORT_BUDGET,
   exportDocument,
   exportRefusalOf,
+  exportBlocked,
+  ExportRefusal,
+  objNeedsFileSink,
 } from '@cadfixer/file-formats';
 import { toAppError, uncancellable } from '@cadfixer/shared';
 import { resolveExportTarget } from './export-protocol';
+import { transferableExportChunk } from './export-chunk';
+import { exportObjToFile } from './obj-file-export';
 import { inflateRaw } from './platform-inflate';
 import type {
   ExportPortMessage,
@@ -98,6 +103,9 @@ async function* deflateRaw(bytes: Uint8Array): AsyncIterable<Uint8Array> {
 
 const decoder = new TextDecoder('utf-8', { fatal: false });
 
+let fileBacked = false;
+let acknowledgeChunk: (() => void) | undefined;
+
 async function run(message: ExportSnapshotMessage): Promise<void> {
   const target = resolveExportTarget(message.target);
   if (target === undefined) {
@@ -111,7 +119,60 @@ async function run(message: ExportSnapshotMessage): Promise<void> {
     return;
   }
 
+  let lastProgress = 0;
+  let lastPhase: string | undefined;
+  const reportProgress = (fraction: number, note?: string): void => {
+    const now = performance.now();
+    if (note !== lastPhase || fraction === 1 || now - lastProgress >= 50) {
+      lastProgress = now;
+      lastPhase = note;
+      post({
+        kind: 'progress',
+        operationId: message.operationId,
+        fraction,
+        ...(note === undefined ? {} : { note }),
+      });
+    }
+  };
   try {
+    if (target === 'obj' && fileBacked) {
+      const metadata = await exportObjToFile(
+        message.snapshot,
+        (bytes) =>
+          new Promise<void>((resolve) => {
+            acknowledgeChunk = resolve;
+            const buffer = transferableExportChunk(bytes);
+            post({ kind: 'chunk', operationId: message.operationId, bytes: buffer }, [buffer]);
+          }),
+        reportProgress,
+        yieldToEventLoop,
+      );
+      post({
+        kind: 'file-ready',
+        operationId: message.operationId,
+        documentId: message.snapshot.documentId,
+        documentRevision: message.snapshot.revision,
+        metadata,
+      });
+      return;
+    }
+    if (
+      target === 'obj' &&
+      objNeedsFileSink(
+        message.snapshot.parts.map((part) => {
+          const mesh = message.snapshot.meshes[part.meshResourceIndex];
+          return {
+            vertexCount: (mesh?.positions.length ?? 0) / 3,
+            triangleCount: (mesh?.indices.length ?? 0) / 3,
+            groupCount: mesh?.groups?.length ?? 0,
+          };
+        }),
+      )
+    )
+      throw exportBlocked(
+        ExportRefusal.FileSinkRequired,
+        'Large OBJ saving requires a file-backed destination.',
+      );
     const written = await exportDocument({
       snapshot: message.snapshot,
       target,
@@ -128,12 +189,10 @@ async function run(message: ExportSnapshotMessage): Promise<void> {
         limits: DEFAULT_EXPORT_LIMITS,
         progress: {
           report: (fraction, note) => {
-            post({
-              kind: 'progress',
-              operationId: message.operationId,
-              fraction,
-              ...(note === undefined ? {} : { note }),
-            });
+            reportProgress(
+              target === 'obj' && note === 'writing' ? fraction * 0.8 : fraction,
+              note,
+            );
           },
         },
         yieldToEventLoop,
@@ -186,8 +245,15 @@ async function run(message: ExportSnapshotMessage): Promise<void> {
   }
 }
 
-self.onmessage = (event: MessageEvent<ExportPortMessage>): void => {
+self.onmessage = (event: MessageEvent<ExportPortMessage | { kind: 'chunk-ack' }>): void => {
   const message = event.data;
+  if (message.kind === 'chunk-ack') {
+    const resolve = acknowledgeChunk;
+    acknowledgeChunk = undefined;
+    resolve?.();
+    return;
+  }
+  fileBacked = message.fileBacked === true;
 
   message.port.onmessage = (snapshotEvent: MessageEvent<ExportSnapshotMessage>): void => {
     void run(snapshotEvent.data);

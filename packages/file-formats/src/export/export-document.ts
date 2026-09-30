@@ -28,8 +28,8 @@ import {
  *
  * Serialise, read the bytes back with the PRODUCTION reader, compare against
  * what the target is expected to preserve, and only then return an artifact.
- * A format-specific success path would be a second definition of "exported",
- * and the two would eventually disagree about what validation means.
+ * Large OBJ uses exportObjDocumentStream with the same production record reader
+ * and source-semantic contract, without reconstructing full output geometry.
  */
 
 export interface ExportDocumentOptions {

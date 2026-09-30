@@ -1,7 +1,8 @@
-import { ExportStatus, type ExportMetadata } from '@cadfixer/file-formats';
+import { ExportStatus, exportRefusalOf, type ExportMetadata } from '@cadfixer/file-formats';
 import type { DocumentHandle } from '@cadfixer/geometry-runtime';
 import { AppErrorCode, toAppError, type AppError } from '@cadfixer/shared';
 import type { GeometryClient } from './geometry-client';
+import type { ExportFileDestination } from './export-file-sink';
 import type { ExportWorkerOutbound } from '../workers/export-protocol';
 
 /**
@@ -20,10 +21,10 @@ import type { ExportWorkerOutbound } from '../workers/export-protocol';
  * THE AUTHORITATIVE WORKER IS NEVER TOUCHED. It is a different worker; it only
  * ever hands over a snapshot.
  *
- * WHAT COMES BACK TO THE PAGE is the finished file. That is not a weakening of
- * ADR 0008: a serialised artifact is what the user asked to save, it cannot be
- * edited back into the model, and holding it is exactly as risky as holding the
- * file they already had on disk.
+ * Large OBJ delivery carries one bounded byte chunk at a time. The controller
+ * acknowledges completed disk writes, checks the live document before commit,
+ * and owns the transactional writable's close/abort lifecycle. Small artifacts
+ * retain the automatic-download path.
  */
 
 export const ExportTarget = {
@@ -37,6 +38,9 @@ export type ExportTarget = (typeof ExportTarget)[keyof typeof ExportTarget];
 
 export interface DocumentExportRequest {
   readonly handle: DocumentHandle;
+  /** Selected under user activation; no worker or snapshot starts before it resolves. */
+  readonly destination?: Promise<ExportFileDestination>;
+  readonly isCurrent?: () => boolean;
   readonly target: ExportTarget;
   /**
    * What the user stated this document's numbers mean, for this export only.
@@ -62,7 +66,8 @@ export interface DocumentExportRequest {
 export type DocumentExportOutcome =
   | {
       readonly status: typeof ExportStatus.Success;
-      readonly bytes: Uint8Array;
+      readonly bytes: Uint8Array | undefined;
+      readonly savedFileName?: string;
       readonly metadata: ExportMetadata;
       readonly handle: DocumentHandle;
       readonly durationMs: number;
@@ -127,6 +132,7 @@ export class DocumentExportService {
   private activeOperationId: string | undefined;
   private settleCurrent: ((outcome: DocumentExportOutcome) => void) | undefined;
   private cancelCurrent: (() => void) | undefined;
+  private cleanupOutput: (() => void) | undefined;
   private readonly client: GeometryClient;
   private readonly createWorker: ExportWorkerFactory;
 
@@ -162,59 +168,149 @@ export class DocumentExportService {
    */
   public run(request: DocumentExportRequest): DocumentExportSession {
     this.dispose();
-
-    const operationId = `export-${String(nextOperation)}`;
-    nextOperation += 1;
-    this.activeOperationId = operationId;
-
-    const worker = this.createWorker();
-    const channel = new MessageChannel();
-    this.worker = worker;
-    this.channel = channel;
+    const operationId = `export-${String(nextOperation++)}`;
     const startedAt = Date.now();
-
+    this.activeOperationId = operationId;
+    let destination: ExportFileDestination | undefined;
+    let completed = false;
+    let writing = false;
+    let committing = false;
+    const active = (): boolean => this.activeOperationId === operationId;
+    const current = (): boolean => active() && (request.isCurrent?.() ?? true);
+    const clean = (): void => {
+      if (!completed) void destination?.abort().catch(() => undefined);
+    };
+    this.cleanupOutput = clean;
+    const failed = (cause: unknown): void => {
+      if (!active()) return;
+      const cancelled = cause instanceof DOMException && cause.name === 'AbortError';
+      this.settle(
+        operationId,
+        cancelled
+          ? {
+              status: ExportStatus.Cancelled,
+              reason: undefined,
+              message: 'Export was cancelled.',
+              durationMs: Date.now() - startedAt,
+            }
+          : outcomeFrom(
+              toAppError(cause),
+              exportRefusalOf(toAppError(cause)),
+              Date.now() - startedAt,
+            ),
+      );
+    };
+    const stale = (): void => {
+      this.settle(operationId, {
+        status: ExportStatus.StaleRevision,
+        reason: 'EXPORT_STALE_REVISION',
+        message: 'The model changed while it was being written.',
+        durationMs: Date.now() - startedAt,
+      });
+    };
     const promise = new Promise<DocumentExportOutcome>((resolve) => {
       this.settleCurrent = resolve;
-
+    });
+    this.cancelCurrent = (): void => {
+      if (!active() || committing) return;
+      this.settle(operationId, {
+        status: ExportStatus.Cancelled,
+        reason: undefined,
+        message: 'Export was cancelled.',
+        durationMs: Date.now() - startedAt,
+      });
+    };
+    const start = (): void => {
+      if (!current()) {
+        if (active()) stale();
+        return;
+      }
+      const worker = this.createWorker();
+      const channel = new MessageChannel();
+      this.worker = worker;
+      this.channel = channel;
+      worker.addEventListener('error', () => {
+        failed(new Error('The export worker failed.'));
+      });
       worker.addEventListener('message', (event: MessageEvent<ExportWorkerOutbound>) => {
+        if (!active()) return;
         const data = event.data;
-        // A message for a superseded operation is DISCARDED, never published.
         if ('operationId' in data && data.operationId !== operationId) return;
-
         switch (data.kind) {
           case 'ready':
             return;
           case 'progress':
             request.onProgress?.(data.fraction, data.note);
             return;
-          case 'written': {
-            /*
-             * THE REVISION IS RE-CHECKED HERE, against the handle the caller
-             * asked for. The snapshot carries the revision it was built from,
-             * so an artifact produced from a document that has since been
-             * repaired, undone or replaced is DISCARDED rather than handed
-             * back — a user must never be given a file of geometry they are no
-             * longer looking at.
-             */
+          case 'chunk': {
+            if (destination === undefined || writing || committing) {
+              failed(new Error('The export violated its bounded delivery protocol.'));
+              return;
+            }
+            if (!current()) {
+              stale();
+              return;
+            }
+            writing = true;
+            void destination
+              .write(new Uint8Array(data.bytes))
+              .then(() => {
+                writing = false;
+                if (current()) worker.postMessage({ kind: 'chunk-ack', operationId });
+                else if (active()) stale();
+              })
+              .catch(failed);
+            return;
+          }
+          case 'written':
+          case 'file-ready': {
             if (
+              !current() ||
               data.documentId !== request.handle.documentId ||
               data.documentRevision !== request.handle.revision
             ) {
-              this.settle(operationId, {
-                status: ExportStatus.StaleRevision,
-                reason: 'EXPORT_STALE_REVISION',
-                message: 'The model changed while it was being written, so the file was discarded.',
-                durationMs: Date.now() - startedAt,
-              });
+              stale();
               return;
             }
-            this.settle(operationId, {
-              status: ExportStatus.Success,
-              bytes: new Uint8Array(data.bytes as ArrayBuffer),
-              metadata: data.metadata,
-              handle: request.handle,
-              durationMs: Date.now() - startedAt,
-            });
+            if (data.kind === 'written') {
+              if (destination !== undefined) {
+                failed(new Error('Expected a streamed export.'));
+                return;
+              }
+              completed = true;
+              this.settle(operationId, {
+                status: ExportStatus.Success,
+                bytes: new Uint8Array(data.bytes as ArrayBuffer),
+                metadata: data.metadata,
+                handle: request.handle,
+                durationMs: Date.now() - startedAt,
+              });
+            } else {
+              if (destination === undefined || writing || committing) {
+                failed(new Error('The export destination is not ready to commit.'));
+                return;
+              }
+              // Atomic publication is the transaction's linearization point.
+              // Cancel is accepted until here; a committed file is success.
+              committing = true;
+              const selected = destination;
+              void selected
+                .close()
+                .then(() => {
+                  if (!active()) return;
+                  completed = true;
+                  request.onProgress?.(1, 'complete');
+                  this.settle(operationId, {
+                    status: ExportStatus.Success,
+                    bytes: undefined,
+                    savedFileName: selected.name,
+                    metadata: data.metadata,
+                    handle: request.handle,
+                    durationMs: Date.now() - startedAt,
+                  });
+                })
+                .catch(failed);
+            }
             return;
           }
           case 'failed':
@@ -223,84 +319,50 @@ export class DocumentExportService {
               outcomeFrom(toAppError(new Error(data.message)), data.reason, Date.now() - startedAt),
             );
             return;
-          default:
-            return;
         }
       });
-
-      /*
-       * A worker that dies without answering must not leave the caller waiting
-       * forever. `error` covers a load or runtime failure; `terminate()` from
-       * `cancel()` fires nothing at all, which is why cancellation settles
-       * explicitly rather than relying on an event.
-       */
-      worker.addEventListener('error', () => {
-        this.settle(operationId, {
-          status: ExportStatus.InternalFailure,
-          reason: undefined,
-          message: 'The export worker failed.',
-          durationMs: Date.now() - startedAt,
-        });
-      });
-
-      this.cancelCurrent = (): void => {
-        if (this.activeOperationId !== operationId) return;
-        const cancelled: DocumentExportOutcome = {
-          status: ExportStatus.Cancelled,
-          reason: undefined,
-          message: 'Export was cancelled.',
-          durationMs: Date.now() - startedAt,
-        };
-        /*
-         * THE RESOLVER IS TAKEN BEFORE THE TEARDOWN, and the order is the whole
-         * fix. `dispose` settles whatever is still pending with a zeroed
-         * record, so disposing first meant the promise had ALREADY resolved
-         * with `durationMs: 0` by the time the real outcome arrived — and a
-         * promise settles once, so the second call did nothing.
-         *
-         * Nothing user-visible depended on the number, which is exactly why it
-         * went unnoticed: a test comparing a cancelled export's duration
-         * against an uncancelled one was comparing against zero and passing for
-         * the wrong reason.
-         */
-        const settle = this.settleCurrent;
-        this.settleCurrent = undefined;
-        this.dispose();
-        settle?.(cancelled);
-      };
-    });
-
-    // Hand each worker its end of the channel, then ask the authoritative
-    // worker to push a disposable snapshot across it.
-    worker.postMessage({ kind: 'port', port: channel.port2 }, [channel.port2]);
-
-    void this.client
-      .sendForExport({
-        handle: request.handle,
-        target: request.target,
-        operationId,
-        port: channel.port1,
-        ...(request.unitAssertion === undefined ? {} : { unitAssertion: request.unitAssertion }),
-      })
-      .catch((cause: unknown) => {
-        if (this.activeOperationId !== operationId) return;
-        /*
-         * SETTLED BEFORE THE TEARDOWN, and the order is load-bearing.
-         * `settle` disposes the operation, and disposal clears the resolver —
-         * so settling afterwards would call nothing and the promise would stay
-         * pending forever. A producer-side refusal (a released handle, a stale
-         * revision) would then leave a panel saying "Writing…" with no worker
-         * running and no way out.
-         */
-        const error = toAppError(cause);
-        this.settle(operationId, outcomeFrom(error, undefined, Date.now() - startedAt));
-      });
-
+      worker.postMessage(
+        {
+          kind: 'port',
+          port: channel.port2,
+          ...(destination === undefined ? {} : { fileBacked: true }),
+        },
+        [channel.port2],
+      );
+      void this.client
+        .sendForExport({
+          handle: request.handle,
+          target: request.target,
+          operationId,
+          port: channel.port1,
+          ...(request.unitAssertion === undefined ? {} : { unitAssertion: request.unitAssertion }),
+        })
+        .catch(failed);
+    };
+    if (request.destination === undefined) {
+      try {
+        start();
+      } catch (cause) {
+        failed(cause);
+      }
+    } else {
+      void request.destination
+        .then(async (selected) => {
+          destination = selected;
+          if (!current()) {
+            await selected.abort();
+            if (active()) stale();
+            return;
+          }
+          start();
+        })
+        .catch(failed);
+    }
     return {
       operationId,
       promise,
       cancel: (): void => {
-        this.cancelCurrent?.();
+        if (active()) this.cancelCurrent?.();
       },
     };
   }
@@ -321,6 +383,8 @@ export class DocumentExportService {
     this.channel?.port2.close();
     this.channel = undefined;
     this.cancelCurrent = undefined;
+    this.cleanupOutput?.();
+    this.cleanupOutput = undefined;
   }
 
   /**

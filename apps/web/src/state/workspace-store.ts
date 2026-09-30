@@ -2132,6 +2132,7 @@ export class WorkspaceStore {
    * is the first of two independent defences, not the only one.
    */
   public beginRepairCommit(): boolean {
+    if (this.state.conversion.state === ConversionState.Working) return false;
     const repair = this.state.repair;
     if (repair.commitState !== RepairCommitState.Idle) return false;
     if (repair.candidateState !== RepairCandidateState.Ready || repair.candidate === undefined) {
@@ -2345,6 +2346,7 @@ export class WorkspaceStore {
 
   /** Claims the undo slot. False when a commit or undo is already running. */
   public beginRepairUndo(): boolean {
+    if (this.state.conversion.state === ConversionState.Working) return false;
     const repair = this.state.repair;
     if (repair.commitState !== RepairCommitState.Idle) return false;
     if (repair.lastApplied?.undoable !== true) return false;
@@ -2895,6 +2897,7 @@ export class WorkspaceStore {
 
   /** Claims the undo slot for a hole fill. */
   public beginHoleFillUndo(): boolean {
+    if (this.state.conversion.state === ConversionState.Working) return false;
     const holeFill = this.state.holeFill;
     if (holeFill.commitState !== HoleFillCommitState.Idle) return false;
     if (holeFill.lastApplied?.undoable !== true) return false;

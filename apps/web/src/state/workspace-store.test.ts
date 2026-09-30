@@ -438,6 +438,14 @@ describe('WorkspaceStore conversion measurements', () => {
     });
   }
 
+  it('prevents repair commit and undo while exporting', () => {
+    const store = loaded();
+    store.beginConversion();
+    expect(store.beginRepairCommit()).toBe(false);
+    expect(store.beginRepairUndo()).toBe(false);
+    expect(store.beginHoleFillUndo()).toBe(false);
+  });
+
   it('records the size of a file it actually wrote, keyed by revision, target and unit', () => {
     const store = loaded();
     save(store, 'obj', 900);
