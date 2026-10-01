@@ -267,6 +267,15 @@ export const SPLIT_COPY = Object.freeze({
   exportThreeMf: 'One 3MF',
   exportThreeMfAction: 'Open in Convert as 3MF',
   hintDrag: 'Drag the orange arrow to move the plane',
+  /*
+   * WORKSPACE-UX-03: one line each for the action region. The full message is
+   * an alert in the scrolling content above it.
+   */
+  previewReady: 'Preview ready — nothing has changed until you apply it.',
+  applying: 'Applying the split…',
+  failedLine: 'No split was made — details above',
+  exportFailedLine: 'The export did not finish — details above',
+  exportSection: 'Export pieces',
 });
 
 /** "Position along Z". */

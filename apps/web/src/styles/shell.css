@@ -2715,44 +2715,90 @@
 }
 
 /*
- * BOUNDED — CONVERT-UX-02. The Convert footer holds the action row and at most
- * one line about it (see `ConvertFooter`), and this is the same promise made
- * structurally: the region cannot exceed the cap whatever it is given, the
- * action row never shrinks, and the line above or below it is what gives way.
- * The cap is a ceiling the content does not reach — it exists so that content
- * added later cannot take the scroll area from the controls above the footer.
+ * THE BOUNDED ACTION REGION — CONVERT-UX-02, made the contract of every
+ * workspace by WORKSPACE-UX-03 (`shell/action-footer.tsx`).
+ *
+ * A workspace footer holds the action row and at most one line about it, and
+ * this is the same promise made structurally: the region cannot exceed
+ * `--action-footer-max` whatever it is given, the action row never shrinks,
+ * and the line beside it is what gives way. The cap is a ceiling the content
+ * does not reach — it exists so that content added later cannot take the
+ * scroll area from the controls above the footer, which is how Repair, Split
+ * and Texture each came to cover theirs.
  */
-.convert-footer--bounded {
+.action-footer {
   max-height: var(--action-footer-max);
   overflow: hidden;
 }
 
-.convert-footer--bounded > * {
+.action-footer > * {
   flex: 0 1 auto;
   min-height: 0;
   overflow: hidden;
 }
 
-.convert-footer--bounded > .convert-footer__actions {
+.action-footer > .convert-footer__actions {
   flex: none;
   /* Room for the focus ring, which `overflow: hidden` would otherwise crop. */
   margin: -3px;
   padding: 3px;
 }
 
-.convert-footer--bounded .convert-footer__failure-text {
+/* The one line: it truncates, it never wraps. */
+.action-footer__line,
+.action-footer .convert-footer__failure-text {
   margin: 0;
   overflow: hidden;
+  color: var(--cad-text);
+  font-size: var(--fs-secondary);
+  line-height: 1.4;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.convert-footer--bounded .convert-footer__hint {
+.action-footer__line > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.action-footer__line--failure {
+  padding: 3px 8px;
+  border-left: 3px solid var(--cad-error);
+  border-radius: var(--radius-sm);
+  background: var(--cad-error-soft);
+  color: var(--cad-text-strong);
+}
+
+.action-footer .convert-footer__failure-text {
+  color: inherit;
+}
+
+.action-footer .convert-footer__hint {
   display: -webkit-box;
   overflow: hidden;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
   line-clamp: 2;
+}
+
+/*
+ * THE OUTCOME BLOCK: the end of a workspace's scrolling content, directly
+ * above the action region. Failures in full, and explanations behind ⓘ.
+ */
+.workspace-outcome > .info-panel {
+  margin: 0 14px 12px;
+}
+
+.workspace-outcome__alert {
+  margin: 0 14px 12px;
+  padding: 8px 10px;
+  border-left: 3px solid var(--cad-error);
+  border-radius: var(--radius-sm);
+  background: var(--cad-error-soft);
+  color: var(--cad-text-strong);
+  font-size: var(--fs-secondary);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
 }
 
 .convert-footer__progress-row {
@@ -3310,7 +3356,22 @@
   font-weight: 500;
 }
 
-.texture-footer__undo {
+.texture-applied__headline {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 6px;
+  color: var(--cad-text-strong);
+  font: 600 var(--fs-secondary) / 1.4 var(--font-body);
+}
+
+.texture-applied__headline > svg {
+  flex: none;
+  color: var(--cad-success);
+}
+
+.texture-applied__undo {
+  width: auto;
   height: 30px;
   font-size: var(--fs-secondary);
 }
@@ -3629,7 +3690,7 @@
 @media (width < 600px) {
   .texture-tool,
   .texture-tools__clear,
-  .texture-footer__undo {
+  .texture-applied__undo {
     height: 40px;
   }
 
@@ -3656,7 +3717,7 @@
     --action-footer-max: 92px;
   }
 
-  .convert-footer--bounded {
+  .action-footer {
     gap: 6px;
     padding-top: 6px;
     padding-bottom: 8px;
@@ -4086,13 +4147,6 @@
   font-size: var(--fs-meta);
 }
 
-.repair-footer__line {
-  margin: 0;
-  color: var(--cad-text);
-  font-size: var(--fs-secondary);
-  line-height: 1.4;
-}
-
 .repair-footer__reason {
   display: flex;
   align-items: flex-start;
@@ -4102,12 +4156,6 @@
 .repair-footer__reason > .convert-footer__hint {
   flex: 1;
   padding-top: 3px;
-}
-
-.repair-footer > .info-panel {
-  max-height: 30vh;
-  margin: 0;
-  overflow-y: auto;
 }
 
 .info-panel__list {

@@ -27,6 +27,13 @@ import {
   type SplitControls,
 } from '../state/use-split-workflow';
 import { useOpenConvertWorkspace } from './shell/open-convert';
+import {
+  ActionFooter,
+  ActionFooterLine,
+  OutcomeAlert,
+  WorkspaceOutcome,
+  useRevealAtEnd,
+} from './shell/action-footer';
 import { Icon } from './shell/Icon';
 import { NumberField } from './shell/number-field';
 import { PanelSection, SegmentedControl, type SegmentedOption } from './shell/primitives';
@@ -46,6 +53,12 @@ import { PanelSection, SegmentedControl, type SegmentedOption } from './shell/pr
 export function SplitWorkspace(): ReactNode {
   const { model } = useWorkspaceState();
   const split = useSplitControls();
+  /*
+   * OWNED HERE — WORKSPACE-UX-03. The choice is made in the scrolling content
+   * and acted on from the footer; when both lived in the footer the applied
+   * state was 162 px tall inside a 140 px scroll area.
+   */
+  const [exportMode, setExportMode] = useState<ExportMode>('stl');
 
   return (
     <div className="convert-workspace split-workspace" data-testid="split-workspace">
@@ -61,10 +74,12 @@ export function SplitWorkspace(): ReactNode {
             <CutPlaneSection split={split} />
             <ConnectorSection split={split} />
             <ResultSection split={split} />
+            <ExportSection split={split} mode={exportMode} onMode={setExportMode} />
           </>
         )}
+        <SplitOutcome split={split} />
       </div>
-      <SplitFooter split={split} />
+      <SplitFooter split={split} exportMode={exportMode} />
     </div>
   );
 }
@@ -538,15 +553,96 @@ function ResultSection({ split }: { readonly split: SplitControls }): ReactNode 
   );
 }
 
-/* ---------------------------------------------------------------- footer -- */
+/* ---------------------------------------------------------------- export -- */
 
 type ExportMode = 'stl' | '3mf';
 
-function SplitFooter({ split }: { readonly split: SplitControls }): ReactNode {
+/**
+ * How the two pieces leave: a choice, so it scrolls with the other choices.
+ * Shown once a split is applied, directly beneath the pieces it will write.
+ */
+function ExportSection({
+  split,
+  mode,
+  onMode,
+}: {
+  readonly split: SplitControls;
+  readonly mode: ExportMode;
+  readonly onMode: (mode: ExportMode) => void;
+}): ReactNode {
+  const { model } = useWorkspaceState();
+  const applied = split.applied !== undefined && split.phase === SplitPhase.Idle;
+  const saved =
+    split.exportMessage !== undefined && split.exportState === SplitExportState.Done
+      ? split.exportMessage
+      : undefined;
+  // The export choice appears where the result just did; a saved file likewise.
+  const ref = useRevealAtEnd<HTMLDivElement>(applied ? `applied${saved ?? ''}` : undefined);
+  if (!applied) return null;
+  const options: readonly SegmentedOption<ExportMode>[] = [
+    { value: 'stl', label: SPLIT_COPY.exportStls, testId: 'split-export-stls' },
+    { value: '3mf', label: SPLIT_COPY.exportThreeMf, testId: 'split-export-3mf' },
+  ];
+  return (
+    <div ref={ref}>
+      <PanelSection title={SPLIT_COPY.exportSection} testId="split-export-section">
+        <SegmentedControl label="Export mode" options={options} value={mode} onChange={onMode} />
+        <p className="split-footer__note" data-testid="split-export-note">
+          {mode === 'stl'
+            ? 'Each piece as its own binary STL, one download each.'
+            : `One 3MF of the whole model — all ${String(model?.parts.length ?? 0)} parts — through Convert, which asks for a unit if the model states none.`}
+        </p>
+        {/* Announced once, when a file is written; never part of the footer. */}
+        <div aria-live="polite">
+          {saved === undefined ? null : (
+            <p className="convert-footer__saved" data-testid="split-export-saved">
+              <Icon name="ok" size={14} />
+              <span>{saved}</span>
+            </p>
+          )}
+        </div>
+      </PanelSection>
+    </div>
+  );
+}
+
+/* --------------------------------------------------------------- outcome -- */
+
+/** Every failure in full, at the end of the scrolling content. */
+function SplitOutcome({ split }: { readonly split: SplitControls }): ReactNode {
+  const exportFailure =
+    split.exportState === SplitExportState.Failed ? split.exportMessage : undefined;
+  const key = [split.error, exportFailure].filter((message) => message !== undefined).join('|');
+  return (
+    <WorkspaceOutcome revealKey={key === '' ? undefined : key}>
+      {split.error === undefined ? null : (
+        <OutcomeAlert testId="split-error">{split.error} The model is unchanged.</OutcomeAlert>
+      )}
+      {exportFailure === undefined ? null : (
+        <OutcomeAlert testId="split-export-failure">{exportFailure}</OutcomeAlert>
+      )}
+    </WorkspaceOutcome>
+  );
+}
+
+/* ---------------------------------------------------------------- footer -- */
+
+/**
+ * The shared bounded action region: the action row and ONE line — progress,
+ * else a failure's headline, else the preview state, else why the action is
+ * unavailable. The pieces, the export choice and every message in full are in
+ * the scrolling content above.
+ */
+function SplitFooter({
+  split,
+  exportMode,
+}: {
+  readonly split: SplitControls;
+  readonly exportMode: ExportMode;
+}): ReactNode {
   const { model } = useWorkspaceState();
   const store = useWorkspaceStore();
   const openConvert = useOpenConvertWorkspace();
-  const [mode, setMode] = useState<ExportMode>('stl');
   const hintId = useId();
   const hasPart = model !== undefined && split.part !== undefined;
   const applied = split.applied;
@@ -558,94 +654,71 @@ function SplitFooter({ split }: { readonly split: SplitControls }): ReactNode {
   const connectorBlocked =
     split.connector.kind !== 'none' &&
     (!split.connectorsAvailable || split.connectorProblem !== undefined);
-  const exportOptions: readonly SegmentedOption<ExportMode>[] = [
-    { value: 'stl', label: SPLIT_COPY.exportStls, testId: 'split-export-stls' },
-    { value: '3mf', label: SPLIT_COPY.exportThreeMf, testId: 'split-export-3mf' },
-  ];
 
   const hint = !hasPart
     ? SPLIT_COPY.noPart
     : connectorBlocked
       ? (split.connectorProblem ?? SPLIT_COPY.connectorsNeedMillimetres)
       : undefined;
+  const working = split.phase === SplitPhase.Computing || split.phase === SplitPhase.Applying;
+  const failureLine =
+    split.error !== undefined
+      ? SPLIT_COPY.failedLine
+      : split.exportState === SplitExportState.Failed && split.exportMessage !== undefined
+        ? SPLIT_COPY.exportFailedLine
+        : undefined;
+  const line = working ? (
+    <p className="split-footer__progress action-footer__line" data-testid="split-progress">
+      <Icon name="loader" size={14} className="spin" />
+      <span>{split.phase === SplitPhase.Applying ? SPLIT_COPY.applying : split.progress}</span>
+    </p>
+  ) : failureLine !== undefined ? (
+    <ActionFooterLine tone="failure" testId="split-failure-line">
+      {failureLine}
+    </ActionFooterLine>
+  ) : split.phase === SplitPhase.Preview ? (
+    <ActionFooterLine testId="split-preview-ready" title={SPLIT_COPY.previewReady}>
+      {SPLIT_COPY.previewReady}
+    </ActionFooterLine>
+  ) : undefined;
 
   return (
-    <div className="convert-footer split-footer" data-testid="split-footer">
+    <ActionFooter testId="split-footer" className="split-footer">
       <div className="convert-footer__status" aria-live="polite">
-        {split.phase === SplitPhase.Computing || split.phase === SplitPhase.Applying ? (
-          <p className="split-footer__progress" data-testid="split-progress">
-            <Icon name="loader" size={14} className="spin" />
-            {split.phase === SplitPhase.Applying ? 'Applying the split…' : split.progress}
-          </p>
-        ) : null}
-        {split.phase === SplitPhase.Preview ? (
-          <p className="split-footer__progress" data-testid="split-preview-ready">
-            Preview ready — nothing has changed until you apply it.
-          </p>
-        ) : null}
-        {split.exportMessage !== undefined && split.exportState === SplitExportState.Done ? (
-          <p className="convert-footer__saved" data-testid="split-export-saved">
-            <Icon name="ok" size={14} />
-            <span>{split.exportMessage}</span>
-          </p>
-        ) : null}
+        {line}
       </div>
-      {split.error === undefined ? null : (
-        <p className="convert-footer__failure" role="alert" data-testid="split-error">
-          {split.error} The model is unchanged.
-        </p>
-      )}
-      {split.exportState === SplitExportState.Failed && split.exportMessage !== undefined ? (
-        <p className="convert-footer__failure" role="alert" data-testid="split-export-failure">
-          {split.exportMessage}
-        </p>
-      ) : null}
 
       {applied !== undefined && split.phase === SplitPhase.Idle ? (
-        <>
-          <p className="format-options__label">{SPLIT_COPY.exportMode}</p>
-          <SegmentedControl
-            label="Export mode"
-            options={exportOptions}
-            value={mode}
-            onChange={setMode}
-          />
-          <p className="split-footer__note" data-testid="split-export-note">
-            {mode === 'stl'
-              ? 'Each piece as its own binary STL, one download each.'
-              : `One 3MF of the whole model — all ${String(model?.parts.length ?? 0)} parts — through Convert, which asks for a unit if the model states none.`}
-          </p>
-          <div className="convert-footer__actions">
-            <button
-              type="button"
-              className="secondary-action convert-footer__cancel"
-              onClick={split.undo}
-              data-testid="split-undo"
-            >
-              {SPLIT_COPY.undoButton}
-            </button>
-            <button
-              type="button"
-              className="primary-action convert-footer__primary"
-              disabled={!piecesPresent || split.exportState === SplitExportState.Exporting}
-              aria-busy={split.exportState === SplitExportState.Exporting}
-              onClick={() => {
-                if (mode === 'stl') {
-                  split.exportPieces();
-                  return;
-                }
-                store.setConversionTarget('3mf');
-                openConvert();
-              }}
-              data-testid="split-export"
-            >
-              <Icon name="download" size={16} />
-              <span>
-                {mode === 'stl' ? describeExportParts(2) : SPLIT_COPY.exportThreeMfAction}
-              </span>
-            </button>
-          </div>
-        </>
+        <div className="convert-footer__actions">
+          <button
+            type="button"
+            className="secondary-action convert-footer__cancel"
+            onClick={split.undo}
+            data-testid="split-undo"
+          >
+            {SPLIT_COPY.undoButton}
+          </button>
+          <button
+            type="button"
+            className="primary-action convert-footer__primary"
+            disabled={!piecesPresent || split.exportState === SplitExportState.Exporting}
+            aria-busy={split.exportState === SplitExportState.Exporting}
+            onClick={() => {
+              if (exportMode === 'stl') {
+                split.exportPieces();
+                return;
+              }
+              store.setConversionTarget('3mf');
+              openConvert();
+            }}
+            data-testid="split-export"
+          >
+            <Icon name="download" size={16} />
+            <span>
+              {exportMode === 'stl' ? describeExportParts(2) : SPLIT_COPY.exportThreeMfAction}
+            </span>
+          </button>
+        </div>
       ) : (
         <div className="convert-footer__actions">
           <button
@@ -689,7 +762,13 @@ function SplitFooter({ split }: { readonly split: SplitControls }): ReactNode {
         </div>
       )}
       {hint === undefined ? null : (
-        <p className="convert-footer__hint" id={hintId} data-testid="split-unavailable">
+        <p
+          // ONE LINE AT A TIME: drawn only when nothing else occupies the region.
+          className={line === undefined ? 'convert-footer__hint' : 'visually-hidden'}
+          id={hintId}
+          title={hint}
+          data-testid="split-unavailable"
+        >
           {hint}
         </p>
       )}
@@ -702,6 +781,6 @@ function SplitFooter({ split }: { readonly split: SplitControls }): ReactNode {
               : ''}
         </p>
       ) : null}
-    </div>
+    </ActionFooter>
   );
 }

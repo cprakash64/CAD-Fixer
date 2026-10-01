@@ -153,4 +153,13 @@ export const TEXTURE_COPY = Object.freeze({
   hudGenerated: 'Generated texture geometry',
   fastPreviewNote:
     'Outlines show exactly where each element will be placed. No geometry has been built.',
+  /*
+   * WORKSPACE-UX-03: one line each for the action region, and the applied
+   * result that used to be a second button row inside it.
+   */
+  applying: 'Applying and validating the texture…',
+  failedLine: 'No texture was made — details above',
+  appliedSection: 'Applied texture',
+  appliedHeadline: 'Texture applied',
+  appliedNote: 'The texture is part of the model. Undo restores the model as it was before it.',
 });

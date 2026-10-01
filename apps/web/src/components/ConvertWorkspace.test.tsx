@@ -625,7 +625,7 @@ describe('keyboard and assistive technology', () => {
     expect(footer).not.toContainElement(saved);
     expect(saved.closest('.convert-workspace__sections')).not.toBeNull();
     // After a save the action region is the action row and nothing else.
-    expect(footer).toHaveClass('convert-footer--bounded');
+    expect(footer).toHaveClass('action-footer');
     expect(footer).toHaveTextContent(/^Export STL$/);
   });
 

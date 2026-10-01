@@ -58,6 +58,7 @@ import {
   type MeasuredExport,
 } from '../state/workspace-store';
 import { ConversionReport } from './ConversionReport';
+import { ActionFooter } from './shell/action-footer';
 import { Icon } from './shell/Icon';
 import { InfoButton, InfoPanel, useInfoDisclosure, type InfoDisclosure } from './shell/info';
 import { PanelSection } from './shell/primitives';
@@ -614,6 +615,8 @@ function UnitChooser({
  * the saved result, a refusal's explanation — lives in the scrolling content.
  * `shell.css` caps the region as well, and gives the action row the space
  * first, so a line that somehow ran long would be clipped before a button was.
+ * Since WORKSPACE-UX-03 this is the contract of EVERY workspace's footer —
+ * see `shell/action-footer.tsx`.
  */
 function ConvertFooter({
   hasModel,
@@ -651,7 +654,7 @@ function ConvertFooter({
   const percent = Math.round(conversion.fraction * 100);
 
   return (
-    <div className="convert-footer convert-footer--bounded" data-testid="convert-footer">
+    <ActionFooter testId="convert-footer">
       {/* PROGRESS, announced politely, and only the PHASE — a percentage read
           out on every update would drown everything else. A refusal is an
           alert below; a saved file is announced by its own card. */}
@@ -755,7 +758,7 @@ function ConvertFooter({
           )}
         </div>
       )}
-    </div>
+    </ActionFooter>
   );
 }
 

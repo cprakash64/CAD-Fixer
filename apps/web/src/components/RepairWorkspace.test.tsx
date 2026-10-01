@@ -715,3 +715,92 @@ describe('progressive disclosure', () => {
     }
   });
 });
+
+/* ---------------------------------------------------- WORKSPACE-UX-03 -- */
+
+/** The lines the action region is DRAWING — not the ones it only speaks. */
+function drawnLines(footer: HTMLElement): number {
+  return footer.querySelectorAll(
+    '.action-footer__line, .convert-footer__hint, .repair-footer__progress',
+  ).length;
+}
+
+describe('the bounded action region', () => {
+  it('holds the action row and one line while a preview is ready', () => {
+    const store = renderWorkspace((s) => {
+      loadModel(s);
+    });
+    analyse(store, { zeroAreaFaceCount: 2 });
+    commitPlan(store, DEGENERATE_PLAN);
+    commitPreview(store);
+
+    const footer = screen.getByTestId('repair-footer');
+    expect(footer).toHaveClass('action-footer');
+    expect(drawnLines(footer)).toBe(1);
+    expect(footer).toContainElement(screen.getByTestId('repair-preview-ready'));
+    // What Apply does is still said — as the button's description, not a line.
+    expect(screen.getByTestId('apply-repair')).toHaveAccessibleDescription(
+      'Apply replaces the model with the validated preview. You can undo it.',
+    );
+    // The preview's review is content.
+    expect(footer).not.toContainElement(screen.getByTestId('repair-candidate'));
+  });
+
+  it('keeps the applied result and its Undo out of the action region', () => {
+    renderWorkspace((store) => {
+      loadModel(store);
+      applied(store, true);
+    });
+
+    const footer = screen.getByTestId('repair-footer');
+    expect(footer).not.toContainElement(screen.getByTestId('repair-applied'));
+    expect(footer).not.toContainElement(screen.getByTestId('undo-repair'));
+    expect(
+      screen.getByTestId('undo-repair').closest('.convert-workspace__sections'),
+    ).not.toBeNull();
+    expect(drawnLines(footer)).toBeLessThanOrEqual(1);
+  });
+
+  it('states a failure as a headline, with the message in the scrolling content', () => {
+    const store = renderWorkspace((s) => {
+      loadModel(s);
+    });
+    analyse(store, { zeroAreaFaceCount: 2 });
+    commitPlan(store, DEGENERATE_PLAN);
+    const message =
+      'The preview could not be built because the working memory it needs is larger than this browser session allows for a part of this size.';
+    act(() => {
+      const token = store.beginRepairPreview();
+      if (token === undefined) throw new Error('no preview token');
+      store.beginRepairCandidate(token);
+      store.failRepairCandidate(token, { message, code: 'RESOURCE_LIMIT', retryable: true });
+    });
+
+    const footer = screen.getByTestId('repair-footer');
+    const alert = screen.getByTestId('repair-candidate-error');
+    expect(alert).toHaveTextContent(message);
+    expect(alert).toHaveAttribute('role', 'alert');
+    expect(footer).not.toContainElement(alert);
+    expect(alert.closest('.workspace-outcome')).not.toBeNull();
+    expect(screen.getByTestId('repair-failure-line')).toHaveTextContent('No preview was made');
+    expect(footer).not.toHaveTextContent(message);
+    expect(drawnLines(footer)).toBe(1);
+    // One alert for one failure.
+    expect(within(footer).queryByRole('alert')).toBeNull();
+  });
+
+  it('opens the reason behind ⓘ in the scrolling content, never in the region', () => {
+    const store = renderWorkspace((s) => {
+      loadModel(s);
+    });
+    analyse(store, { nonManifoldVertexCount: 3 });
+    commitPlan(store, planWith([]));
+
+    const footer = screen.getByTestId('repair-footer');
+    const detail = screen.getByTestId('repair-no-repairs-detail');
+    fireEvent.click(screen.getByTestId('repair-no-repairs-info'));
+    expect(detail).toBeVisible();
+    expect(footer).not.toContainElement(detail);
+    expect(footer).toContainElement(screen.getByTestId('repair-no-repairs-info'));
+  });
+});

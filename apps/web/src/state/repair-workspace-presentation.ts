@@ -87,6 +87,21 @@ export const NO_REPAIRABLE_PROBLEMS = 'No repairable problems found.';
 /** State C, stated beside the Apply button. */
 export const PREVIEW_READY_LINE = 'Preview ready — nothing has changed until you apply it.';
 
+/*
+ * FAILURE HEADLINES — WORKSPACE-UX-03. One line each, for the action region;
+ * the full message is an alert in the scrolling content above it. Each says
+ * only what is certain: what did not happen.
+ */
+export const ANALYSIS_FAILED_LINE = 'Analysis did not finish — details above';
+export const PLAN_FAILED_LINE = 'No repair plan was made — details above';
+export const PREVIEW_FAILED_LINE = 'No preview was made — details above';
+export const APPLY_FAILED_LINE = 'The repair was not applied — details above';
+
+/** While a cancel is being acknowledged. */
+export const REPAIR_CANCELLING_LINE = 'Cancelling… nothing has been changed.';
+export const REPAIR_CANCELLED_LINE = 'Repair was cancelled. Nothing was changed.';
+export const ANALYSIS_CANCELLED_LINE = 'Analysis was cancelled. No partial results are shown.';
+
 /** State D. Deliberately not "Repair complete": other issues may remain. */
 export const REPAIRS_APPLIED_LINE = 'Repairs applied';
 

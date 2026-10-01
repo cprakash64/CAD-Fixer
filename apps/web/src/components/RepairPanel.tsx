@@ -16,6 +16,7 @@ import type {
 import { isInterruptibleRepairSupported } from '../runtime/cancellation-support';
 import { useWorkspaceState, useWorkspaceStore } from '../state/store-context';
 import { useRepairControls } from '../state/workflow-controllers';
+import { useRevealOnMount } from './shell/action-footer';
 import { Icon } from './shell/Icon';
 import { InfoButton, InfoPanel, useInfoDisclosure } from './shell/info';
 import { PanelSection } from './shell/primitives';
@@ -463,8 +464,14 @@ function AppliedResult({
   readonly onUndo: () => void;
 }): ReactNode {
   const changed = describeAppliedChanges(counts, filledOpenings);
+  /*
+   * THE RESULT ANNOUNCES ITSELF — WORKSPACE-UX-03. It is content, not part of
+   * the pinned action region, so on a short window it could be applied out of
+   * sight; it is brought into view once, when it appears, and its Undo with it.
+   */
+  const ref = useRevealOnMount<HTMLDivElement>();
   return (
-    <div className="repair-result" role="status" data-testid="repair-applied">
+    <div ref={ref} className="repair-result" role="status" data-testid="repair-applied">
       <p className="repair-result__headline" data-testid="repair-applied-headline">
         <Icon name="ok" size={14} />
         {REPAIR_APPLIED_HEADLINE}

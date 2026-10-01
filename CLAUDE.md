@@ -1635,6 +1635,27 @@ validated`, and the qualifier naming what was NOT examined travels with it.
   the rebrand migrated none. If one is ever added, its key is an identifier and
   is not renamed with the brand.
 
+## Workspace action-region invariants (CONVERT-UX-02, WORKSPACE-UX-03)
+
+- **EVERY WORKSPACE FOOTER IS `ActionFooter`, AND IT IS BOUNDED.** The pinned
+  region sits inside the tool panel's ONE scroller, which is 140 px tall on a
+  short window; every pixel the region takes is taken from the controls above
+  it. It holds the action row and AT MOST ONE LINE — progress, else a failure's
+  headline, else the state, else why the action is unavailable. v0.6.0's release
+  was blocked twice by a footer that grew with its state.
+- **A RESULT IS CONTENT, NEVER FOOTER.** Applied-result cards, saved files, the
+  full text of a failure, explanations behind ⓘ, and any control that is not the
+  immediate action scroll. Do not add a block to a footer "just for this state".
+- **ONE CAP: `--action-footer-max`**, which is both the region's `max-height`
+  and the scroller's `scroll-padding-bottom`. No per-workspace cap. The padding
+  is what makes focus and scroll-into-view land a control ABOVE the region.
+- **UNDO MUST ALWAYS BE CLICKABLE.** Test reachability with
+  `elementFromPoint` at the control's centre, never `isVisible`: an element
+  under a sticky footer is visible and unusable.
+- `components/shell/action-footer.test.ts` holds the rule at source and
+  `e2e/workspace-short-height.spec.ts` holds it in a browser at thirteen sizes.
+  See `docs/design/UI_SHELL.md`.
+
 ## Things that will trip you up
 
 - **TypeScript is pinned to `~6.0.3` on purpose.** TS 7 exists but

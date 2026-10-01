@@ -6,14 +6,21 @@ import {
 } from '../state/repair-presentation';
 import {
   ADVANCED_INFO,
+  ANALYSIS_CANCELLED_LINE,
+  ANALYSIS_FAILED_LINE,
   ANALYZE_MODEL_ACTION,
+  APPLY_FAILED_LINE,
   APPLY_REPAIRS_ACTION,
   CANCEL_PREVIEW_ACTION,
   FILE_STRUCTURE_INFO,
   NO_REPAIRABLE_PROBLEMS,
   NO_SAFE_REPAIRS,
+  PLAN_FAILED_LINE,
+  PREVIEW_FAILED_LINE,
   PREVIEW_READY_LINE,
   REPAIRS_APPLIED_LINE,
+  REPAIR_CANCELLED_LINE,
+  REPAIR_CANCELLING_LINE,
   REPAIR_MODEL_ACTION,
   REPAIR_UNAVAILABLE_LINE,
   RepairActionKind,
@@ -31,8 +38,14 @@ import { MeshAnalysisSection } from './MeshAnalysisSection';
 import { MeshHealthPanel } from './MeshHealthPanel';
 import { OpenBoundaryPanel, OpenBoundaryLimits } from './OpenBoundaryPanel';
 import { RepairExclusions, RepairPanel } from './RepairPanel';
+import {
+  ActionFooter,
+  ActionFooterLine,
+  OutcomeAlert,
+  WorkspaceOutcome,
+} from './shell/action-footer';
 import { Icon } from './shell/Icon';
-import { InfoButton, InfoPanel, useInfoDisclosure } from './shell/info';
+import { InfoButton, InfoPanel, useInfoDisclosure, type InfoDisclosure } from './shell/info';
 import { PanelSection } from './shell/primitives';
 
 /**
@@ -49,6 +62,10 @@ import { PanelSection } from './shell/primitives';
  * run it is still there, disabled, with the reason beside it — a hidden
  * button reads as a missing feature.
  *
+ * THE FOOTER IS THE SHARED BOUNDED ACTION REGION (WORKSPACE-UX-03): the action
+ * row and one line. The applied result and its Undo, the full text of a
+ * failure and the explanation behind the reason's ⓘ are scrolling content.
+ *
  * NOTHING HERE COMMITS. Repair model builds and validates a candidate through
  * the existing transactional workflow; Apply repairs asks the worker, which
  * re-checks every guard; Cancel preview discards; Undo restores the retained
@@ -58,6 +75,11 @@ import { PanelSection } from './shell/primitives';
 export function RepairWorkspace(): ReactNode {
   const { model } = useWorkspaceState();
   const view = useRepairWorkspace();
+  /*
+   * OWNED HERE, because the ⓘ is in the footer and what it opens is not: an
+   * explanation inside the pinned region is how the region outgrew the panel.
+   */
+  const reasonInfo = useInfoDisclosure();
 
   return (
     <div className="convert-workspace repair-workspace" data-testid="repair-workspace">
@@ -80,8 +102,9 @@ export function RepairWorkspace(): ReactNode {
             </div>
           </PanelSection>
         )}
+        <RepairOutcome view={view} reasonInfo={reasonInfo} />
       </div>
-      <RepairFooter view={view} />
+      <RepairFooter view={view} reasonInfo={reasonInfo} />
     </div>
   );
 }
@@ -153,17 +176,118 @@ function RepairOverview({ view }: { readonly view: RepairWorkspaceView }): React
   );
 }
 
+/* -------------------------------------------------------------- outcome -- */
+
+/** What went wrong, if anything did, as the footer and the content both read it. */
+function repairFailures(
+  action: RepairActionKind,
+  analysis: ReturnType<typeof useWorkspaceState>['analysis'],
+  repair: ReturnType<typeof useWorkspaceState>['repair'],
+): {
+  readonly analysis: string | undefined;
+  readonly plan: string | undefined;
+  readonly candidate: string | undefined;
+  readonly commit: string | undefined;
+} {
+  return {
+    analysis:
+      analysis.state === AnalysisState.Failed && analysis.error !== undefined
+        ? analysis.error.message
+        : undefined,
+    plan:
+      action === RepairActionKind.PlanFailed && repair.planError !== undefined
+        ? repair.planError.message
+        : undefined,
+    candidate:
+      repair.candidateState === RepairCandidateState.Failed && repair.candidateError !== undefined
+        ? repair.candidateError.message
+        : undefined,
+    commit: repair.commitError?.message,
+  };
+}
+
+/**
+ * The end of the scrolling content, directly above the action region: every
+ * failure in full, and the explanation behind the footer's ⓘ. Each failure is
+ * said once as an alert here and once, as a headline, beside the action.
+ */
+function RepairOutcome({
+  view,
+  reasonInfo,
+}: {
+  readonly view: RepairWorkspaceView;
+  readonly reasonInfo: InfoDisclosure;
+}): ReactNode {
+  const { analysis, repair } = useWorkspaceState();
+  const { action } = view;
+  const failures = repairFailures(action, analysis, repair);
+  const report = view.reportIsCurrent ? analysis.report : undefined;
+  const explains =
+    action === RepairActionKind.NothingSafe ||
+    action === RepairActionKind.NothingFound ||
+    action === RepairActionKind.Unavailable;
+  // Nothing left to explain — the state moved on — so nothing stays open.
+  const { open, close } = reasonInfo;
+  useEffect(() => {
+    if (open && !explains) close();
+  }, [open, explains, close]);
+  const shown = [failures.analysis, failures.plan, failures.candidate, failures.commit]
+    .filter((message) => message !== undefined)
+    .join('|');
+  const revealKey = `${shown}${open && explains ? '|reason' : ''}`;
+
+  return (
+    <WorkspaceOutcome revealKey={revealKey === '' ? undefined : revealKey}>
+      {failures.analysis === undefined ? null : (
+        <OutcomeAlert testId="analysis-error">
+          {failures.analysis} The model is still loaded and can be viewed and exported.
+        </OutcomeAlert>
+      )}
+      {failures.plan === undefined ? null : (
+        <OutcomeAlert testId="repair-plan-error">
+          {failures.plan} Your model is unchanged.
+        </OutcomeAlert>
+      )}
+      {failures.candidate === undefined ? null : (
+        <OutcomeAlert testId="repair-candidate-error">{failures.candidate}</OutcomeAlert>
+      )}
+      {failures.commit === undefined ? null : (
+        <OutcomeAlert testId="repair-commit-error">{failures.commit}</OutcomeAlert>
+      )}
+      {action === RepairActionKind.Unavailable ? (
+        <InfoPanel disclosure={reasonInfo} label="repair availability">
+          <p className="info-panel__text">{REPAIR_ISOLATION_DETAIL}</p>
+        </InfoPanel>
+      ) : (
+        <InfoPanel disclosure={reasonInfo} label="automatic repair">
+          <p className="info-panel__text" data-testid="repair-no-repairs-detail">
+            {describeNoRepairsAvailable(
+              report === undefined ? false : totalDefectCount(report) > 0,
+            )}
+          </p>
+        </InfoPanel>
+      )}
+    </WorkspaceOutcome>
+  );
+}
+
 /* --------------------------------------------------------------- footer -- */
 
 /**
- * The sticky action area. One primary control, in one place, in every state;
- * progress, outcomes and refusals are stated directly above it.
+ * The sticky action area. One primary control, in one place, in every state,
+ * and ONE LINE beside it: progress while something runs, else the headline of
+ * a failure, else the state, else what the action will do or why it cannot.
  */
-function RepairFooter({ view }: { readonly view: RepairWorkspaceView }): ReactNode {
+function RepairFooter({
+  view,
+  reasonInfo,
+}: {
+  readonly view: RepairWorkspaceView;
+  readonly reasonInfo: InfoDisclosure;
+}): ReactNode {
   const { analysis, repair } = useWorkspaceState();
   const analysisControls = useAnalysisControls();
   const controls = useRepairControls();
-  const reasonInfo = useInfoDisclosure();
   const hintId = useId();
   const { action, scope } = view;
 
@@ -174,9 +298,11 @@ function RepairFooter({ view }: { readonly view: RepairWorkspaceView }): ReactNo
     candidate !== undefined &&
     presentAcceptance(candidate.validation.acceptance, candidate.validation.regressions)
       .previewable;
-  const report = view.reportIsCurrent ? analysis.report : undefined;
+  const failures = repairFailures(action, analysis, repair);
+  const cancelling = repair.candidateState === RepairCandidateState.Cancelling;
 
-  const status = ((): ReactNode => {
+  /* WORKING: the phase is the worker's own, and it outranks everything. */
+  const working = ((): ReactNode => {
     switch (action) {
       case RepairActionKind.Analyzing:
         return (
@@ -194,7 +320,10 @@ function RepairFooter({ view }: { readonly view: RepairWorkspaceView }): ReactNo
           </div>
         );
       case RepairActionKind.Building:
-        return (
+        // ONE LINE: once a cancel is signalled the bar has nothing left to say.
+        return cancelling ? (
+          <ActionFooterLine testId="repair-cancelling">{REPAIR_CANCELLING_LINE}</ActionFooterLine>
+        ) : (
           <div className="repair-footer__progress" data-testid="repair-progress">
             <div className="convert-footer__progress-row">
               <span data-testid="repair-phase">{repair.phase ?? 'Preparing repair'}</span>
@@ -206,11 +335,6 @@ function RepairFooter({ view }: { readonly view: RepairWorkspaceView }): ReactNo
               value={repairPercent}
               aria-label={`Repair preparation progress: ${String(repairPercent)}%`}
             />
-            {repair.candidateState === RepairCandidateState.Cancelling ? (
-              <p className="convert-footer__hint" data-testid="repair-cancelling">
-                Cancelling… nothing has been changed.
-              </p>
-            ) : null}
           </div>
         );
       case RepairActionKind.Applying:
@@ -229,19 +353,14 @@ function RepairFooter({ view }: { readonly view: RepairWorkspaceView }): ReactNo
           </div>
         );
       case RepairActionKind.Undoing:
-        return <p className="repair-footer__line">Undoing repair…</p>;
-      case RepairActionKind.Preview:
-        return (
-          <p className="repair-footer__line" data-testid="repair-preview-ready">
-            {PREVIEW_READY_LINE}
-          </p>
-        );
+        return <ActionFooterLine>Undoing repair…</ActionFooterLine>;
       case RepairActionKind.Planning:
         return (
-          <p className="repair-footer__line" data-testid="repair-planning">
+          <ActionFooterLine testId="repair-planning">
             Working out what Pybrix can repair…
-          </p>
+          </ActionFooterLine>
         );
+      case RepairActionKind.Preview:
       case RepairActionKind.NoModel:
       case RepairActionKind.Unavailable:
       case RepairActionKind.Analyze:
@@ -249,58 +368,56 @@ function RepairFooter({ view }: { readonly view: RepairWorkspaceView }): ReactNo
       case RepairActionKind.Ready:
       case RepairActionKind.NothingSafe:
       case RepairActionKind.NothingFound:
-        return null;
+        return undefined;
     }
   })();
 
+  const failureLine =
+    failures.analysis !== undefined
+      ? ANALYSIS_FAILED_LINE
+      : failures.plan !== undefined
+        ? PLAN_FAILED_LINE
+        : failures.candidate !== undefined
+          ? PREVIEW_FAILED_LINE
+          : failures.commit !== undefined
+            ? APPLY_FAILED_LINE
+            : undefined;
+
+  const stateLine =
+    action === RepairActionKind.Preview ? (
+      <ActionFooterLine testId="repair-preview-ready" title={PREVIEW_READY_LINE}>
+        {PREVIEW_READY_LINE}
+      </ActionFooterLine>
+    ) : repair.candidateState === RepairCandidateState.Cancelled ? (
+      <ActionFooterLine testId="repair-cancelled">{REPAIR_CANCELLED_LINE}</ActionFooterLine>
+    ) : analysis.state === AnalysisState.Cancelled && action === RepairActionKind.Analyze ? (
+      <ActionFooterLine testId="analysis-cancelled">{ANALYSIS_CANCELLED_LINE}</ActionFooterLine>
+    ) : undefined;
+
+  const line =
+    working ??
+    (failureLine === undefined ? undefined : (
+      <ActionFooterLine tone="failure" testId="repair-failure-line">
+        {failureLine}
+      </ActionFooterLine>
+    )) ??
+    stateLine;
+
   return (
-    <div className="convert-footer repair-footer" data-testid="repair-footer">
+    <ActionFooter testId="repair-footer" className="repair-footer">
       <div className="convert-footer__status" aria-live="polite">
-        {status}
+        {line}
+        {/* The result card in the content says what was repaired; this says,
+            once and to assistive technology, that it happened. */}
         {repair.lastApplied !== undefined &&
         (action === RepairActionKind.Ready ||
           action === RepairActionKind.NothingSafe ||
           action === RepairActionKind.NothingFound) ? (
-          <p className="convert-footer__saved" data-testid="repair-applied-status">
-            <Icon name="ok" size={14} />
-            <span>{REPAIRS_APPLIED_LINE}</span>
-          </p>
-        ) : null}
-        {repair.candidateState === RepairCandidateState.Cancelled &&
-        action !== RepairActionKind.Building ? (
-          <p className="repair-footer__line" data-testid="repair-cancelled">
-            Repair was cancelled. Nothing was changed.
+          <p className="visually-hidden" data-testid="repair-applied-status">
+            {REPAIRS_APPLIED_LINE}
           </p>
         ) : null}
       </div>
-
-      {/* Failures, stated beside the action they block. */}
-      {analysis.state === AnalysisState.Failed && analysis.error !== undefined ? (
-        <p className="convert-footer__failure" role="alert" data-testid="analysis-error">
-          {analysis.error.message} The model is still loaded and can be viewed and exported.
-        </p>
-      ) : null}
-      {analysis.state === AnalysisState.Cancelled && action === RepairActionKind.Analyze ? (
-        <p className="repair-footer__line" data-testid="analysis-cancelled">
-          Analysis was cancelled. No partial results are shown.
-        </p>
-      ) : null}
-      {action === RepairActionKind.PlanFailed && repair.planError !== undefined ? (
-        <p className="convert-footer__failure" role="alert" data-testid="repair-plan-error">
-          {repair.planError.message} Your model is unchanged.
-        </p>
-      ) : null}
-      {repair.candidateState === RepairCandidateState.Failed &&
-      repair.candidateError !== undefined ? (
-        <p className="convert-footer__failure" role="alert" data-testid="repair-candidate-error">
-          {repair.candidateError.message}
-        </p>
-      ) : null}
-      {repair.commitError !== undefined ? (
-        <p className="convert-footer__failure" role="alert" data-testid="repair-commit-error">
-          {repair.commitError.message}
-        </p>
-      ) : null}
 
       <div className="convert-footer__actions">
         {action === RepairActionKind.Analyzing ? (
@@ -320,10 +437,10 @@ function RepairFooter({ view }: { readonly view: RepairWorkspaceView }): ReactNo
             onClick={controls.cancelPreview}
             // Disabled once cancellation is signalled: a second press cannot
             // make the worker unwind sooner.
-            disabled={repair.candidateState === RepairCandidateState.Cancelling}
+            disabled={cancelling}
             data-testid="cancel-repair"
           >
-            {repair.candidateState === RepairCandidateState.Cancelling ? 'Cancelling…' : 'Cancel'}
+            {cancelling ? 'Cancelling…' : 'Cancel'}
           </button>
         ) : null}
         {action === RepairActionKind.PlanFailed && repair.planError?.retryable === true ? (
@@ -362,10 +479,12 @@ function RepairFooter({ view }: { readonly view: RepairWorkspaceView }): ReactNo
         action={action}
         hintId={hintId}
         describeScope={describeRepairScope(scope)}
-        hasRemainingDefects={report === undefined ? false : totalDefectCount(report) > 0}
         reasonInfo={reasonInfo}
+        // ONE LINE AT A TIME: with another line on screen the reason still
+        // describes the action, to assistive technology.
+        spoken={line !== undefined}
       />
-    </div>
+    </ActionFooter>
   );
 }
 
@@ -445,82 +564,76 @@ function PrimaryAction({
 
 /**
  * The one line beneath the action: what pressing it will do, or why it is
- * disabled. The longer "why" is one ⓘ away.
+ * disabled. The longer "why" is one ⓘ away, and opens in the scrolling content.
+ *
+ * `spoken` means another line already occupies the region: the text is then
+ * kept as the action's accessible description and not drawn.
  */
 function FooterHint({
   action,
   hintId,
   describeScope,
-  hasRemainingDefects,
   reasonInfo,
+  spoken,
 }: {
   readonly action: RepairActionKind;
   readonly hintId: string;
   readonly describeScope: string;
-  readonly hasRemainingDefects: boolean;
-  readonly reasonInfo: ReturnType<typeof useInfoDisclosure>;
+  readonly reasonInfo: InfoDisclosure;
+  readonly spoken: boolean;
 }): ReactNode {
-  switch (action) {
-    case RepairActionKind.Ready:
-      return (
-        <p className="convert-footer__hint" id={hintId} data-testid="repair-scope">
-          {describeScope}
-        </p>
-      );
-    case RepairActionKind.NothingSafe:
-    case RepairActionKind.NothingFound:
-      return (
-        <>
-          <div className="repair-footer__reason">
-            <p className="convert-footer__hint" id={hintId} data-testid="repair-no-repairs">
-              {action === RepairActionKind.NothingSafe ? NO_SAFE_REPAIRS : NO_REPAIRABLE_PROBLEMS}
-            </p>
-            <InfoButton
-              disclosure={reasonInfo}
-              label="automatic repair"
-              testId="repair-no-repairs-info"
-            />
-          </div>
-          <InfoPanel disclosure={reasonInfo} label="automatic repair">
-            <p className="info-panel__text" data-testid="repair-no-repairs-detail">
-              {describeNoRepairsAvailable(hasRemainingDefects)}
-            </p>
-          </InfoPanel>
-        </>
-      );
-    case RepairActionKind.Unavailable:
-      return (
-        <>
-          <div className="repair-footer__reason">
-            <p className="convert-footer__hint" id={hintId} data-testid="repair-action-unavailable">
-              {REPAIR_UNAVAILABLE_LINE}
-            </p>
-            <InfoButton disclosure={reasonInfo} label="repair availability" />
-          </div>
-          <InfoPanel disclosure={reasonInfo} label="repair availability">
-            <p className="info-panel__text">{REPAIR_ISOLATION_DETAIL}</p>
-          </InfoPanel>
-        </>
-      );
-    case RepairActionKind.Analyze:
-      return (
-        <p className="convert-footer__hint" id={hintId}>
-          Pybrix checks the mesh before it can repair it.
-        </p>
-      );
-    case RepairActionKind.Preview:
-      return (
-        <p className="convert-footer__hint" id={hintId}>
-          Apply replaces the model with the validated preview. You can undo it.
-        </p>
-      );
-    case RepairActionKind.NoModel:
-    case RepairActionKind.Analyzing:
-    case RepairActionKind.Planning:
-    case RepairActionKind.PlanFailed:
-    case RepairActionKind.Building:
-    case RepairActionKind.Applying:
-    case RepairActionKind.Undoing:
-      return <span id={hintId} hidden />;
+  const text = ((): { readonly text: string; readonly testId?: string } | undefined => {
+    switch (action) {
+      case RepairActionKind.Ready:
+        return { text: describeScope, testId: 'repair-scope' };
+      case RepairActionKind.NothingSafe:
+        return { text: NO_SAFE_REPAIRS, testId: 'repair-no-repairs' };
+      case RepairActionKind.NothingFound:
+        return { text: NO_REPAIRABLE_PROBLEMS, testId: 'repair-no-repairs' };
+      case RepairActionKind.Unavailable:
+        return { text: REPAIR_UNAVAILABLE_LINE, testId: 'repair-action-unavailable' };
+      case RepairActionKind.Analyze:
+        return { text: 'Pybrix checks the mesh before it can repair it.' };
+      case RepairActionKind.Preview:
+        return { text: 'Apply replaces the model with the validated preview. You can undo it.' };
+      case RepairActionKind.NoModel:
+      case RepairActionKind.Analyzing:
+      case RepairActionKind.Planning:
+      case RepairActionKind.PlanFailed:
+      case RepairActionKind.Building:
+      case RepairActionKind.Applying:
+      case RepairActionKind.Undoing:
+        return undefined;
+    }
+  })();
+
+  if (text === undefined) return <span id={hintId} hidden />;
+  const testId = text.testId === undefined ? {} : { 'data-testid': text.testId };
+  if (spoken) {
+    return (
+      <p className="visually-hidden" id={hintId} {...testId}>
+        {text.text}
+      </p>
+    );
   }
+  const explained =
+    action === RepairActionKind.NothingSafe ||
+    action === RepairActionKind.NothingFound ||
+    action === RepairActionKind.Unavailable;
+  const hint = (
+    <p className="convert-footer__hint" id={hintId} title={text.text} {...testId}>
+      {text.text}
+    </p>
+  );
+  if (!explained) return hint;
+  return (
+    <div className="repair-footer__reason">
+      {hint}
+      <InfoButton
+        disclosure={reasonInfo}
+        label={action === RepairActionKind.Unavailable ? 'repair availability' : 'automatic repair'}
+        {...(action === RepairActionKind.Unavailable ? {} : { testId: 'repair-no-repairs-info' })}
+      />
+    </div>
+  );
 }

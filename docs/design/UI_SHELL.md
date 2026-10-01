@@ -272,7 +272,7 @@ The rules that came out of it:
   the scrolling content: `Export complete`, `Saved as <name>`, and the rest —
   format, size, triangle count, the folder NAME, how the file was checked —
   behind ⓘ. No path is shown, because the browser provides none.
-- **The cap is structural as well.** `.convert-footer--bounded` has
+- **The cap is structural as well.** `.action-footer` has
   `max-height: var(--action-footer-max)`; the action row is `flex: none` and the
   line beside it is what shrinks, so content added later is clipped before a
   button is.
@@ -296,5 +296,63 @@ saved card is 52 px and scrolls. The regression is in
 visibility — across twelve viewports and every destination state, and it fails
 on the pre-fix source with `convert-folder` resolving to `convert-export`.
 
-The Repair, Split and Texture footers share the sticky pattern and are NOT
-bounded by this change. They gain the scroll padding and nothing else.
+WORKSPACE-UX-03 (below) made this the contract of every workspace; the class is
+now `.action-footer`.
+
+## WORKSPACE-UX-03 — one bounded action region for every workspace
+
+v0.6.0 RELEASE-06-R4 stopped before deployment on the same defect in the other
+three workspaces. At 1440×300, against a 140 px scroll area:
+
+| Workspace, state      | Footer before | Left for content | Symptom                                      |
+| --------------------- | ------------- | ---------------- | -------------------------------------------- |
+| Repair, preview ready | 139 px        | 0 px             | every issue row covered                      |
+| Repair, applied       | 126 px        | 14 px            | a click on Undo landed on the footer         |
+| Split, applied        | 162 px        | −23 px           | footer taller than the scroller, top cut off |
+| Texture, applied      | 120 px        | 19 px            | configuration covered                        |
+
+**One cause, three expressions.** Each footer was a flex column with no height
+bound, pinned inside a scroller that cannot grow, and each state added a block
+to it: Repair stacked a state line, the buttons and a two-line hint, then an
+explanation panel; Split put a configuration control (the export mode), its
+note and its heading in the footer once a split was applied; Texture added
+Undo as a second button row. Failure messages of any length were footer
+content in all three.
+
+**The contract** (`components/shell/action-footer.tsx`), the same in Repair,
+Convert, Split and Texture:
+
+- `ActionFooter` is the pinned region: the action row and AT MOST ONE LINE —
+  progress, else a failure's headline, else the state, else the reason the
+  action is unavailable. A second line that still matters to assistive
+  technology (what Apply will do) stays as the button's description and is not
+  drawn.
+- `ActionFooterLine` is one line by construction: it truncates and carries its
+  text as a tooltip.
+- A RESULT IS CONTENT. Repair's applied card and its Undo, Split's export choice
+  and saved message, Texture's applied card and its Undo, every failure in full
+  (`OutcomeAlert`, the only `role="alert"` for that failure) and every
+  explanation behind a footer ⓘ are in the scrolling content. `WorkspaceOutcome`
+  is the last block of that content, directly above the region, and scrolls
+  into view when something new appears in it; a result card reveals itself
+  once, when it mounts.
+- ONE CAP. `--action-footer-max` (104 px; 92 px below 480 px of height) is the
+  region's `max-height` and the scroller's `scroll-padding-bottom`. There is no
+  per-workspace cap, and a source-level test refuses one.
+- The action row is `flex: none`; a line that ran long is clipped before a
+  button is.
+
+**Undo.** Repair and Texture keep Undo with the result it undoes, in content,
+where the scroll padding guarantees it can always be brought above the region;
+Split keeps Undo in the action row, beside Export, because after a split those
+two ARE the immediate actions.
+
+**Result reset** is unchanged and is the same rule everywhere: a result is shown
+for as long as its undo record (or, for Convert, its revision) is current. A
+new operation, a new revision, a replacement model or an undo retires it.
+
+Measured at 1440×300 after the change, every state of every workspace leaves at
+least 44 px of scroll area and every footer is within the cap. The regression
+is `e2e/workspace-short-height.spec.ts`: three workspaces, thirteen window
+sizes, each state hit-tested at its controls' centres, and each Undo actually
+pressed. `components/shell/action-footer.test.ts` holds the rule at source.

@@ -15,6 +15,13 @@ import {
 import { useWorkspaceState } from '../state/store-context';
 import { TexturePhase, type TextureControls } from '../state/use-texture-workflow';
 import { useTextureControls } from '../state/workflow-controllers';
+import {
+  ActionFooter,
+  ActionFooterLine,
+  OutcomeAlert,
+  WorkspaceOutcome,
+  useRevealOnMount,
+} from './shell/action-footer';
 import { Icon } from './shell/Icon';
 import { NumberField } from './shell/number-field';
 import { PanelSection, SegmentedControl, type SegmentedOption } from './shell/primitives';
@@ -57,8 +64,16 @@ export function TextureWorkspace(): ReactNode {
             <MappingSection texture={texture} />
             <ParametersSection texture={texture} />
             <LayoutSection texture={texture} />
+            {texture.appliedRecordId === undefined ? null : <AppliedSection texture={texture} />}
           </>
         )}
+        <WorkspaceOutcome revealKey={texture.error}>
+          {texture.error === undefined ? null : (
+            <OutcomeAlert testId="texture-error">
+              {texture.error} The model is unchanged.
+            </OutcomeAlert>
+          )}
+        </WorkspaceOutcome>
       </div>
       <TextureFooter texture={texture} />
     </div>
@@ -465,8 +480,52 @@ function LayoutSection({ texture }: { readonly texture: TextureControls }): Reac
   );
 }
 
+/* -------------------------------------------------------------- applied -- */
+
+/**
+ * THE APPLIED TEXTURE, and its Undo — WORKSPACE-UX-03.
+ *
+ * SCROLLING CONTENT. Undo used to be a second button row inside the pinned
+ * footer, which made the applied state 120 px of a 140 px scroll area. It is
+ * the result's own action, so it sits with the result; the card is brought
+ * into view once, when the texture is applied, and the scroller's padding
+ * keeps Undo clear of the action region whenever it is focused or scrolled to.
+ *
+ * Shown for exactly as long as the undo record exists: a new model, a new
+ * revision or an undo retires it.
+ */
+function AppliedSection({ texture }: { readonly texture: TextureControls }): ReactNode {
+  const ref = useRevealOnMount<HTMLDivElement>();
+  return (
+    <div ref={ref}>
+      <PanelSection title={TEXTURE_COPY.appliedSection} testId="texture-applied-section">
+        <div className="texture-applied" role="status" data-testid="texture-applied">
+          <p className="texture-applied__headline">
+            <Icon name="ok" size={14} />
+            {TEXTURE_COPY.appliedHeadline}
+          </p>
+          <p className="convert-workspace__note">{TEXTURE_COPY.appliedNote}</p>
+          <button
+            type="button"
+            className="secondary-action texture-applied__undo"
+            onClick={texture.undo}
+            data-testid="texture-undo"
+          >
+            {TEXTURE_COPY.undoButton}
+          </button>
+        </div>
+      </PanelSection>
+    </div>
+  );
+}
+
 /* --------------------------------------------------------------- footer -- */
 
+/**
+ * The shared bounded action region: the action row and ONE line — progress,
+ * else a failure's headline, else the preview state, else why the action is
+ * unavailable. Counts, the applied result and Undo are scrolling content.
+ */
 function TextureFooter({ texture }: { readonly texture: TextureControls }): ReactNode {
   const { model } = useWorkspaceState();
   const hintId = useId();
@@ -488,30 +547,34 @@ function TextureFooter({ texture }: { readonly texture: TextureControls }): Reac
             (texture.layout.error === undefined ? undefined : 'The layout above was refused.'));
   const inPreview =
     texture.phase === TexturePhase.Preview || texture.phase === TexturePhase.Applying;
+  const working =
+    texture.phase === TexturePhase.Computing || texture.phase === TexturePhase.Applying;
+  const previewLine =
+    texture.preview === undefined
+      ? TEXTURE_COPY.previewLabel
+      : `${TEXTURE_COPY.previewLabel}: ${texture.preview.elementCount.toLocaleString()} elements, ${texture.preview.candidateTriangleCount.toLocaleString()} triangles.`;
+  const line = working ? (
+    <p className="split-footer__progress action-footer__line" data-testid="texture-progress">
+      <Icon name="loader" size={14} className="spin" />
+      <span>
+        {texture.phase === TexturePhase.Applying ? TEXTURE_COPY.applying : texture.progress}
+      </span>
+    </p>
+  ) : texture.error !== undefined ? (
+    <ActionFooterLine tone="failure" testId="texture-failure-line">
+      {TEXTURE_COPY.failedLine}
+    </ActionFooterLine>
+  ) : texture.phase === TexturePhase.Preview ? (
+    <ActionFooterLine testId="texture-preview-ready" title={previewLine}>
+      {previewLine}
+    </ActionFooterLine>
+  ) : undefined;
 
   return (
-    <div className="convert-footer texture-footer" data-testid="texture-footer">
+    <ActionFooter testId="texture-footer" className="texture-footer">
       <div className="convert-footer__status" aria-live="polite">
-        {texture.phase === TexturePhase.Computing || texture.phase === TexturePhase.Applying ? (
-          <p className="split-footer__progress" data-testid="texture-progress">
-            <Icon name="loader" size={14} className="spin" />
-            {texture.phase === TexturePhase.Applying
-              ? 'Applying and validating the texture…'
-              : texture.progress}
-          </p>
-        ) : null}
-        {texture.phase === TexturePhase.Preview ? (
-          <p className="split-footer__progress" data-testid="texture-preview-ready">
-            {TEXTURE_COPY.previewLabel}: {texture.preview?.elementCount.toLocaleString()} elements,{' '}
-            {texture.preview?.candidateTriangleCount.toLocaleString()} triangles.
-          </p>
-        ) : null}
+        {line}
       </div>
-      {texture.error === undefined ? null : (
-        <p className="convert-footer__failure" role="alert" data-testid="texture-error">
-          {texture.error} The model is unchanged.
-        </p>
-      )}
       <div className="convert-footer__actions">
         <button
           type="button"
@@ -552,20 +615,16 @@ function TextureFooter({ texture }: { readonly texture: TextureControls }): Reac
         )}
       </div>
       {hint === undefined ? null : (
-        <p className="convert-footer__hint" id={hintId} data-testid="texture-unavailable">
+        <p
+          // ONE LINE AT A TIME: drawn only when nothing else occupies the region.
+          className={line === undefined ? 'convert-footer__hint' : 'visually-hidden'}
+          id={hintId}
+          title={hint}
+          data-testid="texture-unavailable"
+        >
           {hint}
         </p>
       )}
-      {texture.appliedRecordId === undefined ? null : (
-        <button
-          type="button"
-          className="secondary-action texture-footer__undo"
-          onClick={texture.undo}
-          data-testid="texture-undo"
-        >
-          {TEXTURE_COPY.undoButton}
-        </button>
-      )}
-    </div>
+    </ActionFooter>
   );
 }
