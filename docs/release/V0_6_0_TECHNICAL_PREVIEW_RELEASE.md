@@ -28,6 +28,27 @@ truthful partial repair, not a claim that the model is fully repaired. Release
 qualification must repeat the local hardware-Chromium journey and STL round trip
 on the frozen artifact before production activation.
 
+## Bounded large OBJ export
+
+Large OBJ exports stream directly to a folder you choose, using 256 KiB chunks
+with one chunk in flight and backpressure. The browser does not retain the
+complete serialized output. Choose a filename and explicitly confirm replacement
+of an existing file; cancellation or failure before commit preserves that file.
+A newly created target is removed after cancellation or failure when its identity
+and ownership can be verified. Ordinary small OBJ exports keep the automatic
+Blob download workflow.
+
+The original qualified model produces a deterministic 267,988,767-byte OBJ;
+after the two fills it produces 267,988,923 bytes. Native large-file export is
+qualified on desktop Chromium with the required directory and transactional
+filesystem capability. If that capability is unavailable, large export refuses
+before serialization rather than falling back to an output-sized Blob.
+
+Large OBJ **import** remains buffered and memory-heavy: re-importing this model
+has used approximately 2.1–2.5 GiB of renderer memory. Bounded export does not
+imply bounded import. See [IMPORT-CORE-01](../design/IMPORT_CORE_01.md) for the
+planned streaming import follow-up.
+
 ## Convert
 
 The primary Convert action stays reachable in short windows. Export refusal
@@ -55,6 +76,8 @@ qualified. See [browser support](BROWSER_SUPPORT.md) and the
   validation/write policy. The motivating truck is not claimed to support 3MF
   export. STL and OBJ remain export options. This export policy does not remove
   large streamed 3MF import support.
+- Large native OBJ export requires the qualified desktop Chromium filesystem
+  capability. Large OBJ import remains buffered and memory-heavy.
 - Self-intersection diagnostics retain their existing resource limits.
 - Split requires an eligible closed manifold solid. Texture operates on one
   flat connected region. Dimensioned connectors and texture require millimetres.
