@@ -21,17 +21,11 @@ SRC="$HERE/upstream"
 BUILD="$HERE/build"
 ARTIFACTS="$HERE/artifacts"
 
+PYBRIX_REPO_ROOT="$(cd "$ROOT/../.." && pwd)"
 # shellcheck disable=SC1091
-source "$ROOT/.toolchain/emsdk_env.sh" >/dev/null 2>&1
-
-# Geogram's platform file locates Emscripten with `find_path(EMSCRIPTEN_DIR
-# emcc.py HINTS ENV EMSCRIPTEN ...)`, and the hint list predates emsdk's current
-# layout, so it finds nothing. Exporting EMSCRIPTEN points it at the SDK we
-# actually pinned. This is BUILD INTEGRATION, not an algorithm change: no
-# Geogram source is modified, and the compiler it selects is the same emcc the
-# other candidates use.
-EMSCRIPTEN_DIR_PATH="$ROOT/.toolchain/upstream/emscripten"
-export EMSCRIPTEN="$EMSCRIPTEN_DIR_PATH"
+source "$ROOT/scripts/geogram-toolchain.sh"
+EMSCRIPTEN_DIR_PATH="$EMSCRIPTEN"
+PYBRIX_CMAKE_PATH_FLAGS="$(printf '%q ' "${PYBRIX_PATH_FLAGS[@]}")"
 
 mkdir -p "$BUILD" "$ARTIFACTS"
 STARTED=$(date +%s)
@@ -45,6 +39,8 @@ emcmake cmake -S "$SRC" -B "$BUILD" \
   -DVORPALINE_PLATFORM=Emscripten-clang \
   -DEMSCRIPTEN_DIR="$EMSCRIPTEN_DIR_PATH" \
   -DCMAKE_BUILD_TYPE=Release \
+  "-DCMAKE_C_FLAGS=$PYBRIX_CMAKE_PATH_FLAGS" \
+  "-DCMAKE_CXX_FLAGS=$PYBRIX_CMAKE_PATH_FLAGS" \
   -DBUILD_SHARED_LIBS=OFF \
   -DGEOGRAM_WITH_TETGEN=OFF \
   -DGEOGRAM_WITH_TRIANGLE=OFF \
@@ -70,6 +66,11 @@ if ! node "$ROOT/scripts/audit-build-inputs.mjs" "$BUILD"; then
   exit 2
 fi
 
+if [ "${1:-}" = "--library-only" ]; then
+  echo "pinned path-independent Geogram library built"
+  exit 0
+fi
+
 GEO_LIB="$(find "$BUILD" -name 'libgeogram.a' | head -1)"
 if [ -z "$GEO_LIB" ]; then
   echo "libgeogram.a not found after build" >&2
@@ -81,7 +82,7 @@ fi
 # the permissive zlib licence — recorded in the ledger as a component that
 # survives into the artifact and therefore carries an attribution obligation.
 # It is NOT one of the gated components.
-em++ -O3 \
+em++ -O3 "${PYBRIX_PATH_FLAGS[@]}" \
   -I"$SRC/src/lib" \
   -I"$SRC/src/lib/geogram/third_party/zlib" \
   "$HERE/binding.cpp" \

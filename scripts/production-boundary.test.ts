@@ -556,6 +556,7 @@ describe('the self-intersection kernel is confined to its own worker', () => {
          * ships.
          */
         join('apps', 'web', 'src', 'workers', 'node-tests', 'kernel-differential.test.ts'),
+        join('apps', 'web', 'src', 'workers', 'node-tests', 'wasm-build-differential.test.ts'),
         /*
          * REPAIR-CORE-02. The local-region fill pipeline against the shipped
          * kernel, beside the whole-part engine with the same kernel. Never ships.
@@ -656,6 +657,7 @@ describe('no UNSHIPPED geometry kernel reaches production', () => {
          * chosen after the fact.
          */
         join('apps', 'web', 'src', 'workers', 'node-tests', 'kernel-differential.test.ts'),
+        join('apps', 'web', 'src', 'workers', 'node-tests', 'wasm-build-differential.test.ts'),
       ].sort(),
     );
   });

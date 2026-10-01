@@ -88,12 +88,12 @@ qualified. See [browser support](BROWSER_SUPPORT.md) and the
 
 The startup message **"Argument is multiply defined"** is pre-existing: one set
 of duplicate `sys` registration messages appears per kernel start and Geogram
-ignores the duplicates. The kernel source and WASM are unchanged from v0.5.0;
-WASM SHA-256 is
-`507ea5e7c9110781e4d90ade507d1b37a7b95b2832b055cb59418bca43399fc3`.
+ignores the duplicates. Kernel behavior and startup logging are unchanged from v0.5.0. The
+requalified kernel WASM SHA-256 is
+`daf40745eee279df051f90b199b65f7cf26882db065e743bb8631f65d6ffaaa3`.
 There is no behavior change. These known messages are classified separately
 from application errors in smoke tests; any new console error blocks release.
-The qualified kernel is not rebuilt merely to silence logging.
+The rebuild preserves these diagnostics; their removal is not a release gate.
 
 ## Canonical origin and deployment
 

@@ -1,3 +1,4 @@
+import { scanArtifactPaths } from './audit-artifact-paths.mjs';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
@@ -46,7 +47,7 @@ const KERNEL = join(
   'self-intersection.wasm',
 );
 
-const EXPECTED_KERNEL_SHA256 = '507ea5e7c9110781e4d90ade507d1b37a7b95b2832b055cb59418bca43399fc3';
+const EXPECTED_KERNEL_SHA256 = 'daf40745eee279df051f90b199b65f7cf26882db065e743bb8631f65d6ffaaa3';
 const STAGING_PLACEHOLDER = '<CAD_FIXER_STAGING_HOST>';
 const SECURITY_SNIPPET_INCLUDE = 'include /etc/nginx/snippets/cad-fixer-security-headers.conf;';
 
@@ -229,9 +230,12 @@ describe('HV-C21 — the Pybrix identity in the artifact (BRAND-01)', () => {
   );
 
   it.skipIf(!artifactBuilt)('HV-C21c: no deployable file carries a local filesystem path', () => {
-    for (const path of siteFiles().filter((p) => TEXT.test(p))) {
-      const text = readFileSync(join(SITE_DIR, path), 'utf8');
-      expect(text, path).not.toMatch(/\/Users\/|cprakash|Documents\/CAD|brand-source/);
+    for (const path of siteFiles()) {
+      expect(scanArtifactPaths(readFileSync(join(SITE_DIR, path))), path).toEqual([]);
+      if (TEXT.test(path)) {
+        const text = readFileSync(join(SITE_DIR, path), 'utf8');
+        expect(text, path).not.toMatch(/\/Users\/|cprakash|Documents\/CAD|brand-source/);
+      }
     }
   });
 

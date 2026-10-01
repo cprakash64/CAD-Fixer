@@ -31,6 +31,7 @@
  * than no manifest.
  */
 import { createHash } from 'node:crypto';
+import { scanArtifactPaths } from './audit-artifact-paths.mjs';
 import { execFileSync } from 'node:child_process';
 import {
   cpSync,
@@ -58,8 +59,8 @@ const kernelPath = join(
   'self-intersection.wasm',
 );
 
-/** The Geogram build qualified in Stage 3C-1B. A different one is not shippable. */
-const EXPECTED_KERNEL_SHA256 = '507ea5e7c9110781e4d90ade507d1b37a7b95b2832b055cb59418bca43399fc3';
+/** The path-independent Geogram build requalified in WASM-BUILD-01. */
+const EXPECTED_KERNEL_SHA256 = 'daf40745eee279df051f90b199b65f7cf26882db065e743bb8631f65d6ffaaa3';
 
 /**
  * Extensions a browser actually requests. Anything else in `dist` is either a
@@ -190,6 +191,8 @@ for (const path of everyFile) {
     );
   }
 
+  const pathLeaks = scanArtifactPaths(readFileSync(join(distDir, path)), { roots: [repoRoot] });
+  if (pathLeaks.length) fail(`local build information in ${path}: ${JSON.stringify(pathLeaks)}`);
   deployable.push(path);
 }
 

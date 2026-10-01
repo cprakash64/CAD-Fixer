@@ -37,9 +37,12 @@ if [ "$ACTUAL" != "$GEOGRAM_COMMIT" ]; then
   exit 1
 fi
 
+PYBRIX_REPO_ROOT="$ROOT"
 # shellcheck disable=SC1091
-source "$KERNELS/.toolchain/emsdk_env.sh" >/dev/null 2>&1
-export EMSCRIPTEN="$KERNELS/.toolchain/upstream/emscripten"
+source "$KERNELS/scripts/geogram-toolchain.sh"
+# Reconfigure and build the library with the same remapping as the binding.
+# Never silently link a pre-existing, path-leaking research archive.
+bash "$KERNELS/geogram/build.sh" --library-only
 
 GEO_LIB="$(find "$GEO_BUILD" -name 'libgeogram.a' | head -1)"
 if [ -z "$GEO_LIB" ]; then
@@ -60,7 +63,7 @@ mkdir -p "$ARTIFACTS"
 # buffer asserts by THROWING, and the capacity guard in si_core.h catches it.
 # Without exception support that throw would kill the diagnostic worker instead
 # of degrading the report to PARTIAL.
-em++ -O3 -std=c++17 -fexceptions \
+em++ -O3 -std=c++17 -fexceptions "${PYBRIX_PATH_FLAGS[@]}" \
   -I"$SRC/src/lib" \
   -I"$SRC/src/lib/geogram/third_party/zlib" \
   -I"$HERE/src" \
@@ -83,6 +86,13 @@ echo "--- licence artifact audit ---"
 if ! node "$KERNELS/scripts/audit-build-inputs.mjs" "$GEO_BUILD" "$ARTIFACTS/self-intersection.wasm"; then
   rm -f "$ARTIFACTS/self-intersection.js" "$ARTIFACTS/self-intersection.wasm"
   echo "BLOCKED_BY_ARTIFACT_LICENSE_GATE: artifact removed" >&2
+  exit 2
+fi
+
+# Every byte of the generated loader and runtime binary is audited.
+if ! node "$ROOT/scripts/audit-artifact-paths.mjs" "$ARTIFACTS/self-intersection.wasm" "$ARTIFACTS/self-intersection.js"; then
+  rm -f "$ARTIFACTS/self-intersection.js" "$ARTIFACTS/self-intersection.wasm"
+  echo "BLOCKED_BY_ARTIFACT_PATH_GATE: artifact removed" >&2
   exit 2
 fi
 

@@ -1,6 +1,10 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { it } from 'vitest';
+import { expect, it } from 'vitest';
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { pathToFileURL } from 'node:url';
 import createSelfIntersectionKernel from '@cadfixer/self-intersection-kernel';
 import { createIndexArray, createPositionArray, type CanonicalMesh } from '@cadfixer/mesh-core';
 import {
@@ -456,6 +460,46 @@ it('real-model boundary-fill evidence', { timeout: 3_600_000 }, async () => {
 
   const first = pass('pass 1 (the source)', mesh, before, module);
   out.push(...first.lines);
+  // WASM-BUILD-01: compare the six actual candidate openings with frozen old bytes.
+  const baselineDirectory = mkdtempSync(join(tmpdir(), 'pybrix-real-kernel-baseline-'));
+  try {
+    const show = (file: string): Buffer =>
+      execFileSync(
+        'git',
+        [
+          'show',
+          `a466058be058b31ad348bc40b3e75be407aaaac6:packages/self-intersection-kernel/artifacts/${file}`,
+        ],
+        { maxBuffer: 64 * MIB },
+      );
+    const glue = join(baselineDirectory, 'self-intersection.js');
+    writeFileSync(glue, show('self-intersection.js'));
+    const oldFactory = (await import(pathToFileURL(glue).href)) as {
+      default: typeof createSelfIntersectionKernel;
+    };
+    const started = performance.now();
+    const oldModule = await oldFactory.default({ wasmBinary: show('self-intersection.wasm') });
+    out.push(`old module startup ${(performance.now() - started).toFixed(1)} ms`);
+    const previous = pass('previous qualified kernel', mesh, before, oldModule);
+    expect(first.filled.map((loop) => loop.id)).toEqual(previous.filled.map((loop) => loop.id));
+    expect(first.filled).toHaveLength(2);
+    expect(first.candidate.indices).toEqual(previous.candidate.indices);
+    expect({ ...first.after, analysisMilliseconds: 0 }).toEqual({
+      ...previous.after,
+      analysisMilliseconds: 0,
+    });
+    // Timing rows differ; all per-opening narrowphase counters/decisions must match.
+    const decisions = (lines: string[]): string[] =>
+      lines.filter((line) => /narrowphase complete=|opening .* ->|sourcePreserved=/.test(line));
+    expect(decisions(first.lines)).toEqual(decisions(previous.lines));
+    expect(sourcePreserved(mesh, first.candidate)).toBe(true);
+    out.push(
+      'old/new real-model kernel decisions and candidate geometry: IDENTICAL (2 accepted, 4 geometry refusals)',
+    );
+    out.push(...previous.lines);
+  } finally {
+    rmSync(baselineDirectory, { recursive: true, force: true });
+  }
 
   out.push('--- independent oracle, every admitted opening of pass 1');
   const scan = scanBoundaries(mesh, {
