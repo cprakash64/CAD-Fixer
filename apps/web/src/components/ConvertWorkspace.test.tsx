@@ -1,12 +1,12 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { IDENTITY_PART_TRANSFORM, type PartTransform } from '@cadfixer/mesh-core';
 import type {
   DocumentHandle,
   DocumentRenderSnapshot,
   PartDescriptor,
 } from '@cadfixer/geometry-runtime';
-import { ConversionVerdict, ExportFormat } from '@cadfixer/file-formats';
+import { ConversionVerdict, ExportFormat, ExportStatus } from '@cadfixer/file-formats';
 import { LengthUnit } from '@cadfixer/shared';
 import { ConvertWorkspace } from './ConvertWorkspace';
 import { ExportSummary } from './ExportSummary';
@@ -595,7 +595,124 @@ describe('keyboard and assistive technology', () => {
 
     const saved = screen.getByTestId('convert-saved');
     expect(saved.closest('[aria-live]')).not.toBeNull();
-    expect(saved).toHaveTextContent('read back and checked');
+    // Concise, and understandable without colour: the words say it was saved.
+    expect(saved).toHaveTextContent('Export complete');
+    expect(saved).toHaveTextContent('Saved as part.stl');
+    expect(saved).not.toHaveTextContent('read back and checked');
+  });
+
+  /* ------------------------------------------------------ CONVERT-UX-02 -- */
+
+  function saveStl(store: WorkspaceStore): void {
+    loadModel(store);
+    store.openConversion('stl');
+    const token = store.beginConversion();
+    store.completeConversion(token, {
+      fileName: 'part.stl',
+      byteLength: 284,
+      target: 'stl',
+      triangleCount: 4,
+      partCount: 1,
+      source: { documentId: 'model-1', revision: 1 } as DocumentHandle,
+      unitAssertion: undefined,
+    });
+  }
+
+  it('keeps the saved result out of the sticky action region', () => {
+    renderWorkspace(saveStl);
+    const footer = screen.getByTestId('convert-footer');
+    const saved = screen.getByTestId('convert-saved');
+    expect(footer).not.toContainElement(saved);
+    expect(saved.closest('.convert-workspace__sections')).not.toBeNull();
+    // After a save the action region is the action row and nothing else.
+    expect(footer).toHaveClass('convert-footer--bounded');
+    expect(footer).toHaveTextContent(/^Export STL$/);
+  });
+
+  it('puts how the file was checked behind the result details', () => {
+    renderWorkspace(saveStl);
+    const details = screen.getByTestId('convert-saved-details');
+    expect(details).not.toBeVisible();
+    fireEvent.click(screen.getByTestId('convert-saved-info'));
+    expect(details).toBeVisible();
+    expect(details).toHaveTextContent('read back and checked');
+    expect(details).toHaveTextContent('4 triangles');
+    expect(screen.getByTestId('convert-footer')).not.toContainElement(details);
+  });
+
+  it('shows one line in the action region when an export is refused for size', () => {
+    const store = renderWorkspace((configured) => {
+      loadModel(configured);
+      configured.openConversion('stl');
+    });
+    act(() => {
+      const model = store.getSnapshot().model;
+      if (model === undefined) throw new Error('No model');
+      const token = store.beginConversion();
+      store.failConversion(
+        token,
+        { status: ExportStatus.ResourceLimit, reason: undefined },
+        {
+          source: model.handle,
+          target: ExportFormat.Stl,
+          unitAssertion: measurementUnitKey(model, ExportFormat.Stl, undefined),
+        },
+      );
+    });
+    const footer = screen.getByTestId('convert-footer');
+    expect(screen.getByTestId('convert-failure')).toBeVisible();
+    // The reason still describes the disabled action, without a second line.
+    const reason = screen.getByTestId('convert-unavailable');
+    expect(reason).toHaveClass('visually-hidden');
+    expect(screen.getByTestId('convert-export')).toHaveAccessibleDescription(reason.textContent);
+    expect(footer.querySelectorAll('.convert-footer__hint-row')).toHaveLength(0);
+    expect(within(footer).getAllByRole('button', { name: /About/ })).toHaveLength(1);
+  });
+
+  it('retires a saved result or a failure when the destination is reconfigured', () => {
+    const store = renderWorkspace(saveStl);
+    const measured = store.getSnapshot().conversion.measured;
+    act(() => {
+      store.clearConversionOutcome();
+    });
+    expect(screen.queryByTestId('convert-saved')).toBeNull();
+    expect(store.getSnapshot().conversion.state).toBe('reviewing');
+    expect(store.getSnapshot().conversion.measured).toBe(measured);
+
+    act(() => {
+      const token = store.beginConversion();
+      store.failConversion(token, { status: ExportStatus.InternalFailure, reason: undefined });
+    });
+    expect(screen.getByTestId('convert-failure')).toBeVisible();
+    act(() => {
+      store.clearConversionOutcome();
+    });
+    expect(screen.queryByTestId('convert-failure')).toBeNull();
+
+    // A running export is not an outcome and is left alone.
+    act(() => {
+      store.beginConversion();
+      store.clearConversionOutcome();
+    });
+    expect(store.getSnapshot().conversion.state).toBe('working');
+  });
+
+  it('shows a saved result only for the revision on screen', () => {
+    renderWorkspace((store) => {
+      loadModel(store);
+      store.openConversion('stl');
+      const token = store.beginConversion();
+      store.completeConversion(token, {
+        fileName: 'part.stl',
+        byteLength: 284,
+        target: 'stl',
+        triangleCount: 4,
+        partCount: 1,
+        source: { documentId: 'model-1', revision: 0 } as DocumentHandle,
+        unitAssertion: undefined,
+      });
+    });
+    expect(screen.queryByTestId('convert-saved')).toBeNull();
   });
 
   it('does not rely on colour alone: every section states its meaning in words', () => {

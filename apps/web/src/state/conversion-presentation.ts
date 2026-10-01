@@ -4,6 +4,7 @@ import {
   ConversionVerdict,
   ExportFormat,
   ExportStatus,
+  isExportFormat,
   type CompatibilityFact,
   type ConversionCompatibilityReport,
 } from '@cadfixer/file-formats';
@@ -428,9 +429,39 @@ export function describeExportFailureHeadline(
   }
 }
 
-/** What a finished export says. Only ever shown after validation succeeded. */
-export function describeSaved(fileName: string, byteLength: number, triangleCount: number): string {
-  return `Saved ${fileName} — ${formatBytes(byteLength)}, ${triangleCount.toLocaleString()} triangles. The file was read back and checked before it was handed to your browser.`;
+/**
+ * WHAT A FINISHED EXPORT SAYS — CONVERT-UX-02. Only ever shown after validation
+ * succeeded.
+ *
+ * TWO SHORT LINES, AND THE REST BEHIND ⓘ. The single sentence this replaced
+ * carried the size, the triangle count and how the file was checked, and it
+ * lived in the sticky footer: on a short window it wrapped to four lines and
+ * the footer covered the destination controls. The result is now a card in the
+ * scrolling content, and nobody has to read how a file was checked to learn
+ * that it was saved.
+ */
+export const SAVED_HEADLINE = 'Export complete';
+
+export function describeSavedAs(fileName: string): string {
+  return `Saved as ${fileName}`;
+}
+
+/**
+ * Behind the result's ⓘ. The folder is the NAME the browser reported for the
+ * directory the user chose — never a path, which the browser does not provide.
+ */
+export function describeSavedDetails(
+  target: string,
+  byteLength: number,
+  triangleCount: number,
+  folderName: string | undefined,
+): readonly string[] {
+  const format = isExportFormat(target) ? outputVariantFor(target).name : target.toUpperCase();
+  return [
+    `${format} · ${formatBytes(byteLength)} · ${triangleCount.toLocaleString()} triangles.`,
+    ...(folderName === undefined ? [] : [`Saved in the folder you chose: ${folderName}.`]),
+    'The file was read back and checked before it was handed to your browser.',
+  ];
 }
 
 export const REVIEW_IN_REPAIR = 'Review in Repair';

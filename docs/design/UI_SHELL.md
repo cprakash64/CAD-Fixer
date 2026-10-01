@@ -244,3 +244,57 @@ Capabilities the reference shows and Pybrix does not have are listed in
   `<h1>` still names the page for assistive technology.
 - **Decorative vs named images.** The header mark is `alt=""` because the
   heading beside it says "Pybrix"; the standalone About lockup is `alt="Pybrix"`.
+
+## CONVERT-UX-02 — the sticky action region is bounded
+
+v0.6.0 RELEASE-06-R3 was blocked by one defect. At 1440×300, after a successful
+large native OBJ export, the saved result — one sentence carrying the name, the
+size, the triangle count and how the file was checked — sat inside the Convert
+footer. The footer is `position: sticky` at the bottom of the workspace's one
+scroller, `.tool-panel__body`, which on a short window is held at its 140 px
+floor. The sentence wrapped to four lines and the footer grew to 117–133 px, so
+7–23 px of the scroll area was left for everything else. Two things followed:
+
+- the filename and folder controls could not be scrolled out from under it;
+- the browser brings a focused or scrolled-to control to the middle of the
+  scrollport, which was underneath the footer, so a click at the folder button's
+  centre landed on Export.
+
+The rules that came out of it:
+
+- **The sticky action region holds the action row and at most one line about
+  it.** The overwrite question, the progress of a running export, a failure's
+  headline, or the reason the action is unavailable — the four are exclusive.
+  When a failure and an unavailable reason coexist (a size refusal) the headline
+  is the line on screen and the reason still describes the button for a screen
+  reader.
+- **A result is content, not chrome.** The saved result is a card at the end of
+  the scrolling content: `Export complete`, `Saved as <name>`, and the rest —
+  format, size, triangle count, the folder NAME, how the file was checked —
+  behind ⓘ. No path is shown, because the browser provides none.
+- **The cap is structural as well.** `.convert-footer--bounded` has
+  `max-height: var(--action-footer-max)`; the action row is `flex: none` and the
+  line beside it is what shrinks, so content added later is clipped before a
+  button is.
+- **The same length is the scroller's `scroll-padding-bottom`.** That is what
+  makes Tab, focus and `scrollIntoView` land a control above the pinned region
+  instead of behind it. It applies to every workspace, since each pins a footer
+  in the same scroller.
+- **One scroller.** Nothing was given its own vertical scroll, and the Activity
+  log is unchanged: it still yields first and never overlaps the workspace.
+- **A new destination retires the last outcome.** Editing the filename or
+  choosing a folder clears a saved result or a failure
+  (`WorkspaceStore.clearConversionOutcome`), as changing the format or the unit
+  always did and as starting an export does. The result is shown only for the
+  revision on screen. After a save the destination note is re-read, so it says
+  the file now exists rather than `New file`.
+
+Measured at 1440×300 after the fix: footer 51 px idle and after a save, 75 px
+with the overwrite question, 84 px while writing, against a cap of 92 px; the
+saved card is 52 px and scrolls. The regression is in
+`e2e/obj-file-export.spec.ts` — hit tests at the control centres, not
+visibility — across twelve viewports and every destination state, and it fails
+on the pre-fix source with `convert-folder` resolving to `convert-export`.
+
+The Repair, Split and Texture footers share the sticky pattern and are NOT
+bounded by this change. They gain the scroll padding and nothing else.

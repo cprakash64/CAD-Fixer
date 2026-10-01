@@ -946,6 +946,16 @@
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
+  /*
+   * THE MOST A STICKY ACTION REGION MAY TAKE FROM THIS SCROLL AREA —
+   * CONVERT-UX-02. One number, read twice: the bounded footer is capped at it,
+   * and the scroll padding below is the same length, so a control brought into
+   * view by focus, by Tab or by `scrollIntoView` lands ABOVE the pinned region
+   * rather than behind it. Without the padding the browser centres a control
+   * in the whole scrollport, which on a 140 px floor is underneath the footer.
+   */
+  --action-footer-max: 104px;
+  scroll-padding-bottom: var(--action-footer-max);
 }
 
 /* The activity log. It scrolls inside a cap so it can never crowd out the
@@ -2704,6 +2714,47 @@
   display: none;
 }
 
+/*
+ * BOUNDED — CONVERT-UX-02. The Convert footer holds the action row and at most
+ * one line about it (see `ConvertFooter`), and this is the same promise made
+ * structurally: the region cannot exceed the cap whatever it is given, the
+ * action row never shrinks, and the line above or below it is what gives way.
+ * The cap is a ceiling the content does not reach — it exists so that content
+ * added later cannot take the scroll area from the controls above the footer.
+ */
+.convert-footer--bounded {
+  max-height: var(--action-footer-max);
+  overflow: hidden;
+}
+
+.convert-footer--bounded > * {
+  flex: 0 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.convert-footer--bounded > .convert-footer__actions {
+  flex: none;
+  /* Room for the focus ring, which `overflow: hidden` would otherwise crop. */
+  margin: -3px;
+  padding: 3px;
+}
+
+.convert-footer--bounded .convert-footer__failure-text {
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.convert-footer--bounded .convert-footer__hint {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+}
+
 .convert-footer__progress-row {
   display: flex;
   justify-content: space-between;
@@ -2792,8 +2843,50 @@
   min-width: 0;
 }
 
-.convert-outcome-details > .info-panel {
+.convert-outcome-details > .info-panel,
+.convert-result > .info-panel {
   margin: 0 14px 12px;
+}
+
+/*
+ * The saved result: a card in the scrolling content, directly above the sticky
+ * footer when the panel is scrolled to its end. Never inside the footer.
+ */
+.convert-result__card {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0 14px 12px;
+  padding: 8px 6px 8px 10px;
+  border: 1px solid var(--cad-border);
+  border-left: 3px solid var(--cad-success);
+  border-radius: var(--radius-card);
+  background: var(--cad-well);
+}
+
+.convert-result__card > svg {
+  flex: none;
+  margin-top: 2px;
+  color: var(--cad-success);
+}
+
+.convert-result__text {
+  flex: 1;
+  min-width: 0;
+}
+
+.convert-result__headline {
+  margin: 0;
+  color: var(--cad-text-strong);
+  font: 600 var(--fs-secondary) / 1.4 var(--font-body);
+}
+
+.convert-result__file {
+  margin: 0;
+  color: var(--cad-text);
+  font-size: var(--fs-secondary);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
 }
 
 /* Viewport output-size card: top-left, compact, and only as wide as it is. */
@@ -3552,6 +3645,20 @@
   .tool-panel__footer {
     max-height: 96px;
     padding-top: 8px;
+    padding-bottom: 8px;
+  }
+}
+
+/* Shorter still (CONVERT-UX-02): the bounded action region gives its padding
+   back to the scroll area, where every pixel is a control in reach. */
+@media (height < 480px) {
+  .tool-panel__body {
+    --action-footer-max: 92px;
+  }
+
+  .convert-footer--bounded {
+    gap: 6px;
+    padding-top: 6px;
     padding-bottom: 8px;
   }
 }

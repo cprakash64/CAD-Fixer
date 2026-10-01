@@ -17,6 +17,7 @@ import {
   OutputSizeKind,
   PENDING_PREVIEW_NOTE,
   REVIEW_IN_REPAIR,
+  SAVED_HEADLINE,
   UNITS_LABEL,
   UNKNOWN_SIZE_MARK,
   UNIT_ASSERTION_EXPLANATION,
@@ -33,7 +34,8 @@ import {
   describeOutputUnit,
   describePartCount,
   describePhase,
-  describeSaved,
+  describeSavedAs,
+  describeSavedDetails,
   describeSizeRefusalDetails,
   describeSourceKind,
   describeSourceUnit,
@@ -247,6 +249,15 @@ export function ConvertWorkspace({ active }: { readonly active: boolean }): Reac
           </button>
         </PanelSection>
 
+        <SavedResult
+          active={active}
+          model={model}
+          folderName={
+            target === 'obj' && model !== undefined && objNeedsFileSink(model.parts)
+              ? folderName
+              : undefined
+          }
+        />
         <OutcomeDetails disclosure={outcomeInfo} target={target} refusedForSize={refusedForSize} />
       </div>
 
@@ -586,13 +597,23 @@ function UnitChooser({
 /* --------------------------------------------------------------- footer -- */
 
 /**
- * The primary action, its progress and its outcome.
+ * The primary action and what is needed to act on it right now.
  *
  * STICKY AT THE BOTTOM OF THE PANEL, so the action is reachable however long
  * the report above it is. Its label says what pressing it does — "Convert to
  * 3MF", or "Export STL" when the format does not change — and when it cannot
  * be pressed the reason is written beside it rather than left to a disabled
  * style.
+ *
+ * A BOUNDED HEIGHT, BY STRUCTURE — CONVERT-UX-02. This region is pinned over
+ * the scrolling content, so every pixel it takes is taken from the controls
+ * above it, and on a short window that is nearly all of them. It therefore
+ * holds the action row and AT MOST ONE LINE about it: the overwrite question,
+ * or the progress of a running export, or the headline of a failure, or the
+ * reason the action is unavailable. The four are exclusive. Anything longer —
+ * the saved result, a refusal's explanation — lives in the scrolling content.
+ * `shell.css` caps the region as well, and gives the action row the space
+ * first, so a line that somehow ran long would be clipped before a button was.
  */
 function ConvertFooter({
   hasModel,
@@ -630,10 +651,10 @@ function ConvertFooter({
   const percent = Math.round(conversion.fraction * 100);
 
   return (
-    <div className="convert-footer" data-testid="convert-footer">
-      {/* THE OUTCOME, announced. A refusal is an alert; progress and success
-          are polite, and only the PHASE is announced — a percentage read out
-          on every update would drown everything else. */}
+    <div className="convert-footer convert-footer--bounded" data-testid="convert-footer">
+      {/* PROGRESS, announced politely, and only the PHASE — a percentage read
+          out on every update would drown everything else. A refusal is an
+          alert below; a saved file is announced by its own card. */}
       <div className="convert-footer__status" aria-live="polite">
         {overwrite !== undefined ? (
           <p className="convert-footer__failure-text">
@@ -656,18 +677,6 @@ function ConvertFooter({
             />
           </div>
         ) : null}
-        {conversion.state === ConversionState.Saved && conversion.result !== undefined ? (
-          <p className="convert-footer__saved" data-testid="convert-saved">
-            <Icon name="ok" size={14} />
-            <span>
-              {describeSaved(
-                conversion.result.fileName,
-                conversion.result.byteLength,
-                conversion.result.triangleCount,
-              )}
-            </span>
-          </p>
-        ) : null}
       </div>
       {/* ONE LINE, NEVER A PARAGRAPH — Convert P1. The full sentence is behind
           ⓘ, in the scrolling content: a paragraph here grew the sticky footer
@@ -683,7 +692,13 @@ function ConvertFooter({
               label="this export"
               testId="convert-failure-info"
             />
-          ) : null}
+          ) : (
+            <InfoButton
+              disclosure={outcomeInfo}
+              label="this export limit"
+              testId="convert-refusal-info"
+            />
+          )}
         </div>
       ) : null}
 
@@ -715,9 +730,20 @@ function ConvertFooter({
           </span>
         </button>
       </div>
-      {unavailable === undefined || working ? null : (
+      {unavailable === undefined || working ? null : failure !== undefined ? (
+        /* ONE LINE AT A TIME. The failure headline above is the line on
+           screen; the reason still describes the button for a screen reader. */
+        <p className="visually-hidden" id={hintId} data-testid="convert-unavailable">
+          {unavailable}
+        </p>
+      ) : (
         <div className="convert-footer__hint-row">
-          <p className="convert-footer__hint" id={hintId} data-testid="convert-unavailable">
+          <p
+            className="convert-footer__hint"
+            id={hintId}
+            title={unavailable}
+            data-testid="convert-unavailable"
+          >
             {unavailable}
           </p>
           {refusedForSize === undefined ? null : (
@@ -729,6 +755,96 @@ function ConvertFooter({
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+/* --------------------------------------------------------- saved result -- */
+
+/**
+ * THE FILE THAT WAS JUST WRITTEN — CONVERT-UX-02.
+ *
+ * IN THE SCROLLING CONTENT, NEVER IN THE STICKY FOOTER. It used to be a
+ * sentence inside the footer, and after a large native export on a 300 px
+ * window that sentence made the footer 133 px of a 140 px scroll area: the
+ * filename and folder controls could not be scrolled out from under it, and a
+ * click on the folder button landed on Export. Here it can be as tall as it
+ * needs to be and takes nothing from the controls above it.
+ *
+ * NEVER IN THE WAY. Nothing has to be dismissed: editing the filename, the
+ * folder, the format or the unit retires it, and so does the next export.
+ *
+ * ONLY FOR THE REVISION ON SCREEN, as the inspector's summary is: a file
+ * written before a repair describes geometry the user has moved off.
+ *
+ * REVEALED ONCE, WHEN IT ARRIVES, by setting the panel's own scroller — never
+ * `scrollIntoView`, which would also scroll every clipped ancestor.
+ */
+function SavedResult({
+  active,
+  model,
+  folderName,
+}: {
+  readonly active: boolean;
+  readonly model: LoadedModel | undefined;
+  readonly folderName: string | undefined;
+}): ReactNode {
+  const { conversion } = useWorkspaceState();
+  const details = useInfoDisclosure();
+  const ref = useRef<HTMLDivElement>(null);
+  const result =
+    conversion.state === ConversionState.Saved &&
+    model !== undefined &&
+    conversion.result?.source.documentId === model.handle.documentId &&
+    conversion.result.source.revision === model.handle.revision
+      ? conversion.result
+      : undefined;
+
+  useEffect(() => {
+    if (result === undefined || !active) return;
+    const scroller = ref.current?.closest('.tool-panel__body');
+    if (scroller instanceof HTMLElement) scroller.scrollTop = scroller.scrollHeight;
+  }, [result, active]);
+
+  // The details of a result that is gone do not stay open for the next one.
+  const { open, close } = details;
+  useEffect(() => {
+    if (open && result === undefined) close();
+  }, [open, result, close]);
+
+  return (
+    <div ref={ref} className="convert-result">
+      {/* ALWAYS MOUNTED, so the region exists before its content does and the
+          result is announced once, when it appears — not on every render. */}
+      <div className="convert-result__live" aria-live="polite">
+        {result === undefined ? null : (
+          <div className="convert-result__card" data-testid="convert-saved">
+            <Icon name="ok" size={16} />
+            <div className="convert-result__text">
+              <p className="convert-result__headline">{SAVED_HEADLINE}</p>
+              {/* User-supplied text, rendered as text. */}
+              <p className="convert-result__file" title={result.fileName}>
+                {describeSavedAs(result.fileName)}
+              </p>
+            </div>
+            <InfoButton disclosure={details} label="this file" testId="convert-saved-info" />
+          </div>
+        )}
+      </div>
+      <InfoPanel disclosure={details} label="this file" testId="convert-saved-details">
+        {result === undefined
+          ? null
+          : describeSavedDetails(
+              result.target,
+              result.byteLength,
+              result.triangleCount,
+              folderName,
+            ).map((text) => (
+              <p key={text} className="info-panel__text">
+                {text}
+              </p>
+            ))}
+      </InfoPanel>
     </div>
   );
 }

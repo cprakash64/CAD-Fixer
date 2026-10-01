@@ -136,7 +136,12 @@ export function useDocumentConversion(): DocumentConversionControls {
       ? filename.value
       : deriveDocumentExportName(model?.source.fileName ?? 'model', 'obj');
   const chooseFolder = useCallback((): void => {
-    void chooseObjDirectory().then(setDirectory, (cause: unknown) => {
+    const chosen = (selected: FileSystemDirectoryHandle): void => {
+      setDirectory(selected);
+      // A different folder is a different file: the last outcome is retired.
+      store.clearConversionOutcome();
+    };
+    void chooseObjDirectory().then(chosen, (cause: unknown) => {
       setDestinationNote(
         cause instanceof DOMException && cause.name === 'AbortError'
           ? 'Folder selection cancelled.'
@@ -145,7 +150,13 @@ export function useDocumentConversion(): DocumentConversionControls {
             : 'The folder could not be selected.',
       );
     });
-  }, []);
+  }, [store]);
+  /*
+   * RE-READ AFTER EVERY SAVE — CONVERT-UX-02. The file this export just wrote
+   * now exists, so a note still reading "New file" would promise that the next
+   * export replaces nothing.
+   */
+  const lastSaved = conversion.result;
   useEffect(() => {
     let current = true;
     if (directory === undefined) return;
@@ -168,7 +179,7 @@ export function useDocumentConversion(): DocumentConversionControls {
     return (): void => {
       current = false;
     };
-  }, [directory, destinationName]);
+  }, [directory, destinationName, lastSaved]);
   const sessionRef = useRef<DocumentExportSession | undefined>(undefined);
 
   /*
@@ -434,7 +445,10 @@ export function useDocumentConversion(): DocumentConversionControls {
     cancel,
     destinationName,
     setDestinationName: (value): void => {
-      if (model !== undefined) setFilename({ documentId: model.handle.documentId, value });
+      if (model === undefined) return;
+      setFilename({ documentId: model.handle.documentId, value });
+      // A different name is a different file: the last outcome is retired.
+      store.clearConversionOutcome();
     },
     folderName: directory?.name,
     chooseFolder,

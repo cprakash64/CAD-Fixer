@@ -3258,6 +3258,36 @@ export class WorkspaceStore {
     });
   }
 
+  /**
+   * Retires the outcome of the LAST attempt — CONVERT-UX-02.
+   *
+   * A NEW DESTINATION IS A DIFFERENT FILE. "Export complete" beside a filename
+   * the user has since retyped, or a failure beside a folder they have since
+   * replaced, describes an attempt they are no longer configuring. The target
+   * and unit setters above already do this for their own fields; this is the
+   * same step for the two fields the store does not hold.
+   *
+   * WHAT IS KEPT: the measured sizes and the remembered size refusals, which
+   * are facts about revision, target and unit and do not depend on where a
+   * file is saved.
+   */
+  public clearConversionOutcome(): void {
+    const previous = this.state.conversion;
+    if (previous.state !== ConversionState.Saved && previous.state !== ConversionState.Failed) {
+      return;
+    }
+    this.update({
+      conversion: {
+        ...previous,
+        state: ConversionState.Reviewing,
+        fraction: 0,
+        phase: undefined,
+        failure: undefined,
+        result: undefined,
+      },
+    });
+  }
+
   public beginConversion(): ConversionToken {
     const token = this.nextConversionToken as ConversionToken;
     this.nextConversionToken += 1;
