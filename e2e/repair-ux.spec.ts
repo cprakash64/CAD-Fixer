@@ -250,10 +250,14 @@ test('RUX04: Repair model previews; Cancel discards; Apply commits; the result i
   });
   await expect(page.getByTestId('repair-applied-remaining')).toContainText('non-manifold vertices');
   // With nothing safe left, the action stays where it is — disabled, with why.
-  await expect(page.getByTestId('repair-applied-status')).toHaveText('Repairs applied');
+  // REPAIR-UX-04: issues remain, so the outcome is PARTIAL and says so once.
+  await expect(page.getByTestId('repair-applied-headline')).toHaveText('Partial repair completed');
+  await expect(page.getByTestId('repair-applied-status')).toHaveText(
+    /^Partial repair completed\. .* Some detected issues remain\.$/,
+  );
   await expect(page.getByTestId('preview-repair')).toBeDisabled();
   await expect(page.getByTestId('repair-no-repairs')).toHaveText(
-    'No safe automatic repairs are available for the detected issues.',
+    'Everything Pybrix can safely repair automatically has been fixed.',
   );
 
   // Undo restores the prior document.

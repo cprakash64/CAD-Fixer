@@ -19,23 +19,34 @@ import {
   NO_REPAIRABLE_PROBLEMS,
   NO_SAFE_REPAIRS,
   PREVIEW_READY_LINE,
-  REPAIRS_APPLIED_LINE,
+  REPAIRS_EXHAUSTED_LINE,
+  REPAIR_CHECKING_REMAINING,
+  REPAIR_FIXED_LABEL,
   REPAIR_MODEL_ACTION,
   REPAIR_MODEL_SUPPORT,
+  REPAIR_NOTHING_REMAINING,
   REPAIR_OPTIONS_INFO,
   REPAIR_OPTION_LABELS,
+  REPAIR_REMAINING_LABEL,
   REPAIR_UNAVAILABLE_LINE,
   REPAIR_WORKSPACE_FORBIDDEN_TERMS,
   RepairActionKind,
+  RepairOutcomeKind,
   SUMMARY_INFO,
   deriveIssueStatus,
   deriveRepairAction,
+  deriveRepairOutcome,
   deriveRepairScope,
+  describeAppliedActivity,
   describeAppliedChanges,
   describeFileStructure,
+  describeHealthRemaining,
   describeFillOptionStatus,
   describeOptionStatus,
   describeRemaining,
+  describeRemainingIssue,
+  describeRepairsExhausted,
+  remainingIssues,
   describeRepairScope,
   type IssueStatus,
   type IssueStatusContext,
@@ -584,7 +595,25 @@ describe('vocabulary', () => {
       NO_SAFE_REPAIRS,
       NO_REPAIRABLE_PROBLEMS,
       PREVIEW_READY_LINE,
-      REPAIRS_APPLIED_LINE,
+      REPAIRS_EXHAUSTED_LINE,
+      REPAIR_FIXED_LABEL,
+      REPAIR_REMAINING_LABEL,
+      REPAIR_CHECKING_REMAINING,
+      REPAIR_NOTHING_REMAINING,
+      describeHealthRemaining('1 error · 2 warnings'),
+      describeAppliedActivity([]),
+      describeAppliedActivity(['2 openings filled']),
+      describeRepairsExhausted(['11 open boundaries', '155 non-manifold vertices']),
+      ...[
+        { changes: [], remainingTypes: undefined, exhausted: false },
+        { changes: ['2 openings filled'], remainingTypes: undefined, exhausted: false },
+        { changes: ['2 openings filled'], remainingTypes: 0, exhausted: false },
+        { changes: ['2 openings filled'], remainingTypes: 3, exhausted: false },
+        { changes: ['2 openings filled'], remainingTypes: 3, exhausted: true },
+      ].flatMap((input) => {
+        const outcome = deriveRepairOutcome(input);
+        return [outcome.headline, outcome.support, outcome.announcement ?? ''];
+      }),
       REPAIR_UNAVAILABLE_LINE,
       HOLE_FILL_SIZE_LIMIT_LINE,
       describeFileStructure(true),
@@ -621,5 +650,172 @@ describe('vocabulary', () => {
         expect(text, `"${text}" contains "${term}"`).not.toMatch(new RegExp(`\\b${term}\\b`, 'i'));
       }
     }
+  });
+});
+
+/* ------------------------------------------------------- REPAIR-UX-04 -- */
+
+describe('the repair outcome is the operation, not the model', () => {
+  const FILLED = ['2 openings filled'];
+
+  it('is PARTIAL when something was fixed and detected issues remain', () => {
+    const outcome = deriveRepairOutcome({ changes: FILLED, remainingTypes: 3, exhausted: false });
+    expect(outcome.kind).toBe(RepairOutcomeKind.Partial);
+    expect(outcome.headline).toBe('Partial repair completed');
+    expect(outcome.support).toBe(
+      'Pybrix fixed the issues it could repair safely. Some detected issues remain.',
+    );
+    // One coherent sentence: the outcome, what was fixed, that issues remain.
+    expect(outcome.announcement).toBe(
+      'Partial repair completed. 2 openings filled. Some detected issues remain.',
+    );
+  });
+
+  it('says so when nothing further can be repaired safely', () => {
+    const outcome = deriveRepairOutcome({ changes: FILLED, remainingTypes: 3, exhausted: true });
+    expect(outcome.kind).toBe(RepairOutcomeKind.Partial);
+    expect(outcome.support).toBe(
+      'Pybrix fixed everything it can currently repair safely on this model.',
+    );
+  });
+
+  it('stays PARTIAL when supported repairs are exhausted but issues are still detected', () => {
+    // "No supported repair remains" is not "no detected issue remains".
+    for (const remainingTypes of [1, 2, 3]) {
+      expect(deriveRepairOutcome({ changes: FILLED, remainingTypes, exhausted: true }).kind).toBe(
+        RepairOutcomeKind.Partial,
+      );
+    }
+  });
+
+  it('is COMPLETE only when the new analysis detects no error or warning', () => {
+    const outcome = deriveRepairOutcome({ changes: FILLED, remainingTypes: 0, exhausted: false });
+    expect(outcome.kind).toBe(RepairOutcomeKind.Complete);
+    expect(outcome.headline).toBe('Repair completed');
+    expect(outcome.support).toBe('No detected issues remain in the checks Pybrix ran.');
+    expect(outcome.announcement).toContain('Repair completed. 2 openings filled.');
+  });
+
+  it('decides nothing before the repaired mesh has been analysed', () => {
+    const outcome = deriveRepairOutcome({
+      changes: FILLED,
+      remainingTypes: undefined,
+      exhausted: false,
+    });
+    expect(outcome.kind).toBe(RepairOutcomeKind.Checking);
+    expect(outcome.headline).toBe('Repair applied');
+    expect(outcome.headline).not.toMatch(/partial|completed/i);
+    // Nothing is announced until the outcome is known.
+    expect(outcome.announcement).toBeUndefined();
+  });
+
+  it('reports no success when the repair changed nothing', () => {
+    for (const remainingTypes of [undefined, 0, 2]) {
+      const outcome = deriveRepairOutcome({ changes: [], remainingTypes, exhausted: true });
+      expect(outcome.kind).toBe(RepairOutcomeKind.NoChange);
+      expect(outcome.headline).toBe('No changes were made');
+      expect(`${outcome.headline} ${outcome.support}`).not.toMatch(/completed|fixed everything/i);
+    }
+  });
+
+  it('is not decided by how many triangles the repair added', () => {
+    // Same change, different remaining diagnostics: different outcome.
+    const many = ['2,000 openings filled', '5 duplicate triangles removed'];
+    expect(deriveRepairOutcome({ changes: many, remainingTypes: 1, exhausted: false }).kind).toBe(
+      RepairOutcomeKind.Partial,
+    );
+    expect(deriveRepairOutcome({ changes: many, remainingTypes: 0, exhausted: false }).kind).toBe(
+      RepairOutcomeKind.Complete,
+    );
+  });
+
+  it('joins several fixes into one sentence', () => {
+    const outcome = deriveRepairOutcome({
+      changes: ['2 openings filled', '3 duplicate triangles removed', '1 triangle reversed'],
+      remainingTypes: 1,
+      exhausted: false,
+    });
+    expect(outcome.announcement).toBe(
+      'Partial repair completed. 2 openings filled, 3 duplicate triangles removed and 1 triangle reversed. Some detected issues remain.',
+    );
+  });
+});
+
+describe('what remains is reported per category, never summed', () => {
+  const issue = (
+    id: RepairIssueId,
+    label: string,
+    severity: IssueSeverity,
+    count: number | undefined,
+  ): RepairIssue => ({
+    id,
+    label,
+    help: '',
+    severity,
+    count,
+    unit: ['', ''],
+    occurrenceSource: 'none',
+    occurrenceCount: 0,
+    occurrencesPartial: false,
+  });
+  const TRUCK: readonly RepairIssue[] = [
+    issue(RepairIssueId.OpenBoundaries, 'Open boundaries', IssueSeverity.Warning, 11),
+    issue(RepairIssueId.NonManifoldEdges, 'Non-manifold edges', IssueSeverity.Ok, 0),
+    issue(RepairIssueId.NonManifoldVertices, 'Non-manifold vertices', IssueSeverity.Error, 155),
+    issue(
+      RepairIssueId.SelfIntersections,
+      'Self-intersections',
+      IssueSeverity.Unchecked,
+      undefined,
+    ),
+    issue(RepairIssueId.Components, 'Separate components', IssueSeverity.Warning, 39),
+  ];
+
+  it('lists each remaining category with its own count', () => {
+    expect(remainingIssues(TRUCK).map(describeRemainingIssue)).toEqual([
+      '11 open boundaries',
+      '155 non-manifold vertices',
+      '39 separate components',
+    ]);
+    expect(describeRemaining(TRUCK)).toEqual(remainingIssues(TRUCK).map(describeRemainingIssue));
+  });
+
+  it('never adds unlike quantities together', () => {
+    const everything = [
+      ...describeRemaining(TRUCK),
+      describeRepairsExhausted(describeRemaining(TRUCK)),
+      deriveRepairOutcome({ changes: ['2 openings filled'], remainingTypes: 3, exhausted: true })
+        .announcement ?? '',
+    ].join(' ');
+    // 11 + 155 + 39, and the partial sums.
+    for (const sum of ['205', '166', '194', '50']) {
+      expect(everything).not.toMatch(new RegExp(`\\b${sum}\\b`));
+    }
+  });
+
+  it('explains the disabled action after a partial repair without saying nothing is wrong', () => {
+    expect(REPAIRS_EXHAUSTED_LINE).toBe(
+      'Everything Pybrix can safely repair automatically has been fixed.',
+    );
+    const detail = describeRepairsExhausted(describeRemaining(TRUCK));
+    expect(detail).toContain(
+      'Still detected: 11 open boundaries, 155 non-manifold vertices and 39 separate components.',
+    );
+    expect(detail).toContain('repairing again would change nothing');
+    expect(`${REPAIRS_EXHAUSTED_LINE} ${detail}`).not.toMatch(
+      /no issues|nothing is wrong|healthy/i,
+    );
+  });
+
+  it('marks the Health counts as what is left, without changing them', () => {
+    expect(describeHealthRemaining('1 error · 2 warnings')).toBe('1 error · 2 warnings remaining');
+  });
+
+  it('writes an Activity entry about what changed, not about what remains', () => {
+    expect(describeAppliedActivity(['2 openings filled'])).toBe(
+      'Repair applied: 2 openings filled. Health shows what remains.',
+    );
+    expect(describeAppliedActivity([])).toBe('Repair applied. No triangles changed.');
+    expect(describeAppliedActivity(['2 openings filled'])).not.toMatch(/complete|partial/i);
   });
 });

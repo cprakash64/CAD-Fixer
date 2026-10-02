@@ -20,8 +20,12 @@ import {
 } from '../runtime/repair-service';
 import { useGeometryClient } from '../runtime/client-context';
 import { useWorkspaceState, useWorkspaceStore } from './store-context';
-import { presentAcceptance, RESOURCE_LIMIT_DETAIL, describeApplied } from './repair-presentation';
-import { describeFillFailure } from './repair-workspace-presentation';
+import { presentAcceptance, RESOURCE_LIMIT_DETAIL } from './repair-presentation';
+import {
+  describeAppliedActivity,
+  describeAppliedChanges,
+  describeFillFailure,
+} from './repair-workspace-presentation';
 import {
   AnalysisState,
   RepairCandidateState,
@@ -499,7 +503,17 @@ export function useConservativeRepair(): ConservativeRepairControls {
           });
           return;
         }
-        store.pushStatus(StatusSeverity.Success, describeApplied(result.appliedOperations));
+        /*
+         * WHAT CHANGED, AND NOTHING ABOUT WHAT REMAINS — REPAIR-UX-04. The new
+         * revision has not been analysed yet, so "complete" or "partial" is not
+         * known here; the result card says which once it is.
+         */
+        store.pushStatus(
+          StatusSeverity.Info,
+          describeAppliedActivity(
+            describeAppliedChanges(preview.counts, preview.boundaryFill?.filledCount ?? 0),
+          ),
+        );
       },
       (cause: unknown) => {
         const failure = describeFailure(cause);

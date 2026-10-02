@@ -3,6 +3,7 @@ import { AppErrorCode, toAppError } from '@cadfixer/shared';
 import type { DocumentHandle } from '@cadfixer/geometry-runtime';
 import { analyzeModelTopology, type AnalysisSession } from '../runtime/analysis-service';
 import { useGeometryClient } from '../runtime/client-context';
+import { deriveHealthSummary, deriveRepairIssues } from './repair-issues';
 import { useWorkspaceState, useWorkspaceStore } from './store-context';
 import { AnalysisState, StatusSeverity, type AnalysisToken } from './workspace-store';
 
@@ -76,7 +77,11 @@ export function useTopologyAnalysis(): TopologyAnalysisControls {
             defects === 0 ? StatusSeverity.Success : StatusSeverity.Warning,
             defects === 0
               ? 'Topology analysis found no defects. Self-intersections and wall thickness were not checked.'
-              : `Topology analysis found ${defects.toLocaleString()} issue${defects === 1 ? '' : 's'}.`,
+              : // ISSUE TYPES, NEVER A SUM — REPAIR-UX-04. The number this used to
+                // print added boundary edges to vertices to triangles, and
+                // "692 issues" beside "1 error · 2 warnings" read as a
+                // different, larger problem. Health's own wording is used.
+                `Mesh analysis: ${deriveHealthSummary(deriveRepairIssues({ report: outcome.report, detail: outcome.detail, selfIntersection: undefined, boundaryRows: undefined })).text}.`,
           );
         },
         (cause: unknown) => {

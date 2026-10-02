@@ -314,10 +314,16 @@ Enforced by test against every string
 
 What may be said, after a validated and committed repair:
 
-> **Conservative repair applied.** Selected topological issues were repaired and
-> revalidated.
+> **Partial repair completed** / **Repair completed.** Selected topological
+> issues were repaired and revalidated.
 >
 > Self-intersections and wall thickness have not yet been checked.
+
+Which headline applies is decided from the analysis of the REPAIRED revision
+(REPAIR-UX-04, `deriveRepairOutcome`): "Repair completed" only when no error or
+warning is still detected, "Partial repair completed" whenever any is — including
+when every supported repair has been exhausted. v0.6.0 said "Conservative repair
+applied" for both, in green, beside a Health line that still showed an error.
 
 The qualifier is a required field on every verdict rather than a suffix a caller
 may forget — including on success, which is the case where it is most tempting to

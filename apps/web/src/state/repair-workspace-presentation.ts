@@ -102,8 +102,20 @@ export const REPAIR_CANCELLING_LINE = 'Cancelling… nothing has been changed.';
 export const REPAIR_CANCELLED_LINE = 'Repair was cancelled. Nothing was changed.';
 export const ANALYSIS_CANCELLED_LINE = 'Analysis was cancelled. No partial results are shown.';
 
-/** State D. Deliberately not "Repair complete": other issues may remain. */
-export const REPAIRS_APPLIED_LINE = 'Repairs applied';
+/**
+ * AFTER A PARTIAL REPAIR, the reason Repair model is disabled — REPAIR-UX-04.
+ * It answers the question the disabled button raises next to a Health line
+ * that still shows an error: why are there still issues, and why would pressing
+ * Repair again not help. Not "nothing is wrong": the detail names what remains.
+ */
+export const REPAIRS_EXHAUSTED_LINE =
+  'Everything Pybrix can safely repair automatically has been fixed.';
+
+/** Behind the ⓘ beside `REPAIRS_EXHAUSTED_LINE`. Category counts, never a sum. */
+export function describeRepairsExhausted(remaining: readonly string[]): string {
+  const still = remaining.length === 0 ? '' : `Still detected: ${joinList(remaining)}. `;
+  return `${still}Pybrix has no safe automatic repair for what is left, so repairing again would change nothing. Each row under Detected issues says what can be done about it.`;
+}
 
 /* ------------------------------------------------------ fixability ---- */
 
@@ -561,6 +573,123 @@ export function deriveRepairAction(input: RepairActionInput): RepairActionKind {
     : RepairActionKind.NothingFound;
 }
 
+/* ---------------------------------------------------- repair outcome -- */
+
+/**
+ * WHAT THE LAST REPAIR ACCOMPLISHED — REPAIR-UX-04.
+ *
+ * A SUCCESSFUL REPAIR OPERATION AND A HEALTHY MODEL ARE DISTINCT STATES. The
+ * outcome reports the OPERATION: what it changed, and whether detected issues
+ * remain afterwards. Health reports the MODEL, from the analysis of the
+ * revision on screen, and is never recoloured because a repair ran. v0.6.0
+ * headed every applied repair "Conservative repair applied" in green, beside a
+ * Health line still reading "1 error · 2 warnings"; a reasonable person read
+ * that as a repair that claimed to fix the model and did not.
+ *
+ * DERIVED, NEVER STORED, from two authoritative facts: what the committed
+ * candidate changed, and what the analysis of the NEW revision still detects.
+ * "The repair added triangles" is not the test for partial; what remains is.
+ */
+export const RepairOutcomeKind = {
+  /** Applied; the new revision's analysis has not reported yet. */
+  Checking: 'checking',
+  /** Something was fixed and the new analysis detects no error or warning. */
+  Complete: 'complete',
+  /** Something was fixed and detected issues remain. */
+  Partial: 'partial',
+  /** The repair changed no triangle. Not a success: nothing happened. */
+  NoChange: 'no-change',
+} as const;
+
+export type RepairOutcomeKind = (typeof RepairOutcomeKind)[keyof typeof RepairOutcomeKind];
+
+export interface RepairOutcome {
+  readonly kind: RepairOutcomeKind;
+  readonly headline: string;
+  /** One sentence under the headline. */
+  readonly support: string;
+  /**
+   * ONE coherent sentence for assistive technology, or `undefined` while the
+   * outcome is still being checked — so a screen reader hears "partial repair,
+   * two openings filled, issues remain" once, not "applied" and then a
+   * separate list of errors.
+   */
+  readonly announcement: string | undefined;
+}
+
+export interface RepairOutcomeInput {
+  /** `describeAppliedChanges` for the committed candidate. Empty: no change. */
+  readonly changes: readonly string[];
+  /**
+   * Issue types (errors and warnings) the analysis of the NEW revision
+   * detects, or `undefined` while that analysis has not reported.
+   */
+  readonly remainingTypes: number | undefined;
+  /** The current plan offers nothing further: supported repairs are exhausted. */
+  readonly exhausted: boolean;
+}
+
+export const REPAIR_FIXED_LABEL = 'Fixed';
+export const REPAIR_REMAINING_LABEL = 'Still needs attention';
+export const REPAIR_CHECKING_REMAINING = 'Checking the repaired mesh…';
+export const REPAIR_NOTHING_REMAINING = 'No issue types detected by these checks';
+
+export function deriveRepairOutcome(input: RepairOutcomeInput): RepairOutcome {
+  const fixed = joinList(input.changes);
+  if (input.changes.length === 0) {
+    return {
+      kind: RepairOutcomeKind.NoChange,
+      headline: 'No changes were made',
+      support: 'The repair found nothing it could change. Your model is as it was.',
+      announcement: 'The repair made no changes.',
+    };
+  }
+  if (input.remainingTypes === undefined) {
+    return {
+      kind: RepairOutcomeKind.Checking,
+      headline: 'Repair applied',
+      support: 'Checking what remains in the repaired mesh…',
+      announcement: undefined,
+    };
+  }
+  if (input.remainingTypes === 0) {
+    return {
+      kind: RepairOutcomeKind.Complete,
+      headline: 'Repair completed',
+      support: 'No detected issues remain in the checks Pybrix ran.',
+      announcement: `Repair completed. ${sentenceCase(fixed)}. No detected issues remain in the checks Pybrix ran.`,
+    };
+  }
+  return {
+    kind: RepairOutcomeKind.Partial,
+    headline: 'Partial repair completed',
+    support: input.exhausted
+      ? 'Pybrix fixed everything it can currently repair safely on this model.'
+      : 'Pybrix fixed the issues it could repair safely. Some detected issues remain.',
+    announcement: `Partial repair completed. ${sentenceCase(fixed)}. Some detected issues remain.`,
+  };
+}
+
+/**
+ * The Health line after a repair that left issues: the same authoritative
+ * counts, with one word saying they are what is LEFT. Only ever applied to a
+ * summary that has an error or a warning in it.
+ */
+export function describeHealthRemaining(summaryText: string): string {
+  return `${summaryText} remaining`;
+}
+
+/**
+ * The Activity entry for an applied repair: what changed, and where to look
+ * for the rest. It makes no claim about what remains — the analysis of the new
+ * revision has not run when this is written.
+ */
+export function describeAppliedActivity(changes: readonly string[]): string {
+  return changes.length === 0
+    ? 'Repair applied. No triangles changed.'
+    : `Repair applied: ${joinList(changes)}. Health shows what remains.`;
+}
+
 /* ---------------------------------------------------- applied result -- */
 
 /**
@@ -590,13 +719,24 @@ export function describeAppliedChanges(
  * "nothing remains".
  */
 export function describeRemaining(issues: readonly RepairIssue[]): readonly string[] {
-  return issues
-    .filter(
-      (issue) =>
-        (issue.severity === IssueSeverity.Error || issue.severity === IssueSeverity.Warning) &&
-        issue.count !== undefined,
-    )
-    .map((issue) => `${(issue.count ?? 0).toLocaleString()} ${issue.label.toLowerCase()}`);
+  return remainingIssues(issues).map(describeRemainingIssue);
+}
+
+/** The rows still detected: errors and warnings whose check has run. */
+export function remainingIssues(issues: readonly RepairIssue[]): readonly RepairIssue[] {
+  return issues.filter(
+    (issue) =>
+      (issue.severity === IssueSeverity.Error || issue.severity === IssueSeverity.Warning) &&
+      issue.count !== undefined,
+  );
+}
+
+/**
+ * "11 open boundaries". ONE CATEGORY, ITS OWN COUNT: boundaries, vertices and
+ * pieces are different kinds of thing, and nothing here ever adds them up.
+ */
+export function describeRemainingIssue(issue: RepairIssue): string {
+  return `${(issue.count ?? 0).toLocaleString()} ${issue.label.toLowerCase()}`;
 }
 
 /* ------------------------------------------------------ repair options -- */
@@ -752,6 +892,16 @@ export const HOLE_FILL_SIZE_LIMIT_LINE =
 export const REPAIR_UNAVAILABLE_LINE = 'Repair is unavailable in this browser context.';
 
 /* ----------------------------------------------------------- utilities -- */
+
+/** "a", "a and b", "a, b and c". */
+function joinList(items: readonly string[]): string {
+  if (items.length <= 1) return items[0] ?? '';
+  return `${items.slice(0, -1).join(', ')} and ${items[items.length - 1] ?? ''}`;
+}
+
+function sentenceCase(text: string): string {
+  return text.length === 0 ? text : `${text[0]?.toUpperCase() ?? ''}${text.slice(1)}`;
+}
 
 function plural(count: number, singular: string, pluralForm = `${singular}s`): string {
   return `${count.toLocaleString()} ${count === 1 ? singular : pluralForm}`;

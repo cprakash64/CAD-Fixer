@@ -635,20 +635,11 @@ export function describeBoundsComparison(comparison: BoundsComparison): string {
 /* ------------------------------------------------------------- committing -- */
 
 /**
- * What is said after a successful commit.
- *
- * "Conservative repair applied" and the exact operations, followed by the same
- * qualifier as everywhere else. Not "fixed", not "repaired successfully", and
- * certainly nothing about printing.
+ * Beneath the repair outcome (REPAIR-UX-04 decides the headline, in
+ * `repair-workspace-presentation.ts`): what was done to the issues that were
+ * selected, followed by the same qualifier as everywhere else. Not "fixed",
+ * not "repaired successfully", and certainly nothing about printing.
  */
-export function describeApplied(operations: readonly RepairOperation[]): string {
-  if (operations.length === 0) return 'Conservative repair applied.';
-  const names = operations.map((operation) => REPAIR_OPERATION_COPY[operation].label.toLowerCase());
-  return `Conservative repair applied: ${joinList(names)}.`;
-}
-
-export const REPAIR_APPLIED_HEADLINE = 'Conservative repair applied';
-
 export const REPAIR_APPLIED_DETAIL = 'Selected topological issues were repaired and revalidated.';
 
 export const NO_REPAIRS_AVAILABLE_HEADLINE = 'No conservative repairs are currently available.';
@@ -687,11 +678,6 @@ export function describeChangeSampling(drawn: number, exact: number): string | u
 
 function formatCount(value: number, noun: string): string {
   return `${value.toLocaleString()} ${noun}${value === 1 ? '' : 's'}`;
-}
-
-function joinList(items: readonly string[]): string {
-  if (items.length <= 1) return items[0] ?? '';
-  return `${items.slice(0, -1).join(', ')} and ${items[items.length - 1] ?? ''}`;
 }
 
 /* --------------------------------------------------- analysis dependency -- */

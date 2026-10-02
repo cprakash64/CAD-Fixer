@@ -1774,10 +1774,23 @@ validated`, and the qualifier naming what was NOT examined travels with it.
   decided in one file and asserted by test: no string it can emit may say
   printable, watertight, fully repaired, all errors fixed, ready to print, fix
   everything, make printable, or hole — and none may claim a repaired model faces
-  outward, because winding is unified RELATIVE to neighbours only. The most that
-  may be said after a committed repair is `Conservative repair applied` plus
-  `Selected topological issues were repaired and revalidated`, always followed by
-  the same unchecked qualifier.
+  outward, because winding is unified RELATIVE to neighbours only. What may
+  be said after a committed repair is decided by `deriveRepairOutcome`
+  (REPAIR-UX-04): `Repair completed` ONLY when the analysis of the repaired
+  revision detects no error or warning, `Partial repair completed` whenever any
+  remain, `Repair applied` while that analysis is pending, and
+  `No changes were made` when nothing changed — each with the unchecked
+  qualifier.
+- **A SUCCESSFUL REPAIR OPERATION AND A HEALTHY MODEL ARE DISTINCT STATES.**
+  Post-repair UI reports both what changed and what remains. The outcome card
+  describes the OPERATION; Health describes the MODEL and is never recoloured or
+  softened because a repair ran. "No supported repair remains" is not "no
+  detected issue remains": a model with supported repairs exhausted and issues
+  still detected is PARTIAL. Remaining diagnostics are reported per category
+  with their own counts and are NEVER summed — boundaries, vertices and pieces
+  are different kinds of thing. Every "after the repair" wording is derived from
+  the applied repair being the current document, revision and part, so Undo, a
+  replacement model or another edit takes it away.
 - **A refusal is not an error, and a preview is not an application.** Refused and
   blocked operations are rendered as decisions with reasons in their own visual
   register; a candidate on screen is labelled `Preview — not applied` until it is

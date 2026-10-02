@@ -504,9 +504,9 @@ describe('after a repair has been applied', () => {
       applied(store, true);
     });
 
-    expect(screen.getByTestId('repair-applied-headline')).toHaveTextContent(
-      'Conservative repair applied',
-    );
+    // The repaired mesh has not been analysed yet: neither partial nor complete.
+    expect(screen.getByTestId('repair-applied-headline')).toHaveTextContent('Repair applied');
+    expect(screen.getByTestId('repair-applied')).toHaveAttribute('data-outcome', 'checking');
     expect(screen.getByTestId('repair-applied-changes')).toHaveTextContent(
       '14 degenerate triangles removed',
     );
@@ -802,5 +802,284 @@ describe('the bounded action region', () => {
     expect(detail).toBeVisible();
     expect(footer).not.toContainElement(detail);
     expect(footer).toContainElement(screen.getByTestId('repair-no-repairs-info'));
+  });
+});
+
+/* ------------------------------------------------------- REPAIR-UX-04 -- */
+
+describe('a repair outcome and the model’s health are distinct', () => {
+  const REPAIRED = { documentId: 'model-1', revision: 2 } as DocumentHandle;
+
+  /** The analysis of the REPAIRED revision, as the worker would report it. */
+  function analyseRepaired(store: WorkspaceStore, overrides: Partial<TopologyReport> = {}): void {
+    act(() => {
+      const token = store.beginAnalysis(REPAIRED, PART);
+      store.commitAnalysis(
+        token,
+        REPAIRED,
+        PART,
+        report({ documentRevision: 2, ...overrides }),
+        DETAIL,
+        1,
+      );
+    });
+  }
+
+  /** The plan for the repaired revision: nothing further to do. */
+  function planRepaired(store: WorkspaceStore): void {
+    const plan: ConservativeRepairPlan = { ...planWith([]), sourceRevision: 2 };
+    act(() => {
+      const token = store.beginRepairPlan(REPAIRED, PART, plan.requested);
+      store.commitRepairPlan(token, REPAIRED, plan, fillPlan(0));
+    });
+  }
+
+  /** The truck's shape in miniature: openings, vertices and pieces remain. */
+  const REMAINING: Partial<TopologyReport> = {
+    boundaryEdgeCount: 44,
+    simpleBoundaryLoopCount: 4,
+    branchedBoundaryCount: 7,
+    nonManifoldVertexCount: 155,
+    componentCount: 39,
+  };
+
+  function partiallyRepaired(): WorkspaceStore {
+    const store = renderWorkspace((s) => {
+      loadModel(s);
+      applied(s, true);
+    });
+    analyseRepaired(store, REMAINING);
+    planRepaired(store);
+    return store;
+  }
+
+  it('heads a repair that left detected issues "Partial repair completed"', () => {
+    partiallyRepaired();
+    const card = screen.getByTestId('repair-applied');
+    expect(card).toHaveAttribute('data-outcome', 'partial');
+    expect(screen.getByTestId('repair-applied-headline')).toHaveTextContent(
+      'Partial repair completed',
+    );
+    expect(card).not.toHaveTextContent('Conservative repair applied');
+    expect(screen.getByTestId('repair-applied-support')).toHaveTextContent(
+      'Pybrix fixed everything it can currently repair safely on this model.',
+    );
+    // Not the all-green frame of a complete repair.
+    expect(card).not.toHaveClass('repair-result--complete');
+  });
+
+  it('shows what was fixed and, separately, each category that remains', () => {
+    partiallyRepaired();
+    const card = screen.getByTestId('repair-applied');
+    expect(card).toHaveTextContent('Fixed');
+    expect(card).toHaveTextContent('Still needs attention');
+    expect(screen.getByTestId('repair-applied-changes')).toHaveTextContent(
+      '14 degenerate triangles removed',
+    );
+    expect(screen.getByTestId('repair-remaining-open-boundaries')).toHaveTextContent(
+      '11 open boundaries',
+    );
+    expect(screen.getByTestId('repair-remaining-non-manifold-vertices')).toHaveTextContent(
+      '155 non-manifold vertices',
+    );
+    expect(screen.getByTestId('repair-remaining-components')).toHaveTextContent(
+      '39 separate components',
+    );
+    // Categories are never added up.
+    expect(card).not.toHaveTextContent(/\b205\b/);
+  });
+
+  it('says what Pybrix can do about each remaining category, with its own severity', () => {
+    partiallyRepaired();
+    const vertices = screen.getByTestId('repair-remaining-non-manifold-vertices');
+    expect(vertices).toHaveTextContent('Not automatically repairable');
+    expect(vertices).toHaveClass('repair-result__remaining--error');
+    expect(vertices).toHaveTextContent('(error)');
+    const components = screen.getByTestId('repair-remaining-components');
+    // Disconnected pieces are not declared broken.
+    expect(components).toHaveTextContent('Review recommended — may be intentional');
+    expect(components).toHaveClass('repair-result__remaining--warning');
+    expect(screen.getByTestId('repair-remaining-open-boundaries')).toHaveTextContent(
+      'Not automatically fillable',
+    );
+  });
+
+  it('keeps Health authoritative, and marks its counts as what remains', () => {
+    partiallyRepaired();
+    const health = screen.getByTestId('health-summary');
+    expect(health).toHaveTextContent('1 error · 2 warnings remaining');
+    // Still the error tone: a repair having run does not turn Health green.
+    expect(health).toHaveClass('health-summary--error');
+  });
+
+  it('explains the disabled action: supported repairs are exhausted, issues remain', () => {
+    partiallyRepaired();
+    expect(screen.getByTestId('preview-repair')).toBeDisabled();
+    expect(screen.getByTestId('repair-no-repairs')).toHaveTextContent(
+      'Everything Pybrix can safely repair automatically has been fixed.',
+    );
+    expect(screen.getByTestId('preview-repair')).toHaveAccessibleDescription(
+      'Everything Pybrix can safely repair automatically has been fixed.',
+    );
+    fireEvent.click(screen.getByTestId('repair-no-repairs-info'));
+    const detail = screen.getByTestId('repair-no-repairs-detail');
+    expect(detail).toHaveTextContent(
+      'Still detected: 11 open boundaries, 155 non-manifold vertices and 39 separate components.',
+    );
+    expect(detail).toHaveTextContent('repairing again would change nothing');
+  });
+
+  it('announces the outcome once, as one sentence, and not through the card', () => {
+    partiallyRepaired();
+    const status = screen.getByTestId('repair-applied-status');
+    expect(status).toHaveTextContent(
+      'Partial repair completed. 14 degenerate triangles removed. Some detected issues remain.',
+    );
+    expect(status.closest('[aria-live]')).not.toBeNull();
+    expect(screen.getAllByTestId('repair-applied-status')).toHaveLength(1);
+    // The card is a labelled group, not a second live region.
+    const card = screen.getByTestId('repair-applied');
+    expect(card).toHaveAttribute('role', 'group');
+    expect(card.closest('[aria-live]')).toBeNull();
+    expect(screen.getAllByTestId('repair-applied')).toHaveLength(1);
+  });
+
+  it('announces nothing while the repaired mesh is still being checked', () => {
+    renderWorkspace((s) => {
+      loadModel(s);
+      applied(s, true);
+    });
+    expect(screen.queryByTestId('repair-applied-status')).toBeNull();
+    expect(screen.getByTestId('repair-applied-remaining')).toHaveTextContent(
+      'Checking the repaired mesh…',
+    );
+  });
+
+  it('heads a repair that left nothing detected "Repair completed"', () => {
+    const store = renderWorkspace((s) => {
+      loadModel(s);
+      applied(s, true);
+    });
+    analyseRepaired(store);
+    planRepaired(store);
+
+    const card = screen.getByTestId('repair-applied');
+    expect(card).toHaveAttribute('data-outcome', 'complete');
+    expect(screen.getByTestId('repair-applied-headline')).toHaveTextContent('Repair completed');
+    expect(screen.getByTestId('repair-applied-headline')).not.toHaveTextContent('Partial');
+    expect(screen.getByTestId('repair-applied-support')).toHaveTextContent(
+      'No detected issues remain in the checks Pybrix ran.',
+    );
+    // The qualifier still travels with it: unchecked is not passed.
+    expect(screen.getByTestId('repair-applied-qualifier')).toHaveTextContent(REPAIR_QUALIFIER);
+    // Nothing remains, so Health does not say "remaining" and the reason is the plain one.
+    expect(screen.getByTestId('health-summary')).toHaveTextContent(/^No issues found$/);
+    expect(screen.getByTestId('repair-no-repairs')).toHaveTextContent(NO_REPAIRABLE_PROBLEMS);
+  });
+
+  it('shows no outcome and no "remaining" for a model no repair was applied to', () => {
+    const store = renderWorkspace((s) => {
+      loadModel(s);
+    });
+    analyse(store, { nonManifoldVertexCount: 3 });
+    commitPlan(store, planWith([]));
+
+    expect(screen.queryByTestId('repair-applied')).toBeNull();
+    expect(screen.queryByTestId('repair-applied-status')).toBeNull();
+    expect(screen.getByTestId('preview-repair')).toBeDisabled();
+    expect(screen.getByTestId('repair-no-repairs')).toHaveTextContent(NO_SAFE_REPAIRS);
+    const health = screen.getByTestId('health-summary');
+    expect(health).toHaveTextContent(/^1 error · 0 warnings$/);
+    expect(health).toHaveClass('health-summary--error');
+  });
+
+  it('clears every post-repair wording when the repair is undone', () => {
+    const store = partiallyRepaired();
+    const restored = { documentId: 'model-1', revision: 3 } as DocumentHandle;
+    act(() => {
+      store.beginRepairUndo();
+      store.applyUndoResult({
+        handle: restored,
+        partId: PART,
+        render: { positions: new Float32Array(9), normals: new Float32Array(9), vertexCount: 3 },
+        parts: [partDescriptor()],
+        bounds: undefined,
+        triangleCount: 4,
+        vertexCount: 12,
+        residentBytes: 192,
+      });
+    });
+    act(() => {
+      const token = store.beginAnalysis(restored, PART);
+      store.commitAnalysis(
+        token,
+        restored,
+        PART,
+        report({ documentRevision: 3, ...REMAINING, boundaryEdgeCount: 52 }),
+        DETAIL,
+        1,
+      );
+      const plan: ConservativeRepairPlan = { ...planWith([]), sourceRevision: 3 };
+      const planToken = store.beginRepairPlan(restored, PART, plan.requested);
+      store.commitRepairPlan(planToken, restored, plan, fillPlan(0));
+    });
+
+    expect(screen.queryByTestId('repair-applied')).toBeNull();
+    expect(screen.queryByTestId('repair-applied-status')).toBeNull();
+    expect(screen.getByTestId('health-summary')).toHaveTextContent(/^1 error · 2 warnings$/);
+    // No stale "everything Pybrix can fix has been fixed", drawn or spoken.
+    expect(screen.getByTestId('repair-workspace')).not.toHaveTextContent('has been fixed');
+    expect(screen.getByTestId('repair-workspace')).not.toHaveTextContent('Partial repair');
+  });
+
+  it('clears every post-repair wording when another model is opened', () => {
+    const store = partiallyRepaired();
+    act(() => {
+      loadModel(store);
+    });
+    analyse(store, { nonManifoldVertexCount: 2 });
+    commitPlan(store, planWith([]));
+
+    expect(screen.queryByTestId('repair-applied')).toBeNull();
+    expect(screen.queryByTestId('repair-applied-status')).toBeNull();
+    expect(screen.getByTestId('health-summary')).toHaveTextContent(/^1 error · 0 warnings$/);
+    expect(screen.getByTestId('repair-no-repairs')).toHaveTextContent(NO_SAFE_REPAIRS);
+  });
+
+  it('shows one result, with current counts, when a repair is applied again', () => {
+    const store = partiallyRepaired();
+    act(() => {
+      store.applyRepairResult({
+        handle: { documentId: 'model-1', revision: 3 } as DocumentHandle,
+        partId: PART,
+        parts: [partDescriptor()],
+        parentRevision: 2,
+        recordId: 'record-2',
+        appliedOperations: [RepairOperation.RemoveDuplicateFaces],
+        counts: {
+          removedDuplicateFaces: 3,
+          removedRepeatedPositionFaces: 0,
+          removedZeroAreaFaces: 0,
+          flippedFaces: 0,
+          sourceFaceCount: 7,
+          candidateFaceCount: 4,
+        },
+        undoable: true,
+        render: { positions: new Float32Array(9), normals: new Float32Array(9), vertexCount: 3 },
+        bounds: undefined,
+        triangleCount: 4,
+        vertexCount: 12,
+        residentBytes: 192,
+      });
+    });
+
+    expect(screen.getAllByTestId('repair-applied')).toHaveLength(1);
+    const changes = screen.getByTestId('repair-applied-changes');
+    expect(changes).toHaveTextContent('3 duplicate triangles removed');
+    expect(changes).not.toHaveTextContent('degenerate');
+    // The earlier outcome is not carried over: this revision is not analysed yet.
+    expect(screen.getByTestId('repair-applied')).toHaveAttribute('data-outcome', 'checking');
+    expect(screen.queryByTestId('repair-applied-status')).toBeNull();
+    expect(screen.getByTestId('health-summary')).not.toHaveTextContent('remaining');
   });
 });

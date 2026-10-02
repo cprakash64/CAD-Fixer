@@ -594,7 +594,7 @@ test('O13: a double Apply commits exactly one revision', async ({ page }) => {
   // Exactly one commit happened: one success message, and no failure beside it.
   const successes = await page
     .getByTestId('status-list')
-    .locator('li', { hasText: 'Conservative repair applied' })
+    .locator('li', { hasText: 'Repair applied' })
     .count();
   expect(successes).toBe(1);
   await expect(page.getByTestId('status-list')).not.toContainText('already been applied');

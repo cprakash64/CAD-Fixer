@@ -115,10 +115,11 @@ non-manifold vertices; open boundaries and components — not 207 events.
   check size".
 - The 3-sentence fill-ceiling refusal → one line, "Automatic filling isn't
   available for this part at its current size." with the numbers behind ⓘ.
-- Applied result: "Conservative repair applied", a **Fixed** list from the
-  committed counts and a **Remaining** list from the NEW revision's analysis
-  ("Checking the repaired mesh…" until it exists), then "Selected topological
-  issues were repaired and revalidated." and the unchecked qualifier.
+- Applied result: a headline decided by the outcome (see REPAIR-UX-04 below),
+  a **Fixed** list from the committed counts and a **Still needs attention**
+  list from the NEW revision's analysis ("Checking the repaired mesh…" until
+  it exists), then "Selected topological issues were repaired and
+  revalidated." and the unchecked qualifier.
 - `REPAIR_WORKSPACE_FORBIDDEN_TERMS` extends the older lists with
   `fix all`, `all issues fixed` and `perfect`; a test checks every string the
   module can produce, and a component test checks the rendered workspace.
@@ -215,3 +216,81 @@ row carries its own Check now / Cancel control.
 - `e2e/repair-ux.spec.ts` — the CTA path in a real browser on a synthetic
   large, defective model, above the self-intersection and fill ceilings, at
   several viewport sizes.
+
+## REPAIR-UX-04 — a repair outcome is not the model's health
+
+**The durable rule: a successful Repair operation and a healthy model are
+distinct states. Post-repair UI must report both what changed and what
+remains.**
+
+v0.6.0 headed every applied repair "Conservative repair applied", in a green
+card. On a real 1,988,877-triangle model the repair filled 2 of 13 open
+boundaries and left 11 open boundaries, 155 non-manifold vertices and 39
+separate components, so the green card sat beside a Health line still reading
+"1 error · 2 warnings" and a disabled Repair button saying only that no safe
+repairs were available. The engine was right on every count. The interface read
+as a repair that claimed to have fixed the model and had not.
+
+### The state model
+
+`deriveRepairOutcome` (`state/repair-workspace-presentation.ts`) is pure and is
+derived on every render from two authoritative facts: what the committed
+candidate changed, and how many issue TYPES the analysis of the repaired
+revision still detects.
+
+| Outcome     | When                                             | Headline                 |
+| ----------- | ------------------------------------------------ | ------------------------ |
+| `checking`  | changed something; new analysis not reported yet | Repair applied           |
+| `complete`  | changed something; no error or warning detected  | Repair completed         |
+| `partial`   | changed something; any error or warning detected | Partial repair completed |
+| `no-change` | changed nothing                                  | No changes were made     |
+
+- **Not derived from how much changed.** "The repair added triangles" is not the
+  test for partial; what remains is.
+- **"No supported repair remains" is not "no detected issue remains".** With
+  every supported repair exhausted and 155 non-manifold vertices still detected
+  the outcome is `partial`; only its supporting sentence changes, to "Pybrix
+  fixed everything it can currently repair safely on this model."
+- **`complete` still carries the unchecked qualifier.** Self-intersections and
+  wall thickness are not passed by not being checked.
+
+### What the screen shows
+
+- **The card is the operation.** Neutral frame for a partial repair, green only
+  for a complete one; never red, because the operation succeeded. **Fixed** has
+  a check per change. **Still needs attention** has one line per category — its
+  own severity icon, its own count, and the same fixability sentence its row
+  under Detected issues shows ("Not automatically fillable", "Not automatically
+  repairable", "Review recommended — may be intentional").
+- **Categories are never summed.** No "205 issues remain". The Activity entry
+  that read "Topology analysis found 692 issues" added boundary edges to
+  vertices to triangles; it now reads "Mesh analysis: 1 error · 2 warnings.",
+  Health's own wording.
+- **Health is authoritative.** Same counts, same tone; after a repair that left
+  issues it reads "1 error · 2 warnings remaining". The status bar keeps the
+  plain counts.
+- **The disabled action explains itself.** After a partial repair with nothing
+  further available: "Everything Pybrix can safely repair automatically has
+  been fixed.", and behind ⓘ what is still detected, per category, and why
+  repairing again would change nothing.
+- **One announcement.** The card is a labelled group, not a live region. The
+  action region announces one sentence when the outcome is known: "Partial
+  repair completed. 2 openings filled. Some detected issues remain."
+- **Activity** says what changed and points at Health; it cannot say what
+  remains, because the repaired revision has not been analysed when it is
+  written.
+
+### Reset
+
+Every "after the repair" wording is derived from the applied repair being the
+CURRENT document, revision and part. Undo, a replacement model, another edit or
+a switch of part moves one of the three and takes the card, the "remaining"
+suffix, the exhausted reason and the announcement with it. Nothing remembers
+that a repair once ran.
+
+### Also corrected
+
+The second line of the disabled reason was clipped by 4 px in v0.6.0: a hidden
+announcement paragraph inside the action region's status slot kept that slot in
+the layout and cost one 8 px gap. The announcement is now its own out-of-flow
+region, and `e2e/repair-outcome.spec.ts` asserts the reason is drawn in full.

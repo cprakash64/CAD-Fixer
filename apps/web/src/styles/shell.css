@@ -4025,8 +4025,22 @@
   border-left: 3px solid var(--cad-info);
 }
 
+/*
+ * THE REPAIR OUTCOME — REPAIR-UX-04. The frame says how the OPERATION went and
+ * never how the model is: green only for a repair after which nothing further
+ * is detected; a partial repair is neutral, with each remaining category in
+ * its own severity colour inside it. Health, above, is the model's condition.
+ */
 .repair-result {
-  border-left: 3px solid var(--cad-success);
+  border-left: 3px solid var(--cad-border-strong, var(--cad-border));
+}
+
+.repair-result--complete {
+  border-left-color: var(--cad-success);
+}
+
+.repair-result--partial {
+  border-left-color: var(--cad-info);
 }
 
 .repair-preview__headline,
@@ -4040,7 +4054,23 @@
 }
 
 .repair-result__headline svg {
+  flex: none;
+  color: var(--cad-text-muted);
+}
+
+.repair-result--complete .repair-result__headline svg {
   color: var(--cad-success);
+}
+
+.repair-result--partial .repair-result__headline svg {
+  color: var(--cad-info);
+}
+
+.repair-result__support {
+  margin: 0 0 8px;
+  color: var(--cad-text);
+  font-size: var(--fs-secondary);
+  line-height: 1.4;
 }
 
 .repair-preview__qualifier,
@@ -4108,15 +4138,8 @@
   margin-top: 8px;
 }
 
-.repair-result__columns {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px;
-  margin: 6px 0;
-}
-
 .repair-result__label {
-  margin: 0 0 2px;
+  margin: 0 0 3px;
   color: var(--cad-text-muted);
   font: 600 var(--fs-meta) var(--font-body);
   letter-spacing: 0.02em;
@@ -4124,11 +4147,50 @@
 }
 
 .repair-result__list {
-  margin: 0;
-  padding-left: 16px;
+  display: grid;
+  gap: 4px;
+  margin: 0 0 8px;
+  padding: 0;
   color: var(--cad-text);
   font-size: var(--fs-secondary);
   line-height: 1.4;
+  list-style: none;
+}
+
+.repair-result__list > li {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.repair-result__list svg {
+  flex: none;
+  margin-top: 2px;
+}
+
+.repair-result__list--fixed svg {
+  color: var(--cad-success);
+}
+
+/* What is left is the part to notice: stronger text, its own severity. */
+.repair-result__remaining-count {
+  display: block;
+  color: var(--cad-text-strong);
+  font-weight: 600;
+}
+
+.repair-result__remaining-status {
+  display: block;
+  color: var(--cad-text-muted);
+  font-size: var(--fs-meta);
+}
+
+.repair-result__remaining--error svg {
+  color: var(--cad-error);
+}
+
+.repair-result__remaining--warning svg {
+  color: var(--cad-warning);
 }
 
 .repair-result__actions {

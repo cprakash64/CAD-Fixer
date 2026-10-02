@@ -16,7 +16,6 @@ import {
   DeltaMeaning,
   NO_REPAIRS_AVAILABLE_HEADLINE,
   REPAIR_APPLIED_DETAIL,
-  REPAIR_APPLIED_HEADLINE,
   REPAIR_EXCLUSIONS,
   REPAIR_FORBIDDEN_TERMS,
   REPAIR_OPERATION_COPY,
@@ -28,7 +27,6 @@ import {
   RESOURCE_LIMIT_DETAIL,
   buildMetricRows,
   describeAnalysisDependency,
-  describeApplied,
   describeBoundsComparison,
   describeChangeSampling,
   describeNoRepairsAvailable,
@@ -110,7 +108,6 @@ function everyEmittedString(): string {
     REPAIR_WORKFLOW_TITLE,
     REPAIR_WORKFLOW_SUMMARY,
     REPAIR_QUALIFIER,
-    REPAIR_APPLIED_HEADLINE,
     REPAIR_APPLIED_DETAIL,
     NO_REPAIRS_AVAILABLE_HEADLINE,
     RESOURCE_LIMIT_DETAIL,
@@ -118,8 +115,6 @@ function everyEmittedString(): string {
     ...REPAIR_EXCLUSIONS,
     describeNoRepairsAvailable(true),
     describeNoRepairsAvailable(false),
-    describeApplied([]),
-    describeApplied([RepairOperation.RemoveDuplicateFaces, RepairOperation.UnifyWinding]),
     describeChangeSampling(1, 5) ?? '',
   ];
 
@@ -439,16 +434,11 @@ describe('sampling and completion', () => {
     expect(describeChangeSampling(4, 4)).toBeUndefined();
   });
 
-  it('reports a completed repair without claiming more than happened', () => {
-    const message = describeApplied([
-      RepairOperation.RemoveDuplicateFaces,
-      RepairOperation.UnifyWinding,
-    ]);
-
-    expect(message).toContain('Conservative repair applied');
-    expect(message).toContain('remove exact duplicate triangles');
-    expect(message).toContain('unify relative face winding');
+  it('describes what an applied repair did without claiming more than happened', () => {
+    // The outcome headline is decided in `repair-workspace-presentation.ts`
+    // (REPAIR-UX-04); this module keeps the qualified detail beneath it.
     expect(REPAIR_APPLIED_DETAIL).toContain('repaired and revalidated');
+    expect(REPAIR_APPLIED_DETAIL).toMatch(/^Selected /);
   });
 
   it('distinguishes a clean model from one whose defects need assisted repair', () => {

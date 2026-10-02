@@ -23,7 +23,6 @@ import { PanelSection } from './shell/primitives';
 import {
   DeltaMeaning,
   REPAIR_APPLIED_DETAIL,
-  REPAIR_APPLIED_HEADLINE,
   REPAIR_EXCLUSIONS,
   REPAIR_ISOLATION_DETAIL,
   REPAIR_ISOLATION_HEADLINE,
@@ -46,11 +45,22 @@ import {
   describeFillOptionStatus,
   describeFillVerdict,
   summariseFillVerdicts,
+  REPAIR_CHECKING_REMAINING,
+  REPAIR_FIXED_LABEL,
+  REPAIR_NOTHING_REMAINING,
+  REPAIR_REMAINING_LABEL,
+  RepairActionKind,
+  RepairOutcomeKind,
   UNDO_REPAIR_ACTION,
+  deriveRepairOutcome,
   describeAppliedChanges,
   describeOptionStatus,
-  describeRemaining,
+  describeRemainingIssue,
+  remainingIssues,
+  type IssueStatus,
+  type RepairOutcome,
 } from '../state/repair-workspace-presentation';
+import { IssueSeverity, type RepairIssue, type RepairIssueId } from '../state/repair-issues';
 import { formatArea, formatMagnitude } from '../state/topology-presentation';
 import { useRepairWorkspace } from '../state/use-repair-workspace';
 import {
@@ -86,7 +96,7 @@ export function RepairPanel(): ReactNode {
   const { model, activePartId, repair } = useWorkspaceState();
   const store = useWorkspaceStore();
   const controls = useRepairControls();
-  const { navigation, reportIsCurrent, currentFill } = useRepairWorkspace();
+  const { navigation, reportIsCurrent, currentFill, statuses, action } = useRepairWorkspace();
 
   if (model === undefined) return null;
 
@@ -142,7 +152,9 @@ export function RepairPanel(): ReactNode {
             operations={repair.lastApplied.appliedOperations}
             counts={repair.lastApplied.counts}
             filledOpenings={repair.lastApplied.filledOpenings}
-            remaining={reportIsCurrent ? describeRemaining(navigation.issues) : undefined}
+            remaining={reportIsCurrent ? remainingIssues(navigation.issues) : undefined}
+            statuses={statuses}
+            exhausted={action === RepairActionKind.NothingSafe}
             undoable={repair.lastApplied.undoable}
             undoing={repair.commitState === RepairCommitState.Undoing}
             busy={isCommitting || isBuilding}
@@ -439,16 +451,27 @@ function OperationRow({
 /* --------------------------------------------------------------- applied -- */
 
 /**
- * What an applied repair changed and what is still detected.
+ * THE REPAIR OUTCOME — what the last repair changed, and what is still
+ * detected (REPAIR-UX-04).
+ *
+ * THE OPERATION, NOT THE MODEL. The headline says whether the repair was
+ * complete or partial; Health, above, says what condition the model is in.
+ * The card is green only when the analysis of the new revision detects nothing
+ * further. A partial repair keeps a neutral frame, a check mark beside what was
+ * fixed, and each remaining category with ITS OWN severity icon, count and what
+ * Pybrix can do about it — the same line its row under Detected issues shows.
  *
  * "Remaining" comes from the analysis of the NEW revision; until that exists
  * the card says it is still checking rather than implying nothing remains.
+ * Categories are never added together.
  */
 function AppliedResult({
   operations,
   counts,
   filledOpenings,
   remaining,
+  statuses,
+  exhausted,
   undoable,
   undoing,
   busy,
@@ -457,13 +480,20 @@ function AppliedResult({
   readonly operations: readonly RepairOperation[];
   readonly counts: RepairChangeCounts;
   readonly filledOpenings: number;
-  readonly remaining: readonly string[] | undefined;
+  readonly remaining: readonly RepairIssue[] | undefined;
+  readonly statuses: ReadonlyMap<RepairIssueId, IssueStatus>;
+  readonly exhausted: boolean;
   readonly undoable: boolean;
   readonly undoing: boolean;
   readonly busy: boolean;
   readonly onUndo: () => void;
 }): ReactNode {
   const changed = describeAppliedChanges(counts, filledOpenings);
+  const outcome: RepairOutcome = deriveRepairOutcome({
+    changes: changed,
+    remainingTypes: remaining?.length,
+    exhausted,
+  });
   /*
    * THE RESULT ANNOUNCES ITSELF — WORKSPACE-UX-03. It is content, not part of
    * the pinned action region, so on a short window it could be applied out of
@@ -471,34 +501,86 @@ function AppliedResult({
    */
   const ref = useRevealOnMount<HTMLDivElement>();
   return (
-    <div ref={ref} className="repair-result" role="status" data-testid="repair-applied">
+    // A GROUP, NOT A LIVE REGION: the footer announces the outcome once, in one
+    // sentence. A live card would read "applied", then every remaining count.
+    <div
+      ref={ref}
+      className={`repair-result repair-result--${outcome.kind}`}
+      role="group"
+      aria-label="Repair result"
+      data-outcome={outcome.kind}
+      data-testid="repair-applied"
+    >
       <p className="repair-result__headline" data-testid="repair-applied-headline">
-        <Icon name="ok" size={14} />
-        {REPAIR_APPLIED_HEADLINE}
+        <Icon
+          name={
+            outcome.kind === RepairOutcomeKind.Complete
+              ? 'ok'
+              : outcome.kind === RepairOutcomeKind.Checking
+                ? 'loader'
+                : 'info'
+          }
+          size={14}
+          className={outcome.kind === RepairOutcomeKind.Checking ? 'spin' : ''}
+        />
+        {outcome.headline}
       </p>
-      <div className="repair-result__columns">
-        <div>
-          <p className="repair-result__label">Fixed</p>
-          <ul className="repair-result__list" data-testid="repair-applied-changes">
-            {changed.length === 0 ? <li>No triangles changed</li> : null}
-            {changed.map((line) => (
-              <li key={line}>{line}</li>
-            ))}
-          </ul>
-        </div>
-        <div>
-          <p className="repair-result__label">Remaining</p>
-          <ul className="repair-result__list" data-testid="repair-applied-remaining">
-            {remaining === undefined ? <li>Checking the repaired mesh…</li> : null}
-            {remaining?.length === 0 ? <li>No issue types detected by these checks</li> : null}
-            {(remaining ?? []).map((line) => (
-              <li key={line}>{line}</li>
-            ))}
-          </ul>
-        </div>
-      </div>
+      <p className="repair-result__support" data-testid="repair-applied-support">
+        {outcome.support}
+      </p>
+
+      <p className="repair-result__label">{REPAIR_FIXED_LABEL}</p>
+      <ul
+        className="repair-result__list repair-result__list--fixed"
+        data-testid="repair-applied-changes"
+      >
+        {changed.length === 0 ? <li>No triangles changed</li> : null}
+        {changed.map((line) => (
+          <li key={line}>
+            <Icon name="ok" size={13} />
+            <span>{line}</span>
+          </li>
+        ))}
+      </ul>
+
+      <p className="repair-result__label">{REPAIR_REMAINING_LABEL}</p>
+      <ul
+        className="repair-result__list repair-result__list--remaining"
+        data-testid="repair-applied-remaining"
+      >
+        {remaining === undefined ? <li>{REPAIR_CHECKING_REMAINING}</li> : null}
+        {remaining?.length === 0 ? <li>{REPAIR_NOTHING_REMAINING}</li> : null}
+        {(remaining ?? []).map((issue) => (
+          <li
+            key={issue.id}
+            className={`repair-result__remaining repair-result__remaining--${issue.severity}`}
+            data-testid={`repair-remaining-${issue.id}`}
+          >
+            <Icon name={issue.severity === IssueSeverity.Error ? 'error' : 'alert'} size={13} />
+            <span>
+              <span className="repair-result__remaining-count">
+                {describeRemainingIssue(issue)}
+              </span>
+              {/* Severity in words, for anyone who cannot see the icon. */}
+              <span className="visually-hidden">
+                {issue.severity === IssueSeverity.Error ? ' (error)' : ' (warning)'}
+              </span>
+              {statuses.get(issue.id) === undefined ? null : (
+                <span className="repair-result__remaining-status">
+                  {statuses.get(issue.id)?.text}
+                </span>
+              )}
+            </span>
+          </li>
+        ))}
+      </ul>
+
       <p className="repair-result__qualifier">
-        <span data-testid="repair-applied-detail">{REPAIR_APPLIED_DETAIL}</span>{' '}
+        {changed.length === 0 ? null : (
+          <>
+            <span data-testid="repair-applied-detail">{REPAIR_APPLIED_DETAIL}</span>{' '}
+          </>
+        )}
         <span data-testid="repair-applied-qualifier">{REPAIR_QUALIFIER}</span>
       </p>
       {/* The exact operations, kept for the record and for assistive tech. */}

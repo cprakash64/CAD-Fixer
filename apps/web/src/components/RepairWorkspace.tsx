@@ -18,15 +18,20 @@ import {
   PLAN_FAILED_LINE,
   PREVIEW_FAILED_LINE,
   PREVIEW_READY_LINE,
-  REPAIRS_APPLIED_LINE,
+  REPAIRS_EXHAUSTED_LINE,
   REPAIR_CANCELLED_LINE,
   REPAIR_CANCELLING_LINE,
   REPAIR_MODEL_ACTION,
   REPAIR_UNAVAILABLE_LINE,
   RepairActionKind,
   SUMMARY_INFO,
+  deriveRepairOutcome,
+  describeAppliedChanges,
   describeFileStructure,
+  describeHealthRemaining,
+  describeRemaining,
   describeRepairScope,
+  describeRepairsExhausted,
 } from '../state/repair-workspace-presentation';
 import { useWorkspaceState } from '../state/store-context';
 import { totalDefectCount } from '../state/topology-presentation';
@@ -118,6 +123,7 @@ export function RepairWorkspace(): ReactNode {
  */
 function RepairOverview({ view }: { readonly view: RepairWorkspaceView }): ReactNode {
   const { model, selectedWorkflow } = useWorkspaceState();
+  const applied = useCurrentAppliedRepair();
   const summaryInfo = useInfoDisclosure();
   const fileInfo = useInfoDisclosure();
   const headingRef = useRef<HTMLParagraphElement>(null);
@@ -150,7 +156,12 @@ function RepairOverview({ view }: { readonly view: RepairWorkspaceView }): React
           className={`health-summary health-summary--${summary.tone}`}
           data-testid="health-summary"
         >
-          {summary.text}
+          {/* THE SAME AUTHORITATIVE COUNTS, with one word saying they are what
+              is LEFT — only while the repair that left them is the current
+              state. Never a different colour because a repair ran. */}
+          {applied !== undefined && view.reportIsCurrent && summary.errors + summary.warnings > 0
+            ? describeHealthRemaining(summary.text)
+            : summary.text}
         </span>
         <InfoButton
           disclosure={summaryInfo}
@@ -174,6 +185,26 @@ function RepairOverview({ view }: { readonly view: RepairWorkspaceView }): React
       <InfoPanel disclosure={fileInfo} label="file structure" info={FILE_STRUCTURE_INFO} />
     </div>
   );
+}
+
+/* -------------------------------------------------------- applied repair -- */
+
+/**
+ * The applied repair, ONLY WHILE IT DESCRIBES WHAT IS ON SCREEN: this document,
+ * this revision, this part. Undo, a replacement model, another edit or a switch
+ * of part each move one of the three, and every "after the repair" wording —
+ * the Health suffix, the disabled reason, the announcement — goes with it.
+ * Derived on every render; nothing remembers that a repair once ran.
+ */
+function useCurrentAppliedRepair(): ReturnType<typeof useWorkspaceState>['repair']['lastApplied'] {
+  const { model, activePartId, repair } = useWorkspaceState();
+  const applied = repair.lastApplied;
+  return model !== undefined &&
+    applied?.handle.documentId === model.handle.documentId &&
+    applied.handle.revision === model.handle.revision &&
+    applied.partId === activePartId
+    ? applied
+    : undefined;
 }
 
 /* -------------------------------------------------------------- outcome -- */
@@ -222,6 +253,8 @@ function RepairOutcome({
   const { action } = view;
   const failures = repairFailures(action, analysis, repair);
   const report = view.reportIsCurrent ? analysis.report : undefined;
+  const applied = useCurrentAppliedRepair();
+  const exhausted = applied !== undefined && action === RepairActionKind.NothingSafe;
   const explains =
     action === RepairActionKind.NothingSafe ||
     action === RepairActionKind.NothingFound ||
@@ -261,9 +294,11 @@ function RepairOutcome({
       ) : (
         <InfoPanel disclosure={reasonInfo} label="automatic repair">
           <p className="info-panel__text" data-testid="repair-no-repairs-detail">
-            {describeNoRepairsAvailable(
-              report === undefined ? false : totalDefectCount(report) > 0,
-            )}
+            {exhausted
+              ? describeRepairsExhausted(describeRemaining(view.navigation.issues))
+              : describeNoRepairsAvailable(
+                  report === undefined ? false : totalDefectCount(report) > 0,
+                )}
           </p>
         </InfoPanel>
       )}
@@ -300,6 +335,26 @@ function RepairFooter({
       .previewable;
   const failures = repairFailures(action, analysis, repair);
   const cancelling = repair.candidateState === RepairCandidateState.Cancelling;
+  const applied = useCurrentAppliedRepair();
+  /*
+   * ONE SENTENCE, ONCE — REPAIR-UX-04. The outcome is announced here, when the
+   * analysis of the repaired mesh has settled what it is: "Partial repair
+   * completed. 2 openings filled. Some detected issues remain." Nothing is
+   * announced while it is still being checked, so a screen reader never hears
+   * a bare "applied" followed by a separate list of errors.
+   */
+  const settled =
+    action === RepairActionKind.Ready ||
+    action === RepairActionKind.NothingSafe ||
+    action === RepairActionKind.NothingFound;
+  const announcement =
+    applied === undefined || !settled || !view.reportIsCurrent
+      ? undefined
+      : deriveRepairOutcome({
+          changes: describeAppliedChanges(applied.counts, applied.filledOpenings),
+          remainingTypes: view.detectedIssueTypes,
+          exhausted: action === RepairActionKind.NothingSafe,
+        }).announcement;
 
   /* WORKING: the phase is the worker's own, and it outranks everything. */
   const working = ((): ReactNode => {
@@ -407,16 +462,16 @@ function RepairFooter({
     <ActionFooter testId="repair-footer" className="repair-footer">
       <div className="convert-footer__status" aria-live="polite">
         {line}
-        {/* The result card in the content says what was repaired; this says,
-            once and to assistive technology, that it happened. */}
-        {repair.lastApplied !== undefined &&
-        (action === RepairActionKind.Ready ||
-          action === RepairActionKind.NothingSafe ||
-          action === RepairActionKind.NothingFound) ? (
-          <p className="visually-hidden" data-testid="repair-applied-status">
-            {REPAIRS_APPLIED_LINE}
-          </p>
-        ) : null}
+      </div>
+
+      {/* The result card in the content shows the outcome; this says it, once,
+          to assistive technology. ITS OWN REGION, out of the layout: inside the
+          status slot it kept that slot from collapsing, and the 8 px it took
+          clipped the second line of the reason beneath the action. */}
+      <div className="visually-hidden" aria-live="polite">
+        {announcement === undefined ? null : (
+          <p data-testid="repair-applied-status">{announcement}</p>
+        )}
       </div>
 
       <div className="convert-footer__actions">
@@ -480,6 +535,7 @@ function RepairFooter({
         hintId={hintId}
         describeScope={describeRepairScope(scope)}
         reasonInfo={reasonInfo}
+        exhausted={applied !== undefined}
         // ONE LINE AT A TIME: with another line on screen the reason still
         // describes the action, to assistive technology.
         spoken={line !== undefined}
@@ -574,12 +630,15 @@ function FooterHint({
   hintId,
   describeScope,
   reasonInfo,
+  exhausted,
   spoken,
 }: {
   readonly action: RepairActionKind;
   readonly hintId: string;
   readonly describeScope: string;
   readonly reasonInfo: InfoDisclosure;
+  /** A repair was just applied to this revision: what is left has no safe fix. */
+  readonly exhausted: boolean;
   readonly spoken: boolean;
 }): ReactNode {
   const text = ((): { readonly text: string; readonly testId?: string } | undefined => {
@@ -587,7 +646,10 @@ function FooterHint({
       case RepairActionKind.Ready:
         return { text: describeScope, testId: 'repair-scope' };
       case RepairActionKind.NothingSafe:
-        return { text: NO_SAFE_REPAIRS, testId: 'repair-no-repairs' };
+        return {
+          text: exhausted ? REPAIRS_EXHAUSTED_LINE : NO_SAFE_REPAIRS,
+          testId: 'repair-no-repairs',
+        };
       case RepairActionKind.NothingFound:
         return { text: NO_REPAIRABLE_PROBLEMS, testId: 'repair-no-repairs' };
       case RepairActionKind.Unavailable:
