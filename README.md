@@ -16,8 +16,10 @@ and no analytics.
 
 **Try it: <https://pybrix.com>**
 
-This repository carries the **Pybrix v0.6.0 Technical Preview** feature set —
-see the [v0.6.0 release notes](docs/release/V0_6_0_TECHNICAL_PREVIEW_RELEASE.md).
+This repository carries the **Pybrix v0.6.1 Technical Preview** — the v0.6.0
+feature set with clearer Repair results. See the
+[v0.6.1 patch notes](docs/release/V0_6_1_TECHNICAL_PREVIEW_RELEASE.md) and the
+[v0.6.0 release notes](docs/release/V0_6_0_TECHNICAL_PREVIEW_RELEASE.md).
 
 - Qualified on **Chromium-based desktop browsers** (Chrome, Edge). The critical
   flow also runs in Playwright's WebKit build; Safari, Firefox and real mobile
@@ -33,7 +35,7 @@ observed unless you report it. See
 [Beta feedback issue](https://github.com/cprakash64/CAD-Fixer/issues/new/choose).
 Please do not attach models you are not authorised to share.
 
-> **Current status: v0.6.0 Technical Preview.**
+> **Current status: v0.6.1 Technical Preview.**
 > You can open an **STL, OBJ or 3MF** file, inspect it in a real 3D viewport,
 > read a full topology report about it, highlight its defects in 3D, **run a
 > combined conservative repair and eligible simple flat opening fills with a

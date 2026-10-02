@@ -13,6 +13,10 @@ not application-upgrade steps. Before any production mutation, obtain explicit
 confirmation that a fresh Hostinger hPanel snapshot has completed. Retain both
 the new release and v0.5.0 (`302721e27a5013e40a28852a0267a0eec88162bc`) for rollback.
 
+For v0.6.1 the same applies. The immediate rollback target is v0.6.0
+(`49037a65feb4e057a41ac9354b83cf8146255aa9`); v0.5.0 is retained as the deeper
+fallback. Keep all three release directories.
+
 Operator steps for deploying a reviewed commit to the VPS. Provider-neutral and
 sanitized: substitute the placeholders from your own records.
 

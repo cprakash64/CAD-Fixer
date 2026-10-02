@@ -1,6 +1,8 @@
 # Format support matrix and known limitations
 
-Released capability reference for the **Pybrix v0.6.0 Technical Preview**. The 3MF
+Released capability reference for the **Pybrix v0.6.1 Technical Preview**, whose
+capabilities are those of v0.6.0: v0.6.1 changes how a Repair result is
+described, not what Repair does. The 3MF
 per-entry ceiling remains 320 MiB; model entries from 128 MiB up are read by
 streaming. The live product is <https://pybrix.com>. Large 3MF export can be
 refused when serialized XML exceeds the 320 MiB validation/write policy; this
