@@ -406,8 +406,7 @@ if (real) {
       .waitFor({ timeout: 600_000 });
     await host.page.getByTestId('apply-repair').click();
     await host.page
-      .getByTestId('repair-applied-remaining')
-      .filter({ hasNotText: 'Checking the repaired mesh' })
+      .locator('[data-testid="repair-applied"]:not([data-outcome="checking"])')
       .waitFor({ timeout: 600_000 });
     await host.page.waitForTimeout(30_000);
     await exportOne(host, 'real-repaired', 1_988_883, true);

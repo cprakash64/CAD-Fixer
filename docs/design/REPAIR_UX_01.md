@@ -253,6 +253,13 @@ revision still detects.
   fixed everything it can currently repair safely on this model."
 - **`complete` still carries the unchecked qualifier.** Self-intersections and
   wall thickness are not passed by not being checked.
+- **A complete repair has no "Still needs attention" section** (REPAIR-UX-04-R1).
+  The section is drawn while the repaired mesh is being checked and whenever
+  its analysis detects something; when that analysis detects no error or
+  warning it is omitted outright, with no placeholder row. The first v0.6.1
+  candidate drew the heading above "No issue types detected by these checks",
+  directly under "Repair completed". The section's absence is a statement
+  about DETECTED issues only: the qualifier beneath says what was not checked.
 
 ### What the screen shows
 

@@ -14,8 +14,8 @@ model and had not.
 
 - **Repair now says whether it was complete or partial.** "Repair completed"
   appears only when the checks Pybrix runs detect nothing further in the
-  repaired mesh. If anything is still detected the result is headed "Partial
-  repair completed".
+  repaired mesh, and then lists only what was fixed. If anything is still
+  detected the result is headed "Partial repair completed".
 - **What was fixed and what still needs attention are shown separately.** Each
   remaining condition is listed with its own count and with what Pybrix can do
   about it. Unlike quantities are never added into one total.

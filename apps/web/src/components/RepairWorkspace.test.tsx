@@ -944,6 +944,29 @@ describe('a repair outcome and the model’s health are distinct', () => {
     expect(screen.getAllByTestId('repair-applied')).toHaveLength(1);
   });
 
+  it('keeps the remaining section while the repaired mesh is still being checked', () => {
+    // Absent is a claim: it is drawn only once the new analysis says nothing remains.
+    renderWorkspace((s) => {
+      loadModel(s);
+      applied(s, true);
+    });
+    const card = screen.getByTestId('repair-applied');
+    expect(card).toHaveAttribute('data-outcome', 'checking');
+    expect(card).toHaveTextContent('Still needs attention');
+    expect(screen.getByTestId('repair-applied-remaining')).toHaveTextContent(
+      'Checking the repaired mesh…',
+    );
+  });
+
+  it('shows both sections for a partial repair', () => {
+    partiallyRepaired();
+    const card = screen.getByTestId('repair-applied');
+    expect(card.querySelectorAll('.repair-result__label')).toHaveLength(2);
+    expect(card).toHaveTextContent('Fixed');
+    expect(card).toHaveTextContent('Still needs attention');
+    expect(screen.getByTestId('repair-applied-remaining').children).toHaveLength(3);
+  });
+
   it('announces nothing while the repaired mesh is still being checked', () => {
     renderWorkspace((s) => {
       loadModel(s);
@@ -970,8 +993,29 @@ describe('a repair outcome and the model’s health are distinct', () => {
     expect(screen.getByTestId('repair-applied-support')).toHaveTextContent(
       'No detected issues remain in the checks Pybrix ran.',
     );
-    // The qualifier still travels with it: unchecked is not passed.
+    // FIXED is shown; nothing claims attention, so that section is not drawn.
+    expect(card).toHaveTextContent('Fixed');
+    expect(screen.getByTestId('repair-applied-changes')).toHaveTextContent(
+      '14 degenerate triangles removed',
+    );
+    expect(screen.queryByTestId('repair-applied-remaining')).toBeNull();
+    expect(card).not.toHaveTextContent('Still needs attention');
+    // And no placeholder row stands in for it.
+    expect(card).not.toHaveTextContent(/No issue types|None found|Nothing remains/i);
+    expect(card.querySelectorAll('.repair-result__label')).toHaveLength(1);
+    // The qualifier still travels with it: unchecked is not passed. The absent
+    // section says nothing about the checks that did not run.
     expect(screen.getByTestId('repair-applied-qualifier')).toHaveTextContent(REPAIR_QUALIFIER);
+    expect(screen.getByTestId('repair-applied-qualifier')).toHaveTextContent(
+      'Self-intersections and wall thickness have not yet been checked.',
+    );
+    expect(screen.getByTestId('undo-repair')).toBeEnabled();
+    // One coherent sentence, with nothing about attention in it.
+    const status = screen.getByTestId('repair-applied-status');
+    expect(status).toHaveTextContent(
+      'Repair completed. 14 degenerate triangles removed. No detected issues remain in the checks Pybrix ran.',
+    );
+    expect(status).not.toHaveTextContent(/attention/i);
     // Nothing remains, so Health does not say "remaining" and the reason is the plain one.
     expect(screen.getByTestId('health-summary')).toHaveTextContent(/^No issues found$/);
     expect(screen.getByTestId('repair-no-repairs')).toHaveTextContent(NO_REPAIRABLE_PROBLEMS);

@@ -62,9 +62,13 @@ test('A: a repair that leaves nothing detected is "Repair completed"', async ({ 
   await expect(page.getByTestId('repair-applied-headline')).toHaveText('Repair completed');
   await expect(card).not.toContainText('Partial');
   await expect(page.getByTestId('repair-applied-changes')).toHaveText('1 opening filled');
-  await expect(page.getByTestId('repair-applied-remaining')).toHaveText(
-    'No issue types detected by these checks',
-  );
+  // REPAIR-UX-04-R1: nothing remains, so nothing is headed "Still needs
+  // attention" — and no placeholder row stands where that section would be.
+  await expect(page.getByTestId('repair-applied-remaining')).toHaveCount(0);
+  await expect(card).toContainText('Fixed');
+  await expect(card).not.toContainText('Still needs attention');
+  await expect(card).not.toContainText('No issue types');
+  await expect(card.locator('.repair-result__label')).toHaveCount(1);
   // Health reports the model, and now has nothing to report — no "remaining".
   await expect(page.getByTestId('health-summary')).toHaveText('No issues found');
   await expect(page.getByTestId('repair-applied-status')).toHaveText(
@@ -74,6 +78,49 @@ test('A: a repair that leaves nothing detected is "Repair completed"', async ({ 
   await expect(page.getByTestId('repair-applied-qualifier')).toContainText(
     'have not yet been checked',
   );
+  await expect(page.getByTestId('repair-applied-status')).not.toContainText(/attention/i);
+
+  // At 1440×300 the whole result is in reach, with no gap where a section was.
+  await page.setViewportSize({ width: 1440, height: 300 });
+  for (const id of [
+    'repair-applied-headline',
+    'repair-applied-support',
+    'repair-applied-changes',
+    'repair-applied-qualifier',
+    'undo-repair',
+  ]) {
+    const control = page.getByTestId(id).first();
+    await control.scrollIntoViewIfNeeded();
+    const probe = await control.evaluate((element) => {
+      const rect = element.getBoundingClientRect();
+      const target = document.elementFromPoint(
+        rect.left + rect.width / 2,
+        rect.top + rect.height / 2,
+      );
+      const footer = document.querySelector('[data-testid="repair-footer"]');
+      if (footer === null) throw new Error('No footer');
+      return {
+        own: target !== null && (element === target || element.contains(target)),
+        hit: target?.closest('[data-testid]')?.getAttribute('data-testid') ?? null,
+        bottom: rect.bottom,
+        footerTop: footer.getBoundingClientRect().top,
+      };
+    });
+    expect(probe.own, `a click at the centre of ${id} lands on ${String(probe.hit)}`).toBe(true);
+    expect(probe.bottom).toBeLessThanOrEqual(probe.footerTop + 1);
+  }
+  // FIXED is followed directly by the qualifier: one list gap, no empty block.
+  const gap = await card.evaluate((element) => {
+    const fixed = element.querySelector('[data-testid="repair-applied-changes"]');
+    const qualifier = element.querySelector('.repair-result__qualifier');
+    if (fixed === null || qualifier === null) throw new Error('No sections');
+    return {
+      adjacent: fixed.nextElementSibling === qualifier,
+      pixels: qualifier.getBoundingClientRect().top - fixed.getBoundingClientRect().bottom,
+    };
+  });
+  expect(gap.adjacent).toBe(true);
+  expect(gap.pixels).toBeLessThanOrEqual(12);
 });
 
 test('B: a repair that leaves detected issues is "Partial repair completed"', async ({ page }) => {

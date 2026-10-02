@@ -240,8 +240,7 @@ async function preview(page) {
 async function applyRepair(page) {
   await page.getByTestId('apply-repair').click();
   await page
-    .getByTestId('repair-applied-remaining')
-    .filter({ hasNotText: 'Checking the repaired mesh' })
+    .locator('[data-testid="repair-applied"]:not([data-outcome="checking"])')
     .waitFor({ timeout: LONG });
 }
 

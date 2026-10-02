@@ -632,7 +632,6 @@ export interface RepairOutcomeInput {
 export const REPAIR_FIXED_LABEL = 'Fixed';
 export const REPAIR_REMAINING_LABEL = 'Still needs attention';
 export const REPAIR_CHECKING_REMAINING = 'Checking the repaired mesh…';
-export const REPAIR_NOTHING_REMAINING = 'No issue types detected by these checks';
 
 export function deriveRepairOutcome(input: RepairOutcomeInput): RepairOutcome {
   const fixed = joinList(input.changes);

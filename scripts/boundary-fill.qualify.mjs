@@ -236,12 +236,16 @@ async function qualify(directory, target, cancel) {
 
       await page.getByTestId('apply-repair').click();
       await page
-        .getByTestId('repair-applied-remaining')
-        .filter({ hasNotText: 'Checking the repaired mesh' })
+        .locator('[data-testid="repair-applied"]:not([data-outcome="checking"])')
         .waitFor({ timeout: LONG });
       const tApply = Date.now();
       const afterApply = footprint(pid);
-      const remaining = (await page.getByTestId('repair-applied-remaining').textContent()) ?? '';
+      // A complete repair has no remaining section at all.
+      const remainingList = page.getByTestId('repair-applied-remaining');
+      const remaining =
+        (await remainingList.count()) === 0
+          ? 'nothing detected'
+          : ((await remainingList.textContent()) ?? '');
       const triangles = (await page.getByTestId('status-triangles').textContent()) ?? '';
       lines.push(
         row(

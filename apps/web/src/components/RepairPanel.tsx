@@ -47,7 +47,6 @@ import {
   summariseFillVerdicts,
   REPAIR_CHECKING_REMAINING,
   REPAIR_FIXED_LABEL,
-  REPAIR_NOTHING_REMAINING,
   REPAIR_REMAINING_LABEL,
   RepairActionKind,
   RepairOutcomeKind,
@@ -543,37 +542,50 @@ function AppliedResult({
         ))}
       </ul>
 
-      <p className="repair-result__label">{REPAIR_REMAINING_LABEL}</p>
-      <ul
-        className="repair-result__list repair-result__list--remaining"
-        data-testid="repair-applied-remaining"
-      >
-        {remaining === undefined ? <li>{REPAIR_CHECKING_REMAINING}</li> : null}
-        {remaining?.length === 0 ? <li>{REPAIR_NOTHING_REMAINING}</li> : null}
-        {(remaining ?? []).map((issue) => (
-          <li
-            key={issue.id}
-            className={`repair-result__remaining repair-result__remaining--${issue.severity}`}
-            data-testid={`repair-remaining-${issue.id}`}
+      {/*
+        ONLY WHEN SOMETHING REMAINS, OR IS STILL BEING CHECKED — REPAIR-UX-04-R1.
+        `remaining` is the analysis of the REPAIRED revision: `undefined` until
+        it reports, and empty only when that analysis detects no error or
+        warning. A heading that says "Still needs attention" over a line that
+        says nothing was detected contradicts "Repair completed" directly above
+        it, so a complete repair has no such section. What was NOT checked is
+        the qualifier beneath, which is always shown — the section's absence
+        says nothing about checks that did not run.
+      */}
+      {remaining?.length === 0 ? null : (
+        <>
+          <p className="repair-result__label">{REPAIR_REMAINING_LABEL}</p>
+          <ul
+            className="repair-result__list repair-result__list--remaining"
+            data-testid="repair-applied-remaining"
           >
-            <Icon name={issue.severity === IssueSeverity.Error ? 'error' : 'alert'} size={13} />
-            <span>
-              <span className="repair-result__remaining-count">
-                {describeRemainingIssue(issue)}
-              </span>
-              {/* Severity in words, for anyone who cannot see the icon. */}
-              <span className="visually-hidden">
-                {issue.severity === IssueSeverity.Error ? ' (error)' : ' (warning)'}
-              </span>
-              {statuses.get(issue.id) === undefined ? null : (
-                <span className="repair-result__remaining-status">
-                  {statuses.get(issue.id)?.text}
+            {remaining === undefined ? <li>{REPAIR_CHECKING_REMAINING}</li> : null}
+            {(remaining ?? []).map((issue) => (
+              <li
+                key={issue.id}
+                className={`repair-result__remaining repair-result__remaining--${issue.severity}`}
+                data-testid={`repair-remaining-${issue.id}`}
+              >
+                <Icon name={issue.severity === IssueSeverity.Error ? 'error' : 'alert'} size={13} />
+                <span>
+                  <span className="repair-result__remaining-count">
+                    {describeRemainingIssue(issue)}
+                  </span>
+                  {/* Severity in words, for anyone who cannot see the icon. */}
+                  <span className="visually-hidden">
+                    {issue.severity === IssueSeverity.Error ? ' (error)' : ' (warning)'}
+                  </span>
+                  {statuses.get(issue.id) === undefined ? null : (
+                    <span className="repair-result__remaining-status">
+                      {statuses.get(issue.id)?.text}
+                    </span>
+                  )}
                 </span>
-              )}
-            </span>
-          </li>
-        ))}
-      </ul>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
 
       <p className="repair-result__qualifier">
         {changed.length === 0 ? null : (
